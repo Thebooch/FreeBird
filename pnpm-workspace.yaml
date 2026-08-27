@@ -1,5 +1,5 @@
 packages:
-  - "packages/*"
+  - "guide/packages/*"
   - "examples/*"
   - "docs"
   # FreeBird Dash — declarative dashboard binding runtime, developed in lockstep

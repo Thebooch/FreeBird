@@ -1,0 +1,48 @@
+{
+  "name": "@freebirdai/digest-worker",
+  "version": "0.1.0",
+  "description": "Standalone digest worker for FreeBird. Runs the same digest engine as @freebirdai/server but as its own process.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Thebooch/FreeBird.git",
+    "directory": "guide/packages/digest-worker"
+  },
+  "homepage": "https://github.com/Thebooch/FreeBird#readme",
+  "bugs": {
+    "url": "https://github.com/Thebooch/FreeBird/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "freebird-digest-worker": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@freebirdai/core": "workspace:*"
+  },
+  "devDependencies": {
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

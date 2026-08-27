@@ -3,8 +3,8 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: [
-      "packages/**/*.test.ts",
-      "packages/**/*.test.tsx",
+      "guide/packages/**/*.test.ts",
+      "guide/packages/**/*.test.tsx",
       "dash/packages/**/*.test.ts",
       "dash/packages/**/*.test.tsx",
       "dash/apps/**/src/**/*.test.ts",

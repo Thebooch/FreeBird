@@ -1,0 +1,56 @@
+{
+  "name": "@freebirdai/core",
+  "version": "0.1.0",
+  "description": "FreeBird core: framework-agnostic engine (registry, chat, layout, tabs, digest, knowledge).",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Thebooch/FreeBird.git",
+    "directory": "guide/packages/core"
+  },
+  "homepage": "https://github.com/Thebooch/FreeBird#readme",
+  "bugs": {
+    "url": "https://github.com/Thebooch/FreeBird/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./adapters": {
+      "types": "./dist/adapters/index.d.ts",
+      "import": "./dist/adapters/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "AGENTS.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "nanoid": "^5.0.9",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.6"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

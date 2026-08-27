@@ -50,10 +50,10 @@ importers:
         version: 0.5.5
       '@freebirdai/adapters-db-postgres':
         specifier: workspace:*
-        version: link:../../../packages/adapters-db-postgres
+        version: link:../../../guide/packages/adapters-db-postgres
       '@freebirdai/core':
         specifier: workspace:*
-        version: link:../../../packages/core
+        version: link:../../../guide/packages/core
       '@freebirdai/dash-adapters':
         specifier: workspace:*
         version: link:../../packages/adapters
@@ -71,7 +71,7 @@ importers:
         version: link:../../packages/spec
       '@freebirdai/server':
         specifier: workspace:*
-        version: link:../../../packages/server
+        version: link:../../../guide/packages/server
       fastify:
         specifier: ^5.2.0
         version: 5.8.5
@@ -102,10 +102,10 @@ importers:
     dependencies:
       '@freebirdai/core':
         specifier: workspace:*
-        version: link:../../../packages/core
+        version: link:../../../guide/packages/core
       '@freebirdai/core-state':
         specifier: workspace:*
-        version: link:../../../packages/core-state
+        version: link:../../../guide/packages/core-state
       '@freebirdai/dash-adapters':
         specifier: workspace:*
         version: link:../../packages/adapters
@@ -126,7 +126,7 @@ importers:
         version: link:../../packages/spec
       '@freebirdai/react':
         specifier: workspace:*
-        version: link:../../../packages/react
+        version: link:../../../guide/packages/react
       react:
         specifier: ^18.3.1
         version: 18.3.1
@@ -383,19 +383,19 @@ importers:
     dependencies:
       '@freebirdai/adapters-llm-openai':
         specifier: workspace:*
-        version: link:../../packages/adapters-llm-openai
+        version: link:../../guide/packages/adapters-llm-openai
       '@freebirdai/core':
         specifier: workspace:*
-        version: link:../../packages/core
+        version: link:../../guide/packages/core
       '@freebirdai/react':
         specifier: workspace:*
-        version: link:../../packages/react
+        version: link:../../guide/packages/react
       '@freebirdai/react-tailwind':
         specifier: workspace:*
-        version: link:../../packages/react-tailwind
+        version: link:../../guide/packages/react-tailwind
       '@freebirdai/server':
         specifier: workspace:*
-        version: link:../../packages/server
+        version: link:../../guide/packages/server
       next:
         specifier: ^15.0.0
         version: 15.3.5(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(sass@1.99.0)
@@ -435,13 +435,13 @@ importers:
     dependencies:
       '@freebirdai/core':
         specifier: workspace:*
-        version: link:../../packages/core
+        version: link:../../guide/packages/core
       '@freebirdai/manifest':
         specifier: workspace:*
-        version: link:../../packages/manifest
+        version: link:../../guide/packages/manifest
       '@freebirdai/server':
         specifier: workspace:*
-        version: link:../../packages/server
+        version: link:../../guide/packages/server
       express:
         specifier: ^4.21.1
         version: 4.22.1
@@ -463,19 +463,19 @@ importers:
     dependencies:
       '@freebirdai/adapters-llm-openai':
         specifier: workspace:*
-        version: link:../../packages/adapters-llm-openai
+        version: link:../../guide/packages/adapters-llm-openai
       '@freebirdai/core':
         specifier: workspace:*
-        version: link:../../packages/core
+        version: link:../../guide/packages/core
       '@freebirdai/react':
         specifier: workspace:*
-        version: link:../../packages/react
+        version: link:../../guide/packages/react
       '@freebirdai/react-tailwind':
         specifier: workspace:*
-        version: link:../../packages/react-tailwind
+        version: link:../../guide/packages/react-tailwind
       '@freebirdai/server':
         specifier: workspace:*
-        version: link:../../packages/server
+        version: link:../../guide/packages/server
       express:
         specifier: ^4.21.1
         version: 4.22.1
@@ -526,7 +526,7 @@ importers:
         specifier: ^6.0.2
         version: 6.4.2(@types/node@22.19.17)(jiti@1.21.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
 
-  packages/adapters-db-postgres:
+  guide/packages/adapters-db-postgres:
     dependencies:
       '@freebirdai/core':
         specifier: workspace:*
@@ -554,7 +554,7 @@ importers:
         specifier: ^2.1.6
         version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
 
-  packages/adapters-db-prisma:
+  guide/packages/adapters-db-prisma:
     dependencies:
       '@freebirdai/core':
         specifier: workspace:*
@@ -570,7 +570,7 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
-  packages/adapters-email-resend:
+  guide/packages/adapters-email-resend:
     dependencies:
       '@freebirdai/core':
         specifier: workspace:*
@@ -586,7 +586,7 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
-  packages/adapters-email-smtp:
+  guide/packages/adapters-email-smtp:
     dependencies:
       '@freebirdai/core':
         specifier: workspace:*
@@ -605,7 +605,7 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
-  packages/adapters-llm-anthropic:
+  guide/packages/adapters-llm-anthropic:
     dependencies:
       '@anthropic-ai/sdk':
         specifier: ^0.30.1
@@ -627,7 +627,7 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
 
-  packages/adapters-llm-openai:
+  guide/packages/adapters-llm-openai:
     dependencies:
       '@freebirdai/core':
         specifier: workspace:*
@@ -649,7 +649,7 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
 
-  packages/angular:
+  guide/packages/angular:
     dependencies:
       '@freebirdai/core':
         specifier: workspace:*
@@ -684,7 +684,7 @@ importers:
         version: 5.6.3
     publishDirectory: ./dist
 
-  packages/codegen:
+  guide/packages/codegen:
     dependencies:
       '@freebirdai/manifest':
         specifier: workspace:*
@@ -703,7 +703,7 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
 
-  packages/core:
+  guide/packages/core:
     dependencies:
       nanoid:
         specifier: ^5.0.9
@@ -722,7 +722,7 @@ importers:
         specifier: ^2.1.6
         version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
 
-  packages/core-state:
+  guide/packages/core-state:
     dependencies:
       '@freebirdai/core':
         specifier: workspace:*
@@ -735,7 +735,7 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
-  packages/create-freebird:
+  guide/packages/create-freebird:
     dependencies:
       '@freebirdai/codegen':
         specifier: workspace:*
@@ -760,7 +760,7 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
 
-  packages/digest-worker:
+  guide/packages/digest-worker:
     dependencies:
       '@freebirdai/core':
         specifier: workspace:*
@@ -773,7 +773,7 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
-  packages/embed:
+  guide/packages/embed:
     dependencies:
       '@freebirdai/core':
         specifier: workspace:*
@@ -801,7 +801,7 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
 
-  packages/manifest:
+  guide/packages/manifest:
     dependencies:
       '@freebirdai/core':
         specifier: workspace:*
@@ -820,7 +820,7 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
 
-  packages/mcp:
+  guide/packages/mcp:
     dependencies:
       '@freebirdai/core':
         specifier: workspace:*
@@ -845,7 +845,7 @@ importers:
         specifier: ^2.1.6
         version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
 
-  packages/react:
+  guide/packages/react:
     dependencies:
       '@freebirdai/core':
         specifier: workspace:*
@@ -873,7 +873,7 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
-  packages/react-tailwind:
+  guide/packages/react-tailwind:
     dependencies:
       '@freebirdai/core':
         specifier: workspace:*
@@ -898,7 +898,7 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
-  packages/server:
+  guide/packages/server:
     dependencies:
       '@freebirdai/core':
         specifier: workspace:*
@@ -929,7 +929,7 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
 
-  packages/vue:
+  guide/packages/vue:
     dependencies:
       '@freebirdai/core':
         specifier: workspace:*
@@ -948,7 +948,7 @@ importers:
         specifier: ^3.5.0
         version: 3.5.33(typescript@5.9.3)
 
-  packages/vue-tailwind:
+  guide/packages/vue-tailwind:
     dependencies:
       '@freebirdai/core':
         specifier: workspace:*

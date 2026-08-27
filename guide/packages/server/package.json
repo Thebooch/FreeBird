@@ -1,0 +1,80 @@
+{
+  "name": "@freebirdai/server",
+  "version": "0.1.0",
+  "description": "FreeBird server: route handlers + Express/Fastify/Next integrations + in-process digest scheduler.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Thebooch/FreeBird.git",
+    "directory": "guide/packages/server"
+  },
+  "homepage": "https://github.com/Thebooch/FreeBird#readme",
+  "bugs": {
+    "url": "https://github.com/Thebooch/FreeBird/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./express": {
+      "types": "./dist/express.d.ts",
+      "import": "./dist/express.js"
+    },
+    "./fastify": {
+      "types": "./dist/fastify.d.ts",
+      "import": "./dist/fastify.js"
+    },
+    "./next": {
+      "types": "./dist/next.d.ts",
+      "import": "./dist/next.js"
+    },
+    "./middleware": {
+      "types": "./dist/middleware.d.ts",
+      "import": "./dist/middleware.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "AGENTS.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@freebirdai/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "express": ">=4",
+    "fastify": ">=4"
+  },
+  "peerDependenciesMeta": {
+    "express": {
+      "optional": true
+    },
+    "fastify": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@freebirdai/manifest": "workspace:*",
+    "@types/express": "^5.0.0",
+    "express": "^4.21.1",
+    "fastify": "^5.1.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.6",
+    "zod": "^3.23.8"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

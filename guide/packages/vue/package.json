@@ -1,0 +1,52 @@
+{
+  "name": "@freebirdai/vue",
+  "version": "0.1.0",
+  "description": "FreeBird Vue 3 bindings: plugin, composables, and headless component primitives.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Thebooch/FreeBird.git",
+    "directory": "guide/packages/vue"
+  },
+  "homepage": "https://github.com/Thebooch/FreeBird#readme",
+  "bugs": {
+    "url": "https://github.com/Thebooch/FreeBird/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "AGENTS.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@freebirdai/core": "workspace:*",
+    "@freebirdai/core-state": "workspace:*"
+  },
+  "peerDependencies": {
+    "vue": "^3.3.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vue": "^3.5.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

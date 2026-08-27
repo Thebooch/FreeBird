@@ -5,7 +5,7 @@ const config: Config = {
   content: [
     "./app/**/*.{ts,tsx}",
     "./components/**/*.{ts,tsx}",
-    "../../packages/react-tailwind/dist/**/*.{js,mjs}",
+    "../../guide/packages/react-tailwind/dist/**/*.{js,mjs}",
   ],
   plugins: [freebirdPlugin],
 };

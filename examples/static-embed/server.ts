@@ -176,7 +176,7 @@ app.use("/freebird", router as unknown as express.Router);
 // Serve the built embed bundle and the static site.
 app.get("/freebird-embed.js", (_req, res) => {
   res.type("application/javascript");
-  res.sendFile(join(__dirname, "../../packages/embed/dist/freebird.js"));
+  res.sendFile(join(__dirname, "../../guide/packages/embed/dist/freebird.js"));
 });
 app.use(express.static(join(__dirname, "public")));
 

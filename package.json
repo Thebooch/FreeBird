@@ -17,10 +17,10 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "pnpm -r --filter \"./packages/**\" --filter \"./dash/packages/**\" run build",
-    "build:core": "pnpm -r --filter \"./packages/**\" run build",
+    "build": "pnpm -r --filter \"./guide/packages/**\" --filter \"./dash/packages/**\" run build",
+    "build:guide": "pnpm -r --filter \"./guide/packages/**\" run build",
     "build:dash": "pnpm -r --filter \"./dash/packages/**\" run build",
-    "dev": "pnpm -r --parallel --filter \"./packages/**\" run dev",
+    "dev": "pnpm -r --parallel --filter \"./guide/packages/**\" run dev",
     "dev:dash": "pnpm -r --parallel --filter \"./dash/apps/**\" run dev",
     "dev:dash:packages": "pnpm -r --parallel --filter \"./dash/packages/**\" run dev",
     "typecheck": "pnpm -r run typecheck",
