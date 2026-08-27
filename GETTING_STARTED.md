@@ -410,7 +410,7 @@ Each adapter is a plain object implementing an interface exported from
 `@freebirdai/core`:
 
 - `DbAdapter` — sessions, messages, tabs, locks. Simplest reference:
-  `packages/core/src/testing/memoryDb.ts`.
+  `guide/packages/core/src/testing/memoryDb.ts`.
 - `LlmAdapter` — `stream(opts)` yielding `{ textDelta }` or `{ toolCall }`.
   Reference: `@freebirdai/adapters-llm-openai`.
 - `EmailAdapter` — a single `send({ to, from, subject, html, text })` method.

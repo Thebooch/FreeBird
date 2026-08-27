@@ -380,11 +380,11 @@ pipeline as `POST /actions/confirm`.
 | Security boundary | `ActionDefinition.authorize` — **not** `setActiveComponentIds` |
 | Audit | `onActionEvent` with `source: "mcp"` |
 
-See [`packages/mcp/README.md`](packages/mcp/README.md) for tool reference and setup.
+See [`guide/packages/mcp/README.md`](guide/packages/mcp/README.md) for tool reference and setup.
 
 ## Where to go next
 
-- Type/contract reference: [`packages/core/src/actions/README.md`](packages/core/src/actions/README.md)
-- State machine + journal: [`packages/core-state/src/actions/README.md`](packages/core-state/src/actions/README.md)
+- Type/contract reference: [`guide/packages/core/src/actions/README.md`](guide/packages/core/src/actions/README.md)
+- State machine + journal: [`guide/packages/core-state/src/actions/README.md`](guide/packages/core-state/src/actions/README.md)
 - Framework specifics: see the **Actions** section of each framework's
   README.

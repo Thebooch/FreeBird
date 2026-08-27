@@ -16,7 +16,9 @@ pnpm monorepo (pnpm 10, Node ≥ 20). Run from the repo root:
 
 ```bash
 pnpm install                          # install all workspaces
-pnpm build                            # build every package (packages/* only)
+pnpm build                            # build every package (guide/packages/* + dash/packages/*)
+pnpm build:guide                      # build only guide/packages/*
+pnpm build:dash                       # build only dash/packages/*
 pnpm typecheck                        # tsc --noEmit across all workspaces
 pnpm test                             # vitest run (root config; DOM tests opt in per-file)
 pnpm lint                             # eslint over the repo
@@ -39,17 +41,17 @@ projects.
 
 | Feature you're integrating | Packages | Guide |
 | --- | --- | --- |
-| Chat engine, sessions, digests, support (server side) | `@freebirdai/core` | [`packages/core/AGENTS.md`](packages/core/AGENTS.md) |
-| HTTP routes for Express / Fastify / Next.js | `@freebirdai/server` | [`packages/server/AGENTS.md`](packages/server/AGENTS.md) |
-| Client store / custom UI binding | `@freebirdai/core-state` | [`packages/core-state/AGENTS.md`](packages/core-state/AGENTS.md) |
-| React UI | `@freebirdai/react` (+ `react-tailwind`) | [`packages/react/AGENTS.md`](packages/react/AGENTS.md), [`packages/react-tailwind/AGENTS.md`](packages/react-tailwind/AGENTS.md) |
-| Vue UI | `@freebirdai/vue` (+ `vue-tailwind`) | [`packages/vue/AGENTS.md`](packages/vue/AGENTS.md), [`packages/vue-tailwind/AGENTS.md`](packages/vue-tailwind/AGENTS.md) |
-| Angular UI | `@freebirdai/angular` | [`packages/angular/AGENTS.md`](packages/angular/AGENTS.md) |
-| Script-tag widget on a static site / WordPress | `@freebirdai/embed` (+ `manifest`) | [`packages/embed/AGENTS.md`](packages/embed/AGENTS.md) |
-| Declarative site manifest → registries | `@freebirdai/manifest`, `@freebirdai/codegen` | [`packages/manifest/AGENTS.md`](packages/manifest/AGENTS.md), [`packages/codegen/AGENTS.md`](packages/codegen/AGENTS.md) |
-| Scaffolding + drift checks (CLI) | `create-freebird` | [`packages/create-freebird/AGENTS.md`](packages/create-freebird/AGENTS.md) |
-| Exposing components/actions to external agents | `@freebirdai/mcp` | [`packages/mcp/AGENTS.md`](packages/mcp/AGENTS.md) |
-| DB / LLM / email adapters | `@freebirdai/adapters-*` | package READMEs (`packages/adapters-*/README.md`) |
+| Chat engine, sessions, digests, support (server side) | `@freebirdai/core` | [`guide/packages/core/AGENTS.md`](guide/packages/core/AGENTS.md) |
+| HTTP routes for Express / Fastify / Next.js | `@freebirdai/server` | [`guide/packages/server/AGENTS.md`](guide/packages/server/AGENTS.md) |
+| Client store / custom UI binding | `@freebirdai/core-state` | [`guide/packages/core-state/AGENTS.md`](guide/packages/core-state/AGENTS.md) |
+| React UI | `@freebirdai/react` (+ `react-tailwind`) | [`guide/packages/react/AGENTS.md`](guide/packages/react/AGENTS.md), [`guide/packages/react-tailwind/AGENTS.md`](guide/packages/react-tailwind/AGENTS.md) |
+| Vue UI | `@freebirdai/vue` (+ `vue-tailwind`) | [`guide/packages/vue/AGENTS.md`](guide/packages/vue/AGENTS.md), [`guide/packages/vue-tailwind/AGENTS.md`](guide/packages/vue-tailwind/AGENTS.md) |
+| Angular UI | `@freebirdai/angular` | [`guide/packages/angular/AGENTS.md`](guide/packages/angular/AGENTS.md) |
+| Script-tag widget on a static site / WordPress | `@freebirdai/embed` (+ `manifest`) | [`guide/packages/embed/AGENTS.md`](guide/packages/embed/AGENTS.md) |
+| Declarative site manifest → registries | `@freebirdai/manifest`, `@freebirdai/codegen` | [`guide/packages/manifest/AGENTS.md`](guide/packages/manifest/AGENTS.md), [`guide/packages/codegen/AGENTS.md`](guide/packages/codegen/AGENTS.md) |
+| Scaffolding + drift checks (CLI) | `create-freebird` | [`guide/packages/create-freebird/AGENTS.md`](guide/packages/create-freebird/AGENTS.md) |
+| Exposing components/actions to external agents | `@freebirdai/mcp` | [`guide/packages/mcp/AGENTS.md`](guide/packages/mcp/AGENTS.md) |
+| DB / LLM / email adapters | `@freebirdai/adapters-*` | package READMEs (`guide/packages/adapters-*/README.md`) |
 
 ## Pivotal docs (read these first)
 
@@ -66,37 +68,37 @@ The action layer is the most stateful subsystem; if your task involves
 actions, read these in order:
 
 1. [`ACTIONS.md`](ACTIONS.md) — top-level user-facing guide.
-2. [`packages/core/src/actions/README.md`](packages/core/src/actions/README.md)
+2. [`guide/packages/core/src/actions/README.md`](guide/packages/core/src/actions/README.md)
    — `ActionDefinition`, `readCurrent`, `buildHarnessTurn` contracts.
-3. [`packages/core-state/src/actions/README.md`](packages/core-state/src/actions/README.md)
+3. [`guide/packages/core-state/src/actions/README.md`](guide/packages/core-state/src/actions/README.md)
    — `ActionState`, `ActionRecord`, `ActionTransition`, journal semantics,
      `ActionEvent` audit stream.
 4. Framework "Actions" sections:
-   - [`packages/react/README.md#actions`](packages/react/README.md)
-   - [`packages/vue/README.md#actions`](packages/vue/README.md)
-   - [`packages/angular/README.md#actions`](packages/angular/README.md)
+   - [`guide/packages/react/README.md#actions`](guide/packages/react/README.md)
+   - [`guide/packages/vue/README.md#actions`](guide/packages/vue/README.md)
+   - [`guide/packages/angular/README.md#actions`](guide/packages/angular/README.md)
 
 ## Source-of-truth files for actions
 
 | Concern                              | File                                                           |
 | ------------------------------------ | -------------------------------------------------------------- |
-| Action types (`ActionDefinition` …)  | `packages/core/src/types.ts`                                   |
-| Server harness (LLM tool schema)     | `packages/core/src/actions/harness.ts`                         |
-| Argument validation + diff utilities | `packages/core/src/actions/diff.ts`                            |
-| State machine + journal              | `packages/core-state/src/actions/state.ts`                     |
-| Audit event types                    | `packages/core-state/src/actions/events.ts`                    |
-| HTTP endpoints                       | `packages/server/src/handlers.ts` (search `/actions/`)         |
-| React hooks/components               | `packages/react/src/hooks/useAction*.ts`, `components/Action*.tsx` |
-| Vue composables/components           | `packages/vue/src/composables/useAction*.ts`, `components/Action*.ts` |
-| Angular service + components         | `packages/angular/src/services/freebird.service.ts`, `components/action-*.component.ts` |
+| Action types (`ActionDefinition` …)  | `guide/packages/core/src/types.ts`                                   |
+| Server harness (LLM tool schema)     | `guide/packages/core/src/actions/harness.ts`                         |
+| Argument validation + diff utilities | `guide/packages/core/src/actions/diff.ts`                            |
+| State machine + journal              | `guide/packages/core-state/src/actions/state.ts`                     |
+| Audit event types                    | `guide/packages/core-state/src/actions/events.ts`                    |
+| HTTP endpoints                       | `guide/packages/server/src/handlers.ts` (search `/actions/`)         |
+| React hooks/components               | `guide/packages/react/src/hooks/useAction*.ts`, `components/Action*.tsx` |
+| Vue composables/components           | `guide/packages/vue/src/composables/useAction*.ts`, `components/Action*.ts` |
+| Angular service + components         | `guide/packages/angular/src/services/freebird.service.ts`, `components/action-*.component.ts` |
 
 ## Auth & security primitives
 
 - **Transport auth** — `FetchTransport` accepts `getAuthToken` + `authScheme`
   for outbound requests, and `onUnauthorized` (single-flight) for 401
   refresh + retry. See
-  [`packages/core-state/README.md`](packages/core-state/README.md).
-  Source: `packages/core-state/src/transport/fetch.ts`.
+  [`guide/packages/core-state/README.md`](guide/packages/core-state/README.md).
+  Source: `guide/packages/core-state/src/transport/fetch.ts`.
 - **Action authorization** — `ActionDefinition.authorize(args, ctx)` runs
   server-side after Zod validation, before `readCurrent`/`handler`. Denials
   return HTTP 403 (or custom status) and emit `action.unauthorized` server
@@ -105,7 +107,7 @@ actions, read these in order:
 - **Digest auth refresh** — `DigestEngineOptions.refreshAuth(savedAuth, tab)`
   runs before each digest tab render so long-running digests can mint a
   fresh service token instead of replaying stale `auth`. See
-  [`packages/digest-worker/README.md`](packages/digest-worker/README.md).
+  [`guide/packages/digest-worker/README.md`](guide/packages/digest-worker/README.md).
 
 ## Harness UX knobs (chat engine)
 
@@ -143,30 +145,30 @@ for full details.
 
 ## Other concepts (1-line each)
 
-- **Layout solver** — `packages/core/src/layout/solver.ts`. Two-pass packer
+- **Layout solver** — `guide/packages/core/src/layout/solver.ts`. Two-pass packer
   over `SizeVariant`s (preferred → minimum). Tests cover priority and
   fallback cases.
-- **Component registry** — `packages/core/src/components/registry.ts`.
+- **Component registry** — `guide/packages/core/src/components/registry.ts`.
   Single source of truth for what components exist + their actions.
-- **Chat engine** — `packages/core/src/chat/engine.ts`. Streams
+- **Chat engine** — `guide/packages/core/src/chat/engine.ts`. Streams
   `ChatStreamEvent`s; orchestrates layout planning + action harness.
-- **Knowledge graph** — `packages/core/src/knowledge/graph.ts`.
+- **Knowledge graph** — `guide/packages/core/src/knowledge/graph.ts`.
   Tag/component-id inverted index for cross-chat references and
   `InfoTrigger`.
-- **Custom tabs + digests** — `packages/core/src/tabs/*.ts`,
-  `packages/core/src/digest/*.ts`. Save layouts; email summaries on a cron.
-- **Adapters** — `packages/adapters-*`. Pluggable DB / LLM / Email impls.
-- **MCP** — `packages/mcp/`. Opt-in MCP server; `runAction()` shared with HTTP confirm.
+- **Custom tabs + digests** — `guide/packages/core/src/tabs/*.ts`,
+  `guide/packages/core/src/digest/*.ts`. Save layouts; email summaries on a cron.
+- **Adapters** — `guide/packages/adapters-*`. Pluggable DB / LLM / Email impls.
+- **MCP** — `guide/packages/mcp/`. Opt-in MCP server; `runAction()` shared with HTTP confirm.
 
 ## MCP (`@freebirdai/mcp`)
 
 | Concern | File |
 | ------------------------------------ | -------------------------------------------------------------- |
-| MCP server factory | `packages/mcp/src/server.ts` |
-| Tool handlers | `packages/mcp/src/tools.ts` |
-| Access mode + overrides | `packages/mcp/src/access.ts` |
-| Shared execute pipeline | `packages/core/src/actions/run.ts` |
-| Policy fields on registry | `packages/core/src/types.ts` (`mcp` on `ActionDefinition` / `ComponentDefinition`) |
+| MCP server factory | `guide/packages/mcp/src/server.ts` |
+| Tool handlers | `guide/packages/mcp/src/tools.ts` |
+| Access mode + overrides | `guide/packages/mcp/src/access.ts` |
+| Shared execute pipeline | `guide/packages/core/src/actions/run.ts` |
+| Policy fields on registry | `guide/packages/core/src/types.ts` (`mcp` on `ActionDefinition` / `ComponentDefinition`) |
 
 MCP writes call the same `runAction()` as `POST /actions/confirm`. **`authorize`
 is the security boundary** — `setActiveComponentIds` gates only the in-app chat
