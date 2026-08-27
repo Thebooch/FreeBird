@@ -1,0 +1,235 @@
+/*
+ * FreeBird Tailwind preset styles. Import once at the top of your app:
+ *   import "@freebirdai/react-tailwind/styles.css";
+ *
+ * All colors and radii are driven by CSS variables so users can override them
+ * in their own `:root { --freebird-accent: ... }` block.
+ */
+
+:root {
+  --freebird-bg: #ffffff;
+  --freebird-fg: #111827;
+  --freebird-muted: #6b7280;
+  --freebird-border: #e5e7eb;
+  --freebird-accent: #4f46e5;
+  --freebird-accent-fg: #ffffff;
+  --freebird-danger: #dc2626;
+  --freebird-radius: 0.75rem;
+  --freebird-radius-sm: 0.375rem;
+  --freebird-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --freebird-focus: 0 0 0 2px var(--freebird-accent);
+}
+
+[data-theme="dark"] {
+  --freebird-bg: #0b1020;
+  --freebird-fg: #e5e7eb;
+  --freebird-muted: #9ca3af;
+  --freebird-border: #1f2937;
+  --freebird-accent: #818cf8;
+  --freebird-accent-fg: #111827;
+  --freebird-danger: #f87171;
+}
+
+/* Chat panel */
+[data-freebird-chat] {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: var(--freebird-bg);
+  color: var(--freebird-fg);
+  border: 1px solid var(--freebird-border);
+  border-radius: var(--freebird-radius);
+  padding: 0.75rem;
+  box-shadow: var(--freebird-shadow);
+}
+
+[data-freebird-chat-messages] {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  overflow-y: auto;
+  max-height: 60vh;
+  padding: 0.25rem;
+}
+
+[data-freebird-chat-message] {
+  border-radius: var(--freebird-radius-sm);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  background: color-mix(in oklab, var(--freebird-border) 30%, transparent);
+}
+
+[data-freebird-chat-message][data-role="user"] {
+  background: color-mix(in oklab, var(--freebird-accent) 12%, transparent);
+  align-self: flex-end;
+  max-width: 80%;
+}
+
+[data-freebird-chat-message][data-role="assistant"] {
+  background: color-mix(in oklab, var(--freebird-border) 40%, transparent);
+  max-width: 90%;
+}
+
+[data-freebird-chat-refs] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.25rem;
+}
+
+[data-freebird-chat-ref] {
+  background: color-mix(in oklab, var(--freebird-accent) 18%, transparent);
+  color: var(--freebird-fg);
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+}
+
+[data-freebird-chat-form] {
+  display: flex;
+  gap: 0.5rem;
+  padding-top: 0.25rem;
+}
+
+[data-freebird-chat-input] {
+  flex: 1;
+  border: 1px solid var(--freebird-border);
+  border-radius: var(--freebird-radius-sm);
+  padding: 0.5rem 0.75rem;
+  background: transparent;
+  color: var(--freebird-fg);
+}
+
+[data-freebird-chat-input]:focus-visible {
+  outline: none;
+  box-shadow: var(--freebird-focus);
+}
+
+[data-freebird-chat-submit] {
+  background: var(--freebird-accent);
+  color: var(--freebird-accent-fg);
+  border: none;
+  border-radius: var(--freebird-radius-sm);
+  padding: 0.5rem 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 120ms;
+}
+
+[data-freebird-chat-submit]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+[data-freebird-chat-submit]:not(:disabled):hover {
+  filter: brightness(1.05);
+}
+
+/* Grid */
+[data-freebird-grid] {
+  width: 100%;
+}
+
+[data-freebird-cell] {
+  position: relative;
+  background: var(--freebird-bg);
+  border: 1px solid var(--freebird-border);
+  border-radius: var(--freebird-radius);
+  padding: 0.75rem;
+  box-shadow: var(--freebird-shadow);
+  overflow: hidden;
+}
+
+[data-freebird-cell][data-locked] {
+  border-color: var(--freebird-accent);
+}
+
+/* Lock / info toggles (pinned top-right of each cell) */
+[data-freebird-lock-toggle],
+[data-freebird-info-trigger] {
+  position: absolute;
+  top: 0.375rem;
+  background: transparent;
+  border: none;
+  color: var(--freebird-muted);
+  cursor: pointer;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+}
+
+[data-freebird-lock-toggle] {
+  right: 0.375rem;
+}
+
+[data-freebird-info-trigger] {
+  right: 2.25rem;
+}
+
+[data-freebird-lock-toggle][data-locked] {
+  color: var(--freebird-accent);
+}
+
+[data-freebird-lock-toggle]:hover,
+[data-freebird-info-trigger]:hover {
+  background: color-mix(in oklab, var(--freebird-border) 50%, transparent);
+  color: var(--freebird-fg);
+}
+
+[data-freebird-grid][data-freebird-locks="hide"] [data-freebird-lock-toggle] {
+  display: none;
+}
+
+/* Tabs */
+[data-freebird-tabs] {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+[data-freebird-tabs-list] {
+  display: inline-flex;
+  gap: 0.375rem;
+  flex-wrap: wrap;
+}
+
+[data-freebird-tab] {
+  background: var(--freebird-bg);
+  border: 1px solid var(--freebird-border);
+  border-radius: 999px;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--freebird-fg);
+  cursor: pointer;
+}
+
+[data-freebird-tab][data-has-digest]::before {
+  content: "✉";
+  margin-right: 0.25rem;
+  opacity: 0.6;
+}
+
+[data-freebird-tab]:hover {
+  border-color: var(--freebird-accent);
+}
+
+[data-freebird-tabs-save] {
+  background: var(--freebird-accent);
+  color: var(--freebird-accent-fg);
+  border: none;
+  border-radius: var(--freebird-radius-sm);
+  padding: 0.25rem 0.75rem;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+[data-freebird-tabs-save]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

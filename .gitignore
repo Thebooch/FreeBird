@@ -1,0 +1,29 @@
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+*.log
+.DS_Store
+Thumbs.db
+coverage/
+.env
+.env.local
+.env.*.local
+*.tsbuildinfo
+.pnpm-store/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json
+.claude/
+docs/.docusaurus/
+
+# Dash local instance state — secrets (master-key) and PGlite data live here.
+.dash/
+
+# Dash instance state — the SpecStore roots under DASH_ROOT, written at runtime
+# as connections, dashboards and reports are created. Local working data (and
+# whichever vendor API you happened to test against), never source.
+dash/**/connections/
+dash/**/dashboards/
+dash/**/reports/

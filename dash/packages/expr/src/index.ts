@@ -1,0 +1,11 @@
+export type { BinaryOp, ExprAst, ExprNode } from "./ast.js";
+export { ExprEvalError, ExprParseError } from "./errors.js";
+export { evalExpr, evalPredicate, truthy } from "./eval.js";
+export type { EvalContext, FunctionDef } from "./functions.js";
+export { FUNCTIONS, isKnownFunction, toNumber, toText } from "./functions.js";
+export { LIMITS, readProp } from "./limits.js";
+export { parseExpr } from "./parser.js";
+export type { PathAst, PathSegment } from "./path.js";
+export { evalPath, extractRows, parsePath } from "./path.js";
+export type { Grain } from "./time.js";
+export { GRAINS, advanceBucket, parseGrain, toEpochMs, truncateToBucket } from "./time.js";

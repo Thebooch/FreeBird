@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>About — Bella's Bakery</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 720px; margin: 0 auto; padding: 32px; color: #1f2937; }
+      header { border-bottom: 2px solid #b45309; padding-bottom: 12px; margin-bottom: 24px; }
+      h1 { color: #b45309; margin: 0; }
+      section { margin: 24px 0; padding: 16px; border: 1px solid #e5e7eb; border-radius: 10px; }
+      h2 { margin-top: 0; }
+      nav a { color: #b45309; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>About Bella's Bakery</h1>
+      <nav><a href="/">← Back to the shop</a></nav>
+    </header>
+
+    <section id="story">
+      <h2>Our story</h2>
+      <p>
+        Bella's has baked for the neighborhood since 1998 — sourdough every morning,
+        custom cakes for every occasion.
+      </p>
+    </section>
+
+    <!-- The section knowledge citations deep-link to: a chip click on the
+         home page navigates here, scrolls to #parking, and pulses it. -->
+    <section id="parking">
+      <h2>Parking</h2>
+      <p>
+        Free parking is available behind the building, including two accessible
+        spots next to the side entrance.
+      </p>
+    </section>
+
+    <section id="delivery-note">
+      <h2>Getting your order</h2>
+      <p>We deliver cakes within the city on Fridays and Saturdays.</p>
+    </section>
+
+    <script
+      src="/freebird-embed.js"
+      data-site-id="fb_bakery"
+      data-api=""
+      defer
+    ></script>
+  </body>
+</html>

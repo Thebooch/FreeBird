@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FreeBird Dash</title>
+    <style>
+      html, body, #root { height: 100%; margin: 0; }
+      /* Mirrors `--dash-plane` so the page is painted before React mounts and
+         the first frame is not a white flash. Keep in step with theme.ts. */
+      body { background: #f6f7f6; }
+      @media (prefers-color-scheme: dark) { body { background: #0c100e; } }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

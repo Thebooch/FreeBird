@@ -1,0 +1,17 @@
+# Normalise line endings. The FreeBird and Dash trees were authored separately
+# and carry a CRLF/LF mix; without this the first diff after init is noise.
+* text=auto eol=lf
+
+# Binary — never touch.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
+
+# Generated — collapse in diffs and exclude from language stats.
+pnpm-lock.yaml -diff linguist-generated
+*.tsbuildinfo -diff linguist-generated

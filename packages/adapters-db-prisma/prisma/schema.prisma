@@ -1,0 +1,61 @@
+// FreeBird Prisma schema. Copy these models into your own schema.prisma
+// or reference this file. Host apps can extend them freely; FreeBird only
+// reads the fields listed here.
+
+model FreeBirdChatSession {
+  id             String               @id
+  title          String?
+  topic          String?
+  tags           String[]             @default([])
+  userId         String?
+  // Nullable tenant scope for multi-tenant (Studio) deployments.
+  tenantId       String?
+  activeLayoutId String?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  messages       FreeBirdChatMessage[]
+
+  @@index([userId, createdAt])
+  @@index([tenantId, createdAt])
+  @@map("freebird_chat_session")
+}
+
+model FreeBirdChatMessage {
+  id             String              @id
+  sessionId      String
+  session        FreeBirdChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role           String
+  content        String
+  referencesJson Json                @default("[]")
+  toolName       String?
+  toolPayload    Json?
+  tenantId       String?
+  createdAt      DateTime            @default(now())
+
+  @@index([sessionId, createdAt])
+  @@index([tenantId])
+  @@map("freebird_chat_message")
+}
+
+model FreeBirdCustomTab {
+  id        String   @id
+  title     String
+  slug      String?
+  ownerId   String?
+  tenantId  String?
+  layout    Json
+  digest    Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerId])
+  @@index([tenantId])
+  @@map("freebird_custom_tab")
+}
+
+model FreeBirdLock {
+  key       String   @id
+  expiresAt DateTime
+
+  @@map("freebird_lock")
+}

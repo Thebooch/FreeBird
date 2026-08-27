@@ -1,0 +1,55 @@
+{
+  "name": "freebird",
+  "version": "0.0.0",
+  "private": true,
+  "description": "FreeBird — an AI-driven website framework, plus FreeBird Dash. Monorepo root.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Thebooch/FreeBird.git"
+  },
+  "homepage": "https://github.com/Thebooch/FreeBird#readme",
+  "bugs": {
+    "url": "https://github.com/Thebooch/FreeBird/issues"
+  },
+  "packageManager": "pnpm@10.33.1",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r --filter \"./packages/**\" --filter \"./dash/packages/**\" run build",
+    "build:core": "pnpm -r --filter \"./packages/**\" run build",
+    "build:dash": "pnpm -r --filter \"./dash/packages/**\" run build",
+    "dev": "pnpm -r --parallel --filter \"./packages/**\" run dev",
+    "dev:dash": "pnpm -r --parallel --filter \"./dash/apps/**\" run dev",
+    "dev:dash:packages": "pnpm -r --parallel --filter \"./dash/packages/**\" run dev",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "eval:models": "pnpm --filter @freebirdai/dash-server eval:models",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "clean": "pnpm -r exec rimraf dist .turbo node_modules/.cache",
+    "changeset": "changeset",
+    "release": "pnpm build && changeset publish"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"],
+    "overrides": {
+      "webpackbar": "^7.0.0",
+      "kysely": "^0.27.4"
+    }
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.27.9",
+    "@types/node": "^22.9.0",
+    "@typescript-eslint/eslint-plugin": "^8.15.0",
+    "@typescript-eslint/parser": "^8.15.0",
+    "eslint": "^9.15.0",
+    "prettier": "^3.4.1",
+    "rimraf": "^6.0.1",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.6"
+  }
+}

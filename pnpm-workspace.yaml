@@ -1,0 +1,9 @@
+packages:
+  - "packages/*"
+  - "examples/*"
+  - "docs"
+  # FreeBird Dash — declarative dashboard binding runtime, developed in lockstep
+  # with @freebirdai/core. Kept in-tree so core changes and their Dash consumers
+  # land in one commit instead of via a file: override on a sibling checkout.
+  - "dash/packages/*"
+  - "dash/apps/*"

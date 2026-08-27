@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bella's Bakery</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 720px; margin: 0 auto; padding: 32px; color: #1f2937; }
+      header { border-bottom: 2px solid #b45309; padding-bottom: 12px; margin-bottom: 24px; }
+      h1 { color: #b45309; margin: 0; }
+      section { margin: 24px 0; padding: 16px; border: 1px solid #e5e7eb; border-radius: 10px; }
+      h2 { margin-top: 0; }
+      label { display: block; margin: 8px 0 4px; font-weight: 600; }
+      input, textarea { width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; }
+      table { width: 100%; border-collapse: collapse; }
+      td { padding: 4px 8px; border-bottom: 1px solid #f3f4f6; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Bella's Bakery</h1>
+      <p>Fresh bread, cakes to order.</p>
+    </header>
+
+    <!--
+      A plain static page. The only FreeBird-specific things here are the
+      data-freebird-* attributes below and the single <script> tag at the end.
+      No build step, no framework.
+    -->
+
+    <section
+      id="hours"
+      data-freebird-component="openingHours"
+      data-freebird-title="Opening hours"
+      data-freebird-description="Bella's Bakery weekly opening hours"
+      data-freebird-tags="hours,contact"
+    >
+      <h2>Opening hours</h2>
+      <table>
+        <tr><td data-freebird-field="weekdays">Mon–Fri</td><td>7:00–15:00</td></tr>
+        <tr><td data-freebird-field="saturday">Saturday</td><td>8:00–13:00</td></tr>
+        <tr><td data-freebird-field="sunday">Sunday</td><td>Closed</td></tr>
+      </table>
+    </section>
+
+    <section
+      id="order"
+      data-freebird-component="orderForm"
+      data-freebird-title="Cake order form"
+      data-freebird-description="Order a custom cake — name, date, and details"
+    >
+      <h2>Order a cake</h2>
+      <label for="name">Your name</label>
+      <input data-freebird-field="name" name="name" type="text" />
+      <label for="date">Pickup date</label>
+      <input data-freebird-field="date" name="date" type="date" />
+      <label for="details">Details</label>
+      <textarea data-freebird-field="details" name="details" rows="3"></textarea>
+    </section>
+
+    <!--
+      The whole integration: one script tag. data-api points at the local demo
+      server (see server.ts), data-site-id selects the tenant's registry.
+    -->
+    <script
+      src="/freebird-embed.js"
+      data-site-id="fb_bakery"
+      data-api=""
+      defer
+    ></script>
+  </body>
+</html>
