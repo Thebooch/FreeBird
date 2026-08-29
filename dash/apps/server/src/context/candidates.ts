@@ -115,3 +115,43 @@ export const buildCandidates = (input: BuildCandidatesInput): Candidate[] => {
 
   return candidates;
 };
+
+/**
+ * Restrict the search to where somebody said to look.
+ *
+ * "In my platform X conversations, has anyone mentioned running late?" names a
+ * place, and reading anywhere else spends their API quota to answer a question
+ * they did not ask. Matched loosely on purpose — people name a connection, a
+ * tab or a widget interchangeably, and by title far more often than by id.
+ *
+ * Returns the full list when nothing matches, rather than nothing. A named
+ * place that cannot be resolved is a reason to search normally and say where
+ * it looked; refusing outright would turn a slightly-off name into a dead end.
+ */
+export const narrowTo = (
+  candidates: readonly Candidate[],
+  named: string,
+  connections: ReadonlyArray<{ readonly id: string; readonly title: string }>,
+): readonly Candidate[] => {
+  const wanted = named.trim().toLowerCase();
+  if (!wanted) return candidates;
+
+  const connection = connections.find(
+    (entry) =>
+      entry.id.toLowerCase() === wanted ||
+      entry.title.toLowerCase() === wanted ||
+      entry.title.toLowerCase().includes(wanted) ||
+      wanted.includes(entry.title.toLowerCase()),
+  );
+
+  const matches = candidates.filter(
+    (candidate) =>
+      (connection && candidate.connection === connection.id) ||
+      candidate.id.toLowerCase() === wanted ||
+      candidate.title.toLowerCase() === wanted ||
+      candidate.title.toLowerCase().includes(wanted) ||
+      (candidate.tab ?? "").toLowerCase() === wanted,
+  );
+
+  return matches.length > 0 ? matches : candidates;
+};

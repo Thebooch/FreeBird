@@ -77,6 +77,12 @@ import { QueryCache, clampMaxAge } from "./cache/queryCache.js";
 import { extractRows, parsePath } from "@freebirdai/dash-expr";
 import { splitOpInputs } from "./query.js";
 import { ANSWER_TOOL, answerFromData } from "./context/tool.js";
+import { bindingFor, bindingsFor } from "./tools/bindings.js";
+import { READ_TOOL, READ_TOOL_NAME, readRecords, readToolSchema } from "./tools/read.js";
+import { queryRoster, readRoster } from "./tools/roster.js";
+import type { ToolDeps } from "./tools/types.js";
+import { QUERY_TOOL, QUERY_TOOL_NAME, queryRecords, queryToolSchema } from "./tools/query.js";
+import { WRITE_TOOL, WRITE_TOOL_NAME, planWrite, writeToolSchema } from "./tools/write.js";
 import type { ReadOutcome } from "./context/types.js";
 import { workspaceHandles } from "./chat/handles.js";
 import { createPromptRotation, renderDashReply } from "./chat/respond.js";
@@ -2109,6 +2115,34 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
      * user asking the same question again a minute later gets a fresh search,
      * which is what they mean by asking again.
      */
+    /**
+     * The endpoint's own `rowsPath`, parsed the same way the pipeline parses it.
+     *
+     * Shared by every tool that turns a response into records, so a malformed
+     * path behaves identically wherever it is met: an empty read rather than a
+     * thrown turn, and a reply that says what it could not read.
+     */
+    /**
+     * How a connection paginates, so those inputs are never offered as filters.
+     *
+     * The adapter is already driving them; letting a model set `limit` is an
+     * invitation to fight the fetcher, and the resulting "I only got 20" is
+     * unattributable from either side.
+     */
+    const paginationOf = (connection: string): unknown =>
+      store.getConnection(connection)?.dialect?.pagination;
+
+    const rowsForOp = (body: unknown, rowsPath: string): Record<string, unknown>[] => {
+      try {
+        return extractRows(parsePath(rowsPath), body).filter(
+          (row): row is Record<string, unknown> =>
+            typeof row === "object" && row !== null && !Array.isArray(row),
+        );
+      } catch {
+        return [];
+      }
+    };
+
     const ANSWER_MEMO_MS = 20_000;
     const answered = new Map<string, { at: number; value: unknown }>();
 
@@ -2155,26 +2189,172 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
          * sixty endpoint descriptions in every prompt.
          */
         [LOOK_UP_WIDGET_TOOL.name]: LOOK_UP_WIDGET_TOOL,
+        /*
+         * One record, in full.
+         *
+         * The verb that was missing. `answer_from_data` searches; this opens
+         * something already identified, which is a different act and a far
+         * cheaper one — a collection returns a summary of each record and the
+         * record's own endpoint returns everything, so a field absent from
+         * rows in hand is usually one request away rather than unavailable.
+         *
+         * Static description on purpose: the engine takes tool schemas once,
+         * and what can actually be opened is listed in the per-turn workspace
+         * knowledge instead, so a connection added five minutes ago is usable
+         * without a restart.
+         */
+        [READ_TOOL_NAME]: READ_TOOL,
+        /*
+         * Narrowing, which is the step between listing everything and opening
+         * one record. Without it, finding something means reading a page and
+         * hoping it is on it — which is how a search over fifty rows comes to
+         * report that a record does not exist when it is on page three.
+         */
+        [QUERY_TOOL_NAME]: QUERY_TOOL,
+        /*
+         * The fourth verb, declared and refused.
+         *
+         * `opDefSchema.method` is `z.literal("GET")` — read-only by
+         * construction so that no spec and no generated binding can ever
+         * mutate a connected account. This exists so "can you update this?"
+         * gets the truth (which record, on which API, and why nothing was
+         * sent) instead of an invented capability or a refusal that sounds
+         * like a policy when it is a fact about the connection.
+         */
+        [WRITE_TOOL_NAME]: WRITE_TOOL,
       },
       executeExtraTool: async (name, args, ctx) => {
-        if (name === LOOK_UP_TOOL) {
-          const parsed = lookUpSchema.safeParse(args);
-          if (!parsed.success) return { error: "look_up_endpoint needs a `query` string" };
-          return lookUpEndpoint(conciergeContext(), parsed.data);
+        /** What a tool is allowed to touch, for this turn's board. */
+        const toolDepsFor = (dashboard: DashboardSpec, context: ConciergeContext): ToolDeps => ({
+          read: readForChat,
+          resolved: resolvedFor(dashboard, ctx.auth.extra?.["range"]),
+          rowsOf: rowsForOp,
+          rowsPathFor: (op) => context.shapes[op]?.rowsPath ?? "$",
+        });
+
+        if (name === WRITE_TOOL_NAME) {
+          const parsed = writeToolSchema.safeParse(args);
+          if (!parsed.success) {
+            return { error: "write_record needs a `resource` name and an `id`" };
+          }
+          const bindings = bindingsFor({ context: conciergeContext(), pagination: paginationOf });
+          return planWrite({
+            binding: bindingFor(bindings, parsed.data.resource),
+            resource: parsed.data.resource,
+            id: parsed.data.id,
+            changes: parsed.data.changes,
+          });
         }
-        if (name === LOOK_UP_WIDGET_TOOL.name) {
-          const parsed = lookUpWidgetSchema.safeParse(args);
-          if (!parsed.success) return { error: "look_up_widget needs a `widgetId`" };
+
+        if (name === QUERY_TOOL_NAME) {
+          const parsed = queryToolSchema.safeParse(args);
+          if (!parsed.success) return { error: "query_records needs a `resource` name" };
           const dashboard = dashboardFor(ctx.auth);
-          const dashboards = store.listDashboards();
-          return lookUpWidget(
-            {
-              handles: workspaceHandles(dashboards, dashboard?.id ?? null),
-              context: conciergeContext(),
-              reports: store.listReports(),
-            },
-            parsed.data,
+          if (!dashboard) return { error: "there is no dashboard to read from" };
+          const context = conciergeContext();
+          const bindings = bindingsFor({ context, pagination: paginationOf });
+          const binding = bindings.find(
+            (entry) => entry.verb === "query" && entry.id === parsed.data.resource,
           );
+          if (!binding) {
+            const names = bindings
+              .filter((entry) => entry.verb === "query")
+              .map((entry) => entry.id);
+            return {
+              error:
+                `"${parsed.data.resource}" is not a collection this workspace can narrow. ` +
+                `Available: ${names.join(", ") || "nothing"}.`,
+            };
+          }
+
+          const found = await queryRecords({
+            binding,
+            deps: toolDepsFor(dashboard, context),
+            ...(parsed.data.text ? { text: parsed.data.text } : {}),
+            ...(parsed.data.filters ? { filters: parsed.data.filters } : {}),
+          });
+
+          /*
+           * A query that found records is as strong a statement of subject as
+           * a search, so a follow-up about one of them costs nothing.
+           */
+          if (focusStore && found.records.length > 0) {
+            const identity = bindings.find(
+              (entry) => entry.verb === "read" && entry.listOp === binding.op,
+            );
+            await focusStore.put(ctx.sessionId, {
+              question: parsed.data.text
+                ? `${binding.resource} matching "${parsed.data.text}"`
+                : `${binding.resource} records`,
+              source: binding.id,
+              sourceTitle: binding.title,
+              connection: binding.connection,
+              op: binding.op,
+              idField: identity?.idField ?? null,
+              records: found.records.slice(0, 50),
+              savedAt: new Date().toISOString(),
+            });
+          }
+
+          return {
+            records: found.records,
+            requests: found.requests,
+            note: found.note,
+            matchedHereNotByTheApi: found.matchedLocally,
+            ...(found.warnings.length > 0 ? { caveats: found.warnings } : {}),
+          };
+        }
+
+        if (name === READ_TOOL_NAME) {
+          const parsed = readToolSchema.safeParse(args);
+          if (!parsed.success) {
+            return { error: "read_record needs a `resource` name and an `id`" };
+          }
+          const dashboard = dashboardFor(ctx.auth);
+          if (!dashboard) return { error: "there is no dashboard to read from" };
+          const context = conciergeContext();
+          const bindings = bindingsFor({ context });
+          // Resolved against what is actually bound, never approximated: an
+          // invented resource name is a request against the wrong endpoint.
+          const binding = bindingFor(bindings, parsed.data.resource);
+          if (!binding) {
+            return {
+              error:
+                `"${parsed.data.resource}" is not a kind of record this workspace can open. ` +
+                `Openable: ${bindings.map((entry) => entry.id).join(", ") || "nothing"}.`,
+            };
+          }
+
+          const opened = await readRecords({
+            binding,
+            ids: [parsed.data.id],
+            deps: toolDepsFor(dashboard, context),
+          });
+
+          /*
+           * What the conversation is now about. Opening a record by hand is as
+           * strong a statement of subject as finding one, so a follow-up about
+           * another of its fields costs nothing.
+           */
+          if (focusStore && opened.records.length > 0) {
+            await focusStore.put(ctx.sessionId, {
+              question: `the ${binding.resource} ${parsed.data.id}`,
+              source: binding.id,
+              sourceTitle: binding.title,
+              connection: binding.connection,
+              op: binding.op,
+              idField: binding.idField ?? null,
+              records: opened.records.slice(0, 50),
+              savedAt: new Date().toISOString(),
+            });
+          }
+
+          return {
+            records: opened.records,
+            requests: opened.requests,
+            note: opened.note,
+            ...(opened.warnings.length > 0 ? { caveats: opened.warnings } : {}),
+          };
         }
         if (name === ANSWER_TOOL.name) {
           const dashboard = dashboardFor(ctx.auth);
@@ -2221,22 +2401,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             read: readForChat,
             // `CacheStore.get` answers a miss with `undefined`, not null.
             isCached: (key) => queries.store.get(key) !== undefined,
-            /*
-             * The endpoint's own `rowsPath`, parsed the same way the pipeline
-             * parses it. A malformed one is an empty read rather than a thrown
-             * turn: the search moves on and the reply says what it could not
-             * read.
-             */
-            rowsOf: (body, rowsPath) => {
-              try {
-                return extractRows(parsePath(rowsPath), body).filter(
-                  (row): row is Record<string, unknown> =>
-                    typeof row === "object" && row !== null && !Array.isArray(row),
-                );
-              } catch {
-                return [];
-              }
-            },
+            rowsOf: rowsForOp,
             rowsPathFor: (op) => context.shapes[op]?.rowsPath ?? "$",
           });
           answered.set(memoKey, { at: Date.now(), value: outcome });
@@ -2448,6 +2613,15 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             open: parseView(auth.extra?.["view"]),
             record: await onScreenFocus(auth, store.listDashboards(), dashboard, conciergeContext()),
           }),
+          /*
+           * What can be opened in full. Derived from every connected API's own
+           * map, so this grows when somebody connects something and needs no
+           * restart — unlike the tool schema, which the engine takes once.
+           */
+          records: [
+            readRoster(bindingsFor({ context: conciergeContext(), pagination: paginationOf })),
+            queryRoster(bindingsFor({ context: conciergeContext(), pagination: paginationOf })),
+          ].join("' + chr(92) + 'n' + chr(92) + 'n"),
           board: {
             getDashboard: () => store.getDashboard(dashboard.id),
             getDashboardById: (id) => store.getDashboard(id),

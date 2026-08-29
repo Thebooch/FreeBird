@@ -15,8 +15,10 @@ import type { Focus } from "./focus.js";
  * the last two is the useful part:
  *
  *   `answer`  — the held records contain it. Nothing is read, nothing is spent.
- *   `related` — it is about these records but needs something they only point
- *               at, which is what an identifier is for. A lookup, not a search.
+ *   `related` — it is about these records but needs something they do not
+ *               themselves carry: the record opened in full, something
+ *               attached to it, or a record it points at. All three are
+ *               reached with an identifier. A lookup, not a search.
  *   `search`  — a different subject. The focus is replaced by whatever the
  *               search finds.
  *
@@ -31,14 +33,23 @@ export const RECALL_SYSTEM_PROMPT = [
   '- "answer": the records shown below already contain what was asked. Every field is here,',
   "  so nothing needs reading. Put what they say in `answer`.",
   '- "related": the question is about these same records but needs something they do not',
-  "  contain and only point at — the things attached to them, their history, what belongs",
-  "  to them. Say what is wanted in `wants`, in plain words.",
+  "  contain. That covers three things and you do not have to know which: a fuller version",
+  "  of the record itself, anything attached to it, or another record it points at. Say",
+  "  what is wanted in `wants`, in plain words.",
   '- "search": the question is about something else. A different subject, a different set of',
   "  records, or the same subject over a wider set than the few held here.",
   "",
   "Rules:",
   "- Answer only from the fields actually present. A field that is absent is a reason to",
   "  choose `related` or `search`, never to estimate.",
+  "- These records may have come from a list, which shows a summary of each one. A field",
+  '  being missing is often not the field being absent — descriptions, notes and long text',
+  '  are exactly what a list leaves out. When what is asked for is that kind of field,',
+  '  "related" is right and "search" would only find the same summary again.',
+  "- Say in `records` which of the held records the question is about, by position. Two were",
+  "  found and the follow-up names one of them: that is the one to open, and opening the",
+  "  other spends a request to answer about the wrong thing. Leave it empty only when the",
+  "  question really is about all of them.",
   "- These are the records a previous question matched, not everything that exists. A question",
   '  about how many there are in total, or about any record beyond these, is "search".',
   '- When you are unsure, choose "search". Reading again is slower; answering from the wrong',
@@ -57,6 +68,14 @@ const recallSchema = z.object({
     .max(300)
     .default("")
     .describe("What related thing is needed. Only when the decision is related."),
+  records: z
+    .array(z.number().int().min(0))
+    .max(50)
+    .default([])
+    .describe(
+      "The 0-based positions of the held records this question is about. Name every one " +
+        "it refers to and nothing it does not. Leave empty when it is about all of them.",
+    ),
 });
 
 const recallTool: LlmTool = {
@@ -69,6 +88,16 @@ export interface RecallResult {
   readonly decision: "answer" | "related" | "search";
   readonly answer: string;
   readonly wants: string;
+  /**
+   * Which of the held records the question is about, by position.
+   *
+   * The fix for a follow-up answering about the wrong record. Two tasks are
+   * found, the follow-up names one, and opening whichever happened to sort
+   * first spends a request to describe the other one — which reads exactly
+   * like a correct answer. Empty means all of them, which is also a real
+   * answer for "what are the notes on those?".
+   */
+  readonly records: readonly number[];
   readonly error?: string;
 }
 
@@ -105,7 +134,7 @@ export const recallFromFocus = async (
    * conversation.
    */
   if (input.focus.records.length === 0) {
-    return { decision: "search", answer: "", wants: "" };
+    return { decision: "search", answer: "", wants: "", records: [] };
   }
 
   let result: Awaited<ReturnType<LlmAdapter["generate"]>>;
@@ -132,6 +161,7 @@ export const recallFromFocus = async (
       decision: "search",
       answer: "",
       wants: "",
+      records: [],
       error: cause instanceof Error ? cause.message : String(cause),
     };
   }
@@ -139,7 +169,13 @@ export const recallFromFocus = async (
   const call = result.toolCalls.find((candidate) => candidate.name === "use_context");
   const parsed = call ? recallSchema.safeParse(call.args) : null;
   if (!parsed?.success) {
-    return { decision: "search", answer: "", wants: "", error: "the model gave no decision" };
+    return {
+      decision: "search",
+      answer: "",
+      wants: "",
+      records: [],
+      error: "the model gave no decision",
+    };
   }
 
   const decision = parsed.data.decision;
@@ -148,8 +184,18 @@ export const recallFromFocus = async (
 
   // A decision that contradicts itself is not acted on: "answer" with nothing
   // to say, or "related" with nothing named, both mean the same thing here.
-  if (decision === "answer" && !answer) return { decision: "search", answer: "", wants: "" };
-  if (decision === "related" && !wants) return { decision: "search", answer: "", wants: "" };
+  if (decision === "answer" && !answer) {
+    return { decision: "search", answer: "", wants: "", records: [] };
+  }
+  if (decision === "related" && !wants) {
+    return { decision: "search", answer: "", wants: "", records: [] };
+  }
 
-  return { decision, answer, wants };
+  // Positions are resolved against the records that were actually shown, never
+  // approximated — an out-of-range index would silently drop a subject.
+  const records = [...new Set(parsed.data.records)].filter(
+    (index) => index < input.focus.records.length,
+  );
+
+  return { decision, answer, wants, records };
 };

@@ -257,3 +257,239 @@ describe("DEFAULT_BUDGET", () => {
     expect(DEFAULT_BUDGET.sources).toBeLessThanOrEqual(4);
   });
 });
+
+/**
+ * The failure this was built from, as a test.
+ *
+ * Asked for the notes on a particular task, the judge correctly picked the row
+ * and correctly said the description was not in it — and the loop then ranked a
+ * different source, which could only ever find the same summary again. The
+ * record itself was one request away the whole time.
+ */
+describe("opening the record a row named", () => {
+  it("expands a matched row that does not carry the answer, and judges again", async () => {
+    const llm = script(
+      { sources: ["tasks"], reason: "" },
+      { verdict: "partial", answer: "", missing: "the description is not in these rows", matched: [1] },
+      { verdict: "found", answer: "water is pooling by the downpipe", missing: "" },
+    );
+
+    const opened: Record<string, unknown>[][] = [];
+    const result = await runContextHarness("what are the notes on the water task?", {
+      llm,
+      candidates: [candidate("tasks"), candidate("other")],
+      readCandidate: async (c) =>
+        evidenceFor(c, [{ Id: 1, Title: "Turn" }, { Id: 2, Title: "Water on side of house" }]),
+      expand: async (matched, from) => {
+        opened.push([...matched]);
+        return {
+          note: "Opened the full task record — 1 request(s).",
+          evidence: evidenceFor(
+            from.candidate,
+            [{ Id: 2, Title: "Water on side of house", Description: "water is pooling by the downpipe" }],
+            1,
+          ),
+        };
+      },
+    });
+
+    // Only the row the judge matched, never the whole page.
+    expect(opened).toEqual([[{ Id: 2, Title: "Water on side of house" }]]);
+    expect(result.outcome).toBe("found");
+    expect(result.answer).toContain("downpipe");
+    expect(result.missing).toBe("");
+    // The reply is required to say it spent something.
+    expect(result.notes).toEqual(["Opened the full task record — 1 request(s)."]);
+    expect(result.spent.requests).toBe(1);
+  });
+
+  /*
+   * The focus becomes the full record, not the summary the row was. That is
+   * what makes the next question about any other field of it free.
+   */
+  it("leaves the opened record as what the question was about", async () => {
+    const llm = script(
+      { sources: ["tasks"], reason: "" },
+      { verdict: "partial", answer: "", missing: "no description", matched: [0] },
+      { verdict: "found", answer: "…", missing: "" },
+    );
+    const result = await runContextHarness("notes?", {
+      llm,
+      candidates: [candidate("tasks")],
+      readCandidate: async (c) => evidenceFor(c, [{ Id: 2, Title: "Water" }]),
+      expand: async (_matched, from) => ({
+        note: "opened",
+        evidence: evidenceFor(from.candidate, [{ Id: 2, Title: "Water", Description: "full" }], 1),
+      }),
+    });
+    expect(result.matched).toEqual([{ Id: 2, Title: "Water", Description: "full" }]);
+  });
+
+  it("does not open anything when no row was matched", async () => {
+    const llm = script(
+      { sources: ["tasks"], reason: "" },
+      { verdict: "miss", answer: "", missing: "nothing here", matched: [] },
+      { sources: [], reason: "nothing else could hold it" },
+    );
+    let opened = 0;
+    await runContextHarness("how many tasks are there?", {
+      llm,
+      candidates: [candidate("tasks")],
+      readCandidate: async (c) => evidenceFor(c, [{ Id: 1 }]),
+      expand: async () => {
+        opened += 1;
+        return null;
+      },
+    });
+    expect(opened).toBe(0);
+  });
+
+  /*
+   * An API with no by-id endpoint returns null, and the loop carries on as it
+   * always did rather than treating the absence as a failure.
+   */
+  it("carries on when the API cannot open a record", async () => {
+    const llm = script(
+      { sources: ["tasks"], reason: "" },
+      { verdict: "partial", answer: "", missing: "no description", matched: [0] },
+      { sources: [], reason: "nothing else holds it" },
+    );
+    const result = await runContextHarness("notes?", {
+      llm,
+      candidates: [candidate("tasks")],
+      readCandidate: async (c) => evidenceFor(c, [{ Id: 1 }]),
+      expand: async () => null,
+    });
+    expect(result.outcome).toBe("partial");
+    expect(result.notes).toEqual([]);
+  });
+
+  it("does not open a record once the budget is spent", async () => {
+    const llm = script(
+      { sources: ["tasks"], reason: "" },
+      { verdict: "partial", answer: "", missing: "no description", matched: [0] },
+    );
+    let opened = 0;
+    await runContextHarness("notes?", {
+      llm,
+      candidates: [candidate("tasks")],
+      budget: { sources: 2, requests: 1 },
+      readCandidate: async (c) => evidenceFor(c, [{ Id: 1 }], 1),
+      expand: async () => {
+        opened += 1;
+        return null;
+      },
+    });
+    expect(opened).toBe(0);
+  });
+});
+
+/**
+ * "Has anyone mentioned running late?" is a different question from "what is
+ * the highest rent?".
+ *
+ * The second is answered by one source and a second cannot improve on it. The
+ * first is answered by every source that could hold it, and stopping at the
+ * first hit reports one platform's three while never mentioning the other's
+ * four — which is not a partial answer but a wrong one.
+ */
+describe("across every source", () => {
+  it("keeps reading after the first source answers", async () => {
+    const llm = script(
+      { sources: ["platform-x"], reason: "" },
+      { verdict: "found", answer: "3 mention it", missing: "", matched: [0] },
+      { sources: ["platform-y"], reason: "" },
+      { verdict: "found", answer: "4 mention it", missing: "", matched: [0] },
+      { sources: [], reason: "nothing else holds conversations" },
+    );
+    const reads: string[] = [];
+    const result = await runContextHarness("has anyone mentioned running late?", {
+      llm,
+      scope: { mode: "all" },
+      candidates: [
+        candidate("platform-x", { connection: "x" }),
+        candidate("platform-y", { connection: "y" }),
+      ],
+      readCandidate: async (c) => {
+        reads.push(c.id);
+        return evidenceFor(c, [{ text: "running late" }]);
+      },
+    });
+
+    expect(reads).toEqual(["platform-x", "platform-y"]);
+    expect(result.outcome).toBe("found");
+    expect(result.evidence).toHaveLength(2);
+  });
+
+  /*
+   * Itemizing needs each source's own reading. One combined sentence cannot be
+   * attributed back to either platform.
+   */
+  it("keeps what each source said, separately", async () => {
+    const llm = script(
+      { sources: ["platform-x"], reason: "" },
+      { verdict: "found", answer: "3 mention it", missing: "", matched: [0] },
+      { sources: ["platform-y"], reason: "" },
+      { verdict: "found", answer: "4 mention it", missing: "", matched: [0] },
+      { sources: [], reason: "" },
+    );
+    const result = await runContextHarness("who is running late?", {
+      llm,
+      scope: { mode: "all" },
+      candidates: [
+        candidate("platform-x", { connection: "x" }),
+        candidate("platform-y", { connection: "y" }),
+      ],
+      readCandidate: async (c) => evidenceFor(c, [{ text: "late" }]),
+    });
+
+    expect(result.evidence.map((entry) => entry.answer)).toEqual([
+      "3 mention it",
+      "4 mention it",
+    ]);
+    expect(result.evidence.map((entry) => entry.matched)).toEqual([1, 1]);
+    expect(result.evidence.map((entry) => entry.candidate.connection)).toEqual(["x", "y"]);
+  });
+
+  it("still stops at the first answer when not asked to go wide", async () => {
+    const llm = script(
+      { sources: ["platform-x"], reason: "" },
+      { verdict: "found", answer: "3", missing: "", matched: [0] },
+    );
+    const reads: string[] = [];
+    const result = await runContextHarness("how many?", {
+      llm,
+      candidates: [candidate("platform-x"), candidate("platform-y")],
+      readCandidate: async (c) => {
+        reads.push(c.id);
+        return evidenceFor(c, [{ text: "x" }]);
+      },
+    });
+    expect(reads).toEqual(["platform-x"]);
+    expect(result.evidence).toHaveLength(1);
+  });
+
+  /* The budget is still the budget. Going wide cannot mean going unbounded. */
+  it("stops at the budget however many sources could hold it", async () => {
+    const llm = script(
+      { sources: ["a"], reason: "" },
+      { verdict: "found", answer: "1", missing: "", matched: [0] },
+      { sources: ["b"], reason: "" },
+      { verdict: "found", answer: "1", missing: "", matched: [0] },
+      { sources: ["c"], reason: "" },
+      { verdict: "found", answer: "1", missing: "", matched: [0] },
+    );
+    const reads: string[] = [];
+    await runContextHarness("anywhere?", {
+      llm,
+      scope: { mode: "all" },
+      budget: { sources: 2, requests: 8 },
+      candidates: [candidate("a"), candidate("b"), candidate("c")],
+      readCandidate: async (c) => {
+        reads.push(c.id);
+        return evidenceFor(c, [{ text: "x" }]);
+      },
+    });
+    expect(reads).toEqual(["a", "b"]);
+  });
+});

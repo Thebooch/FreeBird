@@ -4,6 +4,8 @@ import type { WidgetHandle } from "../chat/handles.js";
 import type { Focus } from "./focus.js";
 import { readWidget } from "./read.js";
 import { identityFor } from "./related.js";
+import { bindingsFor, expansionFor } from "../tools/bindings.js";
+import { readRecords } from "../tools/read.js";
 import type { OpReader } from "./types.js";
 
 /**
@@ -94,47 +96,74 @@ export const focusFromScreen = async (
   if (!idField) return null;
 
   /*
-   * The record's own fetch first, because that is what the page made.
+   * The record's own endpoint first, because that is what the page called.
    *
    * A record page does not read the list — it calls the endpoint for that one
-   * record, `/things/{id}`, and that is the request sitting in the cache. The
-   * first version scanned the widget's rows instead, missed every time
-   * somebody arrived by link, and reported that it could not tell what was on
-   * screen while the record sat in the cache under a different key.
+   * record, and that is the request sitting in the cache. The first version
+   * scanned the widget's rows instead, missed every time somebody arrived by
+   * link, and reported that it could not tell what was on screen while the
+   * record sat in the cache under a different key.
    *
    * It is also the better record: a detail endpoint returns everything, where
-   * a list row carries whatever the collection chose to include.
+   * a list row carries whatever the collection chose to include. This is the
+   * same act `read_record` performs, through the same code — the only
+   * difference is that nothing may be bought to do it.
    */
+  /*
+   * The widget's own drill-down wins over the catalog's.
+   *
+   * They normally agree — both come from the same resource model — but the one
+   * that matters is the one the page actually called, because that is the
+   * cache key the row is sitting under. Preferring the catalog's would produce
+   * a miss that looks exactly like a cold cache.
+   */
+  const catalogue = expansionFor(bindingsFor({ context: input.context }), op);
   const drilldown = entry.widget.drilldown;
-  if (drilldown?.op) {
-    const params: Record<string, string> = {};
-    for (const [name, value] of Object.entries(drilldown.params ?? {})) {
-      // The drill-down states which input carries the row's identity, as a
-      // `{{row.<field>}}` token. The value is the id from the address bar.
-      params[name] = /\{\{\s*row\./.test(value) ? input.open.recordId : value;
-    }
-    const outcome = await input.read({
-      connection,
-      op: drilldown.op,
-      params,
-      resolved: input.resolved,
+  const declared = drilldown?.op
+    ? Object.entries(drilldown.params ?? {}).find(([, value]) => /\{\{\s*row\./.test(value))
+    : undefined;
+  const binding =
+    drilldown?.op && declared
+      ? {
+          ...(catalogue ?? {
+            verb: "read" as const,
+            id: entry.handle,
+            connection,
+            connectionTitle: connection,
+            resource: entry.widget.title,
+            title: entry.widget.title,
+            describes: "",
+          }),
+          op: drilldown.op,
+          idParam: declared[0],
+        }
+      : catalogue;
+
+  if (binding) {
+    const opened = await readRecords({
+      binding,
+      ids: [input.open.recordId],
+      deps: {
+        read: input.read,
+        resolved: input.resolved,
+        rowsOf: (body) => input.rowsOf(body),
+        rowsPathFor: () => "$",
+      },
+      // Free or not at all: the rows were drawn a moment ago.
       cacheOnly: true,
     });
-    if (outcome?.ok) {
-      const rows = input.rowsOf(outcome.body);
-      const record = rows[0];
-      if (record) {
-        return {
-          question: "the record they have open",
-          source: entry.handle,
-          sourceTitle: entry.widget.title,
-          connection,
-          op,
-          idField,
-          records: [record],
-          savedAt: new Date(input.now()).toISOString(),
-        };
-      }
+    const record = opened.records[0];
+    if (record) {
+      return {
+        question: "the record they have open",
+        source: entry.handle,
+        sourceTitle: entry.widget.title,
+        connection,
+        op,
+        idField,
+        records: [record],
+        savedAt: new Date(input.now()).toISOString(),
+      };
     }
   }
 

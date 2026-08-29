@@ -59,6 +59,34 @@ export const focusSchema = z.object({
 
 export type Focus = z.infer<typeof focusSchema>;
 
+/**
+ * Fold newly opened records into the ones already held.
+ *
+ * A record opened in full supersedes the summary it was read from — same
+ * record, more fields — but the records beside it are still what the
+ * conversation is about. "Any dishwasher or washing machine tasks?" followed
+ * by "notes on the dishwasher one?" must not lose the washing machine,
+ * because "and the other one?" is the next thing anybody asks.
+ *
+ * Without an identifier there is nothing to match on, so the opened records
+ * simply lead and the rest follow. That is worse than merging and better than
+ * pretending two records are the same because they arrived together.
+ */
+export const mergeRecords = (
+  held: readonly Record<string, unknown>[],
+  opened: readonly Record<string, unknown>[],
+  idField: string | null,
+): Record<string, unknown>[] => {
+  if (!idField) return [...opened, ...held];
+  const replaced = new Set(
+    opened.map((record) => String(record[idField] ?? "")).filter((id) => id !== ""),
+  );
+  return [
+    ...opened,
+    ...held.filter((record) => !replaced.has(String(record[idField] ?? ""))),
+  ];
+};
+
 /** How long a focus survives without being used. */
 export const FOCUS_TTL_MS = 2 * 60 * 60 * 1000;
 

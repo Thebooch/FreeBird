@@ -74,6 +74,16 @@ export interface Evidence {
    */
   readonly shows?: readonly string[];
   readonly coverage: Coverage;
+  /**
+   * What the judge read out of *these* rows, and how many it matched.
+   *
+   * Per source rather than per turn, because a question asked across several
+   * connected platforms has an answer per platform — "three here, four there"
+   * — and one combined sentence cannot be attributed back to either. Absent
+   * until the source has been judged.
+   */
+  readonly answer?: string;
+  readonly matched?: number;
   /** Caveats the runtime raised — dropped joins, page caps, coercion failures. */
   readonly warnings: readonly string[];
   /** Upstream requests this cost. Zero when it came out of the cache. */
@@ -122,6 +132,15 @@ export interface HarnessResult {
   /** Which evidence the matches came from, so their source can be named. */
   readonly matchedFrom: Evidence | null;
   readonly spent: { readonly requests: number; readonly sources: number };
+  /**
+   * Things the reply is required to say, because they cost something.
+   *
+   * Opening a record, fanning out over several sources — anything that spends
+   * a request the user did not explicitly ask for has to be stated. A lookup
+   * nobody asked for and nobody was told about is the kind of cost that gets a
+   * feature switched off.
+   */
+  readonly notes: readonly string[];
   /** True when more could be read if the user asks for it. */
   readonly canGoDeeper: boolean;
 }

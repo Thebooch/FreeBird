@@ -1,6 +1,6 @@
 import { fakeLlm } from "@freebirdai/dash-agent";
 import { describe, expect, it } from "vitest";
-import { type Focus, MemoryFocusStore, focusIds, parseFocus } from "./focus.js";
+import { type Focus, MemoryFocusStore, focusIds, mergeRecords, parseFocus } from "./focus.js";
 import { recallFromFocus } from "./recall.js";
 
 /**
@@ -110,6 +110,39 @@ describe("recallFromFocus", () => {
     expect(result.answer).toBe("It is not draining.");
   });
 
+  /*
+   * The gap this closes. Two records are held, the follow-up names one, and
+   * opening whichever sorts first spends a request to describe the other —
+   * which reads exactly like a correct answer.
+   */
+  it("names which of the held records the follow-up is about", async () => {
+    const llm = ask({ decision: "related", wants: "the notes", records: [1] });
+    const result = await recallFromFocus(llm, {
+      question: "notes on the second one?",
+      focus: focus({ records: [{ Id: 1 }, { Id: 2 }] }),
+    });
+    expect(result.records).toEqual([1]);
+  });
+
+  it("takes an empty list as meaning all of them", async () => {
+    const llm = ask({ decision: "related", wants: "the notes" });
+    const result = await recallFromFocus(llm, {
+      question: "any notes on those?",
+      focus: focus({ records: [{ Id: 1 }, { Id: 2 }] }),
+    });
+    expect(result.records).toEqual([]);
+  });
+
+  /* An out-of-range position would silently drop a subject. */
+  it("discards a position the held records do not have", async () => {
+    const llm = ask({ decision: "related", wants: "the notes", records: [0, 7, 0] });
+    const result = await recallFromFocus(llm, {
+      question: "notes?",
+      focus: focus({ records: [{ Id: 1 }] }),
+    });
+    expect(result.records).toEqual([0]);
+  });
+
   it("recognises a question about something attached to the records", async () => {
     const llm = ask({ decision: "related", answer: "", wants: "notes on the task" });
     const result = await recallFromFocus(llm, {
@@ -178,5 +211,55 @@ describe("recallFromFocus", () => {
     expect(prompt).toContain("All Tasks");
     expect(prompt).toContain("Dishwasher");
     expect(prompt).toContain("any dishwasher tasks?");
+  });
+});
+
+
+/**
+ * The gap this closes: a follow-up that opened the wrong record.
+ *
+ * Two tasks are found, the follow-up names one, and opening whichever happened
+ * to sort first spends a request to describe the other one — which reads
+ * exactly like a correct answer.
+ */
+describe("mergeRecords", () => {
+  const held = [
+    { Id: 1, Title: "Dishwasher" },
+    { Id: 2, Title: "Washing machine" },
+  ];
+
+  it("replaces the summary with the record opened in full", () => {
+    const merged = mergeRecords(held, [{ Id: 1, Title: "Dishwasher", Description: "not draining" }], "Id");
+    expect(merged).toHaveLength(2);
+    expect(merged[0]).toMatchObject({ Id: 1, Description: "not draining" });
+  });
+
+  /*
+   * "And the other one?" is the next thing anybody asks, so the records beside
+   * the one just opened have to survive.
+   */
+  it("keeps the records it did not open", () => {
+    const merged = mergeRecords(held, [{ Id: 1, Description: "x" }], "Id");
+    expect(merged.find((record) => record["Id"] === 2)).toMatchObject({ Title: "Washing machine" });
+  });
+
+  it("matches a numeric id against a string one", () => {
+    const merged = mergeRecords([{ Id: "1", Title: "a" }], [{ Id: 1, Title: "a", Extra: true }], "Id");
+    expect(merged).toHaveLength(1);
+  });
+
+  /*
+   * Without an identifier there is nothing to match on. Leading with the
+   * opened records is worse than merging and better than pretending two
+   * records are the same because they arrived together.
+   */
+  it("leads with the opened records when nothing identifies them", () => {
+    const merged = mergeRecords(held, [{ Title: "opened" }], null);
+    expect(merged[0]).toEqual({ Title: "opened" });
+    expect(merged).toHaveLength(3);
+  });
+
+  it("is the held records when nothing was opened", () => {
+    expect(mergeRecords(held, [], "Id")).toEqual(held);
   });
 });

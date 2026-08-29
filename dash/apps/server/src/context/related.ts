@@ -62,13 +62,32 @@ export const relatedFor = (
   op: string,
 ): readonly ChildCollection[] => context.children.filter((child) => child.parentOp === op);
 
+/**
+ * One thing that can be opened from a record in hand.
+ *
+ * Deliberately not a `ChildCollection`. A record's own fuller version, a
+ * collection attached to it, and another record it points at are three
+ * mechanisms serving one decision — "where does what they asked for live?" —
+ * and different APIs model the same information as different ones of the
+ * three. Notes are a subcollection on one API and a field on the record on the
+ * next, so a picker that could only see collections could only ever find half
+ * of them.
+ */
+export interface LookupOption {
+  /** Resolved back against the list by the caller. Never approximated. */
+  readonly id: string;
+  readonly title: string;
+  /** What choosing it would get, in plain words. */
+  readonly note: string;
+}
+
 export const PICK_RELATED_PROMPT = [
-  "A record is in hand and something attached to it has been asked for. Choose which of the",
-  "collections below holds it.",
+  "A record is in hand and something it does not itself contain has been asked for. Choose",
+  "which of the things below holds it.",
   "",
   "Answer with one id from the list, or leave it empty when none of them is what was asked",
   "for. An empty answer is a real answer — the reply will say the API does not expose it,",
-  "which is more useful than reading the wrong collection and reporting what it happened to",
+  "which is more useful than opening the wrong thing and reporting what it happened to",
   "contain.",
 ].join("\n");
 
@@ -77,37 +96,50 @@ const pickSchema = z.object({
     .string()
     .max(200)
     .default("")
-    .describe("Id of the collection to read, or empty if none of them fits."),
+    .describe("Id of the one to open, or empty if none of them fits."),
   reason: z.string().max(300).default(""),
 });
 
 const pickTool: LlmTool = {
   name: "pick_related",
-  description: "Choose which related collection to read.",
+  description: "Choose which of these holds what was asked for.",
   schema: pickSchema,
 };
 
 export const buildRelatedPrompt = (input: {
   readonly wants: string;
-  readonly options: readonly ChildCollection[];
+  readonly options: readonly LookupOption[];
 }): string =>
   [
     `Wanted: ${input.wants}`,
     "",
-    "Collections attached to this record:",
+    "What can be opened from this record:",
     ...input.options.map(
-      (option) =>
-        `- ${option.id}: ${option.title}` +
-        (option.path ? ` (${option.path})` : "") +
-        (option.resource ? ` — records of ${option.resource}` : ""),
+      (option) => `- ${option.id}: ${option.title}${option.note ? ` — ${option.note}` : ""}`,
     ),
   ].join("\n");
 
-export const pickRelated = async (
+/** Describe a child collection as something that can be opened. */
+export const asOption = (child: ChildCollection): LookupOption => ({
+  id: child.id,
+  title: child.title,
+  note:
+    (child.resource ? `records of ${child.resource}` : "a collection attached to this record") +
+    (child.path ? ` (${child.path})` : ""),
+});
+
+/**
+ * Which of them holds it, or none of them.
+ *
+ * Returns the option itself, resolved against the list that was offered — the
+ * same boundary every model-chosen id in this codebase is held to, because an
+ * approximated id is a request against the wrong endpoint.
+ */
+export const pickOption = async <T extends LookupOption>(
   llm: LlmAdapter,
-  input: { readonly wants: string; readonly options: readonly ChildCollection[] },
+  input: { readonly wants: string; readonly options: readonly T[] },
   options: { model?: string | undefined; signal?: AbortSignal | undefined } = {},
-): Promise<ChildCollection | null> => {
+): Promise<T | null> => {
   if (input.options.length === 0) return null;
 
   try {
@@ -126,8 +158,6 @@ export const pickRelated = async (
     const call = result.toolCalls.find((candidate) => candidate.name === "pick_related");
     const parsed = call ? pickSchema.safeParse(call.args) : null;
     if (!parsed?.success || !parsed.data.collection) return null;
-    // Resolved against the list, never approximated — the same boundary every
-    // other model-chosen id in this codebase is held to.
     return input.options.find((option) => option.id === parsed.data.collection) ?? null;
   } catch {
     return null;

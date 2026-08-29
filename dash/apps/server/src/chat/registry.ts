@@ -74,6 +74,15 @@ export interface BuildChatRegistryInput {
    * nothing finer, so "what is this?" on a record page has no subject.
    */
   readonly onScreen?: string;
+  /**
+   * Which kinds of record can be opened in full, one line each.
+   *
+   * Rebuilt every turn, unlike the tool schemas the engine takes once — which
+   * is what lets a connection added five minutes ago be used without a
+   * restart. It is also what stops the assistant reporting a field as
+   * unavailable when the collection merely summarised it. See `readRoster`.
+   */
+  readonly records?: string;
   readonly board: BoardOps;
   /** Offers the chat may pick from when asked to add something. */
   readonly suggestions?: readonly AuthoredWidget[];
@@ -732,6 +741,7 @@ export const buildChatRegistry = (input: BuildChatRegistryInput) => {
       "The workspace itself: every widget on every tab, and what can be added.",
     knowledge: [
       ...(input.onScreen ? [{ text: input.onScreen }] : []),
+      ...(input.records ? [{ text: input.records }] : []),
       ...inventoryKnowledge(input, handles),
       ...workspaceKnowledge(input),
       ...(input.concierge ? conciergeKnowledge(input.concierge) : []),

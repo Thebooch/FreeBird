@@ -26,6 +26,7 @@ export type Flow =
   | "answered"
   | "recalled"
   | "opened"
+  | "across"
   | "deep"
   | "partial"
   | "nothing-found"
@@ -69,6 +70,11 @@ const ALWAYS = [
  * than a synonym swap.
  */
 export const RESPONSE_PROMPTS: Record<Flow, readonly string[]> = {
+  across: [
+    "Several connected sources each hold part of this. Report them separately and name each one — a single combined total cannot be acted on, and one of them being the interesting one is exactly what they are trying to find out. Say how many sources were looked at, and if any could not be read, which.",
+    "This was found in more than one place. Give the answer per source, named, so they can see where the weight is. Do not merge them into one figure, and be clear about which sources were covered and which were not.",
+    "The answer is spread across sources. Take them one at a time, naming the source and what it holds, then say plainly how many places were checked in total.",
+  ],
   recalled: [
     "This was answered from records already in hand — nothing was read. Answer plainly and do not mention where the records came from unless they ask; from their side it is the same conversation.",
     "The records were already held from the earlier question, so nothing was fetched. Give the answer directly.",
@@ -134,6 +140,8 @@ export interface TurnFacts {
     readonly recalled?: boolean;
     /** A collection hanging off the record was opened, at a cost. */
     readonly opened?: boolean;
+    /** More than one connected source held part of the answer. */
+    readonly across?: number;
   };
   readonly builtWidget?: boolean;
 }
@@ -168,6 +176,12 @@ export const flowOf = (ctx: FinalReplyContext, facts: TurnFacts = {}): Flow => {
      */
     if (facts.harness.opened) return "opened";
     if (facts.harness.recalled) return "recalled";
+    /*
+     * Several platforms each hold part of it. Answering with one combined
+     * number here is not a summary, it is a loss: "seven mentions" cannot be
+     * acted on, and "three in X, four in Y" can.
+     */
+    if ((facts.harness.across ?? 0) > 1) return "across";
     if (facts.harness.outcome === "found") return "answered";
     if (facts.harness.outcome === "partial") return "partial";
     if (facts.harness.outcome === "exhausted") return "exhausted";
@@ -222,12 +236,27 @@ export const factsFrom = (ctx: FinalReplyContext): TurnFacts => {
       typeof shaped === "object" &&
       typeof shaped.outcome === "string"
     ) {
-      const extra = shaped as { usedContext?: unknown; openedRelated?: unknown };
+      const extra = shaped as {
+        usedContext?: unknown;
+        openedRelated?: unknown;
+        findings?: ReadonlyArray<{ from?: string; matched?: number }>;
+      };
+      /*
+       * Counted by connection, not by source. Two widgets over the same API
+       * are one platform holding the answer twice, and reporting that as two
+       * places would invent a spread the user does not have.
+       */
+      const across = new Set(
+        (extra.findings ?? [])
+          .filter((finding) => (finding.matched ?? 0) > 0 && finding.from)
+          .map((finding) => finding.from as string),
+      ).size;
       facts.harness = {
         outcome: shaped.outcome as NonNullable<TurnFacts["harness"]>["outcome"],
         ...(shaped.deep ? { deep: true } : {}),
         ...(extra.openedRelated ? { opened: true } : {}),
         ...(extra.usedContext && !extra.openedRelated ? { recalled: true } : {}),
+        ...(across > 1 ? { across } : {}),
       };
     }
   }

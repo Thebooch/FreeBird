@@ -254,6 +254,68 @@ const scripted = fakeLlm([
 ]);
 
 /*
+ * `--expand <text>` reproduces the shape the record-opening path exists for:
+ * the rows name the record and do not carry what was asked for.
+ *
+ * The judge cannot be scripted upfront here, because the position of the
+ * matching row is not known until the rows have been read. So the judge call
+ * is intercepted, the row is found in the prompt it was actually handed, and
+ * the verdict is built around it — still free, still deterministic, and now
+ * exercising the one path a scripted `found` can never reach.
+ */
+const expandAt = process.argv.indexOf("--expand");
+const expandFor = expandAt === -1 ? null : process.argv[expandAt + 1];
+
+const expandingLlm = (fallback: ReturnType<typeof fakeLlm>) => {
+  let judged = 0;
+  return {
+    ...fallback,
+    generate: async (opts: Parameters<typeof fallback.generate>[0]) => {
+      const name = (opts.toolChoice as { name?: string } | undefined)?.name;
+      if (name !== "judge_evidence") return fallback.generate(opts);
+
+      judged += 1;
+      // The second judge is the one that sees the opened record.
+      if (judged > 1) {
+        return {
+          text: "",
+          toolCalls: [
+            {
+              id: "j2",
+              name: "judge_evidence",
+              args: { verdict: "found", answer: "scripted-after-open", missing: "", matched: [] },
+            },
+          ],
+          } as Awaited<ReturnType<typeof fallback.generate>>;
+      }
+
+      const prompt = opts.messages.map((message) => message.content).join("\n");
+      const start = prompt.indexOf("[");
+      const rows = start === -1 ? [] : (JSON.parse(prompt.slice(start, prompt.lastIndexOf("]") + 1)) as unknown[]);
+      const at = rows.findIndex((row) =>
+        JSON.stringify(row).toLowerCase().includes((expandFor ?? "").toLowerCase()),
+      );
+      console.log(`  [scripted judge] matched "${expandFor}" at index ${at} of ${rows.length}`);
+      return {
+        text: "",
+        toolCalls: [
+          {
+            id: "j1",
+            name: "judge_evidence",
+            args: {
+              verdict: "partial",
+              answer: "",
+              missing: "the notes are not in these rows",
+              matched: at === -1 ? [] : [at],
+            },
+          },
+        ],
+      } as Awaited<ReturnType<typeof fallback.generate>>;
+    },
+  } as typeof fallback;
+};
+
+/*
  * `--deep N` runs the real chunked analysis on the real model, which is the
  * only way to see whether a hundred records at a time yields a pattern worth
  * reading. It costs one call per chunk plus the join.
@@ -281,7 +343,7 @@ const answer = await answerFromData(
      */
     sessionId: "eval",
     focus: focusStore,
-    llm: scanRecords ? deepLlm(scripted) : scripted,
+    llm: expandFor ? expandingLlm(scripted) : scanRecords ? deepLlm(scripted) : scripted,
     ...(chunkSize ? { chunkSize } : {}),
     context,
     handles,

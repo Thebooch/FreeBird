@@ -324,6 +324,17 @@ export const buildConciergeContext = (input: ContextInput): ConciergeContext => 
       if (pathParamNames(resolved.path).length > 0) continue;
       const described = resolved.description ?? mappedOps.get(op.id)?.description;
       const resource = resourceOfOp.get(op.id);
+      /*
+       * The op's own inputs, falling back to the map's.
+       *
+       * A connection created from a shared catalog entry often carries no
+       * params of its own — the map has them, all two hundred and twenty-six
+       * endpoints' worth, including the roles. Reading only the connection's
+       * copy is how the query tool came to derive nothing at all from an API
+       * that describes itself perfectly well.
+       */
+      const params = resolved.params.length > 0 ? resolved.params : mappedOps.get(op.id)?.params;
+
       ops.push({
         id: op.id,
         title: resolved.title,
@@ -331,6 +342,7 @@ export const buildConciergeContext = (input: ContextInput): ConciergeContext => 
         path: resolved.path,
         ...(described ? { description: described } : {}),
         ...(resource ? { resource } : {}),
+        ...(params && params.length > 0 ? { params } : {}),
       });
 
     }

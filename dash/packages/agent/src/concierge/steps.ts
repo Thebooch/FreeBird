@@ -1,4 +1,4 @@
-import type { ComponentContract, RoleContract } from "@freebirdai/dash-spec";
+import type { ComponentContract, ParamDef, RoleContract } from "@freebirdai/dash-spec";
 import {
   COMPONENT_CONTRACTS,
   PRESENTATION_MANIFESTS,
@@ -214,6 +214,18 @@ export interface ConciergeContext {
      * an API already declares is better than one inferred from id prefixes.
      */
     readonly resource?: string | undefined;
+    /**
+     * What this endpoint accepts, and what each input *does*.
+     *
+     * `role` is the load-bearing field, as `paramDefSchema` says: every vendor
+     * spells the same idea differently, and recording the role once is what
+     * lets something offer "narrow this to a date range" without knowing the
+     * vendor's vocabulary. Carried here because the query tool is that
+     * something, and it needs the roles rather than the names.
+     *
+     * Absent for an endpoint nothing has described.
+     */
+    readonly params?: readonly ParamDef[] | undefined;
   }>;
   /** Sampled shape per op id, for whatever has been read. */
   readonly shapes: Readonly<Record<string, InferredShape>>;

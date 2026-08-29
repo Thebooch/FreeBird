@@ -1,11 +1,26 @@
-import type { ConciergeContext, LlmAdapter, LlmTool } from "@freebirdai/dash-agent";
+import type {
+  ChildCollection,
+  ConciergeContext,
+  LlmAdapter,
+  LlmTool,
+} from "@freebirdai/dash-agent";
 import type { DashboardSpec, ResolvedParams } from "@freebirdai/dash-spec";
 import { z } from "zod";
 import type { WidgetHandle } from "../chat/handles.js";
-import { buildCandidates } from "./candidates.js";
-import type { Focus, FocusStore } from "./focus.js";
+import { buildCandidates, narrowTo } from "./candidates.js";
+import { type Focus, type FocusStore, mergeRecords } from "./focus.js";
 import { recallFromFocus } from "./recall.js";
-import { identityFor, pickRelated, readRelated, relatedFor } from "./related.js";
+import {
+  type LookupOption,
+  asOption,
+  identityFor,
+  pickOption,
+  readRelated,
+  relatedFor,
+} from "./related.js";
+import { bindingsFor, expansionFor, referencesFrom } from "../tools/bindings.js";
+import { identityValue, readRecords, readReferenced } from "../tools/read.js";
+import type { Reference, ToolBinding, ToolDeps } from "../tools/types.js";
 import { CHUNK_SIZE, type DeepFinding, analyseDeep } from "./deep.js";
 import { type Budget, DEFAULT_BUDGET, runContextHarness } from "./harness.js";
 import { PAGE_SIZE, readEndpoint, readWidget } from "./read.js";
@@ -35,6 +50,24 @@ const answerSchema = z.object({
       "What to find out, in one self-contained sentence. Include what the user means by " +
         "their own words — this is read without the rest of the conversation.",
     ),
+  source: z
+    .string()
+    .max(120)
+    .optional()
+    .describe(
+      "Set ONLY when the user named where to look — a platform, a connection, a tab or a " +
+        "widget. It restricts the search to that place. Leave unset when they did not say, " +
+        "because reading somewhere they did not ask about spends their API quota.",
+    ),
+  across: z
+    .boolean()
+    .optional()
+    .describe(
+      "Set when the question is whether something appears ANYWHERE — 'has anyone', 'any of " +
+        "my', 'across everything'. Every connected source that could hold it is read and " +
+        "reported separately, so the answer can say which platform has what. Costs more " +
+        "than a single-source answer; leave unset for an ordinary question.",
+    ),
   scanRecords: z
     .number()
     .int()
@@ -63,7 +96,9 @@ export const ANSWER_TOOL: LlmTool = {
     "never instead of the answer, so ask here first and point afterwards. It searches " +
     "the widgets on every tab and the connected " +
     "endpoints, reads a bounded sample, and reports how much it read. Pass `scanRecords` " +
-    "only when the user has asked to look deeper.",
+    "only when the user has asked to look deeper. Pass `source` when they named where to " +
+    "look, and `across` when they asked whether something appears anywhere at all - that " +
+    "reads every source that could hold it and reports each one separately.",
   schema: answerSchema,
 };
 
@@ -107,11 +142,23 @@ export interface AnswerResult {
   readonly answer: string;
   /** True when this was answered from records already in hand. */
   readonly usedContext?: boolean;
-  /** What extra collection was opened, when one was — the reply must say so. */
+  /**
+   * What extra was opened, when anything was — the reply must say so.
+   *
+   * A record read in full, a collection attached to it, or a record it points
+   * at. All three cost a request nobody explicitly asked for, and a lookup
+   * nobody was told about is the kind of cost that gets a feature switched off.
+   */
   readonly openedRelated?: string;
   readonly findings: ReadonlyArray<{
     readonly source: string;
     readonly tab?: string;
+    /** Which connection this source belongs to, so an answer can itemize. */
+    readonly from?: string;
+    /** What the judge read out of this source alone. */
+    readonly answer?: string;
+    /** How many of its records the question was about. */
+    readonly matched?: number;
     readonly describes: string;
     readonly columns: readonly string[];
     /** The columns the tile draws, when it says. Used to narrow a big dump. */
@@ -173,15 +220,39 @@ export const answerFromData = async (
     return { error: "there is no AI key configured, so the data cannot be searched" };
   }
 
-  const candidates = buildCandidates({
+  const everywhere = buildCandidates({
     handles: deps.handles,
     context: deps.context,
     resolved: deps.resolved,
     isCached: deps.isCached,
   });
+  /*
+   * Where they said to look, when they said. A hard constraint rather than an
+   * inference: reading a platform nobody named spends their quota on a
+   * question they did not ask.
+   */
+  const candidates = parsed.data.source
+    ? narrowTo(everywhere, parsed.data.source, deps.context.connections)
+    : everywhere;
 
   const limit = parsed.data.scanRecords ?? PAGE_SIZE;
   const widgetOf = new Map(deps.handles.map((entry) => [entry.handle, entry]));
+
+  /*
+   * What every connected API can be asked to do, derived from its map.
+   *
+   * Nothing below knows which API it is talking to: a binding says which
+   * endpoint returns one record, which input takes its identifier and which
+   * field on a row supplies it, and those facts are true of every API that has
+   * records at all.
+   */
+  const bindings = bindingsFor({ context: deps.context });
+  const toolDeps: ToolDeps = {
+    read: deps.read,
+    resolved: deps.resolved,
+    rowsOf: deps.rowsOf,
+    rowsPathFor: deps.rowsPathFor,
+  };
 
   /*
    * What the conversation is already about, before anything is read.
@@ -222,20 +293,85 @@ export const answerFromData = async (
     }
 
     if (recalled.decision === "related") {
-      const options = relatedFor(deps.context, focus.op);
-      const child = await pickRelated(
+      /*
+       * Which of the held records this is about.
+       *
+       * The gap this closes: two tasks are found, the follow-up names one of
+       * them, and opening whichever happened to sort first spends a request to
+       * describe the *other* one — which reads exactly like a correct answer.
+       * Empty means all of them, which is a real answer for "any notes on
+       * those?".
+       */
+      const subject =
+        recalled.records.length > 0
+          ? recalled.records
+              .map((index) => focus.records[index])
+              .filter((record): record is Record<string, unknown> => record !== undefined)
+          : focus.records;
+
+      /*
+       * Everything that can be opened from the records in hand, as one list.
+       *
+       * Three mechanisms, one decision. The record's own fuller version, a
+       * collection attached to it, and a record it points at are different
+       * things to an API and the same thing to somebody asking "what are the
+       * notes on that?" — an API models notes as a subcollection, the next one
+       * as a field on the record you have to fetch, and a picker that could
+       * only see collections could only ever find half of them. That is
+       * exactly how the transcript failed: it looked for a notes collection,
+       * found none, and never considered that the record itself had more.
+       */
+      const expansion = expansionFor(bindings, focus.op);
+      const references = referencesFrom(deps.context, focus.op, bindings);
+
+      type Openable = LookupOption &
+        (
+          | { readonly kind: "record"; readonly binding: ToolBinding }
+          | { readonly kind: "collection"; readonly child: ChildCollection }
+          | { readonly kind: "reference"; readonly reference: Reference }
+        );
+
+      const options: Openable[] = [
+        ...(expansion
+          ? [
+              {
+                id: "the-record-itself",
+                title: `The full ${expansion.resource} record`,
+                note:
+                  "every field the collection left out — descriptions, notes and anything " +
+                  "else only the record itself carries",
+                kind: "record" as const,
+                binding: expansion,
+              },
+            ]
+          : []),
+        ...relatedFor(deps.context, focus.op).map((child) => ({
+          ...asOption(child),
+          kind: "collection" as const,
+          child,
+        })),
+        ...references.map((reference) => ({
+          id: `points-at-${reference.field}`,
+          title: reference.title,
+          note: `the ${reference.to.resource} this record points at, by its ${reference.field}`,
+          kind: "reference" as const,
+          reference,
+        })),
+      ];
+
+      const chosen = await pickOption(
         deps.llm,
         { wants: recalled.wants, options },
         { ...(deps.model ? { model: deps.model } : {}) },
       );
-      if (!child) {
+      if (!chosen) {
         return {
           outcome: "not-found",
           looked: [focus.source],
           missing:
             options.length === 0
-              ? `nothing is recorded as attached to these records, so ${recalled.wants} cannot be looked up`
-              : `none of what is attached to these records holds ${recalled.wants}`,
+              ? `this API exposes nothing further about these records, so ${recalled.wants} cannot be looked up`
+              : `none of what can be opened from these records holds ${recalled.wants}`,
           answer: "",
           usedContext: true,
           findings: [],
@@ -243,19 +379,113 @@ export const answerFromData = async (
         };
       }
 
+      /*
+       * Opening the record itself.
+       *
+       * The fuller records replace what the conversation is about, which is
+       * the compounding part: a list row was kept because it was all there
+       * was, and every later question about this record is now answered from
+       * the whole thing for nothing.
+       */
+      if (chosen.kind === "record") {
+        const ids = subject.flatMap((record) =>
+          identityValue(record, chosen.binding.idField ?? focus.idField ?? "", chosen.binding.idField),
+        );
+        const opened = await readRecords({ binding: chosen.binding, ids, deps: toolDeps });
+
+        /*
+         * Merged, not replaced.
+         *
+         * The opened record supersedes the summary it was read from, but the
+         * others stay: "any dishwasher or washing machine tasks?" followed by
+         * "notes on the dishwasher one?" must not throw away the washing
+         * machine, because "and the other one?" is the next thing anybody asks.
+         */
+        if (deps.focus && opened.records.length > 0) {
+          await deps.focus.put(deps.sessionId, {
+            ...focus,
+            idField: chosen.binding.idField ?? focus.idField,
+            records: mergeRecords(
+              focus.records,
+              opened.records,
+              chosen.binding.idField ?? focus.idField,
+            ).slice(0, 50),
+            savedAt: new Date(deps.now()).toISOString(),
+          });
+        }
+
+        return {
+          outcome: opened.records.length > 0 ? "found" : "not-found",
+          looked: [focus.source, chosen.binding.op],
+          missing: opened.records.length > 0 ? "" : recalled.wants,
+          answer: "",
+          usedContext: true,
+          openedRelated: opened.note,
+          findings:
+            opened.records.length > 0
+              ? [
+                  {
+                    source: focus.sourceTitle || focus.source,
+                    describes: `the full ${chosen.binding.resource} record`,
+                    columns: [...new Set(opened.records.flatMap((row) => Object.keys(row)))],
+                    coverage: `read in full — all ${opened.records.length} record(s)`,
+                    rows: opened.records,
+                    caveats: opened.warnings,
+                  },
+                ]
+              : [],
+          requests: opened.requests,
+          componentIds: [focus.source],
+        };
+      }
+
+      /* A record this one points at, opened with an id it already carries. */
+      if (chosen.kind === "reference") {
+        const opened = await readReferenced({
+          reference: chosen.reference,
+          from: subject,
+          deps: toolDeps,
+        });
+        return {
+          outcome: opened.records.length > 0 ? "found" : "not-found",
+          looked: [focus.source, chosen.reference.to.op],
+          missing: opened.records.length > 0 ? "" : recalled.wants,
+          answer: "",
+          usedContext: true,
+          openedRelated: opened.note,
+          findings:
+            opened.records.length > 0
+              ? [
+                  {
+                    source: chosen.reference.to.title,
+                    describes: chosen.reference.to.describes,
+                    columns: [...new Set(opened.records.flatMap((row) => Object.keys(row)))],
+                    coverage: `read in full — all ${opened.records.length} record(s)`,
+                    rows: opened.records,
+                    caveats: opened.warnings,
+                  },
+                ]
+              : [],
+          requests: opened.requests,
+          componentIds: [focus.source],
+        };
+      }
+
       const related = await readRelated({
-        focus,
-        child,
+        // Narrowed to what the follow-up is about, so a fan-out of one request
+        // per record is spent on the records that were actually asked about.
+        focus: { ...focus, records: subject },
+        child: chosen.child,
         read: deps.read,
         resolved: deps.resolved,
         rowsOf: deps.rowsOf,
-        rowsPath: deps.rowsPathFor(child.op),
+        rowsPath: deps.rowsPathFor(chosen.child.op),
         limit,
       });
 
       return {
         outcome: related.evidence && related.evidence.rows.length > 0 ? "found" : "not-found",
-        looked: [focus.source, child.op],
+        looked: [focus.source, chosen.child.op],
         missing: related.evidence?.rows.length ? "" : recalled.wants,
         answer: "",
         usedContext: true,
@@ -316,6 +546,55 @@ export const answerFromData = async (
     ...(deps.model ? { model: deps.model } : {}),
     candidates,
     readCandidate,
+    /*
+     * The rows named the record and did not carry the answer.
+     *
+     * A collection returns a summary of each record; the record's own endpoint
+     * returns everything. So a matched row that lacks the asked-for field is
+     * not a dead end, it is an identifier — and following it is one request,
+     * against an API that has already told us which endpoint takes it.
+     */
+    expand: async (matched, from) => {
+      const binding = expansionFor(bindings, from.candidate.op);
+      if (!binding?.idField) return null;
+
+      const ids = matched.flatMap((record) =>
+        identityValue(record, binding.idField as string, binding.idField),
+      );
+      const opened = await readRecords({ binding, ids, deps: toolDeps });
+      if (opened.records.length === 0) return null;
+
+      return {
+        note: opened.note,
+        evidence: {
+          candidate: {
+            ...from.candidate,
+            // Named as what it is, so the reply can say where the answer came
+            // from without implying the whole collection was re-read.
+            title: `${from.candidate.title} — opened in full`,
+            op: binding.op,
+            cached: false,
+          },
+          rows: opened.records,
+          columns: [...new Set(opened.records.flatMap((row) => Object.keys(row)))],
+          coverage: {
+            scanned: opened.records.length,
+            of: opened.records.length,
+            orderedBy: null,
+            partial: false,
+          },
+          warnings: opened.warnings,
+          requests: opened.requests,
+        },
+      };
+    },
+    /*
+     * "Has anyone mentioned running late?" is a different question from "what
+     * is the highest rent?" — the first is answered by every source that could
+     * hold it, itemized, and stopping at the first hit would report one
+     * platform's three and never mention the other's four.
+     */
+    ...(parsed.data.across ? { scope: { mode: "all" as const } } : {}),
     ...(deps.budget ? { budget: deps.budget } : { budget: DEFAULT_BUDGET }),
   });
 
@@ -372,9 +651,20 @@ export const answerFromData = async (
     looked: result.tried,
     missing: result.missing,
     answer: result.answer,
+    // Anything that cost a request nobody explicitly asked for. The reply is
+    // required to say it happened.
+    ...(result.notes.length > 0 ? { openedRelated: result.notes.join(" ") } : {}),
     findings: result.evidence.map((evidence) => ({
       source: evidence.candidate.title,
       ...(evidence.candidate.tab ? { tab: evidence.candidate.tab } : {}),
+      /*
+       * Which API this came from, and what it said on its own. Both are what
+       * an itemized answer is made of: "platform X has three" cannot be
+       * written from a combined total.
+       */
+      from: evidence.candidate.connection,
+      ...(evidence.answer ? { answer: evidence.answer } : {}),
+      ...(evidence.matched !== undefined ? { matched: evidence.matched } : {}),
       describes: evidence.candidate.describes,
       columns: evidence.columns,
       ...(evidence.shows ? { shows: evidence.shows } : {}),
