@@ -14,10 +14,12 @@ import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { api } from "./api.js";
 import { ChatColumn } from "./ChatColumn.jsx";
+import { ChatScopeReporter, ChatSession } from "./ChatSession.jsx";
+import { showWidget } from "./showWidget.js";
 import { ConnectionManager } from "./ConnectionManager.jsx";
 import { autoArrange, isTypingTarget } from "./editing.js";
 import { createLayoutSaver } from "./layoutSave.js";
-import { type Route, currentRoute, navigate, onRouteChange } from "./route.js";
+import { BOARD_ROUTE, type Route, currentRoute, navigate, onRouteChange } from "./route.js";
 import { TopNav } from "./TopNav.jsx";
 import { PresentationEditor } from "./PresentationEditor.jsx";
 import { WidgetLibrary } from "./WidgetLibrary.jsx";
@@ -230,7 +232,7 @@ const App = (): JSX.Element => {
     });
     if (!response.ok) return;
     const created = (await response.json()) as DashboardSummary;
-    setDashboardId(created.id);
+    navigate({ kind: "board", dashboardId: created.id });
     reload();
   };
 
@@ -248,8 +250,9 @@ const App = (): JSX.Element => {
   const deleteDashboard = async (id: string): Promise<void> => {
     await fetch(`/api/dashboards/${id}`, { method: "DELETE" });
     // Stop pointing at something that no longer exists; the loader falls back
-    // to whatever is left.
-    if (dashboardId === id) setDashboardId(null);
+    // to whatever is left. Cleared through the URL, since a bare `setDashboardId`
+    // is undone by the route-sync effect below while the hash still names it.
+    if (dashboardId === id) navigate(BOARD_ROUTE);
     reload();
   };
 
@@ -550,41 +553,15 @@ const App = (): JSX.Element => {
    */
   useEffect(() => {
     if (!justAdded) return;
-
     /*
-     * Waits for the tile rather than assuming it.
-     *
-     * The confirm writes server-side and the reload that follows is
-     * asynchronous, so at the moment the widget is announced its tile does not
-     * exist. Looking once and giving up meant the board silently never
-     * scrolled — and a re-run keyed on the dashboard object only helps if that
-     * object's identity happens to change, which is not something this effect
-     * should be relying on.
-     *
-     * A timer rather than `requestAnimationFrame`: rAF does not fire in a
-     * window that is not compositing, and this has to work in a background tab
-     * as well as a foreground one.
+     * The same wait-then-ring an `open_widget` action and a citation chip use.
+     * Shared rather than repeated: three callers wanting a tile brought into
+     * view is one behaviour, and three copies of the polling would drift.
      */
-    let attempts = 0;
-    let clear = 0;
-    const look = (): void => {
-      const tile = document.querySelector(`[data-widget-id="${justAdded}"]`);
-      if (!tile) {
-        // Roughly three seconds. Beyond that the widget is not coming, and a
-        // ring on a tile nobody is looking at any more is just noise.
-        if (attempts++ < 30) clear = window.setTimeout(look, 100);
-        else setJustAdded(null);
-        return;
-      }
-      tile.setAttribute("data-just-added", "true");
-      tile.scrollIntoView({ behavior: "smooth", block: "center" });
-      clear = window.setTimeout(() => {
-        tile.removeAttribute("data-just-added");
-        setJustAdded(null);
-      }, 2600);
-    };
-    look();
-    return () => window.clearTimeout(clear);
+    return showWidget(justAdded, {
+      ring: "just-added",
+      onGaveUp: () => setJustAdded(null),
+    });
   }, [justAdded]);
 
   useEffect(() => {
@@ -686,6 +663,18 @@ const App = (): JSX.Element => {
    */
   const overlays = (
     <>
+      {/*
+       * Reports which board and which window the conversation is about.
+       * Rendered here, inside the dashboard's provider, because the resolved
+       * window is only knowable from in here — and always, whether or not the
+       * column is open, so the first message of a session is already scoped.
+       */}
+      <ChatScopeReporter
+        dashboardId={live.dashboard?.id ?? null}
+        {...(route.kind === "record" && route.widgetId
+          ? { openRecord: { widgetId: route.widgetId, recordId: route.recordId } }
+          : {})}
+      />
       <ChatColumn
         open={chatOpen}
         onToggle={setChatOpen}
@@ -703,7 +692,7 @@ const App = (): JSX.Element => {
           setJustAdded(widgetId);
           setArranging(true);
         }}
-        onSwitchDashboard={setDashboardId}
+        onSwitchDashboard={(id) => navigate({ kind: "board", dashboardId: id })}
         /*
          * `open_add_widget` now lands on the palette rather than a second
          * proposer. The assistant builds widgets itself; the panel it opens is
@@ -751,7 +740,7 @@ const App = (): JSX.Element => {
     <TopNav
       tabs={live.available}
       activeId={live.dashboard?.id ?? null}
-      onSelect={setDashboardId}
+      onSelect={(id) => navigate({ kind: "board", dashboardId: id })}
       onCreate={() => void createDashboard()}
       onRename={(id, title) => void renameDashboard(id, title)}
       onDelete={(id) => void deleteDashboard(id)}
@@ -958,6 +947,13 @@ global.__dashRoot = root;
 root.render(
   <StrictMode>
     {/*
+      * The conversation is mounted above everything, deliberately.
+      *
+      * It used to live inside `<Dashboard key={boardId}>`, so switching tabs
+      * unmounted it and started a new session — which defeats the point of the
+      * assistant being able to navigate between tabs at all. See `ChatSession`.
+      */}
+    {/*
       * The base sheet, with no stored tokens.
       *
       * It mounts above `App` so the empty state has theme variables too, and
@@ -965,6 +961,8 @@ root.render(
       * write the same element, so the later one simply wins.
       */}
     <DashStyleSheet />
-    <App />
+    <ChatSession>
+      <App />
+    </ChatSession>
   </StrictMode>,
 );

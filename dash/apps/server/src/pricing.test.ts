@@ -53,13 +53,44 @@ describe("costOf", () => {
     expect(cost.usd).toBeCloseTo(1 + 0.3 + 1.25 + 2.5, 10);
   });
 
-  it("uses each OpenAI model's own published cache rate", () => {
-    // Anthropic's cache read is a fixed 0.1x of input; OpenAI's is per-model
-    // (gpt-4o is 0.5x, gpt-4.1 is 0.25x), so it cannot be derived.
-    expect(RATES["gpt-4o"]?.cachedInput).toBe(1.25);
-    expect(RATES["gpt-4.1"]?.cachedInput).toBe(0.5);
-    const cost = costOf("gpt-4o", usage({ promptTokens: 1_000_000, cachedPromptTokens: 1_000_000 }));
-    expect(cost.usd).toBeCloseTo(1.25, 10);
+  /*
+   * Nothing here asks OpenAI to cache, but OpenAI caches on its own above a
+   * prompt length this app is well past, reports the hit, and `llm.ts` reads
+   * it. Without a recorded rate those tokens would be billed at full input
+   * and every turn would be overstated.
+   */
+  it("charges an OpenAI cache hit at the recorded cache rate", () => {
+    expect(RATES["gpt-5.6-terra"]?.cachedInput).toBe(0.2);
+    const cost = costOf(
+      "gpt-5.6-terra",
+      usage({ promptTokens: 1_000_000, cachedPromptTokens: 1_000_000 }),
+    );
+    expect(cost.usd).toBeCloseTo(0.2, 10);
+  });
+
+  it("records each OpenAI cache rate rather than deriving one", () => {
+    // Every model in the current family happens to read at 0.1x input, which
+    // is exactly why they are written out: a derived multiplier would look
+    // right until one model published a different one.
+    for (const id of ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.4-mini"]) {
+      const rate = RATES[id];
+      expect(rate?.cachedInput).toBeDefined();
+      expect(rate?.cachedInput).toBeLessThan(rate!.input);
+    }
+  });
+
+  it("does not charge OpenAI for a cache write", () => {
+    // Anthropic bills the write at 1.25x input; OpenAI does not bill it at all.
+    expect(RATES["gpt-5.6-terra"]?.cacheWrite).toBeUndefined();
+  });
+
+  /*
+   * The pro models are dearer than everything else by an order of magnitude,
+   * and this table is what the picker offers. Their absence is a decision, so
+   * it is asserted rather than left to be undone by a tidy-up.
+   */
+  it("offers no pro model", () => {
+    expect(Object.keys(RATES).filter((id) => id.includes("-pro"))).toEqual([]);
   });
 
   it("reports an unknown model as unpriced rather than free", () => {
@@ -125,10 +156,12 @@ describe("a dated model id", () => {
   });
 
   it("takes the longest matching family, not the first", () => {
-    // `gpt-4.1-mini` must not be priced as `gpt-4.1`: the separator is what
+    // `gpt-5.4-nano` must not be priced as `gpt-5.4`: the separator is what
     // keeps a cheaper sibling from inheriting its parent's rate.
-    expect(rateFor("gpt-4.1-mini")).toEqual(RATES["gpt-4.1-mini"]);
-    expect(rateFor("gpt-4.1-mini")).not.toEqual(RATES["gpt-4.1"]);
+    expect(rateFor("gpt-5.4-nano")).toEqual(RATES["gpt-5.4-nano"]);
+    expect(rateFor("gpt-5.4-nano")).not.toEqual(RATES["gpt-5.4"]);
+    // And a dated release of one still finds its own family.
+    expect(rateFor("gpt-5.6-terra-2026-08-01")).toEqual(RATES["gpt-5.6-terra"]);
   });
 
   it("still reports an unrelated model as unpriced rather than free", () => {

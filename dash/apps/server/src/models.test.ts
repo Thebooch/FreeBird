@@ -3,7 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { anthropicAdapter, availableProviders, defaultModelId, llmForModel, openAiAdapter } from "./llm.js";
-import { MODELS, capabilitiesFor, findModel, providerFor } from "./models.js";
+import {
+  DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_PROVIDER,
+  MODELS,
+  capabilitiesFor,
+  findModel,
+  providerFor,
+} from "./models.js";
 import { SettingsStore } from "./settings.js";
 
 const KEYS = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DASH_LLM_MODEL"] as const;
@@ -58,7 +65,7 @@ describe("model capability table", () => {
 
   it("routes ids to a provider, including ones not in the table", () => {
     expect(providerFor("claude-sonnet-5")).toBe("anthropic");
-    expect(providerFor("gpt-4o-mini")).toBe("openai");
+    expect(providerFor("gpt-5.6-luna")).toBe("openai");
     expect(providerFor("claude-future-9")).toBe("anthropic");
     expect(providerFor("o3-mini")).toBe("openai");
     expect(providerFor("llama-3")).toBeNull();
@@ -90,13 +97,28 @@ describe("temperature is omitted where it would 400", () => {
     expect(sent[0]).not.toHaveProperty("temperature");
   });
 
-  it("omits it for OpenAI reasoning models too", async () => {
+  /*
+   * Every OpenAI model now offered is recorded as not taking temperature, and
+   * that is a statement about what has been proved rather than about the
+   * models. Omitting the parameter always works; sending one a model rejects
+   * is a 400 that loses the call. The cost is determinism on the calls that
+   * ask for `temperature: 0` — flip an entry in `MODELS` once a real call
+   * shows it is accepted, and this test is where that shows up.
+   */
+  it("omits it for every OpenAI model currently offered", async () => {
     const sent = captureBody();
     await openAiAdapter("key", { model: "o3-mini" }).generate(ask);
     expect(sent[0]).not.toHaveProperty("temperature");
 
-    await openAiAdapter("key", { model: "gpt-4o-mini" }).generate(ask);
-    expect(sent[1]?.temperature).toBe(0.2);
+    await openAiAdapter("key", { model: "gpt-5.6-luna" }).generate(ask);
+    expect(sent[1]).not.toHaveProperty("temperature");
+  });
+
+  it("sends it for a model recorded as accepting one", async () => {
+    const sent = captureBody();
+    // Anthropic's older releases still take it, so the branch stays live.
+    await anthropicAdapter("key", { model: "claude-haiku-4-5" }).generate(ask);
+    expect(sent[0]?.temperature).toBe(0.2);
   });
 });
 
@@ -104,7 +126,7 @@ describe("provider routing", () => {
   it("builds nothing when the model's provider has no key", () => {
     process.env.OPENAI_API_KEY = "sk-oai";
     expect(llmForModel("claude-sonnet-5")).toBeNull();
-    expect(llmForModel("gpt-4o-mini")).not.toBeNull();
+    expect(llmForModel("gpt-5.6-luna")).not.toBeNull();
   });
 
   it("reports which providers are reachable", () => {
@@ -116,11 +138,17 @@ describe("provider routing", () => {
   it("falls back to a provider default, and lets the env pin win", () => {
     expect(defaultModelId()).toBeNull();
 
-    process.env.OPENAI_API_KEY = "sk-oai";
-    expect(defaultModelId()).toBe("gpt-4.1-mini");
-
+    // Whichever provider has a key, when only one does.
     process.env.ANTHROPIC_API_KEY = "sk-ant";
     expect(defaultModelId()).toBe("claude-sonnet-5");
+
+    // And DEFAULT_PROVIDER when both do — the choice above the table, which a
+    // stored preference or the picker can move.
+    process.env.OPENAI_API_KEY = "sk-oai";
+    expect(defaultModelId()).toBe(DEFAULT_MODEL_BY_PROVIDER[DEFAULT_PROVIDER]);
+    expect(defaultModelId({ provider: "anthropic", model: null, models: {} })).toBe(
+      "claude-sonnet-5",
+    );
 
     process.env.DASH_LLM_MODEL = "claude-opus-5";
     expect(defaultModelId()).toBe("claude-opus-5");

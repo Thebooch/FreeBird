@@ -46,6 +46,8 @@ export interface FreeBirdContextValue {
   latestReferences: Reference[];
   actionState: ActionState;
   activeComponentIds: string[];
+  /** The last error the chat stream reported, or null. */
+  lastChatError: string | null;
   pausedRecords: ActionRecord[];
 
   // Setters / actions (delegate to store)
@@ -151,6 +153,7 @@ export const FreeBirdProvider: React.FC<FreeBirdProviderProps> = ({
       latestReferences: state.latestReferences,
       actionState: state.actionState,
       activeComponentIds: state.activeComponentIds,
+      lastChatError: state.lastChatError,
       pausedRecords,
 
       setSessionId: (id) => store.setSessionId(id),

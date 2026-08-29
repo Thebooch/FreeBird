@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { ChatEngine, type ChatStreamEvent } from "./engine.js";
+import { ChatEngine, createCiteStripper, type ChatStreamEvent } from "./engine.js";
 import { createComponentRegistry } from "../components/registry.js";
 import { createKnowledgeGraph } from "../knowledge/graph.js";
 import { FakeLlm, type FakeLlmResponse } from "../testing/fakeLlm.js";
@@ -690,5 +690,338 @@ describe("ChatEngine — a processing tool that ran must be answered from", () =
 
     // Bounded by maxToolSteps, so a model that never concludes cannot run away.
     expect(calls.length).toBeLessThanOrEqual(3);
+  });
+});
+
+describe("ChatEngine - finalReply", () => {
+  const textOf = (events: ChatStreamEvent[]): string =>
+    events
+      .filter((e) => e.kind === "text_delta")
+      .map((e) => e.textDelta ?? "")
+      .join("");
+
+  const savedContent = (events: ChatStreamEvent[]): string => {
+    const saved = events.find((e) => e.kind === "assistant_saved");
+    return saved?.assistantMessage?.content ?? "";
+  };
+
+  it('mode "always" never streams the loop prose and lets the final step write the reply', async () => {
+    const { registry, db, llm, knowledge } = setup([
+      { kind: "text", text: "DRAFT-PROSE" },
+      { kind: "text", text: "The finished answer." },
+    ]);
+    const session = await db.createSession({ title: "T" }, auth);
+    const engine = new ChatEngine({
+      db,
+      llm,
+      registry,
+      knowledge,
+      finalReply: { mode: "always" },
+    });
+
+    const events = await collect(
+      engine.send({ sessionId: session.id, text: "hi" }, auth),
+    );
+
+    const streamed = textOf(events);
+    expect(streamed).not.toContain("DRAFT-PROSE");
+    expect(streamed).toContain("The finished answer.");
+    expect(savedContent(events)).toBe("The finished answer.");
+  });
+
+  it("hands the loop prose to the final step as a draft", async () => {
+    const { registry, db, llm, knowledge } = setup([
+      { kind: "text", text: "DRAFT-PROSE" },
+      { kind: "text", text: "rewritten" },
+    ]);
+    const session = await db.createSession({ title: "T" }, auth);
+    let sawDraft = "";
+    const engine = new ChatEngine({
+      db,
+      llm,
+      registry,
+      knowledge,
+      finalReply: {
+        mode: "always",
+        render: (ctx) => {
+          sawDraft = ctx.draft;
+          return "write something";
+        },
+      },
+    });
+
+    await collect(engine.send({ sessionId: session.id, text: "hi" }, auth));
+    expect(sawDraft).toBe("DRAFT-PROSE");
+  });
+
+  it('default ("fallback") still lets the model prose be the reply, with no extra call', async () => {
+    const { registry, db, llm, knowledge } = setup([
+      { kind: "text", text: "Answered directly." },
+    ]);
+    const session = await db.createSession({ title: "T" }, auth);
+    const engine = new ChatEngine({ db, llm, registry, knowledge });
+
+    const events = await collect(
+      engine.send({ sessionId: session.id, text: "hi" }, auth),
+    );
+    expect(textOf(events)).toContain("Answered directly.");
+    expect(savedContent(events)).toBe("Answered directly.");
+  });
+
+  /*
+   * A stored session id can outlive the database it was made in. The append
+   * then throws before the try block, and the turn used to end having yielded
+   * nothing at all - no message, no error, no reason.
+   */
+  it("reports a session it cannot write to instead of ending in silence", async () => {
+    const { registry, db, llm, knowledge } = setup([{ kind: "text", text: "hi" }]);
+    const broken = {
+      ...db,
+      appendMessage: async () => {
+        throw new Error("no such session");
+      },
+    } as unknown as typeof db;
+    const engine = new ChatEngine({ db: broken, llm, registry, knowledge });
+
+    const events = await collect(engine.send({ sessionId: "cs_gone", text: "hi" }, auth));
+    const error = events.find((e) => e.kind === "error");
+    expect(error?.error).toMatch(/session/i);
+    expect(events).not.toHaveLength(0);
+  });
+
+  it("writes the final reply with its own model when one is given", async () => {
+    const { registry, db, llm, knowledge } = setup([{ kind: "text", text: "DRAFT" }]);
+    const writer = new FakeLlm([{ kind: "text", text: "the finished answer" }]);
+    const session = await db.createSession({ title: "T" }, auth);
+    const engine = new ChatEngine({
+      db,
+      llm,
+      registry,
+      knowledge,
+      finalReply: { mode: "always", llm: writer },
+    });
+
+    const events = await collect(engine.send({ sessionId: session.id, text: "hi" }, auth));
+    expect(savedContent(events)).toBe("the finished answer");
+    // The loop's model was asked once, and never for the reply.
+    expect((llm as unknown as { queue: unknown[] }).queue).toHaveLength(0);
+  });
+
+  /*
+   * The loop only routes under "always" — it never writes a sentence — so
+   * handing it a whole tool result pays twice for material one step uses.
+   */
+  it("gives the loop an excerpt of a tool result, not the whole thing", async () => {
+    const big = { rows: Array.from({ length: 200 }, (_, i) => ({ i, pad: "x".repeat(40) })) };
+    const seen: string[] = [];
+    const scripted: LlmAdapter = {
+      defaultModel: "fake",
+      generate: async () => ({ text: "", toolCalls: [] }),
+      stream: async function* (opts) {
+        seen.push(opts.messages.map((m) => m.content).join("\n"));
+        if (seen.length === 1) {
+          yield { toolCall: { id: "t", name: "look_up", args: { q: "x" } } };
+          return;
+        }
+        yield { textDelta: "done" };
+      },
+    };
+    const { registry, db, knowledge } = setup();
+    const session = await db.createSession({ title: "T" }, auth);
+    const engine = new ChatEngine({
+      db,
+      llm: scripted,
+      registry,
+      knowledge,
+      finalReply: { mode: "always" },
+      executeExtraTool: async () => big,
+    });
+
+    await collect(
+      engine.send(
+        {
+          sessionId: session.id,
+          text: "look it up",
+          extraTools: {
+            look_up: {
+              name: "look_up",
+              description: "look something up",
+              schema: z.object({ q: z.string() }),
+            },
+          },
+        },
+        auth,
+      ),
+    );
+
+    const continuation = seen[1] ?? "";
+    expect(continuation).toContain("do NOT summarize them here");
+    // The whole payload is ~10KB; the excerpt is capped well below it.
+    expect(continuation.length).toBeLessThan(JSON.stringify(big).length);
+  });
+
+  it("still gives the loop the whole result in the default mode", async () => {
+    const payload = { rows: [{ marker: "FULL-RESULT-MARKER" }] };
+    const seen: string[] = [];
+    const scripted: LlmAdapter = {
+      defaultModel: "fake",
+      generate: async () => ({ text: "", toolCalls: [] }),
+      stream: async function* (opts) {
+        seen.push(opts.messages.map((m) => m.content).join("\n"));
+        if (seen.length === 1) {
+          yield { toolCall: { id: "t", name: "look_up", args: { q: "x" } } };
+          return;
+        }
+        yield { textDelta: "done" };
+      },
+    };
+    const { registry, db, knowledge } = setup();
+    const session = await db.createSession({ title: "T" }, auth);
+    const engine = new ChatEngine({
+      db,
+      llm: scripted,
+      registry,
+      knowledge,
+      executeExtraTool: async () => payload,
+    });
+
+    await collect(
+      engine.send(
+        {
+          sessionId: session.id,
+          text: "look it up",
+          extraTools: {
+            look_up: {
+              name: "look_up",
+              description: "look something up",
+              schema: z.object({ q: z.string() }),
+            },
+          },
+        },
+        auth,
+      ),
+    );
+    expect(seen[1] ?? "").toContain("FULL-RESULT-MARKER");
+  });
+
+  it("carries a processing tool's payload onto the assistant message", async () => {
+    const { registry, db, llm, knowledge } = setup([
+      { kind: "toolCall", name: "look_up", args: { q: "x" } },
+      { kind: "text", text: "Found it." },
+    ]);
+    const session = await db.createSession({ title: "T" }, auth);
+    const engine = new ChatEngine({
+      db,
+      llm,
+      registry,
+      knowledge,
+      executeExtraTool: async () => ({
+        answer: "42",
+        payload: { coverage: { scanned: 50 } },
+      }),
+    });
+
+    const events = await collect(
+      engine.send(
+        {
+          sessionId: session.id,
+          text: "look it up",
+          extraTools: {
+            look_up: {
+              name: "look_up",
+              description: "look something up",
+              schema: z.object({ q: z.string() }),
+            },
+          },
+        },
+        auth,
+      ),
+    );
+
+    const saved = events.find((e) => e.kind === "assistant_saved");
+    const payload = saved?.assistantMessage?.toolPayload as
+      | { toolPayloads?: Array<{ tool: string; payload: unknown }> }
+      | undefined;
+    expect(payload?.toolPayloads).toEqual([
+      { tool: "look_up", payload: { coverage: { scanned: 50 } } },
+    ]);
+  });
+
+  it("does not carry a payload from a tool that failed", async () => {
+    const { registry, db, llm, knowledge } = setup([
+      { kind: "toolCall", name: "look_up", args: { q: "x" } },
+      { kind: "text", text: "That did not work." },
+    ]);
+    const session = await db.createSession({ title: "T" }, auth);
+    const engine = new ChatEngine({
+      db,
+      llm,
+      registry,
+      knowledge,
+      executeExtraTool: async () => {
+        throw new Error("upstream refused");
+      },
+    });
+
+    const events = await collect(
+      engine.send(
+        {
+          sessionId: session.id,
+          text: "look it up",
+          extraTools: {
+            look_up: {
+              name: "look_up",
+              description: "look something up",
+              schema: z.object({ q: z.string() }),
+            },
+          },
+        },
+        auth,
+      ),
+    );
+    const saved = events.find((e) => e.kind === "assistant_saved");
+    const payload = saved?.assistantMessage?.toolPayload as
+      | { toolPayloads?: unknown }
+      | undefined;
+    expect(payload?.toolPayloads).toBeUndefined();
+  });
+});
+
+describe("createCiteStripper", () => {
+  const run = (deltas: string[], enabled = true): string => {
+    const s = createCiteStripper(enabled);
+    return deltas.map((d) => s.push(d)).join("") + s.flush();
+  };
+
+  it("passes text through untouched when citations are off", () => {
+    expect(run(["a [[cite:x]] b"], false)).toBe("a [[cite:x]] b");
+  });
+
+  it("removes a marker that arrives whole", () => {
+    expect(run(["done [[cite:leases]] here"])).toBe("done  here");
+  });
+
+  it("removes a marker split across chunks", () => {
+    expect(run(["done [[cit", "e:lea", "ses]] here"])).toBe("done  here");
+  });
+
+  it("never emits a partial marker", () => {
+    const s = createCiteStripper(true);
+    const first = s.push("all good [[cite:lea");
+    expect(first).toBe("all good ");
+    expect(first).not.toContain("[[");
+  });
+
+  it("releases a bracket that turns out not to be a marker", () => {
+    expect(run(["see [1] and [note]"])).toBe("see [1] and [note]");
+  });
+
+  /*
+   * A malformed marker survives `extractCitations` too, so it will be in the
+   * persisted reply. Emitting it keeps the streamed bubble and the saved
+   * message identical, which matters more than hiding the model's typo.
+   */
+  it("releases an unterminated marker on flush, matching what gets persisted", () => {
+    expect(run(["text [[cite:unfinis"])).toBe("text [[cite:unfinis");
   });
 });

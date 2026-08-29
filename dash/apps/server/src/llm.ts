@@ -2,6 +2,7 @@ import type { LlmAdapter, LlmTokenUsage, LlmTool } from "@freebirdai/dash-agent"
 import { z } from "zod";
 import {
   DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_PROVIDER,
   type LlmTask,
   type Provider,
   TIER_MODELS,
@@ -156,7 +157,14 @@ export const openAiAdapter = (
   options: { baseUrl?: string; model?: string } = {},
 ): LlmAdapter => {
   const baseUrl = options.baseUrl ?? "https://api.openai.com/v1";
-  const defaultModel = options.model ?? "gpt-4o-mini";
+  /*
+   * The provider default, not a literal. A hardcoded id here outlives the
+   * catalogue: when the 4.x models were retired this still named one, so an
+   * adapter built without an explicit model would have called something the
+   * picker no longer offers and the price table no longer knows — logging
+   * every one of those calls as unpriced.
+   */
+  const defaultModel = options.model ?? DEFAULT_MODEL_BY_PROVIDER.openai;
 
   // Typed through the interface so the generic signature is preserved —
   // annotating the parameter concretely makes it unassignable to LlmAdapter.
@@ -174,11 +182,34 @@ export const openAiAdapter = (
       body: JSON.stringify({
         model,
         ...(supportsTemperature ? { temperature: opts.temperature ?? 0.2 } : {}),
-        max_tokens: opts.maxOutputTokens ?? 4096,
+        /*
+         * `max_completion_tokens`, not `max_tokens`.
+         *
+         * The current OpenAI models reject `max_tokens` outright — a 400 on
+         * every call, before the prompt is even looked at. Anthropic still
+         * takes `max_tokens`, which is why this differs between the two
+         * adapters in this file rather than being shared.
+         */
+        max_completion_tokens: opts.maxOutputTokens ?? 4096,
         messages: opts.messages.map((message) => ({
           role: message.role,
           content: message.content,
         })),
+        /*
+         * Reasoning off whenever tools are in play.
+         *
+         * The current OpenAI models refuse function tools and reasoning
+         * together on `/v1/chat/completions` — a 400 naming `reasoning_effort`
+         * and offering two ways out: move to `/v1/responses`, or turn it off.
+         * Nearly every call this product makes is a forced tool call, so
+         * without this none of them work at all.
+         *
+         * Scoped to calls that actually send tools, so the one step that does
+         * not — the final reply, which is prose and nothing else — keeps
+         * whatever reasoning the model does by default. Sending it
+         * unconditionally would trade that away for nothing.
+         */
+        ...(tools.length > 0 ? { reasoning_effort: "none" } : {}),
         ...(tools.length > 0
           ? {
               tools: tools.map((tool) => ({
@@ -271,11 +302,34 @@ export const openAiAdapter = (
         // is logged as unpriced — a running total you cannot trust.
         stream_options: { include_usage: true },
         ...(supportsTemperature ? { temperature: opts.temperature ?? 0.2 } : {}),
-        max_tokens: opts.maxOutputTokens ?? 4096,
+        /*
+         * `max_completion_tokens`, not `max_tokens`.
+         *
+         * The current OpenAI models reject `max_tokens` outright — a 400 on
+         * every call, before the prompt is even looked at. Anthropic still
+         * takes `max_tokens`, which is why this differs between the two
+         * adapters in this file rather than being shared.
+         */
+        max_completion_tokens: opts.maxOutputTokens ?? 4096,
         messages: opts.messages.map((message) => ({
           role: message.role,
           content: message.content,
         })),
+        /*
+         * Reasoning off whenever tools are in play.
+         *
+         * The current OpenAI models refuse function tools and reasoning
+         * together on `/v1/chat/completions` — a 400 naming `reasoning_effort`
+         * and offering two ways out: move to `/v1/responses`, or turn it off.
+         * Nearly every call this product makes is a forced tool call, so
+         * without this none of them work at all.
+         *
+         * Scoped to calls that actually send tools, so the one step that does
+         * not — the final reply, which is prose and nothing else — keeps
+         * whatever reasoning the model does by default. Sending it
+         * unconditionally would trade that away for nothing.
+         */
+        ...(tools.length > 0 ? { reasoning_effort: "none" } : {}),
         ...(tools.length > 0
           ? {
               tools: tools.map((tool) => ({
@@ -809,26 +863,33 @@ export const llmForModel = (modelId: string, label = "llm"): LlmAdapter | null =
 
 /**
  * The model used when nobody has picked one: an explicit `DASH_LLM_MODEL`,
- * else the default for whichever provider has a key.
+ * else the default for whichever provider is in force.
  */
-export const defaultModelId = (): string | null => {
+export const defaultModelId = (settings?: ModelChoices | null): string | null => {
   if (process.env.DASH_LLM_MODEL) return process.env.DASH_LLM_MODEL;
-  const provider = preferredProvider();
+  const provider = preferredProvider(settings);
   return provider ? DEFAULT_MODEL_BY_PROVIDER[provider] : null;
 };
 
 /**
- * Whose models to reach for when nothing has said.
+ * Whose models to reach for when nothing more specific has said.
  *
- * Anthropic first when both keys are present, which is what `defaultModelId`
- * has always done — this only names it, so the tier defaults and the plain
- * default cannot drift apart.
+ * The stored choice leads, because somebody sat in the picker and made it.
+ * Everything after it is a fallback in the same order: `DEFAULT_PROVIDER`
+ * first, then whatever has a key.
+ *
+ * A chosen provider with no key falls through rather than routing every action
+ * into a 401 — the picker says the key is missing, and meanwhile the app still
+ * works. This is the one place the choice is not obeyed literally, and it is
+ * the difference between a warning and an outage.
  */
-export const preferredProvider = (): Provider | null => {
+export const preferredProvider = (settings?: ModelChoices | null): Provider | null => {
   const providers = availableProviders();
-  if (providers.anthropic) return "anthropic";
-  if (providers.openai) return "openai";
-  return null;
+  const chosen = settings?.provider;
+  if (chosen && providers[chosen]) return chosen;
+  if (providers[DEFAULT_PROVIDER]) return DEFAULT_PROVIDER;
+  const other = DEFAULT_PROVIDER === "anthropic" ? "openai" : "anthropic";
+  return providers[other] ? other : null;
 };
 
 /**
@@ -839,6 +900,8 @@ const TASK_ENV_ALIASES: Partial<Record<LlmTask, string>> = { suggest: "DASH_REVI
 
 /** The settings this resolution reads, structurally — see `SettingsStore`. */
 export interface ModelChoices {
+  /** Whose models to use for anything that falls through to a tier default. */
+  readonly provider?: Provider | null;
   readonly model: string | null;
   readonly models: Partial<Record<LlmTask, string>>;
 }
@@ -855,7 +918,9 @@ export interface ModelChoices {
  *      truth.
  *   3. An explicit per-task choice.
  *   4. "Use one model for everything", chosen in the picker.
- *   5. The task's tier — the default, and what almost everyone runs.
+ *   5. The task's tier, resolved against the provider in force — the
+ *      default, and what almost everyone runs. Picking a provider moves every
+ *      one of these at once, which is the choice most people actually want.
  *   6. The provider default, for a task somehow outside the table.
  *
  * Returns null only when there is no key at all, which every caller already
@@ -875,7 +940,7 @@ export const modelForTask = (task: LlmTask, settings?: ModelChoices | null): str
   if (chosen) return chosen;
   if (settings?.model) return settings.model;
 
-  const provider = preferredProvider();
+  const provider = preferredProvider(settings);
   if (!provider) return null;
 
   const tier = findTask(task)?.tier;
@@ -892,14 +957,14 @@ export const sourceForTask = (task: LlmTask, settings?: ModelChoices | null): Mo
   if (process.env.DASH_LLM_MODEL) return "env";
   if (settings?.models?.[task]) return "task";
   if (settings?.model) return "global";
-  return preferredProvider() ? "tier" : "none";
+  return preferredProvider(settings) ? "tier" : "none";
 };
 
 /**
  * Build an adapter from the environment. Returns null when no key is set, so
  * the route can say "add an AI key" instead of failing obscurely.
  */
-export const llmFromEnv = (label = "llm"): LlmAdapter | null => {
-  const model = defaultModelId();
+export const llmFromEnv = (label = "llm", settings?: ModelChoices | null): LlmAdapter | null => {
+  const model = defaultModelId(settings);
   return model ? llmForModel(model, label) : null;
 };

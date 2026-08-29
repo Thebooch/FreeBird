@@ -9,11 +9,12 @@ import type { LlmTokenUsage } from "@freebirdai/dash-agent";
  * these were read, and it is printed alongside any total — an old date is the
  * signal to re-check, and nothing here pretends to be authoritative after it.
  *
- * Rates read 2026-08-17 from platform.claude.com/docs/en/about-claude/models
- * and developers.openai.com/api/docs/pricing.
+ * Anthropic rates read 2026-08-17 from
+ * platform.claude.com/docs/en/about-claude/models; OpenAI rates supplied by
+ * the owner 2026-08-28 from developers.openai.com/api/docs/pricing.
  */
 
-export const RATES_AS_OF = "2026-08-17";
+export const RATES_AS_OF = "2026-08-28";
 
 export interface ModelRate {
   /** USD per million prompt tokens. */
@@ -56,10 +57,32 @@ export const RATES: Readonly<Record<string, ModelRate>> = {
   "claude-sonnet-4-6": anthropic(3, 15),
   "claude-haiku-4-5": anthropic(1, 5),
 
-  "gpt-4.1": { input: 2, output: 8, cachedInput: 0.5 },
-  "gpt-4.1-mini": { input: 0.4, output: 1.6, cachedInput: 0.1 },
-  "gpt-4o": { input: 2.5, output: 10, cachedInput: 1.25 },
-  "gpt-4o-mini": { input: 0.15, output: 0.6, cachedInput: 0.075 },
+  /*
+   * Standard tier, not priority.
+   *
+   * OpenAI publishes both; priority runs 2x input and 1.5x output. Standard is
+   * what an ordinary call bills at, and over-reporting a spend monitor by
+   * double would make every comparison here useless.
+   *
+   * `cachedInput` is carried even though nothing in this product asks for
+   * caching, because OpenAI caches automatically above a prompt length this
+   * app is comfortably over, reports it as `prompt_tokens_details.cached_tokens`,
+   * and `llm.ts` already reads it. Leaving the rate off would price those
+   * tokens at full input and overstate every turn. No `cacheWrite`: OpenAI
+   * does not charge for the write.
+   *
+   * The `-pro` models are deliberately absent. They are an order of magnitude
+   * dearer than anything else here ($30/$180 and up) and this table is what
+   * the picker offers — a model nobody meant to select should not be one
+   * click away. Add them back only with that in mind.
+   */
+  "gpt-5.6-sol": { input: 4, output: 20, cachedInput: 0.4 },
+  "gpt-5.6-terra": { input: 2, output: 12, cachedInput: 0.2 },
+  "gpt-5.6-luna": { input: 0.2, output: 1.2, cachedInput: 0.02 },
+  "gpt-5.5": { input: 5, output: 30, cachedInput: 0.5 },
+  "gpt-5.4": { input: 2.5, output: 15, cachedInput: 0.25 },
+  "gpt-5.4-mini": { input: 0.75, output: 4.5, cachedInput: 0.075 },
+  "gpt-5.4-nano": { input: 0.2, output: 1.25, cachedInput: 0.02 },
 };
 
 /**

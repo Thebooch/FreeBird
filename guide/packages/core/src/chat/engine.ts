@@ -14,7 +14,7 @@ import { buildPlanLayoutTool } from "../layout/tool.js";
 import { solveLayout } from "../layout/solver.js";
 import { resolveReferences } from "./references.js";
 import { resolveProcessingToolsForTurn } from "./processingTools.js";
-import { buildCitationsPrompt, extractCitations } from "./citations.js";
+import { CITE_MARKER_RE, buildCitationsPrompt, extractCitations } from "./citations.js";
 import { buildKnowledgePrompt } from "./knowledge-context.js";
 import { buildSupportPrompt } from "../support/prompt.js";
 import { buildReviewPrompt } from "../review/prompt.js";
@@ -41,6 +41,42 @@ import type {
   Reference,
   WorkspaceCitation,
 } from "../types.js";
+
+/**
+ * Everything a turn produced, handed to the final reply step.
+ *
+ * `draft` is the prose the model wrote during the tool loop. Under
+ * `finalReply.mode: "always"` it was never shown to anyone, so the final step
+ * is free to rewrite, keep or discard it. `deterministic` is the sentence the
+ * engine would have persisted on its own — passed in rather than used, so a
+ * host writing its own voice still knows what the engine concluded.
+ */
+export interface FinalReplyContext {
+  /** Which conversation this is, so a host can keep per-session state. */
+  readonly sessionId: string;
+  readonly userText: string;
+  readonly draft: string;
+  readonly deterministic: string;
+  readonly actionState: ActionState;
+  readonly executedExtraTools: Array<{ name: string; args: unknown; result: unknown }>;
+  readonly finalLayout?: LayoutPlan;
+  readonly clarificationQuestion: string;
+  /**
+   * Actions this turn actually started, in order.
+   *
+   * Distinct from `actionState`, which is a *position*: an action with no
+   * confirmation step runs, completes and leaves the phase idle, so a host
+   * reading the phase alone cannot tell "nothing happened" from "something
+   * happened and finished". That difference decides what the reply should
+   * say, so it is reported rather than inferred.
+   */
+  readonly actionsRun: ReadonlyArray<{
+    readonly componentId: string;
+    readonly actionId: string;
+  }>;
+  /** Set when the turn failed outright; the reply has to say so. */
+  readonly error?: string;
+}
 
 export interface ChatEngineOptions {
   db: DbAdapter;
@@ -126,6 +162,36 @@ export interface ChatEngineOptions {
    * tool-free LLM summarization step.
    */
   requireAssistantReply?: boolean;
+  /**
+   * How the turn's user-visible reply is produced.
+   *
+   * `"fallback"` (default) keeps the historical behaviour: whatever prose the
+   * model emitted during the tool loop IS the reply, and the final
+   * summarization step only rescues a turn that produced nothing usable.
+   *
+   * `"always"` makes the final step the only writer of the reply. The loop's
+   * prose becomes a draft handed to that step rather than something shown and
+   * then replaced — so inner-step deltas are not streamed, and the final step
+   * streams instead. Hosts that want one consistent voice over tool results,
+   * action outcomes and errors want this; it costs one extra LLM call per turn.
+   *
+   * `render` replaces {@link renderTurnSummaryPrompt} with the host's own
+   * instructions. It receives everything the turn produced, including the
+   * deterministic summary the engine would otherwise have persisted.
+   */
+  finalReply?: {
+    mode?: "fallback" | "always";
+    render?: (ctx: FinalReplyContext) => string;
+    /**
+     * Model for the final step, when it should differ from the loop's.
+     *
+     * The two jobs are not alike. The loop decides which tools to call, which
+     * is routing; the final step writes the only sentence anybody reads. A
+     * host running the loop on a cheap model has no way to say that without
+     * this, and would be paying for the cheap one exactly where it shows.
+     */
+    llm?: LlmAdapter | (() => LlmAdapter);
+  };
   /**
    * Host hook for wizard missing fields / blockers beyond the action Zod
    * schema (e.g. a multi-step wizard whose later steps depend on earlier ones).
@@ -346,6 +412,10 @@ export class ChatEngine {
   private readonly estimateLlmCostUsd: ChatEngineOptions["estimateLlmCostUsd"];
   private readonly executeExtraTool: ChatEngineOptions["executeExtraTool"];
   private readonly requireAssistantReply: boolean;
+  /** True when the final step is the only writer of the reply. */
+  private readonly finalReplyAlways: boolean;
+  private readonly renderFinalReply: (ctx: FinalReplyContext) => string;
+  private readonly finalReplyLlm: LlmAdapter | (() => LlmAdapter) | undefined;
   private readonly processingToolCatalog: ChatEngineOptions["processingToolCatalog"];
   private readonly deriveActionReadiness?: ChatEngineOptions["deriveActionReadiness"];
   private readonly sanitizeActionArgs?: ChatEngineOptions["sanitizeActionArgs"];
@@ -376,6 +446,9 @@ export class ChatEngine {
     this.estimateLlmCostUsd = opts.estimateLlmCostUsd;
     this.executeExtraTool = opts.executeExtraTool;
     this.requireAssistantReply = opts.requireAssistantReply !== false;
+    this.finalReplyAlways = opts.finalReply?.mode === "always";
+    this.renderFinalReply = opts.finalReply?.render ?? renderTurnSummaryPrompt;
+    this.finalReplyLlm = opts.finalReply?.llm;
     this.processingToolCatalog = opts.processingToolCatalog;
     this.deriveActionReadiness = opts.deriveActionReadiness;
     this.sanitizeActionArgs = opts.sanitizeActionArgs;
@@ -460,10 +533,33 @@ export class ChatEngine {
     const { db, llm, registry, knowledge } = this.opts;
 
     // 1. Persist user message
-    const userMessage = await db.appendMessage(
-      { sessionId: input.sessionId, role: "user", content: input.text },
-      auth,
-    );
+    /*
+     * Guarded, and it is the only statement out here that is.
+     *
+     * Everything after this runs inside the try below, so a failure there
+     * becomes an `error` event the client can show. This one did not: if the
+     * session does not exist — a stored id outliving the database it was made
+     * in, which happens after a restore or a wipe — the append throws, the
+     * generator ends before yielding anything, and the caller gets an empty
+     * 200. No user message, no error, no reason. Silence is the one answer a
+     * client cannot do anything with.
+     */
+    let userMessage;
+    try {
+      userMessage = await db.appendMessage(
+        { sessionId: input.sessionId, role: "user", content: input.text },
+        auth,
+      );
+    } catch (err) {
+      yield {
+        kind: "error",
+        error:
+          `that conversation could not be written to (${
+            err instanceof Error ? err.message : String(err)
+          }) — its session may no longer exist`,
+      };
+      return;
+    }
     yield { kind: "user_saved", userMessage };
 
     try {
@@ -570,6 +666,8 @@ export class ChatEngine {
       }
       let clarificationQuestion = "";
       let ticketDraftedThisTurn = false;
+      /** Every action started this turn, for the final reply's context. */
+      const actionsRun: Array<{ componentId: string; actionId: string }> = [];
 
       const turnExtraTools = resolveProcessingToolsForTurn({
         baseExtraTools: input.extraTools,
@@ -661,7 +759,16 @@ export class ChatEngine {
           if (chunk.textDelta) {
             stepText += chunk.textDelta;
             assistantText += chunk.textDelta;
-            yield { kind: "text_delta", textDelta: chunk.textDelta };
+            /*
+             * Under `finalReply: "always"` this text is a draft, not the
+             * reply. Streaming it would show the user a preamble that the
+             * final step then replaces — and `text_delta` is additive on the
+             * client with no reset event, so the bubble would read as both
+             * until `assistant_saved` lands. The final step streams instead.
+             */
+            if (!this.finalReplyAlways) {
+              yield { kind: "text_delta", textDelta: chunk.textDelta };
+            }
           }
           if (chunk.usage && (this.emitLlmUsage || this.onLlmUsage)) {
             const model = chunk.model ?? input.model ?? llm.defaultModel;
@@ -749,6 +856,7 @@ export class ChatEngine {
             role: "system",
             content: renderExtraToolContinuation(
               executedExtraTools.slice(-stepExtraToolCalls.length),
+              this.finalReplyAlways,
             ),
           });
           ranExtraTools = true;
@@ -804,6 +912,12 @@ export class ChatEngine {
         for (const ev of stepActionEvents) {
           if (ev.kind === "action_clarification" && ev.clarification?.trim()) {
             clarificationQuestion = ev.clarification.trim();
+          }
+          if (ev.kind === "action_started" && ev.action) {
+            actionsRun.push({
+              componentId: ev.action.componentId,
+              actionId: ev.action.actionId,
+            });
           }
           yield ev;
         }
@@ -1124,7 +1238,11 @@ export class ChatEngine {
 
       // 6. Persist the assistant message — every turn gets user-visible prose.
       const trimmed = assistantText.trim();
-      let streamedContent = trimmed.length > 0;
+      /*
+       * Under `finalReply: "always"` the loop's prose was never streamed, so
+       * nothing has reached the user yet however much of it there is.
+       */
+      let streamedContent = this.finalReplyAlways ? false : trimmed.length > 0;
       let finalContent = resolveAssistantContent({
         assistantText: trimmed,
         finalLayout,
@@ -1150,31 +1268,54 @@ export class ChatEngine {
         }
       }
 
-      // A host-configured phrase is an explicit choice — don't second-guess
-      // it with an extra LLM summary call.
+      /*
+       * A host-configured phrase is an explicit choice — don't second-guess it
+       * with an extra LLM call. `finalReplyAlways` overrides all of that: the
+       * host has said the final step writes every reply, and everything above
+       * is an input to it rather than a competitor.
+       */
       const needsLlmSummary =
         this.requireAssistantReply &&
-        !hostPhraseApplied &&
-        (executedExtraTools.length > 0 ||
-          actionState.phase !== "idle" ||
-          clarificationQuestion.length > 0 ||
-          isWeakToolOnlyFallback(trimmed)) &&
-        (!finalContent || isWeakToolOnlyFallback(finalContent));
+        (this.finalReplyAlways ||
+          (!hostPhraseApplied &&
+            (executedExtraTools.length > 0 ||
+              actionState.phase !== "idle" ||
+              clarificationQuestion.length > 0 ||
+              isWeakToolOnlyFallback(trimmed)) &&
+            (!finalContent || isWeakToolOnlyFallback(finalContent))));
 
       if (needsLlmSummary) {
-        const summary = await this.runFinalSummaryStep({
+        /*
+         * Streamed, not buffered. When this step owns the whole reply it is
+         * the only text the user will see, and waiting for it to finish before
+         * showing a character is exactly the latency the loop's own streaming
+         * used to hide. Citation markers are held back incrementally so
+         * `[[cite:x]]` never appears on screen and then vanishes.
+         */
+        const stripper = createCiteStripper(this.citationsEnabled);
+        let summary = "";
+        for await (const delta of this.streamFinalReply({
           llm,
           input,
-          baseMessages,
-          actionState,
-          executedExtraTools,
-          finalLayout,
-          clarificationQuestion,
+          sessionId: input.sessionId,
           userText: input.text,
-        });
+          baseMessages,
+          draft: trimmed,
+          deterministic: finalContent,
+          actionState,
+          actionsRun,
+          executedExtraTools,
+          ...(finalLayout ? { finalLayout } : {}),
+          clarificationQuestion,
+        })) {
+          summary += delta;
+          const safe = stripper.push(delta);
+          if (safe) yield { kind: "text_delta", textDelta: safe };
+        }
+        const tail = stripper.flush();
+        if (tail) yield { kind: "text_delta", textDelta: tail };
         if (summary.trim()) {
           finalContent = summary.trim();
-          yield { kind: "text_delta", textDelta: finalContent };
           streamedContent = true;
         }
       }
@@ -1220,18 +1361,22 @@ export class ChatEngine {
         citations = extracted.citations;
       }
 
+      const toolPayloads = collectToolPayloads(executedExtraTools);
+
       let toolPayload: unknown;
       if (layoutIntent && finalLayout && finalLayout.cells.length > 0) {
         toolPayload = layoutIntent;
       } else if (
         workspaceCitations.length > 0 ||
         extraToolResults.length > 0 ||
-        citations.length > 0
+        citations.length > 0 ||
+        toolPayloads.length > 0
       ) {
         toolPayload = {
           ...(workspaceCitations.length > 0 ? { workspaceCitations } : {}),
           ...(citations.length > 0 ? { citations } : {}),
           ...(extraToolResults.length > 0 ? { extraTools: extraToolResults } : {}),
+          ...(toolPayloads.length > 0 ? { toolPayloads } : {}),
         };
       } else if (layoutIntent) {
         toolPayload = layoutIntent;
@@ -1260,11 +1405,51 @@ export class ChatEngine {
         error: errorText,
       };
       try {
+        /*
+         * A host that owns every reply owns this one too: an error is
+         * something to explain, not a template to print. The attempt is
+         * guarded because the thing that just failed is often the model
+         * itself, and a second failure must not lose the first one's message.
+         */
+        let content = `Sorry — I couldn't complete that request: ${errorText}`;
+        if (this.finalReplyAlways && this.requireAssistantReply) {
+          try {
+            let written = "";
+            for await (const delta of this.streamFinalReply({
+              llm,
+              input,
+              baseMessages: [
+                { role: "system", content: this.systemPrompt },
+                { role: "user", content: input.text },
+              ],
+              sessionId: input.sessionId,
+              userText: input.text,
+              draft: "",
+              deterministic: content,
+              actionsRun: [],
+              actionState: input.actionState ?? {
+                phase: "idle",
+                pending: null,
+                journal: [],
+                workflowStack: [],
+              },
+              executedExtraTools: [],
+              clarificationQuestion: "",
+              error: errorText,
+            })) {
+              written += delta;
+              yield { kind: "text_delta", textDelta: delta };
+            }
+            if (written.trim()) content = written.trim();
+          } catch {
+            // The model is what failed. The sentence above still says so.
+          }
+        }
         const assistantMessage = await db.appendMessage(
           {
             sessionId: input.sessionId,
             role: "assistant",
-            content: `Sorry — I couldn't complete that request: ${errorText}`,
+            content,
             references: [],
           },
           auth,
@@ -1277,22 +1462,26 @@ export class ChatEngine {
   }
 
   /**
-   * One tool-free LLM call that summarizes what happened this turn when
-   * deterministic fallbacks did not produce prose.
+   * One tool-free LLM call that writes the turn's reply.
+   *
+   * Yields deltas rather than returning a string so the caller can stream it.
+   * That matters under `finalReply.mode: "always"`, where this is the only
+   * text the user ever sees and buffering it would mean a silent wait for the
+   * whole reply.
    */
-  private async runFinalSummaryStep(ctx: {
-    llm: LlmAdapter;
-    input: SendMessageInput;
-    baseMessages: LlmMessage[];
-    actionState: ActionState;
-    executedExtraTools: Array<{ name: string; args: unknown; result: unknown }>;
-    finalLayout?: LayoutPlan;
-    clarificationQuestion: string;
-    userText: string;
-  }): Promise<string> {
-    const prompt = renderTurnSummaryPrompt(ctx);
-    let text = "";
-    for await (const chunk of ctx.llm.stream({
+  private async *streamFinalReply(
+    ctx: FinalReplyContext & {
+      llm: LlmAdapter;
+      input: SendMessageInput;
+      baseMessages: LlmMessage[];
+    },
+  ): AsyncGenerator<string, void, undefined> {
+    const prompt = this.renderFinalReply(ctx);
+    const llm =
+      typeof this.finalReplyLlm === "function"
+        ? this.finalReplyLlm()
+        : (this.finalReplyLlm ?? ctx.llm);
+    for await (const chunk of llm.stream({
       messages: [
         ...ctx.baseMessages,
         {
@@ -1303,9 +1492,8 @@ export class ChatEngine {
       signal: ctx.input.signal,
       model: ctx.input.model,
     })) {
-      if (chunk.textDelta) text += chunk.textDelta;
+      if (chunk.textDelta) yield chunk.textDelta;
     }
-    return text.trim();
   }
 }
 
@@ -1523,6 +1711,32 @@ const extractNormalizedArgsFromProcessingTools = (
  * (or a `componentIds: string[]`) on their result. Results carrying an
  * `error` are skipped.
  */
+/**
+ * Structured extras a processing tool wants to reach the client with.
+ *
+ * A tool result is otherwise consumed entirely by the model: it is rendered
+ * into a continuation message and then thrown away. A host whose tool produced
+ * something the *bubble* needs to render - a coverage note, a scope offer -
+ * has no way to carry it, and the engine already reads shape out of tool
+ * results for `workspaceCitations`. Same convention, generalised: a result may
+ * carry `payload`, and it lands on the assistant message under `toolPayloads`
+ * keyed by the tool that produced it. The engine never interprets it.
+ */
+const collectToolPayloads = (
+  tools: Array<{ name: string; args: unknown; result: unknown }>,
+): Array<{ tool: string; payload: unknown }> => {
+  const out: Array<{ tool: string; payload: unknown }> = [];
+  for (const tool of tools) {
+    const result = tool.result;
+    if (!result || typeof result !== "object") continue;
+    if ("error" in result && (result as { error?: unknown }).error) continue;
+    const payload = (result as { payload?: unknown }).payload;
+    if (payload === undefined || payload === null) continue;
+    out.push({ tool: tool.name, payload });
+  }
+  return out;
+};
+
 const collectWorkspaceCitations = (
   tools: Array<{ name: string; args: unknown; result: unknown }>,
 ): WorkspaceCitation[] => {
@@ -1559,9 +1773,35 @@ const collectWorkspaceCitations = (
   return citations;
 };
 
+/**
+ * What the loop is told after a processing tool ran.
+ *
+ * `brief` is for hosts whose final step writes the reply. The loop's remaining
+ * job there is to decide whether anything else needs calling — it never writes
+ * a sentence — so handing it the whole result pays twice for material only one
+ * of the two steps uses. On a tool that returns records that is not a small
+ * difference: fifty rows, pretty-printed, measured tens of thousands of tokens
+ * per turn, and the final step was given them again.
+ *
+ * The full result is untouched either way. It reaches the final step through
+ * `executedExtraTools`, which is where the writing happens.
+ */
 const renderExtraToolContinuation = (
   results: Array<{ name: string; args: unknown; result: unknown }>,
+  brief = false,
 ): string => {
+  if (brief) {
+    const excerpt = results
+      .map((r) => `${r.name}(${JSON.stringify(r.args).slice(0, 200)}) -> ${JSON.stringify(r.result).slice(0, 600)}`)
+      .join("\n");
+    return (
+      `These tools have already run this turn, and their full results are held:\n${excerpt}\n\n` +
+      `A later step writes the reply from the full results, so do NOT summarize them here, ` +
+      `and do NOT call any of these again with the same arguments — it would return the same ` +
+      `thing and cost the user twice. Call a tool only if it is a genuinely different question. ` +
+      `Otherwise reply with one short sentence and stop.`
+    );
+  }
   const payload = results
     .map((r) => `Tool \`${r.name}\` returned:\n${JSON.stringify(r.result, null, 2)}`)
     .join("\n\n");
@@ -1663,18 +1903,16 @@ const resolveDefaultTurnSummary = (
   }
 };
 
-const renderTurnSummaryPrompt = (ctx: {
-  actionState: ActionState;
-  executedExtraTools: Array<{ name: string; args: unknown; result: unknown }>;
-  finalLayout?: LayoutPlan;
-  clarificationQuestion: string;
-  userText: string;
-}): string => {
+const renderTurnSummaryPrompt = (ctx: FinalReplyContext): string => {
   const parts: string[] = [
-    "The user just sent a message and the system ran tools/actions, but no assistant prose was produced yet.",
+    ctx.draft
+      ? "The user just sent a message and the system ran tools/actions. A draft reply was written but never shown to anyone; rewrite it."
+      : "The user just sent a message and the system ran tools/actions, but no assistant prose was produced yet.",
     `User message: ${JSON.stringify(ctx.userText)}`,
     `Action phase: ${ctx.actionState.phase}`,
   ];
+  if (ctx.draft) parts.push(`Draft reply (never shown to the user): ${ctx.draft}`);
+  if (ctx.error) parts.push(`The turn failed with: ${ctx.error}`);
   if (ctx.actionState.pending) {
     parts.push(
       `Pending action: ${ctx.actionState.pending.componentId}:${ctx.actionState.pending.actionId}`,
@@ -1701,6 +1939,9 @@ const renderTurnSummaryPrompt = (ctx: {
           .map((t) => `- ${t.name}: ${JSON.stringify(t.result).slice(0, 800)}`)
           .join("\n"),
     );
+  }
+  if (ctx.deterministic) {
+    parts.push(`The system's own summary of this turn: ${ctx.deterministic}`);
   }
   parts.push(
     "Write 1–3 short sentences for the user summarizing what happened, what succeeded, what failed, or what you need next. " +
@@ -2124,3 +2365,62 @@ const handleActionToolCall = (
 };
 
 export const createChatEngine = (opts: ChatEngineOptions): ChatEngine => new ChatEngine(opts);
+
+/**
+ * Hold back citation markers while text streams.
+ *
+ * Markers are stripped from the persisted reply, but a stream emits text
+ * before that happens - so without this, `[[cite:id]]` appears on screen and
+ * then vanishes when `assistant_saved` lands. A marker can straddle two
+ * chunks, so anything that could still grow into one is held until it either
+ * completes (and is dropped) or is proved not to be a marker.
+ */
+const CITE_OPEN = "[[cite:";
+/**
+ * How far back to look for an unfinished marker. A component id is bounded by
+ * what `CITE_MARKER_RE` accepts, and holding an unbounded tail would mean a
+ * single stray bracket stopped the stream from ever emitting again.
+ */
+const MAX_HELD = 256;
+
+export const createCiteStripper = (
+  enabled: boolean,
+): { push(delta: string): string; flush(): string } => {
+  if (!enabled) return { push: (delta) => delta, flush: () => "" };
+  let held = "";
+  /**
+   * Index at which the unemittable tail begins; `held.length` when there is
+   * none. Scanned left to right so the *earliest* hold-worthy bracket wins —
+   * looking backwards from the end finds the inner bracket of `[[` and reads
+   * its tail as text that could never be a marker.
+   */
+  const openTailAt = (text: string): number => {
+    const from = Math.max(0, text.length - MAX_HELD);
+    for (let start = from; start < text.length; start++) {
+      if (text[start] !== "[") continue;
+      const tail = text.slice(start);
+      if (tail.startsWith(CITE_OPEN)) {
+        // Opened but not closed: hold until the rest of it arrives.
+        if (!tail.includes("]]")) return start;
+        // Closed: the regex removes it, so there is nothing to hold.
+        continue;
+      }
+      if (CITE_OPEN.startsWith(tail)) return start;
+    }
+    return text.length;
+  };
+  return {
+    push(delta) {
+      held += delta;
+      const cut = openTailAt(held);
+      const ready = held.slice(0, cut).replace(CITE_MARKER_RE, "");
+      held = held.slice(cut);
+      return ready;
+    },
+    flush() {
+      const rest = held.replace(CITE_MARKER_RE, "");
+      held = "";
+      return rest;
+    },
+  };
+};

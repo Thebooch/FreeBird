@@ -84,9 +84,9 @@ describe("chat registry knowledge", () => {
     expect(registry.list()[0]?.id).toBe("dashboard");
   });
 
-  it("names every widget on the board", () => {
+  it("names every widget in the workspace, grouped by tab", () => {
     const text = roster(build());
-    expect(text).toContain("ON THIS DASHBOARD NOW");
+    expect(text).toContain("WIDGETS");
     expect(text).toContain("Leases");
     expect(text).toContain("leases");
   });
@@ -124,7 +124,7 @@ describe("chat registry knowledge", () => {
   it("still builds for an empty board, rather than throwing", () => {
     const registry = build({ dashboard: board("blank", "Blank") });
     expect(registry.list()).toHaveLength(1);
-    expect(roster(registry)).toContain("no widgets on it yet");
+    expect(roster(registry)).toContain("no widgets anywhere in this workspace");
     // The actions still have somewhere to live, or an empty board is inert.
     expect(actionOf(registry, "add_widget")).toBeDefined();
   });
@@ -213,5 +213,92 @@ describe("chat registry actions", () => {
       {} as never,
     );
     expect(result).toMatchObject({ opened: "connections", connectionId: "beta" });
+  });
+});
+
+/*
+ * Tabs are the user's filing, not a boundary. These assert the three things
+ * that has to mean: every widget is registered, every widget is citable, and
+ * a widget on another tab can be acted on without switching first.
+ */
+describe("chat registry across tabs", () => {
+  const ops = board("ops", "Ops", [widget("leases", "Leases")]);
+  const finance = board("finance", "Finance", [widget("rent", "Rent roll")]);
+  const workspace = [ops, finance];
+
+  const withWorkspace = (overrides: Partial<BuildChatRegistryInput> = {}) =>
+    build({ dashboard: ops, workspace, ...overrides });
+
+  it("registers widgets from every tab, not just the open one", () => {
+    const ids = withWorkspace()
+      .list()
+      .map((component) => component.id);
+    expect(ids).toContain("leases");
+    expect(ids).toContain("rent");
+  });
+
+  it("names the other tab's widgets in the roster", () => {
+    const text = roster(withWorkspace());
+    expect(text).toContain("Rent roll");
+    expect(text).toMatch(/Ops \(open now\)/);
+  });
+
+  it("gives every widget a citable, navigable anchor", () => {
+    const rent = withWorkspace()
+      .list()
+      .find((component) => component.id === "rent");
+    expect(rent?.domAnchor).toEqual({
+      selector: '[data-widget-id="rent"]',
+      page: "#/d/finance",
+    });
+  });
+
+  /*
+   * The split that makes registering the workspace affordable:
+   * `buildKnowledgePrompt` emits only components that HAVE knowledge, so an
+   * off-tab widget costs nothing there while still being citable.
+   */
+  it("carries full knowledge only for the open tab's widgets", () => {
+    const registry = withWorkspace();
+    const leases = registry.list().find((component) => component.id === "leases");
+    const rent = registry.list().find((component) => component.id === "rent");
+    expect((leases?.knowledge?.length ?? 0)).toBeGreaterThan(0);
+    expect(rent?.knowledge ?? []).toHaveLength(0);
+  });
+
+  it("opens a widget on another tab, naming the tab to move to", async () => {
+    const open = actionOf(withWorkspace(), "open_widget");
+    await expect(open?.handler?.({ widgetId: "rent" }, {} as never)).resolves.toMatchObject({
+      widgetId: "rent",
+      dashboardId: "finance",
+    });
+  });
+
+  it("refuses to open a widget that does not exist", async () => {
+    const open = actionOf(withWorkspace(), "open_widget");
+    await expect(open?.handler?.({ widgetId: "invented" }, {} as never)).rejects.toThrow(
+      /no widget/,
+    );
+  });
+
+  it("authorizes removing a widget filed under another tab", () => {
+    const remove = actionOf(withWorkspace(), "remove_widget");
+    expect(remove?.authorize?.({ widgetId: "rent" }, {} as never)).toBe(true);
+  });
+
+  it("still refuses to remove a widget nothing carries", () => {
+    const remove = actionOf(withWorkspace(), "remove_widget");
+    expect(remove?.authorize?.({ widgetId: "invented" }, {} as never)).toMatchObject({
+      ok: false,
+    });
+  });
+
+  it("qualifies a handle when two tabs hold the same widget id", () => {
+    const twin = board("finance", "Finance", [widget("leases", "Leases (finance)")]);
+    const ids = build({ dashboard: ops, workspace: [ops, twin] })
+      .list()
+      .map((component) => component.id);
+    expect(ids).toContain("leases--ops");
+    expect(ids).toContain("leases--finance");
   });
 });

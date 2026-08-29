@@ -157,3 +157,71 @@ describe("replayPendingCitation", () => {
     expect(outcome).toEqual({ ok: false, detail: "wrong-page" });
   });
 });
+
+/*
+ * Hash-routed hosts (FreeBird Dash among them) serve every route from one
+ * pathname, so the page comparison has to read the hash or a citation aimed at
+ * the section already on screen navigates instead of scrolling.
+ */
+describe("activateCitation - hash routing", () => {
+  const hashCitation = (over: Partial<ComponentCitation> = {}): ComponentCitation => ({
+    componentId: "leases-by-status",
+    title: "Leases by status",
+    directive: "highlight",
+    selector: "#parking",
+    page: "#/d/rentals",
+    ...over,
+  });
+
+  it("scrolls without navigating when the hash route already matches", async () => {
+    window.history.replaceState(null, "", "/#/d/rentals");
+    const onNavigate = vi.fn();
+    const outcome = await activateCitation(hashCitation(), { onNavigate });
+    expect(onNavigate).not.toHaveBeenCalled();
+    expect(outcome).toEqual({ ok: true });
+    expect(document.getElementById("parking")!.scrollIntoView).toHaveBeenCalled();
+  });
+
+  it("ignores a trailing slash difference in the hash route", async () => {
+    window.history.replaceState(null, "", "/#/d/rentals/");
+    const onNavigate = vi.fn();
+    await activateCitation(hashCitation(), { onNavigate });
+    expect(onNavigate).not.toHaveBeenCalled();
+  });
+
+  it("navigates when the citation names a different hash route", async () => {
+    window.history.replaceState(null, "", "/#/d/finance");
+    const onNavigate = vi.fn();
+    const outcome = await activateCitation(hashCitation(), { onNavigate });
+    expect(onNavigate).toHaveBeenCalledWith("#/d/rentals", expect.anything());
+    expect(outcome).toEqual({ ok: true, detail: "navigating" });
+  });
+
+  it("stashes the citation so the host can finish the scroll after routing", async () => {
+    window.history.replaceState(null, "", "/#/d/finance");
+    await activateCitation(hashCitation(), { onNavigate: () => true });
+    expect(readPendingCitation()?.componentId).toBe("leases-by-status");
+  });
+
+  it("replays a stashed hash citation once the host has switched route", async () => {
+    window.history.replaceState(null, "", "/#/d/finance");
+    await activateCitation(hashCitation(), { onNavigate: () => true });
+    window.history.replaceState(null, "", "/#/d/rentals");
+    const outcome = await replayPendingCitation();
+    expect(outcome).toEqual({ ok: true });
+    expect(document.getElementById("parking")!.scrollIntoView).toHaveBeenCalled();
+  });
+
+  it("still refuses to replay on the wrong hash route", async () => {
+    window.history.replaceState(null, "", "/#/d/finance");
+    await activateCitation(hashCitation(), { onNavigate: () => true });
+    expect(await replayPendingCitation()).toEqual({ ok: false, detail: "wrong-page" });
+  });
+
+  it("leaves path-routed citations comparing pathnames", async () => {
+    window.history.replaceState(null, "", "/somewhere-else#/d/rentals");
+    const onNavigate = vi.fn();
+    await activateCitation(knowledgeCitation(), { onNavigate });
+    expect(onNavigate).toHaveBeenCalledWith("/visit", expect.anything());
+  });
+});

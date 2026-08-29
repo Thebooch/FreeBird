@@ -602,6 +602,46 @@ export const DASH_REACT_STYLES = `
 }
 
 /*
+ * Footnotes under a reply: where it came from, and how far it looked.
+ *
+ * Deliberately quiet and deliberately below the text. A citation is a place
+ * to go and a coverage note is a limit on the claim above it - neither is the
+ * assistant speaking, so neither should read like part of the sentence.
+ */
+.dash-chat__cites {
+  display: flex; flex-wrap: wrap; gap: var(--dash-space-1);
+  margin-top: var(--dash-space-2);
+}
+.dash-chat__cite {
+  font: inherit; font-size: var(--dash-text-xs); line-height: 1.2;
+  padding: 2px var(--dash-space-2);
+  border: 1px solid var(--dash-border); border-radius: var(--dash-radius-pill);
+  background: var(--dash-surface); color: var(--dash-muted);
+  cursor: pointer; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  transition: color var(--dash-dur-fast) var(--dash-ease),
+              border-color var(--dash-dur-fast) var(--dash-ease);
+}
+.dash-chat__cite::before { content: "↗ "; opacity: 0.7; }
+.dash-chat__cite:hover { color: var(--dash-accent); border-color: var(--dash-accent); }
+.dash-chat__cite:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 1px; }
+
+/* The corner, where a limit on the claim belongs. */
+.dash-chat__coverage {
+  display: flex; justify-content: flex-end; align-items: baseline;
+  flex-wrap: wrap; gap: var(--dash-space-1);
+  margin-top: var(--dash-space-2);
+  font-size: var(--dash-text-xs); color: var(--dash-muted);
+  text-align: right;
+}
+.dash-chat__deeper {
+  font: inherit; padding: 0; border: 0; background: none;
+  color: var(--dash-accent); cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.dash-chat__deeper:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 2px; }
+
+/*
  * The wait, with something honest in it.
  *
  * The dots say the turn is alive; the line beside them says what it is doing,
@@ -1000,8 +1040,13 @@ export const DASH_REACT_STYLES = `
   .dash-models__row select { max-width: none; }
 }
 
-/* The tile a widget was just added to, so it can be found on a full board. */
-.dash-grid__cell[data-just-added="true"] {
+/*
+ * The tile a widget was just added to, so it can be found on a full board -
+ * and the tile a citation was just clicked through to, which is the same need
+ * with a different cause, so it wears the same ring rather than a second one.
+ */
+.dash-grid__cell[data-just-added="true"],
+.dash-grid__cell[data-cited="true"] {
   animation: dash-landed 2.4s ease-out 1;
 }
 @keyframes dash-landed {

@@ -1,10 +1,11 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { type LlmTask, isTask } from "./models.js";
+import { type LlmTask, type Provider, isProvider, isTask, providerFor } from "./models.js";
 
 /**
  * Per-instance preferences that are chosen in the UI rather than configured on
- * disk — currently just which model runs which AI action.
+ * disk — currently which provider to run on, and which model runs which AI
+ * action.
  *
  * This lives beside the vault in `.dash/` rather than with the specs, because
  * it is a property of *this installation*, not of the dashboards. Specs are
@@ -13,6 +14,14 @@ import { type LlmTask, isTask } from "./models.js";
  */
 
 export interface Settings {
+  /**
+   * Whose models to run, when nothing more specific has said.
+   *
+   * The choice most people actually want to make — "run this on OpenAI for a
+   * while" — sitting one level above the per-task table, which follows it.
+   * Null means the built-in default provider applies.
+   */
+  readonly provider: Provider | null;
   /**
    * "Use this one model for everything", overriding the per-task defaults.
    *
@@ -32,7 +41,7 @@ export interface Settings {
   readonly models: Partial<Record<LlmTask, string>>;
 }
 
-const EMPTY: Settings = { model: null, models: {} };
+const EMPTY: Settings = { provider: null, model: null, models: {} };
 
 /** Keep only string values under names that are still real tasks. */
 const readTasks = (raw: unknown): Partial<Record<LlmTask, string>> => {
@@ -44,6 +53,15 @@ const readTasks = (raw: unknown): Partial<Record<LlmTask, string>> => {
   return out;
 };
 
+/** What a provider switch leaves behind: the choices it had to drop. */
+export interface ProviderChange {
+  readonly settings: Settings;
+  /** Tasks whose pinned model belonged to the provider being left. */
+  readonly clearedTasks: LlmTask[];
+  /** True when the "one model for everything" choice was dropped too. */
+  readonly clearedGlobal: boolean;
+}
+
 export class SettingsStore {
   constructor(private readonly path: string) {}
 
@@ -51,6 +69,7 @@ export class SettingsStore {
     try {
       const parsed = JSON.parse(readFileSync(this.path, "utf8")) as Partial<Settings>;
       return {
+        provider: isProvider(parsed.provider) ? parsed.provider : null,
         model: typeof parsed.model === "string" && parsed.model ? parsed.model : null,
         models: readTasks(parsed.models),
       };
@@ -59,6 +78,42 @@ export class SettingsStore {
       // worth refusing to boot over.
       return EMPTY;
     }
+  }
+
+  /**
+   * Choose whose models to run, or pass null to go back to the default.
+   *
+   * Switching provider *drops the choices that contradict it*. A row pinned to
+   * Claude Opus while the provider says OpenAI is not a preference being
+   * preserved, it is a switch that silently did not happen — and the one thing
+   * worse than losing a pin is being told the provider changed when a third of
+   * the actions still route to the old one. What was dropped is returned so it
+   * can be said out loud rather than discovered later in a bill.
+   */
+  setProvider(provider: Provider | null): ProviderChange {
+    const current = this.read();
+    const stale = (model: string | undefined | null): boolean =>
+      Boolean(provider && model && providerFor(model) !== provider);
+
+    const models = { ...current.models };
+    const clearedTasks: LlmTask[] = [];
+    for (const [task, model] of Object.entries(models) as [LlmTask, string][]) {
+      if (stale(model)) {
+        delete models[task];
+        clearedTasks.push(task);
+      }
+    }
+    const clearedGlobal = stale(current.model);
+
+    return {
+      settings: this.write({
+        provider,
+        model: clearedGlobal ? null : current.model,
+        models,
+      }),
+      clearedTasks,
+      clearedGlobal,
+    };
   }
 
   /** Pass null to clear the choice and go back to the per-task defaults. */

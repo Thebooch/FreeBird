@@ -2,9 +2,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AdapterRegistry, AdapterError, RestAdapter, type HttpFetch } from "@freebirdai/dash-adapters";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
-import type { InferredShape } from "@freebirdai/dash-agent";
+import type { ConciergeContext, InferredShape } from "@freebirdai/dash-agent";
 import { inferShape, mapReviewProposal, reviewSuggestions, suggestWidgets } from "@freebirdai/dash-agent";
-import type { ConnectionSpec, DashboardSpec, ResolvedParams } from "@freebirdai/dash-spec";
+import type {
+  ConnectionSpec,
+  DashboardSpec,
+  RangePreset,
+  ResolvedParams,
+  TimeRange,
+} from "@freebirdai/dash-spec";
 import { authKeyRefs, catalogEntrySchema, connectionSchema, dashboardSchema, defaultGrainFor, findNarrowing, getOp, isStale, opDefSchema, pathParamNames, queryKey, resolveRange, resourceSchema, statusTone } from "@freebirdai/dash-spec";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -45,14 +51,18 @@ import {
   defaultModelId,
   llmSpend,
   modelForTask,
+  preferredProvider,
   sourceForTask,
 } from "./llm.js";
 import {
   type LlmTask,
   MODELS,
+  PROVIDERS,
   TASKS,
   type TaskInfo,
+  findProvider,
   findTask,
+  isProvider,
   isTask,
   providerFor,
 } from "./models.js";
@@ -62,8 +72,21 @@ import type { PartRegistry } from "@freebirdai/dash-parts";
 import { partsRoutes } from "./routes/parts.js";
 import { conciergeRoutes } from "./routes/concierge.js";
 import { mapRoutes } from "./routes/map.js";
-import type { SettingsStore } from "./settings.js";
+import type { Settings, SettingsStore } from "./settings.js";
 import { QueryCache, clampMaxAge } from "./cache/queryCache.js";
+import { extractRows, parsePath } from "@freebirdai/dash-expr";
+import { splitOpInputs } from "./query.js";
+import { ANSWER_TOOL, answerFromData } from "./context/tool.js";
+import type { ReadOutcome } from "./context/types.js";
+import { workspaceHandles } from "./chat/handles.js";
+import { createPromptRotation, renderDashReply } from "./chat/respond.js";
+import { ScratchFocusStore } from "./context/focus.js";
+import { describeScreen, focusFromScreen, parseView } from "./context/onscreen.js";
+import {
+  LOOK_UP_WIDGET_TOOL,
+  lookUpWidget,
+  lookUpWidgetSchema,
+} from "./chat/lookUpWidget.js";
 import type { CacheStore } from "./cache/store.js";
 import { waitPhrase } from "./cache/cooldown.js";
 import { SpecStore } from "./store.js";
@@ -121,17 +144,18 @@ export interface BuildServerOptions {
  */
 export const LOCAL_USER_ID = "local";
 
-const CHAT_SYSTEM_PROMPT = [
+/** Exported so the prompt-budget driver can measure it. */
+export const CHAT_SYSTEM_PROMPT = [
   "You are the assistant inside FreeBird Dash, a dashboard over the user's own APIs.",
   "",
-  "You are always given the dashboard's full contents. Two lists appear in the",
-  "knowledge for the component named after the dashboard, and they mean different",
-  "things:",
+  "You are always given the whole workspace. Two lists appear in the knowledge for",
+  "the component named after the dashboard, and they mean different things:",
   "",
-  '  - "ON THIS DASHBOARD NOW" — widgets that exist. This is the complete list;',
-  "    there is no other widget you have not been told about. Answer questions",
-  "    about what is on the dashboard directly from it, and match the user's",
-  "    wording against these titles rather than asking them for an id.",
+  '  - "WIDGETS" — every widget that exists, on every tab, grouped by tab. This is',
+  "    the complete list; there is no other widget you have not been told about.",
+  "    Match the user's wording against these titles rather than asking for an id,",
+  "    and never ask them to switch tabs first — tabs are how they filed things,",
+  "    not a limit on what you can talk about. `open_widget` moves the view for you.",
   '  - "NOT YET CREATED" — ready-made widgets that do not exist yet, each with the',
   "    id `add_widget` expects. These are for browsing: offer them when somebody",
   "    asks what they could look at. When they describe something specific, build",
@@ -140,6 +164,46 @@ const CHAT_SYSTEM_PROMPT = [
   "",
   "Never say you cannot see the dashboard: if a widget is not in the first list,",
   "it is genuinely not there — say so, and offer the closest thing from the second.",
+  "",
+  "THREE TOOLS, AND THE DIFFERENCE BETWEEN THEM. You are given full detail for the",
+  "widgets on the tab that is open, and only names for the rest. When you need more:",
+  "",
+  "  - `look_up_widget` — what a widget on another tab is: its endpoint, its",
+  "    fields, what one row is. Costs nothing.",
+  "  - `look_up_endpoint` — what an endpoint could show. Also costs nothing.",
+  "  - `answer_from_data` — what the data actually SAYS. Call this for any",
+  "    question whose answer is a value: a count, a total, a maximum, a specific",
+  "    record, or what a widget is currently showing. It searches the widgets on",
+  "    every tab and the connected endpoints, reads a bounded sample, and reports",
+  "    how much it read.",
+  "",
+  "GOING DEEPER. Every answer says how much it read, and the reply carries a",
+  '"dig deeper" offer when it read only part of a source. When the user takes it,',
+  "first tell them the options — a number of records, back to a date, or everything —",
+  "and what each would cost in requests; everything is usually a lot. Once they choose,",
+  "call `answer_from_data` again with `scanRecords` set. That reads the records in chunks",
+  "and reports patterns nobody asked about alongside the answer, which is the point of it.",
+  "Never set `scanRecords` on your own initiative: it spends their money to be thorough",
+  "about a question they asked casually.",
+  "",
+  "FOLLOW-UPS. `answer_from_data` remembers the records the last question was about, so",
+  '"what was the issue?", "when is it due?" and "any notes on it?" go back to it rather',
+  "than being left unanswered. It answers from what it already holds when it can, and",
+  "opens what is attached to a record when it has to - saying what that cost.",
+  "",
+  "ANSWER AND SHOW. Sending somebody to the right place is genuinely useful - a lot of",
+  "people would rather look at a widget and click around than read a paragraph - so keep",
+  "doing it. What is not acceptable is offering it *instead* of the answer. Say what the",
+  "data says first, then take them to it: `open_widget` moves the view, and citing a",
+  "widget puts a chip under your reply that goes straight to the tile. Never say you",
+  "cannot see something and point at the screen in its place; look it up, answer, and",
+  "then point.",
+  "",
+  "Never answer a question about values from memory or from field names. If you did",
+  "not call `answer_from_data`, you do not know what the data says — and a number",
+  "you guessed renders exactly like one you read. When it reports that it only saw",
+  "part of a source, say so alongside the number rather than presenting a sample as",
+  "a total.",
   "",
   "Two more lists sit alongside them, and they answer the questions the widget",
   "lists cannot:",
@@ -196,8 +260,14 @@ const CHAT_SYSTEM_PROMPT = [
   "Never invent an id. Keep answers short and concrete.",
 ].join("\n");
 
-/** The real transport, wrapped in the SSRF guard and the host allowlist. */
-const nodeHttp: HttpFetch = async (url, init, allowedHost) => {
+/**
+ * The real transport, wrapped in the SSRF guard and the host allowlist.
+ *
+ * Exported so a driver script reads through exactly the transport the server
+ * does. A second, unguarded copy in a script is how an SSRF guard stops being
+ * true of every path that reaches an API.
+ */
+export const nodeHttp: HttpFetch = async (url, init, allowedHost) => {
   const result = await guardedFetch(url, init, allowedHost);
   return {
     status: result.status,
@@ -888,26 +958,9 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     if (!resolvedOp) return reply.status(404).send({ error: `no operation "${op}"` });
     registry.addConnection(spec);
 
-    /*
-     * Route each supplied input to the channel that can actually consume it.
-     *
-     * A caller sends one flat bag of values and should not have to know that a
-     * path segment is filled by a `{{param.x}}` token read from `filters`,
-     * while everything else is a query-string override. The op declares which
-     * of its parameters live in the path, so the split is made here — the only
-     * side that has both the values and the endpoint's contract.
-     */
-    const pathBound = new Set([
-      ...pathParamNames(resolvedOp.path),
-      ...resolvedOp.params.filter((param) => param.in === "path").map((param) => param.name),
-    ]);
-
-    const overrides: Record<string, string | number | boolean> = {};
-    const inputs: Record<string, string | number | boolean> = { ...filters };
-    for (const [name, value] of Object.entries(params)) {
-      if (pathBound.has(name)) inputs[name] = value;
-      else overrides[name] = value;
-    }
+    // Shared with the chat's context harness, so both produce the same cache
+    // key for the same request. See `splitOpInputs`.
+    const { overrides, inputs } = splitOpInputs(resolvedOp, params, filters);
 
     /*
      * The caller's window wins whenever it sent one.
@@ -1413,7 +1466,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   // The single global choice this used to be survives as an override, for
   // anyone who would rather not think about it.
   const currentSettings = (): ModelChoices =>
-    options.settings?.read() ?? { model: null, models: {} };
+    options.settings?.read() ?? { provider: null, model: null, models: {} };
 
   /** What runs a task, where the answer came from, and whether it can run. */
   const taskState = (task: LlmTask, settings: ModelChoices) => {
@@ -1439,6 +1492,27 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
 
     return {
       providers,
+      /*
+       * The provider is the choice above the table: pick one and every task
+       * that has not been pinned individually moves with it. Both the stored
+       * answer and the one actually in force are sent, because they differ
+       * whenever the chosen provider has no key — and the picker has to be
+       * able to say that rather than appear to have done nothing.
+       */
+      providerOptions: PROVIDERS.map((provider) => ({
+        ...provider,
+        available: providers[provider.id],
+      })),
+      provider: settings.provider ?? null,
+      effectiveProvider: preferredProvider(settings),
+      /*
+       * What "Default" would actually give, which is not the same as what is
+       * in force. Choosing Claude and then reading "Default (Claude)" on the
+       * option that would move you back to OpenAI is a label describing the
+       * state instead of the choice — so this is resolved with the stored
+       * answer taken out.
+       */
+      defaultProvider: preferredProvider({ provider: null, model: null, models: {} }),
       models: MODELS.map((model) => ({
         ...model,
         // Surfaced so the picker can disable rather than hide — seeing that
@@ -1446,7 +1520,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         available: providers[model.provider],
       })),
       selected,
-      effective: selected ?? defaultModelId(),
+      effective: selected ?? defaultModelId(settings),
       // A model id set in .env cannot be overridden from the UI, so say so
       // rather than letting the picker appear to do nothing.
       pinnedByEnv: Boolean(process.env.DASH_LLM_MODEL),
@@ -1467,18 +1541,67 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     if (!options.settings) {
       return reply.status(400).send({ error: "this server has no settings store" });
     }
-    const parsed = z
-      .object({
-        model: z.string().min(1).max(120).nullable(),
-        /** Absent means the global choice; a task name means only that one. */
-        task: z.string().max(40).optional(),
-      })
+
+    /** The state every write returns, so the picker never re-fetches to agree. */
+    const stateOf = (next: Settings, cleared?: { tasks: LlmTask[]; global: boolean }) => ({
+      provider: next.provider ?? null,
+      effectiveProvider: preferredProvider(next),
+      defaultProvider: preferredProvider({ provider: null, model: null, models: {} }),
+      selected: next.model,
+      effective: next.model ?? defaultModelId(next),
+      tasks: TASKS.map((entry) => taskState(entry.id, next)),
+      /*
+       * What the write had to drop to be true. Nothing else here removes a
+       * choice somebody made, so it is said rather than left to be noticed.
+       */
+      clearedTasks: cleared?.tasks ?? [],
+      clearedGlobal: cleared?.global ?? false,
+    });
+
+    /*
+     * Two writes through one route, distinguished by which key is present:
+     * the provider above the table, or a model for the table (globally, or
+     * for one task).
+     */
+    const body = z
+      .union([
+        z.object({ provider: z.string().max(40).nullable() }),
+        z.object({
+          model: z.string().min(1).max(120).nullable(),
+          /** Absent means the global choice; a task name means only that one. */
+          task: z.string().max(40).optional(),
+        }),
+      ])
       .safeParse(request.body);
-    if (!parsed.success) {
+    if (!body.success) {
       return reply.status(400).send({ error: "a model id (or null to clear) is required" });
     }
 
-    const { model, task } = parsed.data;
+    if ("provider" in body.data) {
+      const wanted = body.data.provider;
+      if (wanted !== null && !isProvider(wanted)) {
+        return reply.status(400).send({ error: `"${wanted}" is not a provider this server knows.` });
+      }
+      /*
+       * A provider with no key is refused rather than stored. Unlike a model
+       * choice, this one silently falls back at resolution time, so accepting
+       * it would leave the picker reading OpenAI while every call went to
+       * Claude.
+       */
+      if (wanted && !availableProviders()[wanted]) {
+        const info = findProvider(wanted);
+        return reply.status(400).send({
+          error: `${info?.label ?? wanted} needs a ${info?.keyVar}, which this server doesn't have.`,
+        });
+      }
+      const change = options.settings.setProvider(wanted);
+      return stateOf(change.settings, {
+        tasks: change.clearedTasks,
+        global: change.clearedGlobal,
+      });
+    }
+
+    const { model, task } = body.data;
     if (task !== undefined && !isTask(task)) {
       return reply.status(400).send({ error: `"${task}" is not an action this server performs.` });
     }
@@ -1500,11 +1623,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       ? options.settings.setTaskModel(task, model)
       : options.settings.setModel(model);
 
-    return {
-      selected: next.model,
-      effective: next.model ?? defaultModelId(),
-      tasks: TASKS.map((entry) => taskState(entry.id, next)),
-    };
+    return stateOf(next);
   });
 
   // ── catalog ─────────────────────────────────────────────────────────────
@@ -1801,6 +1920,198 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       return store.listDashboards()[0] ?? null;
     };
 
+    /*
+     * The window the board is actually showing.
+     *
+     * The browser resolves its range against `controls.anchor` — an instant
+     * that only moves when the user acts — so re-resolving here against the
+     * server's clock would give the chat a different window from the tiles it
+     * is talking about. The client sends what it resolved; the board's own
+     * default stands in when it did not.
+     */
+    const resolvedFor = (
+      dashboard: DashboardSpec,
+      header: unknown,
+    ): ResolvedParams => {
+      const parts = typeof header === "string" ? header.split(":") : [];
+      const start = Number(parts[1]);
+      const end = Number(parts[2]);
+      if (parts.length >= 3 && Number.isFinite(start) && Number.isFinite(end)) {
+        return {
+          range: {
+            start,
+            end,
+            grain: (parts[3] as TimeRange["grain"]) || defaultGrainFor(start, end),
+            preset: (parts[0] as RangePreset) || "custom",
+          },
+          filters: {},
+        };
+      }
+      return {
+        range: resolveRange({
+          preset: dashboard.params.defaultRange,
+          now: Date.now(),
+        }),
+        filters: {},
+      };
+    };
+
+    /**
+     * One read, through the same cache and accounting a widget's own request
+     * goes through — so a widget the user is looking at is already in there
+     * and costs nothing to talk about.
+     *
+     * `cacheOnly` is what keeps the harness's budget honest: a source chosen
+     * *because* it was free must not quietly become a request if the entry
+     * expired between choosing and reading. It returns null instead and the
+     * search moves on.
+     */
+    const readForChat = async (input: {
+      connection: string;
+      op: string;
+      params: Readonly<Record<string, string | number | boolean>>;
+      resolved: ResolvedParams;
+      cacheOnly: boolean;
+    }): Promise<ReadOutcome | null> => {
+      const spec = store.getConnection(input.connection);
+      if (!spec) return null;
+      const resolvedOp = getOp(spec, input.op);
+      if (!resolvedOp) return null;
+
+      const { overrides, inputs } = splitOpInputs(
+        resolvedOp,
+        input.params,
+        input.resolved.filters,
+      );
+      const scoped: ResolvedParams = { ...input.resolved, filters: inputs };
+      const key = queryKey(input.connection, input.op, overrides, scoped);
+
+      if (input.cacheOnly) {
+        const cached = queries.store.get(key);
+        return cached
+          ? {
+              ok: true as const,
+              body: cached.body,
+              requests: 0,
+              truncated: cached.meta.truncated,
+            }
+          : null;
+      }
+
+      registry.addConnection(spec);
+      try {
+        const outcome = await queries.read({
+          key,
+          connection: input.connection,
+          // An hour: the chat is answering a question about a board, not
+          // refreshing it. Forcing a fetch here would spend a request on data
+          // the user is already looking at.
+          maxAgeMs: 60 * 60_000,
+          fetcher: (validators) =>
+            registry.fetch(input.connection, input.op, overrides, {
+              params: scoped,
+              now: Date.now(),
+              resolveSecret: async (keyRef) => keys.get(keyRef),
+              ...(validators ? { validators } : {}),
+            }),
+        });
+        return {
+          ok: true as const,
+          body: outcome.body,
+          requests: outcome.outcome === "hit" || outcome.outcome === "stale" ? 0 : 1,
+          truncated: outcome.meta.truncated,
+        };
+      } catch (error) {
+        /*
+         * A refused endpoint is not an error in the conversation — the search
+         * moves on. But the *reason* travels with it: the adapter has already
+         * phrased 401, 403 and 429 for a person, and "your key works and is not
+         * allowed to read this" is the only actionable thing in the reply.
+         * Throwing here would end the turn over one unreadable source.
+         */
+        return {
+          ok: false as const,
+          reason:
+            error instanceof AdapterError
+              ? error.userMessage
+              : `"${input.op}" could not be read.`,
+        };
+      }
+    };
+
+    /*
+     * Rotates the response instructions so consecutive replies do not share a
+     * skeleton. Held here rather than per call so it actually advances.
+     */
+    const rotatePrompt = createPromptRotation();
+
+    /**
+     * The record the person has open, as this turn's context.
+     *
+     * Read cache-only: the browser has just drawn it, so the rows are already
+     * held, and a chat turn must never quietly buy data merely to work out
+     * what somebody is looking at.
+     */
+    const onScreenFocus = async (
+      auth: { extra?: Record<string, unknown> },
+      dashboards: readonly DashboardSpec[],
+      dashboard: DashboardSpec,
+      context: ConciergeContext,
+    ) => {
+      const open = parseView(auth.extra?.["view"]);
+      if (!open) return null;
+      return focusFromScreen({
+        open,
+        handles: workspaceHandles(dashboards, dashboard.id),
+        context,
+        resolved: resolvedFor(dashboard, auth.extra?.["range"]),
+        read: readForChat,
+        now: () => Date.now(),
+        timeZone: dashboard.params.timeZone,
+        rowsOf: (body) =>
+          typeof body === "object" && body !== null && !Array.isArray(body)
+            ? [body as Record<string, unknown>]
+            : Array.isArray(body)
+              ? (body.filter(
+                  (row) => typeof row === "object" && row !== null,
+                ) as Record<string, unknown>[])
+              : [],
+      });
+    };
+
+    /*
+     * Where a conversation's current records live.
+     *
+     * In the chat database, so a follow-up survives a restart — the same
+     * scratch table the concierge's draft uses, under its own namespace and
+     * scoped by session rather than by board. Identity is passed explicitly
+     * because the table folds tenant and user into its primary key, and these
+     * rows hold records read off somebody's API.
+     */
+    const focusStore = new ScratchFocusStore(chatDb.adapter, {
+      userId: LOCAL_USER_ID,
+    });
+
+    /*
+     * One search per question, however many times it is asked for.
+     *
+     * The inner loop runs up to `maxToolSteps` times, and a model that has
+     * just been handed an excerpt rather than a full result will sometimes ask
+     * the same question again to see the rest. The prompt tells it not to;
+     * this makes it free when it does anyway, which matters because the repeat
+     * is not a wasted model call but a whole second search - several calls and
+     * real upstream requests against somebody's account.
+     *
+     * Keyed on the session and the arguments, so a genuinely different question
+     * still runs. Entries expire after a few seconds rather than at a turn
+     * boundary, because `executeExtraTool` is not told which turn it is in —
+     * and the window only has to outlive one inner loop, which is seconds. A
+     * user asking the same question again a minute later gets a fresh search,
+     * which is what they mean by asking again.
+     */
+    const ANSWER_MEMO_MS = 20_000;
+    const answered = new Map<string, { at: number; value: unknown }>();
+
     const chatPlugin = createFreeBirdPlugin({
       db: chatDb.adapter,
       llm: () => resolveChatLlm(() => resolveLlm("chat")),
@@ -1827,12 +2138,111 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             "no request against it.",
           schema: lookUpSchema,
         },
+        /*
+         * The other half of the same idea, and the more expensive one.
+         *
+         * `look_up_endpoint` answers "what could this show"; this answers
+         * "what does it say". It is the only path from the conversation to
+         * the user's actual values, and it is a processing tool for the same
+         * reason: an action's result never comes back, so a model calling one
+         * to answer a question has nothing to say afterwards.
+         */
+        [ANSWER_TOOL.name]: ANSWER_TOOL,
+        /*
+         * The workspace's own version of `look_up_endpoint`. Every widget is
+         * registered so it can be named and cited, but only the open tab's
+         * carry full knowledge — this is what gets the rest without putting
+         * sixty endpoint descriptions in every prompt.
+         */
+        [LOOK_UP_WIDGET_TOOL.name]: LOOK_UP_WIDGET_TOOL,
       },
-      executeExtraTool: async (name, args) => {
-        if (name !== LOOK_UP_TOOL) return { error: `unknown tool "${name}"` };
-        const parsed = lookUpSchema.safeParse(args);
-        if (!parsed.success) return { error: "look_up_endpoint needs a `query` string" };
-        return lookUpEndpoint(conciergeContext(), parsed.data);
+      executeExtraTool: async (name, args, ctx) => {
+        if (name === LOOK_UP_TOOL) {
+          const parsed = lookUpSchema.safeParse(args);
+          if (!parsed.success) return { error: "look_up_endpoint needs a `query` string" };
+          return lookUpEndpoint(conciergeContext(), parsed.data);
+        }
+        if (name === LOOK_UP_WIDGET_TOOL.name) {
+          const parsed = lookUpWidgetSchema.safeParse(args);
+          if (!parsed.success) return { error: "look_up_widget needs a `widgetId`" };
+          const dashboard = dashboardFor(ctx.auth);
+          const dashboards = store.listDashboards();
+          return lookUpWidget(
+            {
+              handles: workspaceHandles(dashboards, dashboard?.id ?? null),
+              context: conciergeContext(),
+              reports: store.listReports(),
+            },
+            parsed.data,
+          );
+        }
+        if (name === ANSWER_TOOL.name) {
+          const dashboard = dashboardFor(ctx.auth);
+          if (!dashboard) return { error: "there is no dashboard to read from" };
+          const memoKey = `${ctx.sessionId}|${JSON.stringify(args)}`;
+          const now = Date.now();
+          for (const [key, entry] of answered) {
+            if (now - entry.at > ANSWER_MEMO_MS) answered.delete(key);
+          }
+          const already = answered.get(memoKey);
+          if (already) return already.value;
+          const dashboards = store.listDashboards();
+          const context = conciergeContext();
+          const resolved = resolvedFor(dashboard, ctx.auth.extra?.["range"]);
+          const outcome = await answerFromData(args, {
+            /*
+             * The conversation, not the board. What a session is currently
+             * about belongs to that session — two people on the same board are
+             * asking about different records, and one must not answer from the
+             * other's.
+             */
+            sessionId: ctx.sessionId,
+            ...(focusStore ? { focus: focusStore } : {}),
+            /*
+             * The record on screen outranks whatever the last question put in
+             * hand: somebody looking at one record and asking "what is this?"
+             * means that one. Costs nothing — the rows were drawn a moment ago
+             * and are read cache-only.
+             */
+            onScreen: await onScreenFocus(ctx.auth, dashboards, dashboard, context),
+            /*
+             * The cheap tier, deliberately. Ranking sources and judging a
+             * sample are reading tasks, and there are several of them per
+             * question — the one call the user actually reads is the final
+             * response, and that is where the capable model goes.
+             */
+            llm: options.llm ? resolveLlm("context") : null,
+            handles: workspaceHandles(dashboards, dashboard.id),
+            dashboards,
+            context,
+            resolved,
+            timeZone: dashboard.params.timeZone,
+            now: () => Date.now(),
+            read: readForChat,
+            // `CacheStore.get` answers a miss with `undefined`, not null.
+            isCached: (key) => queries.store.get(key) !== undefined,
+            /*
+             * The endpoint's own `rowsPath`, parsed the same way the pipeline
+             * parses it. A malformed one is an empty read rather than a thrown
+             * turn: the search moves on and the reply says what it could not
+             * read.
+             */
+            rowsOf: (body, rowsPath) => {
+              try {
+                return extractRows(parsePath(rowsPath), body).filter(
+                  (row): row is Record<string, unknown> =>
+                    typeof row === "object" && row !== null && !Array.isArray(row),
+                );
+              } catch {
+                return [];
+              }
+            },
+            rowsPathFor: (op) => context.shapes[op]?.rowsPath ?? "$",
+          });
+          answered.set(memoKey, { at: Date.now(), value: outcome });
+          return outcome;
+        }
+        return { error: `unknown tool "${name}"` };
       },
 
       /*
@@ -2023,6 +2433,21 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           allDashboards: store
             .listDashboards()
             .map((board) => ({ id: board.id, title: board.title })),
+          /*
+           * The whole workspace, widgets included. `allDashboards` answers
+           * "what tabs do I have"; this is what makes a widget on one of them
+           * nameable, citable and openable without switching to it first.
+           */
+          workspace: store.listDashboards(),
+          /*
+           * What they are looking at, so the assistant can talk about it. Free
+           * — the record is resolved from rows the browser already drew.
+           */
+          onScreen: describeScreen({
+            tab: dashboard.title,
+            open: parseView(auth.extra?.["view"]),
+            record: await onScreenFocus(auth, store.listDashboards(), dashboard, conciergeContext()),
+          }),
           board: {
             getDashboard: () => store.getDashboard(dashboard.id),
             getDashboardById: (id) => store.getDashboard(id),
@@ -2049,7 +2474,18 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           (request as { headers?: Record<string, unknown> })?.headers ?? {};
         return {
           userId: LOCAL_USER_ID,
-          extra: { dashboardId: headers["x-dash-dashboard"] },
+          extra: {
+            dashboardId: headers["x-dash-dashboard"],
+            /*
+             * The window the board resolved, not one resolved here. The
+             * browser anchors its range to an instant that only moves when the
+             * user acts; re-resolving against the server's clock would have
+             * the chat describing a different window from the tiles.
+             */
+            range: headers["x-dash-range"],
+            /** What is on screen, when it is finer than the board. */
+            view: headers["x-dash-view"],
+          },
         };
       },
 
@@ -2072,6 +2508,35 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       // `DashboardGrid` for control of the same cells.
       enablePlanLayout: false,
       citations: { enabled: true },
+
+      /*
+       * One generated reply per turn, and no other writer.
+       *
+       * `"fallback"` — the default — lets whatever prose the model produced
+       * mid-loop be the reply, and prints a canned sentence when there was
+       * none. That is how a turn that did nothing came to read exactly like
+       * one that worked. Under `"always"` the loop's prose is a draft nobody
+       * sees, every deterministic conclusion is an input, and one final call
+       * writes what the user reads.
+       */
+      finalReply: {
+        mode: "always",
+        /*
+         * The one call the user actually reads, on the better model.
+         *
+         * The loop runs on `chat` and the search on `context`, both cheap,
+         * because routing and reading are what the cheap model measured well
+         * at. Writing the answer is the judgement call, and it is the only
+         * part anybody sees — without this it silently inherited the loop's
+         * model and the whole per-task split stopped at the last step.
+         */
+        llm: () => resolveChatLlm(() => resolveLlm("respond")),
+        render: (context) =>
+          renderDashReply(context, {
+            sessionId: context.sessionId,
+            rotate: rotatePrompt,
+          }),
+      },
       /*
        * Well above the 6000-character default.
        *

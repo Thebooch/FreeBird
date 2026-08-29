@@ -52,8 +52,10 @@ export { buildPlanLayoutTool } from "./layout/tool.js";
 export {
   ChatEngine,
   createChatEngine,
+  createCiteStripper,
   type ChatEngineOptions,
   type ChatStreamEvent,
+  type FinalReplyContext,
   type LlmUsagePayload,
   type SendMessageInput,
 } from "./chat/engine.js";

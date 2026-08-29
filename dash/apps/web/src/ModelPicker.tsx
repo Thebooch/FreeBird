@@ -1,8 +1,14 @@
 import { useEffect, useState } from "react";
-import { type ModelOption, type ModelsResult, type TaskOption, api } from "./api.js";
+import {
+  type ModelOption,
+  type ModelWriteResult,
+  type ModelsResult,
+  type TaskOption,
+  api,
+} from "./api.js";
 
 /**
- * Which model runs which AI action.
+ * Whose models to run, and which one runs which AI action.
  *
  * This was one global choice, and the comment here said per-action selection
  * was a later problem because knowing *which* model wrote a binding mattered
@@ -11,6 +17,10 @@ import { type ModelOption, type ModelsResult, type TaskOption, api } from "./api
  * answering a question about a board is reading — and a widget now records the
  * model that produced it, so the provenance objection is answered rather than
  * traded away.
+ *
+ * The provider sits above all of it, because that is the choice people
+ * actually make: "run this on OpenAI for a while", not eight model ids. Pick
+ * one and every action below follows it.
  *
  * Defaults lead. Nothing here has to be touched for the routing to be good;
  * every row shows what will run and says why, and the panel exists for the
@@ -96,6 +106,8 @@ export const ModelPicker = (): JSX.Element | null => {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
+  /** What a provider switch had to drop, said once rather than left to be found. */
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = (): void => {
     void api
@@ -122,17 +134,38 @@ export const ModelPicker = (): JSX.Element | null => {
     );
   }
 
-  const choose = async (model: string | null, task?: string): Promise<void> => {
+  /*
+   * Every write returns the whole routing, so nothing here re-fetches to find
+   * out what it just did. A provider switch changes far more rows than it
+   * touches, and a picker that showed the old answers until the next open
+   * would be the same complaint that led to this panel.
+   */
+  const apply = (result: ModelWriteResult): void => {
+    setState({
+      ...state,
+      provider: result.provider,
+      effectiveProvider: result.effectiveProvider,
+      defaultProvider: result.defaultProvider,
+      selected: result.selected,
+      effective: result.effective,
+      tasks: result.tasks,
+    });
+
+    const cleared = result.clearedTasks
+      .map((id) => state.tasks.find((task) => task.id === id)?.label ?? id)
+      .concat(result.clearedGlobal ? ["the one-model-for-everything choice"] : []);
+    setNotice(
+      cleared.length === 0
+        ? null
+        : `Dropped ${cleared.join(", ")} — ${cleared.length === 1 ? "it was" : "they were"} pinned to the other provider.`,
+    );
+  };
+
+  const run = async (write: () => Promise<ModelWriteResult>): Promise<void> => {
     setBusy(true);
     setError(null);
     try {
-      const result = await api.setModel(model, task);
-      setState({
-        ...state,
-        selected: result.selected,
-        effective: result.effective,
-        tasks: result.tasks,
-      });
+      apply(await write());
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -140,18 +173,34 @@ export const ModelPicker = (): JSX.Element | null => {
     }
   };
 
+  const choose = (model: string | null, task?: string): Promise<void> =>
+    run(() => api.setModel(model, task));
+
+  const chooseProvider = (provider: string): Promise<void> =>
+    run(() => api.setProvider(provider === "" ? null : (provider as "anthropic" | "openai")));
+
+  const inForce = state.providerOptions.find(
+    (provider) => provider.id === state.effectiveProvider,
+  );
+  /* What picking "Default" would give — not what is in force, which is what
+     the option said before and was a description of the state instead. */
+  const byDefault = state.providerOptions.find(
+    (provider) => provider.id === state.defaultProvider,
+  );
+
   /*
    * The button says what is actually happening, in one word.
    *
-   * "Per action" rather than a model name, because naming one of several
+   * The provider rather than a model name, because naming one of several
    * models on a control that routes to all of them is the sort of half-truth
-   * that costs somebody an afternoon.
+   * that costs somebody an afternoon — and the provider *is* true of all of
+   * them until somebody pins a row to the other one.
    */
   const summary = state.pinnedByEnv
     ? "Pinned"
     : state.selected
       ? (state.models.find((model) => model.id === state.selected)?.label ?? state.selected)
-      : "Per action";
+      : (inForce?.label ?? "Per action");
 
   const tiered = (tier: TaskOption["tier"]): JSX.Element[] =>
     state.tasks
@@ -216,6 +265,56 @@ export const ModelPicker = (): JSX.Element | null => {
                   DASH_LLM_MODEL is set in the environment, which overrides everything here.
                 </p>
               )}
+
+              {notice && (
+                <p className="dash-callout" data-testid="model-picker-notice">
+                  {notice}
+                </p>
+              )}
+
+              {state.provider && state.provider !== state.effectiveProvider && (
+                <p className="dash-callout dash-callout--bad" data-testid="model-picker-provider-gone">
+                  {state.providerOptions.find((entry) => entry.id === state.provider)?.label} is
+                  selected, but its key is missing, so everything is running on{" "}
+                  {inForce?.label ?? "nothing"}.
+                </p>
+              )}
+
+              <section className="dash-sheet__section">
+                <h3 className="dash-sheet__sub">Provider</h3>
+                <label className="dash-models__row">
+                  <span className="dash-models__name">
+                    Whose models to use
+                    <small className="dash-models__note">
+                      Everything below follows this unless it is pinned to something else.
+                    </small>
+                    <small className="dash-models__note">
+                      {state.provider ? "Chosen" : "Default"}
+                      {inForce ? `: ${inForce.label} — ${inForce.note}` : ""}
+                    </small>
+                  </span>
+                  <select
+                    className="dash-control"
+                    aria-label="Provider"
+                    data-testid="model-picker-provider"
+                    disabled={busy || state.pinnedByEnv}
+                    value={state.provider ?? ""}
+                    onChange={(event) => void chooseProvider(event.target.value)}
+                  >
+                    <option value="">Default{byDefault ? ` (${byDefault.label})` : ""}</option>
+                    {state.providerOptions.map((provider) => (
+                      <option
+                        key={provider.id}
+                        value={provider.id}
+                        disabled={!provider.available}
+                      >
+                        {provider.label}
+                        {provider.available ? "" : ` — needs ${provider.keyVar}`}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </section>
 
               <section className="dash-sheet__section">
                 <h3 className="dash-sheet__sub">Every action</h3>

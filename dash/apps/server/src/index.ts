@@ -60,8 +60,13 @@ const parts = buildPartRegistry({ stateDir, projectDir: join(repoRoot, "parts") 
  * A missing task name means a caller outside the table, which still deserves a
  * working model rather than an error, so it falls back to the plain default.
  */
-const modelFor = (task?: string): string | null =>
-  task && isTask(task) ? modelForTask(task, settings.read()) : (settings.read().model ?? defaultModelId());
+const modelFor = (task?: string): string | null => {
+  const chosen = settings.read();
+  if (task && isTask(task)) return modelForTask(task, chosen);
+  // Outside the table, so there is no tier to resolve — but the provider
+  // above it still applies, or a caller nobody named would quietly ignore it.
+  return chosen.model ?? defaultModelId(chosen);
+};
 
 // Resolved per request, so picking a different model in the UI takes effect on
 // the next action rather than the next restart.

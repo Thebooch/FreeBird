@@ -8,10 +8,15 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "eval:models": "tsx src/eval/models.mts"
+    "eval:models": "tsx src/eval/models.mts",
+    "eval:context": "tsx src/eval/context.mts",
+    "eval:prompt": "tsx src/eval/prompt.mts",
+    "eval:reply": "tsx src/eval/reply.mts",
+    "eval:related": "tsx src/eval/related.mts"
   },
   "dependencies": {
     "@freebirdai/dash-adapters": "workspace:*",
+    "@freebirdai/dash-expr": "workspace:*",
     "@freebirdai/dash-agent": "workspace:*",
     "@freebirdai/dash-parts": "workspace:*",
     "@freebirdai/dash-runtime": "workspace:*",

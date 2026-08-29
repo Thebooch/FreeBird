@@ -138,8 +138,43 @@ export interface SpendTotals {
   unpriced: number;
 }
 
+/** One provider the server can reach, or would if it had the key. */
+export interface ProviderOption {
+  id: "anthropic" | "openai";
+  /** What people call it, which is not always what the API is called. */
+  label: string;
+  /** The environment variable this provider needs. */
+  keyVar: string;
+  /** Which models it means, in one line. */
+  note: string;
+  available: boolean;
+}
+
+/** What every write to /api/models returns, so the picker never re-fetches. */
+export interface ModelWriteResult {
+  provider: "anthropic" | "openai" | null;
+  effectiveProvider: "anthropic" | "openai" | null;
+  /** What "Default" resolves to, with any stored choice taken out. */
+  defaultProvider: "anthropic" | "openai" | null;
+  selected: string | null;
+  effective: string | null;
+  tasks: TaskOption[];
+  /** Per-action choices dropped because they belonged to the old provider. */
+  clearedTasks: string[];
+  /** True when the "one model for everything" choice was dropped too. */
+  clearedGlobal: boolean;
+}
+
 export interface ModelsResult {
   providers: { anthropic: boolean; openai: boolean };
+  /** The providers to choose between, and whether each one has a key. */
+  providerOptions: ProviderOption[];
+  /** The chosen provider, or null for the built-in default. */
+  provider: "anthropic" | "openai" | null;
+  /** Which provider is actually in force — differs when the chosen one has no key. */
+  effectiveProvider: "anthropic" | "openai" | null;
+  /** What "Default" resolves to, with any stored choice taken out. */
+  defaultProvider: "anthropic" | "openai" | null;
   models: ModelOption[];
   /** The "use one model for everything" override, or null for per-task. */
   selected: string | null;
@@ -499,11 +534,22 @@ export const api = {
 
   models: (): Promise<ModelsResult> => request("/api/models"),
 
+  /**
+   * Choose whose models to run. Everything not pinned individually follows.
+   *
+   * Pins belonging to the provider being left are dropped by the server and
+   * named in `clearedTasks`, because a switch that quietly left a third of the
+   * actions on the old provider would be a control that lied.
+   */
+  setProvider: (provider: "anthropic" | "openai" | null): Promise<ModelWriteResult> =>
+    request("/api/models", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider }),
+    }),
+
   /** Omit `task` to set the global override; name one to route just it. */
-  setModel: (
-    model: string | null,
-    task?: string,
-  ): Promise<{ selected: string | null; effective: string | null; tasks: TaskOption[] }> =>
+  setModel: (model: string | null, task?: string): Promise<ModelWriteResult> =>
     request("/api/models", {
       method: "PUT",
       headers: { "content-type": "application/json" },

@@ -20,6 +20,7 @@
  */
 
 import type { SearchProvider, SearchResult } from "./search.js";
+import { TIER_MODELS } from "../models.js";
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
@@ -168,7 +169,12 @@ export const openAiWebSearch = (
   apiKey: string,
   options: { model?: string } = {},
 ): SearchProvider => {
-  const model = options.model ?? "gpt-4o-mini";
+  /*
+   * The cheap tier, read from the catalogue rather than written down here.
+   * Searching is a reading job, and a literal id in this file would go stale
+   * silently the next time the model list changes.
+   */
+  const model = options.model ?? TIER_MODELS.openai.fast;
 
   return {
     name: "openai",

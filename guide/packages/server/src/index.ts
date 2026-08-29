@@ -137,6 +137,12 @@ export interface CreateFreeBirdRouterOptions<TAuth = unknown> {
   executeExtraTool?: import("@freebirdai/core").ChatEngineOptions["executeExtraTool"];
   /** Inner LLM steps per message. Default 3; 1 disables the loop. */
   maxToolSteps?: import("@freebirdai/core").ChatEngineOptions["maxToolSteps"];
+  /**
+   * Forwarded to ChatEngineOptions.finalReply. Default `"fallback"`, where the
+   * model's own prose is the reply; `"always"` makes one final step the sole
+   * writer of every reply, at the cost of an extra LLM call per turn.
+   */
+  finalReply?: import("@freebirdai/core").ChatEngineOptions["finalReply"];
   /** Summary prompt passed to the digest engine. */
   summaryPrompt?: string;
   /**
@@ -206,6 +212,7 @@ export const resolveDeps = <TAuth = unknown>(opts: CreateFreeBirdRouterOptions<T
       maxToolSteps: opts.maxToolSteps,
       processingToolCatalog: opts.processingToolCatalog,
       executeExtraTool: opts.executeExtraTool,
+      finalReply: opts.finalReply,
     });
   const tabs = opts.tabs ?? createCustomTabsService(opts.db);
   const digest =
@@ -333,6 +340,7 @@ export const createDepsResolver = <TAuth = unknown>(
         maxToolSteps: opts.maxToolSteps,
         processingToolCatalog: opts.processingToolCatalog,
         executeExtraTool: opts.executeExtraTool,
+        finalReply: opts.finalReply,
       });
       return {
         chat,

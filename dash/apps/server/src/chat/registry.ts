@@ -10,6 +10,13 @@ import { parseWidget, rangePresetSchema, widgetSources } from "@freebirdai/dash-
 import type { ComponentDefinition } from "@freebirdai/core";
 import { createComponentRegistry } from "@freebirdai/core";
 import { z } from "zod";
+import {
+  pageFor,
+  resolveHandle,
+  selectorFor,
+  workspaceHandles,
+  type WidgetHandle,
+} from "./handles.js";
 
 /**
  * The dashboard, described to the chat engine.
@@ -48,7 +55,25 @@ export interface ConnectionSummary {
 
 export interface BuildChatRegistryInput {
   readonly dashboard: DashboardSpec;
+  /**
+   * Every board, with its widgets.
+   *
+   * Tabs are the user's own filing, not a boundary the assistant should
+   * inherit: a widget one tab over has to be nameable, citable and openable
+   * without being switched to first. Absent, only `dashboard` is registered —
+   * which is what the no-dashboard bootstrap case wants.
+   */
+  readonly workspace?: readonly DashboardSpec[];
   readonly reports: readonly CapabilityReport[];
+  /**
+   * What is on screen right now, in one sentence.
+   *
+   * Showing somebody a widget and letting them click into a record is a good
+   * way to work, and the conversation should be able to keep up with wherever
+   * that lands them. Without this the assistant knows which board is open and
+   * nothing finer, so "what is this?" on a record page has no subject.
+   */
+  readonly onScreen?: string;
   readonly board: BoardOps;
   /** Offers the chat may pick from when asked to add something. */
   readonly suggestions?: readonly AuthoredWidget[];
@@ -76,7 +101,10 @@ const addWidgetSchema = z.object({
 });
 
 const removeWidgetSchema = z.object({
-  widgetId: z.string().min(1).describe("Id of a widget currently on the dashboard."),
+  widgetId: z
+    .string()
+    .min(1)
+    .describe("Id of a widget that exists, from the WIDGETS list. Any tab."),
 });
 
 const setRangeSchema = z.object({
@@ -84,7 +112,10 @@ const setRangeSchema = z.object({
 });
 
 const openWidgetSchema = z.object({
-  widgetId: z.string().min(1).describe("Id of a widget currently on the dashboard."),
+  widgetId: z
+    .string()
+    .min(1)
+    .describe("Id of a widget that exists, from the WIDGETS list. Any tab."),
 });
 
 const switchDashboardSchema = z.object({
@@ -116,7 +147,9 @@ const readConnectionSchema = z.object({
  * and undone by doing the opposite. Nothing leaves the browser and no stored
  * spec changes.
  */
-const viewActions = (): ComponentDefinition["actions"] => [
+const viewActions = (
+  handles: readonly WidgetHandle[],
+): ComponentDefinition["actions"] => [
   {
     id: "set_time_range",
     description: "Change the dashboard's time range.",
@@ -126,11 +159,27 @@ const viewActions = (): ComponentDefinition["actions"] => [
     handler: async (args: { preset: RangePreset }) => ({ preset: args.preset }),
   },
   {
+    /*
+     * Takes a workspace handle, so this one action reaches a widget on any
+     * tab. The client switches tab first when it has to — which is the whole
+     * point of tabs being the user's filing rather than a boundary.
+     */
     id: "open_widget",
-    description: "Open a widget's inspector so the user can see its data and request.",
+    description:
+      "Show the user a widget and open its inspector. Works for a widget on any tab; " +
+      "the view moves to that tab first.",
     schema: openWidgetSchema,
     requiresConfirmation: "none",
-    handler: async (args: { widgetId: string }) => ({ widgetId: args.widgetId }),
+    handler: async (args: { widgetId: string }) => {
+      const found = resolveHandle(handles, args.widgetId);
+      if (!found) throw new Error(`there is no widget "${args.widgetId}"`);
+      return {
+        widgetId: found.widgetId,
+        dashboardId: found.dashboardId,
+        handle: found.handle,
+        title: found.widget.title,
+      };
+    },
   },
   {
     id: "switch_dashboard",
@@ -171,7 +220,10 @@ const viewActions = (): ComponentDefinition["actions"] => [
  * from a model's guess to a changed file, and the preview card is the only
  * thing standing in it.
  */
-const boardActions = (input: BuildChatRegistryInput): ComponentDefinition["actions"] => {
+const boardActions = (
+  input: BuildChatRegistryInput,
+  handles: readonly WidgetHandle[],
+): ComponentDefinition["actions"] => {
   const suggestionById = new Map(
     (input.suggestions ?? []).map((offer) => [offer.id, offer]),
   );
@@ -219,31 +271,52 @@ const boardActions = (input: BuildChatRegistryInput): ComponentDefinition["actio
       },
     },
     {
+      /*
+       * Also handle-addressed, and deliberately so: refusing to remove a
+       * widget the assistant can see and name, purely because it is filed
+       * under a different tab, is the boundary this pass exists to remove.
+       * It is still `preview`, so the user reads which widget on which tab
+       * before anything is written.
+       */
       id: "remove_widget",
-      description: "Remove a widget from the dashboard.",
+      description:
+        "Remove a widget. Works for a widget on any tab; the confirmation card names which.",
       schema: removeWidgetSchema,
       requiresConfirmation: "preview",
       authorize: (args: { widgetId: string }) =>
-        (input.board.getDashboard()?.widgets.some((w) => w.id === args.widgetId) ?? false) || {
+        resolveHandle(handles, args.widgetId) !== null || {
           ok: false as const,
-          reason: `"${args.widgetId}" is not on this dashboard.`,
+          reason: `"${args.widgetId}" is not a widget in this workspace.`,
           status: 404,
         },
       readCurrent: (args: { widgetId: string }) => {
-        const widget = input.board
-          .getDashboard()
-          ?.widgets.find((candidate) => candidate.id === args.widgetId);
-        return widget ? { id: widget.id, title: widget.title } : null;
+        const found = resolveHandle(handles, args.widgetId);
+        return found
+          ? { id: found.handle, title: found.widget.title, tab: found.dashboardTitle }
+          : null;
       },
       handler: async (args: { widgetId: string }) => {
-        const current = input.board.getDashboard();
-        if (!current) throw new Error("no dashboard is open");
+        const found = resolveHandle(handles, args.widgetId);
+        if (!found) throw new Error(`there is no widget "${args.widgetId}"`);
+        const board =
+          input.board.getDashboardById?.(found.dashboardId) ??
+          (found.current ? input.board.getDashboard() : null);
+        if (!board) throw new Error("that tab no longer exists");
         input.board.putDashboard({
-          ...current,
-          widgets: current.widgets.filter((widget) => widget.id !== args.widgetId),
+          ...board,
+          widgets: board.widgets.filter((widget) => widget.id !== found.widgetId),
+          layout: {
+            ...board.layout,
+            cells: board.layout.cells.filter((cell) => cell.widgetId !== found.widgetId),
+          },
         });
         input.board.onChanged?.();
-        return { removed: true, widgetId: args.widgetId };
+        return {
+          removed: true,
+          widgetId: found.widgetId,
+          dashboardId: found.dashboardId,
+          title: found.widget.title,
+        };
       },
     },
 
@@ -432,20 +505,56 @@ const knowledgeFor = (
  *   - what exists on the board right now, addressable by id and by title
  *   - what does not exist yet but can be created, with the id `add_widget` wants
  */
-const inventoryKnowledge = (input: BuildChatRegistryInput): Array<{ text: string }> => {
+const inventoryKnowledge = (
+  input: BuildChatRegistryInput,
+  handles: readonly WidgetHandle[],
+): Array<{ text: string }> => {
   const facts: Array<{ text: string }> = [];
   const widgets = input.dashboard.widgets;
 
-  if (widgets.length === 0) {
-    facts.push({ text: "This dashboard has no widgets on it yet." });
+  if (handles.length === 0) {
+    facts.push({ text: "There are no widgets anywhere in this workspace yet." });
   } else {
+    /*
+     * One list for the whole workspace, grouped by tab.
+     *
+     * Grouped rather than flat because the tab is the only thing that
+     * distinguishes two widgets with the same title, and stated as one list
+     * because a tab is where the user filed something, not a limit on what can
+     * be discussed. `open_widget` moves the view when it needs to, so nothing
+     * here has to be reached by switching first.
+     */
+    const byTab = new Map<string, WidgetHandle[]>();
+    for (const entry of handles) {
+      const list = byTab.get(entry.dashboardId) ?? [];
+      list.push(entry);
+      byTab.set(entry.dashboardId, list);
+    }
+    const groups = [...byTab.values()].map((list) => {
+      const first = list[0]!;
+      return (
+        `${first.dashboardTitle}${first.current ? " (open now)" : ""}: ` +
+        list
+          .map((entry) => `"${entry.widget.title}" (id: ${entry.handle}, ${entry.widget.component})`)
+          .join("; ")
+      );
+    });
     facts.push({
       text:
-        `ON THIS DASHBOARD NOW — ${widgets.length} widget(s). ` +
-        "These already exist; you can open or remove them by id: " +
-        widgets
-          .map((widget) => `"${widget.title}" (id: ${widget.id}, ${widget.component})`)
-          .join("; "),
+        `WIDGETS — ${handles.length} across ${byTab.size} tab(s). This is the complete ` +
+        "list of what exists; there is no widget you have not been told about. Use these " +
+        "ids to open, cite or remove one, on any tab — you never have to ask the user to " +
+        "switch tabs first, and never have to ask them for an id. " +
+        groups.join(" | "),
+    });
+    if (widgets.length === 0) {
+      facts.push({ text: "The tab open right now has no widgets on it." });
+    }
+    facts.push({
+      text:
+        "You have full detail (endpoint, fields, what one row is) for the widgets on the " +
+        "tab that is open. For any other widget, call `look_up_widget` with its id rather " +
+        "than guessing or saying you cannot see it.",
     });
   }
 
@@ -512,7 +621,7 @@ const inventoryKnowledge = (input: BuildChatRegistryInput): Array<{ text: string
   facts.push({
     text:
       "Never pass an id to `add_widget` that is not in the NOT YET CREATED list, and " +
-      "never claim a widget is on the dashboard unless it is in the ON THIS DASHBOARD NOW list. " +
+      "never claim a widget exists unless it is in the WIDGETS list. " +
       "And do not stretch one of these to fit a request it does not match — when the user " +
       "described what they want, `start_setup` builds exactly that and shows it to them.",
   });
@@ -587,9 +696,13 @@ const workspaceKnowledge = (input: BuildChatRegistryInput): Array<{ text: string
 
 export const buildChatRegistry = (input: BuildChatRegistryInput) => {
   const registry = createComponentRegistry();
+  const handles = workspaceHandles(
+    input.workspace ?? [input.dashboard],
+    input.dashboard.id,
+  );
   const actions = [
-    ...(boardActions(input) ?? []),
-    ...(viewActions() ?? []),
+    ...(boardActions(input, handles) ?? []),
+    ...(viewActions(handles) ?? []),
     ...(input.concierge ? (conciergeActions(input.concierge) ?? []) : []),
   ];
 
@@ -608,7 +721,7 @@ export const buildChatRegistry = (input: BuildChatRegistryInput) => {
    * shadow it — and avoid `__`, which the per-action tool encoder uses as
    * its separator.
    */
-  const taken = new Set(input.dashboard.widgets.map((widget) => widget.id));
+  const taken = new Set(handles.map((entry) => entry.handle));
   let rosterId = "dashboard";
   for (let n = 2; taken.has(rosterId); n++) rosterId = `dashboard-${n}`;
 
@@ -616,9 +729,10 @@ export const buildChatRegistry = (input: BuildChatRegistryInput) => {
     id: rosterId,
     title: input.dashboard.title,
     description:
-      "The dashboard itself: which widgets are on it, and which can be added to it.",
+      "The workspace itself: every widget on every tab, and what can be added.",
     knowledge: [
-      ...inventoryKnowledge(input),
+      ...(input.onScreen ? [{ text: input.onScreen }] : []),
+      ...inventoryKnowledge(input, handles),
       ...workspaceKnowledge(input),
       ...(input.concierge ? conciergeKnowledge(input.concierge) : []),
     ],
@@ -626,25 +740,68 @@ export const buildChatRegistry = (input: BuildChatRegistryInput) => {
     actions,
   });
 
-  for (const widget of input.dashboard.widgets) {
-    const cell = input.dashboard.layout.cells.find((candidate) => candidate.widgetId === widget.id);
+  /*
+   * Every widget in the workspace is registered; only the current tab's carry
+   * knowledge.
+   *
+   * The split is what makes registering the whole workspace affordable, and it
+   * falls out of how the two prompt blocks are built. `buildKnowledgePrompt`
+   * emits only components that HAVE knowledge, and truncates at a budget —
+   * so a knowledge-less component costs nothing there. `buildCitationsPrompt`
+   * lists any component with a `domAnchor`, one line each — so registering all
+   * of them is what makes a widget on another tab citable and navigable at all.
+   * The detail for those is a `look_up_widget` call away, which is the same
+   * "names always on, fields on demand" rule the endpoint roster follows.
+   */
+  for (const entry of handles) {
+    const cellOf = input.workspace?.find((board) => board.id === entry.dashboardId) ??
+      (entry.current ? input.dashboard : undefined);
+    const cell = cellOf?.layout.cells.find(
+      (candidate) => candidate.widgetId === entry.widgetId,
+    );
     const connections = [
-      ...new Set(widgetSources(widget).map((source) => source.connection)),
+      ...new Set(widgetSources(entry.widget).map((source) => source.connection)),
     ];
     registry.register({
-      id: widget.id,
-      title: widget.title,
-      description: `A ${widget.component} on the "${input.dashboard.title}" dashboard.`,
-      tags: [...connections, widget.component],
-      knowledge: knowledgeFor(widget, input.reports),
+      id: entry.handle,
+      title: entry.widget.title,
+      description: entry.current
+        ? `A ${entry.widget.component} on the "${entry.dashboardTitle}" tab, the one open now.`
+        : `A ${entry.widget.component} on the "${entry.dashboardTitle}" tab.`,
+      tags: [...connections, entry.widget.component, entry.dashboardId],
+      /*
+       * What a citation chip does when clicked: switch to that tab if needed,
+       * then scroll to the tile and pulse it. `data-widget-id` is already on
+       * every grid cell and `#/d/<id>` is already how the app routes, so this
+       * describes the app rather than adding anything to it.
+       */
+      domAnchor: {
+        selector: selectorFor(entry.widgetId),
+        page: pageFor(entry.dashboardId),
+      },
+      ...(entry.current ? { knowledge: knowledgeFor(entry.widget, input.reports) } : {}),
       grid: {
         minW: cell?.w ?? 4,
         minH: cell?.h ?? 4,
       },
-      // Every widget carries the same board actions: the model addresses the
-      // dashboard, not one panel, and duplicating them per component is how
-      // an action ends up reachable from one widget and not another.
-      actions,
+      /*
+       * No actions here, and this is a size decision rather than a scoping one.
+       *
+       * The actions are the same on every widget — the model addresses the
+       * dashboard, not one panel — so they used to be attached to all of them
+       * "so an action cannot end up reachable from one widget and not
+       * another". That fear does not apply: Dash never sets
+       * `activeComponentIds`, so `buildHarnessTurn` treats every registered
+       * action as a candidate and the roster component alone exposes all of
+       * them.
+       *
+       * What the duplication did instead was multiply the prompt. `per_action`
+       * mode emits one tool, schema inlined, per (component, action) pair — so
+       * 15 actions across 9 components was 135 near-identical tool schemas at
+       * 152 KB, over 90% of the whole prompt, on every turn. Registering the
+       * workspace made that worse in exact proportion to how many widgets
+       * somebody has, which is the wrong way for a cost to scale.
+       */
     });
   }
 

@@ -57,6 +57,16 @@ export interface FreeBirdState {
    * `emitLlmUsage` on {@link ChatEngine}). Useful for dev / admin HUDs.
    */
   lastLlmUsage: LlmUsagePayload | null;
+  /**
+   * The last error the chat stream reported, or null.
+   *
+   * Surfaced as state because a host cannot act on `console.error`. The case
+   * that forced it: a stored session id outliving the database it was made in
+   * produced a stream carrying only an error, so the panel sat there looking
+   * idle and every later message did the same. A host that can see this can
+   * start a fresh session instead of staying broken.
+   */
+  lastChatError: string | null;
   /** Customer-service ticket draft / filed state. */
   supportState: SupportState;
 }
@@ -122,6 +132,7 @@ export class FreeBirdStore {
       latestReferences: initial.latestReferences ?? [],
       actionState: initial.actionState ?? initialActionState,
       activeComponentIds: initial.activeComponentIds ?? [],
+      lastChatError: null,
       lastLlmUsage: initial.lastLlmUsage ?? null,
       supportState: initial.supportState ?? initialSupportState(),
     };
@@ -651,6 +662,8 @@ export class FreeBirdStore {
     if (!this.state.sessionId) {
       throw new Error("FreeBirdStore.send: no active session. Create one first.");
     }
+    // Scoped to this turn: a host reading it must not act on a stale failure.
+    if (this.state.lastChatError !== null) this.setState({ lastChatError: null });
 
     const trimmed = text.trim();
     const supportPhase = this.state.supportState.phase;
@@ -910,7 +923,7 @@ export class FreeBirdStore {
             break;
           case "error": {
             const errMsg = event.error ?? "Something went wrong.";
-             
+            this.setState({ lastChatError: errMsg });
             console.error("[freebird] chat error:", errMsg);
             break;
           }

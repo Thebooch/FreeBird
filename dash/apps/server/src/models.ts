@@ -63,41 +63,125 @@ export const MODELS: readonly ModelInfo[] = [
     note: "Fastest and cheapest. Weaker on ambiguous documentation.",
   },
 
-  // ── OpenAI ──────────────────────────────────────────────────────────────
+  /*
+   * ── OpenAI ────────────────────────────────────────────────────────────
+   *
+   * `supportsTemperature: false` on all of these, and it is a statement about
+   * what is known rather than about the models. Omitting the parameter is
+   * always safe; sending one a model rejects is a 400 that fails the call. It
+   * is also what an unlisted id already gets from `capabilitiesFor`, so this
+   * preserves current behaviour rather than betting on it. Flip any of them to
+   * true once a real call proves it — the calls that ask for `temperature: 0`
+   * get their determinism back when you do.
+   *
+   * Notes carry prices instead of adjectives. Nothing here has been measured
+   * on this workload yet, and "capable general model" next to a number nobody
+   * checked is the kind of hint that decides a choice badly.
+   *
+   * The `-pro` models are left out on purpose: at $30/$180 and up they are far
+   * dearer than anything else here, and everything in this list is one click
+   * away in the picker.
+   */
   {
-    id: "gpt-4.1",
-    label: "GPT-4.1",
+    id: "gpt-5.6-sol",
+    label: "GPT-5.6 Sol",
     provider: "openai",
-    supportsTemperature: true,
-    note: "Capable general model.",
+    supportsTemperature: false,
+    note: "Largest of the 5.6 family. $4 in / $20 out per million tokens.",
   },
   {
-    id: "gpt-4.1-mini",
-    label: "GPT-4.1 mini",
+    id: "gpt-5.6-terra",
+    label: "GPT-5.6 Terra",
     provider: "openai",
-    supportsTemperature: true,
-    note: "Cheaper and faster.",
+    supportsTemperature: false,
+    note: "Mid 5.6, and the OpenAI capable tier here. $2 in / $12 out.",
   },
   {
-    id: "gpt-4o",
-    label: "GPT-4o",
+    id: "gpt-5.6-luna",
+    label: "GPT-5.6 Luna",
     provider: "openai",
-    supportsTemperature: true,
-    note: "Widely available.",
+    supportsTemperature: false,
+    note: "Smallest 5.6, and the OpenAI fast tier. $0.20 in / $1.20 out.",
   },
   {
-    id: "gpt-4o-mini",
-    label: "GPT-4o mini",
+    id: "gpt-5.5",
+    label: "GPT-5.5",
     provider: "openai",
-    supportsTemperature: true,
-    note: "Cheapest OpenAI option.",
+    supportsTemperature: false,
+    note: "Previous generation. $5 in / $30 out — dearer than 5.6 Sol.",
+  },
+  {
+    id: "gpt-5.4",
+    label: "GPT-5.4",
+    provider: "openai",
+    supportsTemperature: false,
+    note: "Previous generation. $2.50 in / $15 out.",
+  },
+  {
+    id: "gpt-5.4-mini",
+    label: "GPT-5.4 mini",
+    provider: "openai",
+    supportsTemperature: false,
+    note: "$0.75 in / $4.50 out.",
+  },
+  {
+    id: "gpt-5.4-nano",
+    label: "GPT-5.4 nano",
+    provider: "openai",
+    supportsTemperature: false,
+    note: "Cheapest listed. $0.20 in / $1.25 out.",
   },
 ];
 
 export const DEFAULT_MODEL_BY_PROVIDER: Record<Provider, string> = {
   anthropic: "claude-sonnet-5",
-  openai: "gpt-4.1-mini",
+  openai: "gpt-5.6-terra",
 };
+
+/**
+ * Whose models to use when nothing more specific has said.
+ *
+ * A person thinks "I want to run on OpenAI for a while", not "I want
+ * gpt-5.6-terra for building widgets and gpt-5.6-luna for chat" — so the
+ * provider is one choice above the table, and the per-task rows follow it.
+ * Everything below stays available for the case where somebody does want to
+ * pin one action to something else.
+ *
+ * The default is OpenAI. That is a live preference rather than a verdict: the
+ * measurements behind `TASKS` were taken on Anthropic and still stand, and
+ * this is one edit to move.
+ */
+export const DEFAULT_PROVIDER: Provider = "openai";
+
+export interface ProviderInfo {
+  readonly id: Provider;
+  /** What people call it, which is not always what the API is called. */
+  readonly label: string;
+  /** The key that has to exist for this provider to be reachable. */
+  readonly keyVar: string;
+  readonly note: string;
+}
+
+export const PROVIDERS: readonly ProviderInfo[] = [
+  {
+    id: "openai",
+    label: "OpenAI",
+    keyVar: "OPENAI_API_KEY",
+    note: "GPT-5.6 Terra for setting up, Luna for using.",
+  },
+  {
+    id: "anthropic",
+    label: "Claude",
+    keyVar: "ANTHROPIC_API_KEY",
+    note: "Sonnet 5 for setting up, Haiku 4.5 for using.",
+  },
+];
+
+export const findProvider = (id: string): ProviderInfo | undefined =>
+  PROVIDERS.find((provider) => provider.id === id);
+
+export const isProvider = (id: unknown): id is Provider =>
+  typeof id === "string" && Boolean(findProvider(id));
 
 export const findModel = (id: string): ModelInfo | undefined =>
   MODELS.find((model) => model.id === id);
@@ -147,7 +231,9 @@ export type LlmTask =
   | "label"
   | "chat"
   | "narrow"
-  | "suggest";
+  | "suggest"
+  | "context"
+  | "respond";
 
 /**
  * Two tiers, not three.
@@ -203,7 +289,30 @@ export const TASKS: readonly TaskInfo[] = [
     id: "chat",
     label: "Chat",
     tier: "fast",
-    note: "Answers questions about a dashboard. Runs on every message.",
+    note: "Decides what a message needs and which tools to call. Every message.",
+  },
+  {
+    /*
+     * Several calls per question - rank, judge, rank again - against material
+     * that is already in memory. Reading and matching, which is where the
+     * cheap model measured well; the judgement that matters is downstream.
+     */
+    id: "context",
+    label: "Finding an answer in your data",
+    tier: "fast",
+    note: "Picks where to look and checks whether it found it. Several calls per question.",
+  },
+  {
+    /*
+     * The one call the user actually reads. Everything else this session does
+     * is a step toward it, and a flat or hedged sentence undoes all of them -
+     * so this is the one place in the "use" half that pays for the better
+     * model.
+     */
+    id: "respond",
+    label: "Writing the reply",
+    tier: "capable",
+    note: "Turns what was found into the answer the user reads. Once per message.",
   },
   {
     id: "narrow",
@@ -232,7 +341,7 @@ export const isTask = (id: string): id is LlmTask => Boolean(findTask(id));
  */
 export const TIER_MODELS: Record<Provider, Record<Tier, string>> = {
   anthropic: { capable: "claude-sonnet-5", fast: "claude-haiku-4-5" },
-  openai: { capable: "gpt-4.1", fast: "gpt-4.1-mini" },
+  openai: { capable: "gpt-5.6-terra", fast: "gpt-5.6-luna" },
 };
 
 /** The environment variable that pins one task, e.g. `DASH_MODEL_WIDGET`. */

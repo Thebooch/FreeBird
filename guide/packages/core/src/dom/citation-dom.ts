@@ -56,6 +56,25 @@ export interface ActivateCitationOptions {
 const normalizePath = (path: string): string =>
   path.split(/[?#]/)[0]!.replace(/\/+$/, "") || "/";
 
+/**
+ * Where the citation says its target lives, and where we are, as one string.
+ *
+ * A hash-routed app serves every route from one pathname, so comparing
+ * pathnames alone says "different page" for a citation pointing at the very
+ * section on screen - and the click navigates instead of scrolling. When the
+ * citation names a hash route, the hash is the address and has to be part of
+ * the comparison; when it does not, nothing changes.
+ */
+const isHashRoute = (page: string): boolean => page.trimStart().startsWith("#");
+
+const citationTarget = (page: string): string =>
+  isHashRoute(page) ? page.trim().replace(/\/+$/, "") : normalizePath(page);
+
+const currentLocation = (win: Window, page: string): string =>
+  isHashRoute(page)
+    ? (win.location.hash || "#").replace(/\/+$/, "")
+    : normalizePath(win.location.pathname);
+
 const resolveDoc = (doc?: Document): Document | undefined =>
   doc ?? (typeof document !== "undefined" ? document : undefined);
 
@@ -195,7 +214,7 @@ export const activateCitation = async (
   if (
     citation.page &&
     win &&
-    normalizePath(citation.page) !== normalizePath(win.location.pathname)
+    citationTarget(citation.page) !== currentLocation(win, citation.page)
   ) {
     stashPendingCitation(citation, opts.storage);
     if (opts.onNavigate) {
@@ -237,7 +256,7 @@ export const replayPendingCitation = async (
   if (
     citation.page &&
     win &&
-    normalizePath(citation.page) !== normalizePath(win.location.pathname)
+    citationTarget(citation.page) !== currentLocation(win, citation.page)
   ) {
     return { ok: false, detail: "wrong-page" };
   }
