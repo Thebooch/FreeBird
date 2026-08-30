@@ -101,11 +101,35 @@ const TaskRow = ({
   </label>
 );
 
-export const ModelPicker = (): JSX.Element | null => {
+export interface ModelPickerProps {
+  /**
+   * Dressing for the trigger, so the same control can be a bar button or a row
+   * in the nav's overflow menu.
+   */
+  readonly className?: string;
+  /**
+   * Announced whenever the sheet opens or closes.
+   *
+   * The trigger now lives inside a popover that closes on an outside click,
+   * and the sheet renders *within* that popover — so a popover that closed
+   * behind the sheet would unmount the sheet along with it. The nav holds its
+   * menu open while this says the sheet is up.
+   */
+  readonly onOpenChange?: (open: boolean) => void;
+}
+
+export const ModelPicker = ({
+  className = "dash-control",
+  onOpenChange,
+}: ModelPickerProps = {}): JSX.Element | null => {
   const [state, setState] = useState<ModelsResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
+  const show = (next: boolean): void => {
+    setOpen(next);
+    onOpenChange?.(next);
+  };
   /** What a provider switch had to drop, said once rather than left to be found. */
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -124,11 +148,29 @@ export const ModelPicker = (): JSX.Element | null => {
     if (open) load();
   }, [open]);
 
-  if (!state) return null;
+  /*
+   * A placeholder row rather than nothing.
+   *
+   * This is a row in the nav's overflow menu now, and the menu mounts it on
+   * open — so returning null until the fetch landed moved every item below it
+   * down under whatever the cursor was already over. It also gives a failed
+   * read somewhere to say so, which returning null never did.
+   */
+  if (!state) {
+    return (
+      <span
+        className={className}
+        data-testid="model-picker-loading"
+        title={error ?? "Reading which model runs which action"}
+      >
+        {error ? "⚠ Models unavailable" : "⚙ Models…"}
+      </span>
+    );
+  }
 
   if (!state.providers.anthropic && !state.providers.openai) {
     return (
-      <span className="dash-control" data-testid="model-picker-disabled" title="No AI key is set">
+      <span className={className} data-testid="model-picker-disabled" title="No AI key is set">
         ⚠ No AI key
       </span>
     );
@@ -219,9 +261,9 @@ export const ModelPicker = (): JSX.Element | null => {
   return (
     <>
       <button
-        className="dash-control"
+        className={className}
         data-on={open}
-        onClick={() => setOpen(!open)}
+        onClick={() => show(!open)}
         data-testid="model-picker"
         title="Which model runs which AI action"
       >
@@ -229,7 +271,7 @@ export const ModelPicker = (): JSX.Element | null => {
       </button>
 
       {open && (
-        <div className="dash-sheet-backdrop" onClick={() => setOpen(false)} role="presentation">
+        <div className="dash-sheet-backdrop" onClick={() => show(false)} role="presentation">
           <aside
             className="dash-sheet"
             role="dialog"
@@ -242,7 +284,7 @@ export const ModelPicker = (): JSX.Element | null => {
                 <span className="dash-sheet__title">AI models</span>
                 <button
                   className="dash-control dash-sheet__close"
-                  onClick={() => setOpen(false)}
+                  onClick={() => show(false)}
                   aria-label="Close"
                 >
                   ✕

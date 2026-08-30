@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { LlmAdapter, LlmTokenUsage, LlmTool } from "@freebirdai/dash-agent";
 import { z } from "zod";
 import {
@@ -764,6 +765,163 @@ const tally = (label: string, usd: number, priced: boolean): void => {
 
 const thousands = (value: number): string => value.toLocaleString("en-US");
 
+/* ── the per-turn ceiling ─────────────────────────────────────────────── */
+
+/**
+ * A cap on what ONE turn may spend, enforced where the meter already counts.
+ *
+ * Every individual mechanism in this product is already bounded — the harness
+ * at four sources and eight requests, a deep read at twenty chunks, a related
+ * lookup at its own cap, a page at fifty rows. What none of them bound is the
+ * total, and a turn can reach several of them: search, then open records, then
+ * go deep, then write a reply. The meter below could see all of it and did
+ * nothing but report it afterwards, which is a gauge, not a limit.
+ *
+ * The number is not the point and is not claimed to be optimal — the point is
+ * that one was chosen rather than inherited. Sizing, at the rates in
+ * `pricing.ts` as of {@link RATES_AS_OF}:
+ *
+ *   - an ordinary chat turn — one capable-model reply over a large prompt,
+ *     plus a handful of fast-model rank/judge calls — runs well under $0.20.
+ *   - the dearest legitimate shape is a deep read: `MAX_CHUNKS` of 20 means 21
+ *     model calls over real records, and lands around $0.60.
+ *
+ * $2.00 is roughly three times that worst case and ten times a normal turn, so
+ * it cannot be reached by any path this code takes deliberately. Raise it if a
+ * real turn ever trips it; do not remove it.
+ *
+ * ⚠️ IT FAILS OPEN ON UNPRICED MODELS. A model with no entry in `RATES` costs
+ * $0 as far as this can tell, so it can never trip the ceiling — the same
+ * limitation the totals have, and visible the same way, in the `unpriced`
+ * count. A ceiling that guessed a price for an unknown model would refuse real
+ * work over a number nobody could check, which is worse. If unpriced calls
+ * start appearing in normal use, the fix is a rate in `pricing.ts`, not a
+ * guess here.
+ */
+export const DEFAULT_TURN_CEILING_USD = 2;
+
+/**
+ * The ceiling in force, from `DASH_TURN_CEILING_USD` or the default above.
+ *
+ * `0` — or anything that is not a positive number — switches it off, and that
+ * is stated here rather than left to be discovered: an operator who wants the
+ * old behaviour needs one obvious way to ask for it, and a knob that silently
+ * ignores a value it cannot parse is how a ceiling somebody believes in turns
+ * out never to have been set. An unparseable value falls back to the default
+ * and says so, because the alternative is an install running uncapped while
+ * its config claims otherwise.
+ */
+export const turnCeilingUsd = (): number => {
+  const raw = process.env.DASH_TURN_CEILING_USD;
+  if (raw === undefined || raw.trim() === "") return DEFAULT_TURN_CEILING_USD;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    console.info(
+      `[llm] DASH_TURN_CEILING_USD is not a number ("${raw}") — using the default ` +
+        `${formatUsd(DEFAULT_TURN_CEILING_USD)} per turn`,
+    );
+    return DEFAULT_TURN_CEILING_USD;
+  }
+  return parsed;
+};
+
+interface TurnSpend {
+  usd: number;
+  calls: number;
+  readonly ceilingUsd: number;
+}
+
+/*
+ * Held in async context rather than passed down.
+ *
+ * The alternative is threading a budget object through `answerFromData` →
+ * `runContextHarness` → `rankSources` / `judgeEvidence` / `readChunks` and out
+ * to the reply step, which is a dozen signatures changed to carry one number
+ * that only two places touch. Everything in a turn runs inside one async
+ * context, so the store finds them all without any of them knowing.
+ */
+const turnSpend = new AsyncLocalStorage<TurnSpend>();
+
+/** Raised when a turn has spent its ceiling. Carries the numbers to say so. */
+export class TurnBudgetExceededError extends Error {
+  readonly spentUsd: number;
+  readonly ceilingUsd: number;
+
+  constructor(spentUsd: number, ceilingUsd: number) {
+    super(
+      `this turn has spent ${formatUsd(spentUsd)} of its ${formatUsd(ceilingUsd)} ceiling`,
+    );
+    this.name = "TurnBudgetExceededError";
+    this.spentUsd = spentUsd;
+    this.ceilingUsd = ceilingUsd;
+  }
+}
+
+/**
+ * Run one turn with a ceiling on it.
+ *
+ * A ceiling of `Infinity` — or anything non-finite — installs no store at all,
+ * so the metering path stays exactly as it was. That is what makes this safe
+ * to leave switched on by default: an install that sets the knob to nothing
+ * gets the code it had before.
+ */
+export const runWithTurnBudget = async <T>(
+  ceilingUsd: number,
+  fn: () => Promise<T>,
+): Promise<T> => {
+  if (!Number.isFinite(ceilingUsd) || ceilingUsd <= 0) return await fn();
+  return await turnSpend.run({ usd: 0, calls: 0, ceilingUsd }, fn);
+};
+
+/**
+ * Open a turn for the rest of THIS async context, with no callback to wrap.
+ *
+ * What a Fastify `onRequest` hook needs: it runs before the handler and
+ * returns, so there is no function to put the handler inside. `enterWith` sets
+ * the store for everything that follows on this context, which is exactly the
+ * request being served.
+ *
+ * A request is the honest unit here. "Turn" is the word for it in chat, but
+ * the authoring routes and the concierge spend model calls too, and each of
+ * them is one request that should not be able to run away either.
+ */
+export const enterTurnBudget = (ceilingUsd: number): void => {
+  if (!Number.isFinite(ceilingUsd) || ceilingUsd <= 0) return;
+  turnSpend.enterWith({ usd: 0, calls: 0, ceilingUsd });
+};
+
+/** What the current turn has spent, or null outside one. For tests and logs. */
+export const turnSpendSoFar = (): (SpendTotals & { ceilingUsd: number }) | null => {
+  const store = turnSpend.getStore();
+  return store
+    ? { usd: store.usd, calls: store.calls, unpriced: 0, ceilingUsd: store.ceilingUsd }
+    : null;
+};
+
+/**
+ * Refuse before spending, not after.
+ *
+ * Checked at the top of every call rather than only when the previous one
+ * returned: the last call of a turn can overshoot the ceiling by its own cost
+ * and there is no way to know that in advance, so the ceiling is a line the
+ * turn stops AT rather than one it is prevented from crossing. Stopping the
+ * *next* call is what makes it terminate.
+ */
+const guardTurnBudget = (): void => {
+  const store = turnSpend.getStore();
+  if (store && store.usd >= store.ceilingUsd) {
+    throw new TurnBudgetExceededError(store.usd, store.ceilingUsd);
+  }
+};
+
+/** Add one call's cost to the turn, when a turn is what this is running in. */
+const chargeTurn = (usd: number): void => {
+  const store = turnSpend.getStore();
+  if (!store) return;
+  store.usd += usd;
+  store.calls += 1;
+};
+
 /** Exported so the log line and the running total can be tested directly. */
 export const meter = (adapter: LlmAdapter, label: string): LlmAdapter => {
   const record = (
@@ -785,6 +943,7 @@ export const meter = (adapter: LlmAdapter, label: string): LlmAdapter => {
 
     const cost = costOf(model, usage);
     tally(label, cost.usd, cost.priced);
+    chargeTurn(cost.usd);
 
     const cached = usage.cachedPromptTokens ?? 0;
     const written = usage.cacheWriteTokens ?? 0;
@@ -807,17 +966,26 @@ export const meter = (adapter: LlmAdapter, label: string): LlmAdapter => {
   return {
     defaultModel: adapter.defaultModel,
     generate: async (opts) => {
+      guardTurnBudget();
       const startedAt = Date.now();
       const result = await adapter.generate(opts);
       record(result.usage, result.model ?? opts.model ?? adapter.defaultModel, startedAt);
       return result;
     },
     stream: (opts) => {
-      const startedAt = Date.now();
-      const source = adapter.stream(opts);
       // Usage arrives on a late chunk, so the log lands when the stream ends
       // rather than when it opens — and only if a chunk actually carried it.
       return (async function* metered() {
+        /*
+         * Inside the generator, and before the `try`, for two reasons. Inside,
+         * so a blown budget surfaces where `generate`'s does — as a rejection
+         * while the result is consumed, rather than as a synchronous throw
+         * from a call nobody expects to throw. Before the `try`, so the
+         * `finally` cannot log a call that was never made.
+         */
+        guardTurnBudget();
+        const startedAt = Date.now();
+        const source = adapter.stream(opts);
         let usage: LlmTokenUsage | undefined;
         let model: string | undefined;
         try {

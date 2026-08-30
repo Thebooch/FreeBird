@@ -1,6 +1,15 @@
 import type { LlmAdapter, LlmTokenUsage } from "@freebirdai/dash-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { llmSpend, meter, resetLlmSpend } from "./llm.js";
+import {
+  DEFAULT_TURN_CEILING_USD,
+  TurnBudgetExceededError,
+  llmSpend,
+  meter,
+  resetLlmSpend,
+  runWithTurnBudget,
+  turnCeilingUsd,
+  turnSpendSoFar,
+} from "./llm.js";
 
 /**
  * The cost line, and the total behind it.
@@ -133,5 +142,143 @@ describe("spend per task", () => {
     await adapter.generate({ messages: [] });
     resetLlmSpend();
     expect(llmSpend().byTask).toEqual({});
+  });
+});
+
+/**
+ * The ceiling behind the meter.
+ *
+ * Every mechanism that reaches for a model is bounded on its own; one request
+ * can reach several of them and nothing bounded the total. These are the cases
+ * that decide whether the limit is real: that it stops a runaway, that it does
+ * not touch an ordinary request, and that switching it off restores exactly
+ * the behaviour that existed before it.
+ */
+describe("the per-request spend ceiling", () => {
+  // $5/M in on claude-opus-5, so one call at 1M prompt tokens costs $5.
+  const fiveDollarCall = () => meter(fake(usage({ promptTokens: 1_000_000 })), "chat");
+
+  it("refuses the next call once the ceiling is reached", async () => {
+    await runWithTurnBudget(6, async () => {
+      const adapter = fiveDollarCall();
+      // The first call is allowed even though it will take the turn to $5:
+      // there is no way to know a call's cost before making it.
+      await adapter.generate({ messages: [] });
+      await adapter.generate({ messages: [] });
+      // Now at $10, past the $6 ceiling — the next one is refused.
+      await expect(adapter.generate({ messages: [] })).rejects.toThrow(
+        TurnBudgetExceededError,
+      );
+    });
+  });
+
+  it("carries the numbers, so the refusal can say what happened", async () => {
+    await runWithTurnBudget(1, async () => {
+      const adapter = fiveDollarCall();
+      await adapter.generate({ messages: [] });
+      const failure = await adapter.generate({ messages: [] }).catch((cause) => cause);
+      expect(failure).toBeInstanceOf(TurnBudgetExceededError);
+      expect(failure.spentUsd).toBe(5);
+      expect(failure.ceilingUsd).toBe(1);
+      expect(String(failure.message)).toContain("$5.00");
+    });
+  });
+
+  /* A stream must fail where `generate` fails — while it is consumed. */
+  it("refuses a stream too, on consumption rather than on the call", async () => {
+    await runWithTurnBudget(1, async () => {
+      const adapter = fiveDollarCall();
+      await adapter.generate({ messages: [] });
+
+      const stream = adapter.stream({ messages: [] });
+      await expect(
+        (async () => {
+          for await (const _chunk of stream) void _chunk;
+        })(),
+      ).rejects.toThrow(TurnBudgetExceededError);
+    });
+  });
+
+  it("leaves an ordinary request alone", async () => {
+    await runWithTurnBudget(100, async () => {
+      const adapter = fiveDollarCall();
+      await adapter.generate({ messages: [] });
+      await adapter.generate({ messages: [] });
+      expect(turnSpendSoFar()).toMatchObject({ usd: 10, calls: 2, ceilingUsd: 100 });
+    });
+  });
+
+  /*
+   * The escape hatch, and the state every existing caller is already in.
+   * Outside a budget there is no store, no ceiling and no behaviour change.
+   */
+  it("does nothing at all when switched off", async () => {
+    await runWithTurnBudget(0, async () => {
+      const adapter = fiveDollarCall();
+      for (let i = 0; i < 5; i += 1) await adapter.generate({ messages: [] });
+      expect(turnSpendSoFar()).toBeNull();
+    });
+    const adapter = fiveDollarCall();
+    await adapter.generate({ messages: [] });
+    expect(turnSpendSoFar()).toBeNull();
+  });
+
+  /*
+   * Stated as a test because it is a real limitation and the kind that gets
+   * forgotten: an unpriced model costs $0 as far as this can tell, so it can
+   * never trip the ceiling. The fix is a rate in `pricing.ts`, and the signal
+   * that one is needed is the `unpriced` count, not a surprise bill.
+   */
+  it("cannot bound a model it has no rate for", async () => {
+    await runWithTurnBudget(0.01, async () => {
+      const adapter = meter(fake(usage({ promptTokens: 5_000_000 }), "future-model"), "chat");
+      await adapter.generate({ messages: [] });
+      await adapter.generate({ messages: [] });
+      expect(turnSpendSoFar()).toMatchObject({ usd: 0 });
+      expect(llmSpend().unpriced).toBe(2);
+    });
+  });
+
+  it("keeps the process-wide totals it always kept", async () => {
+    await runWithTurnBudget(100, async () => {
+      const adapter = fiveDollarCall();
+      await adapter.generate({ messages: [] });
+    });
+    expect(llmSpend()).toMatchObject({ usd: 5, calls: 1 });
+    expect(llmSpend().byTask.chat).toMatchObject({ usd: 5, calls: 1 });
+  });
+});
+
+describe("reading the ceiling from the environment", () => {
+  const original = process.env.DASH_TURN_CEILING_USD;
+  afterEach(() => {
+    if (original === undefined) delete process.env.DASH_TURN_CEILING_USD;
+    else process.env.DASH_TURN_CEILING_USD = original;
+  });
+
+  it("uses the default when unset", () => {
+    delete process.env.DASH_TURN_CEILING_USD;
+    expect(turnCeilingUsd()).toBe(DEFAULT_TURN_CEILING_USD);
+  });
+
+  it("takes a number when given one", () => {
+    process.env.DASH_TURN_CEILING_USD = "0.5";
+    expect(turnCeilingUsd()).toBe(0.5);
+  });
+
+  it("accepts 0 as switching it off", () => {
+    process.env.DASH_TURN_CEILING_USD = "0";
+    expect(turnCeilingUsd()).toBe(0);
+  });
+
+  /*
+   * The failure worth being loud about: an install running uncapped while its
+   * config claims otherwise. Falling back to the default is the safe
+   * direction, and saying so is what makes the typo findable.
+   */
+  it("falls back to the default and says so when the value is not a number", () => {
+    process.env.DASH_TURN_CEILING_USD = "two dollars";
+    expect(turnCeilingUsd()).toBe(DEFAULT_TURN_CEILING_USD);
+    expect(lines.join(" ")).toContain("not a number");
   });
 });

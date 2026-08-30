@@ -159,8 +159,15 @@ const narrow = (
 export const fitRows = (
   rows: readonly Record<string, unknown>[],
   budget: number,
-  /** The columns worth keeping when width has to go. Usually what is on screen. */
-  preferred: readonly string[] = [],
+  /**
+   * Fields to keep whatever it costs. The record's identity, in practice.
+   *
+   * Size is a good proxy for importance and not a guarantee: squeezed to two
+   * fields per row, this keeps `UnitId` over `Id` purely because the unit
+   * number is a shorter number — dropping the one field every follow-up lookup
+   * needs. So the identity is named rather than inferred.
+   */
+  protect: readonly string[] = [],
 ): FittedRows => {
   const whole = encode(rows);
   if (whole.length <= budget) {
@@ -169,30 +176,30 @@ export const fitRows = (
 
   const present = [...new Set(rows.flatMap((row) => Object.keys(row)))];
 
-  // Width first: every row survives, carrying only what the tile draws.
-  if (preferred.length > 0) {
-    const keep = new Set(preferred);
-    const dropped = present.filter((field) => !keep.has(field));
-    if (dropped.length > 0) {
-      const narrowed = narrow(rows, preferred);
-      const json = encode(narrowed);
-      if (json.length <= budget) {
-        return { shown: narrowed, json, droppedFields: dropped, droppedRows: 0 };
-      }
-    }
-  }
-
   /*
-   * Nothing said what to keep, or keeping it was still too much.
+   * Width first, by size: the widest field goes, then the next, until the rows
+   * fit. A nested object full of hrefs is worth many times a title, and it is
+   * the title the question is about.
    *
-   * Only a widget knows which of its columns are on screen; an endpoint read
-   * directly has no such list, and that is exactly the case that regressed —
-   * with no preference the fallback dropped rows, and a judge shown 20 of 50
-   * records reported that no dishwasher was among them.
+   * This used to keep the widget's own columns instead, on the reasoning that
+   * people ask about what they can see. Twice that reasoning produced a
+   * confident wrong answer. Asked whether any task mentioned a dishwasher, the
+   * reply said it had read all fifty and found none — the row was there, and
+   * the field holding it was not one the tile drew. Asked for a property's
+   * identifier, the reply said it was "omitted from the displayed data", while
+   * the same row sat whole in the session's own memory and the widget's
+   * drill-down was `{{row.Id}}` — a field the tile depends on and does not
+   * show.
    *
-   * So width still goes first, by size: the widest field is dropped, then the
-   * next, until the rows fit. A nested object full of hrefs is worth many
-   * times a title, and it is the title the question is about.
+   * So the rule is reversed: the model always gets the fullest record that
+   * fits, whatever the tile happens to draw. Being unable to answer is a
+   * bigger failure than quoting a field nobody can see, and the rarer case —
+   * "where did that come from, I don't see it" — is a question somebody can
+   * simply ask, answered from `shows` and `look_up_widget`.
+   *
+   * Sorting by size also protects identifiers for free. An `Id` is among the
+   * smallest fields a record has, so it is the last thing to go rather than,
+   * as before, one of the first.
    */
   const width = new Map<string, number>();
   for (const field of present) {
@@ -200,7 +207,10 @@ export const fitRows = (
     for (const row of rows) total += JSON.stringify(row[field] ?? null).length;
     width.set(field, total);
   }
-  const widestFirst = [...present].sort((a, b) => (width.get(b) ?? 0) - (width.get(a) ?? 0));
+  const kept = new Set(protect.filter((field) => present.includes(field)));
+  const widestFirst = [...present]
+    .filter((field) => !kept.has(field))
+    .sort((a, b) => (width.get(b) ?? 0) - (width.get(a) ?? 0));
 
   const keeping = new Set(present);
   const droppedBySize: string[] = [];
@@ -210,14 +220,7 @@ export const fitRows = (
     const narrowed = narrow(rows, [...keeping]);
     const json = encode(narrowed);
     if (json.length <= budget) {
-      return {
-        shown: narrowed,
-        json,
-        droppedFields: [...droppedBySize, ...present.filter((f) => !keeping.has(f))].filter(
-          (f, i, all) => all.indexOf(f) === i,
-        ),
-        droppedRows: 0,
-      };
+      return { shown: narrowed, json, droppedFields: [...droppedBySize], droppedRows: 0 };
     }
     keeping.delete(field);
     droppedBySize.push(field);
@@ -227,7 +230,7 @@ export const fitRows = (
    * Only now, rows — whole ones, and counted so the caller can say how many
    * and the prompt can refuse a definitive answer.
    */
-  const keptFields = preferred.length > 0 ? preferred : [...keeping];
+  const keptFields = [...keeping];
   const base = narrow(rows, keptFields);
   const droppedFields = present.filter((field) => !keptFields.includes(field));
   const shown: Record<string, unknown>[] = [];
@@ -263,7 +266,11 @@ const JUDGE_CHARS = 24_000;
  * shorter, and it is a prefix.
  */
 export const judgeSample = (evidence: Evidence) =>
-  fitRows(evidence.rows.slice(0, JUDGE_ROWS), JUDGE_CHARS, evidence.shows ?? []);
+  fitRows(
+    evidence.rows.slice(0, JUDGE_ROWS),
+    JUDGE_CHARS,
+    evidence.candidate.idField ? [evidence.candidate.idField] : [],
+  );
 
 export const buildJudgePrompt = (input: {
   readonly question: string;

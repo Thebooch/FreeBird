@@ -11,17 +11,10 @@ export const DASH_REACT_STYLES = `
 .dash-page__title { font-size: var(--dash-text-lg); font-weight: 650; margin: 0; color: var(--dash-ink); }
 .dash-page__description { font-size: var(--dash-text-sm); color: var(--dash-muted); margin: 0; }
 
-/* Filters sit in one row above the charts. */
+/* Filters sit in one row above the charts, with Refresh all on the right. */
 .dash-params { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
 .dash-params__group { display: inline-flex; align-items: center; gap: 6px; }
 .dash-params__label { font-size: var(--dash-text-xs); color: var(--dash-muted); }
-.dash-segment { display: inline-flex; background: var(--dash-surface); border: 1px solid var(--dash-border); border-radius: var(--dash-radius-sm); overflow: hidden; }
-.dash-segment button {
-  font: inherit; font-size: var(--dash-text-sm); border: none; background: transparent;
-  color: var(--dash-ink-secondary); padding: 5px 10px; cursor: pointer; min-height: 30px;
-}
-.dash-segment button[aria-pressed="true"] { background: var(--dash-accent); color: var(--dash-accent-ink); }
-.dash-segment button:hover[aria-pressed="false"] { background: var(--dash-wash); }
 
 /* == grid ===============================================================
  * The library positions items with transforms and inline sizes; everything
@@ -436,6 +429,49 @@ export const DASH_REACT_STYLES = `
   border-color: var(--dash-accent-line); background: var(--dash-accent-wash); color: var(--dash-accent);
 }
 
+/* The overflow menu: one button in the bar, everything else a click away.
+ *
+ * The bar used to carry six controls plus the tabs, which made the two things
+ * you actually navigate with — the tabs and the assistant — compete with four
+ * things you touch once a session. These live behind a single disclosure now.
+ * Anchored to its trigger rather than fixed, so it tracks the button when the
+ * action group wraps to its own row on a narrow window. */
+.dash-nav__menu { position: relative; display: inline-flex; }
+.dash-nav__pop {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 5;
+  min-width: 216px; padding: var(--dash-space-1);
+  display: flex; flex-direction: column; gap: 2px;
+  background: var(--dash-surface);
+  border: 1px solid var(--dash-border); border-radius: var(--dash-radius);
+  box-shadow: var(--dash-shadow-md);
+}
+/* Carried by the rows themselves rather than by a bare descendant rule: the
+   model sheet renders inside this popover, and its own controls must not come
+   out dressed as menu rows. */
+.dash-nav__pop .dash-nav__item {
+  font: inherit; font-size: var(--dash-text-sm); text-align: left; white-space: nowrap;
+  display: flex; align-items: center; gap: var(--dash-space-2);
+  width: 100%; min-height: 32px; padding: var(--dash-space-1) var(--dash-space-2);
+  border: 1px solid transparent; border-radius: var(--dash-radius-sm);
+  background: transparent; color: var(--dash-ink); cursor: pointer;
+  transition: background var(--dash-dur-fast) var(--dash-ease),
+              color var(--dash-dur-fast) var(--dash-ease);
+}
+.dash-nav__pop .dash-nav__item:hover:not(:disabled) { background: var(--dash-wash); }
+.dash-nav__pop .dash-nav__item:disabled { color: var(--dash-muted); cursor: not-allowed; }
+.dash-nav__pop .dash-nav__item[data-on="true"] {
+  border-color: var(--dash-accent-line); background: var(--dash-accent-wash); color: var(--dash-accent);
+}
+.dash-nav__pop .dash-nav__item:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: -2px; }
+.dash-nav__sep { height: 1px; margin: var(--dash-space-1) 0; background: var(--dash-border); }
+/* Standing behind one of its own sheets: the panel gets out of the way but
+   stays in the tree, because the sheet renders inside it. */
+.dash-nav__pop[data-sheet="open"] {
+  padding: 0; background: none; border-color: transparent; box-shadow: none;
+}
+.dash-nav__pop[data-sheet="open"] > .dash-nav__item,
+.dash-nav__pop[data-sheet="open"] > .dash-nav__sep { display: none; }
+
 @media (max-width: 900px) {
   .dash-nav { flex-wrap: wrap; gap: var(--dash-space-2); }
   .dash-nav__rail { order: 3; width: 100%; }
@@ -537,23 +573,6 @@ export const DASH_REACT_STYLES = `
   transition: transform var(--dash-dur-slow) var(--dash-ease);
 }
 .dash-chat[data-open="true"] { transform: translateX(0); }
-
-/* The slim edge tab, shown only while closed. */
-.dash-chat__tab {
-  position: fixed; right: 0; top: 50%; z-index: 41;
-  width: 40px; height: 128px;
-  transform: translateY(-50%);
-  display: flex; align-items: center; justify-content: center;
-  writing-mode: vertical-rl;
-  font: inherit; font-size: var(--dash-text-sm); letter-spacing: .04em;
-  color: var(--dash-ink); cursor: pointer;
-  background: var(--dash-surface);
-  border: 1px solid var(--dash-border); border-right: none;
-  border-radius: var(--dash-radius-sm) 0 0 10px;
-  transition: background var(--dash-dur-fast) var(--dash-ease);
-}
-.dash-chat__tab:hover { background: var(--dash-wash); }
-.dash-chat__tab[hidden] { display: none; }
 
 .dash-chat__head {
   display: flex; align-items: center; gap: var(--dash-space-2);

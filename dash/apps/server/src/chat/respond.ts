@@ -30,6 +30,7 @@ export type Flow =
   | "deep"
   | "partial"
   | "nothing-found"
+  | "unreadable"
   | "exhausted"
   | "built"
   | "deciding"
@@ -99,9 +100,13 @@ export const RESPONSE_PROMPTS: Record<Flow, readonly string[]> = {
     "You have some of it. Lead with what is certain, then the limit, then what reading further would settle.",
   ],
   "nothing-found": [
-    "Nothing you read answers the question. Say which sources you looked in and what they hold instead, so they can tell whether the data exists at all.",
-    "You could not find it. Name what you checked and why it did not fit - a specific dead end is more useful than an apology.",
-    "The answer is not in what you read. Be direct about that, name where you looked, and suggest the nearest thing you did see.",
+    "Nothing you read answers the question. Say which sources you looked in and what they hold instead, so they can tell whether the data exists at all. If `couldCheck` is present you also went past the rows into what hangs off them — name those in its words too, so they can see the search was already taken further and need not ask you to.",
+    "You could not find it. Name what you checked and why it did not fit - a specific dead end is more useful than an apology. Where `couldCheck` lists what else was opened or considered, say it: never leave them to guess at some further thing they should have asked for.",
+    "The answer is not in what you read. Be direct about that, name where you looked - including anything in `couldCheck` that was reached from the records themselves - and suggest the nearest thing you did see. Use the names given there; the user does not know this product's endpoints and should never have to.",
+  ],
+  unreadable: [
+    "The places that could have held this could not be read — a key is missing or the API refused. Say which ones and, in their own words, why. Never say the data does not exist: nobody was able to look, and that is a different sentence with a different fix.",
+    "You could not get at the sources for this. Name them and give the reason each gave. Be explicit that this is not a statement about whether their data has what they asked for.",
   ],
   exhausted: [
     "You ran out of the budget for this question before checking everything. Say what you looked at, what you found, and that there is more that could be read.",
@@ -133,7 +138,13 @@ export const RESPONSE_PROMPTS: Record<Flow, readonly string[]> = {
 /** What the turn produced, in the terms the flow choice is made from. */
 export interface TurnFacts {
   readonly harness?: {
-    readonly outcome: "found" | "partial" | "not-found" | "exhausted" | "no-sources";
+    readonly outcome:
+      | "found"
+      | "partial"
+      | "not-found"
+      | "exhausted"
+      | "no-sources"
+      | "unreadable";
     /** Every record was read in chunks rather than a sample being taken. */
     readonly deep?: boolean;
     /** Answered from records already held, with nothing read. */
@@ -142,6 +153,21 @@ export interface TurnFacts {
     readonly opened?: boolean;
     /** More than one connected source held part of the answer. */
     readonly across?: number;
+    /**
+     * Something that might have held the answer could not be read at all.
+     *
+     * Kept apart from every verdict about the data, because it is not one. A
+     * refused source says nothing about whether the records exist.
+     */
+    readonly couldNotRead?: boolean;
+    /**
+     * The search went past the rows it matched, into what hangs off them.
+     *
+     * True whether or not any of it answered — on a dead end it is what lets
+     * the reply say where it went, which is the difference between ending the
+     * question and inviting the user to ask for what was already tried.
+     */
+    readonly checkedFurther?: boolean;
   };
   readonly builtWidget?: boolean;
 }
@@ -182,6 +208,12 @@ export const flowOf = (ctx: FinalReplyContext, facts: TurnFacts = {}): Flow => {
      * acted on, and "three in X, four in Y" can.
      */
     if ((facts.harness.across ?? 0) > 1) return "across";
+    /*
+     * Before every verdict about the data. "Nothing was found" and "nothing
+     * could be looked at" send somebody to completely different places, and
+     * the second one has an action attached to it.
+     */
+    if (facts.harness.outcome === "unreadable") return "unreadable";
     if (facts.harness.outcome === "found") return "answered";
     if (facts.harness.outcome === "partial") return "partial";
     if (facts.harness.outcome === "exhausted") return "exhausted";
@@ -239,6 +271,8 @@ export const factsFrom = (ctx: FinalReplyContext): TurnFacts => {
       const extra = shaped as {
         usedContext?: unknown;
         openedRelated?: unknown;
+        unreadable?: ReadonlyArray<unknown>;
+        couldCheck?: ReadonlyArray<unknown>;
         findings?: ReadonlyArray<{ from?: string; matched?: number }>;
       };
       /*
@@ -257,6 +291,8 @@ export const factsFrom = (ctx: FinalReplyContext): TurnFacts => {
         ...(extra.openedRelated ? { opened: true } : {}),
         ...(extra.usedContext && !extra.openedRelated ? { recalled: true } : {}),
         ...(across > 1 ? { across } : {}),
+        ...((extra.unreadable?.length ?? 0) > 0 ? { couldNotRead: true } : {}),
+        ...((extra.couldCheck?.length ?? 0) > 0 ? { checkedFurther: true } : {}),
       };
     }
   }
@@ -289,6 +325,8 @@ interface RowFinding {
   readonly coverage?: unknown;
   readonly columns?: unknown;
   readonly shows?: unknown;
+  /** The record's identity, protected from narrowing like the judge's is. */
+  readonly idField?: unknown;
   readonly caveats?: unknown;
   readonly rows?: unknown;
 }
@@ -300,7 +338,8 @@ const renderFinding = (finding: RowFinding): string => {
   const rows = Array.isArray(finding.rows)
     ? (finding.rows as Record<string, unknown>[])
     : [];
-  const fitted = fitRows(rows, FINDING_ROW_CHARS, asStrings(finding.shows));
+  const idField = typeof finding.idField === "string" ? [finding.idField] : [];
+  const fitted = fitRows(rows, FINDING_ROW_CHARS, idField);
   const lines = [
     `  source: ${String(finding.source ?? "unknown")}` +
       (finding.tab ? ` [tab: ${String(finding.tab)}]` : ""),
@@ -310,8 +349,24 @@ const renderFinding = (finding: RowFinding): string => {
   for (const caveat of asStrings(finding.caveats)) lines.push(`  caveat: ${caveat}`);
   if (fitted.droppedFields.length > 0) {
     lines.push(
-      `  rows below carry only the columns the tile displays; not shown: ` +
-        `${fitted.droppedFields.slice(0, 20).join(", ")}`,
+      "  these rows were too large to hand over whole, so the biggest fields were left " +
+        `out: ${fitted.droppedFields.slice(0, 20).join(", ")}`,
+    );
+  }
+  /*
+   * What the tile actually draws, stated separately from what was handed over.
+   *
+   * The two are no longer the same: the model is given the fullest record that
+   * fits, so it can answer from a field nobody can see on screen. That is the
+   * right trade — being unable to answer is worse than quoting an unseen
+   * field — but the reply should not imply the user is looking at something
+   * they are not.
+   */
+  const onScreen = asStrings(finding.shows);
+  if (onScreen.length > 0) {
+    lines.push(
+      `  of these, the tile displays only: ${onScreen.join(", ")} — if you use anything ` +
+        "else, say where it came from rather than implying it is on screen",
     );
   }
   if (fitted.droppedRows > 0) {

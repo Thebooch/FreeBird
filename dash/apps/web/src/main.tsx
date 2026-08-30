@@ -531,15 +531,24 @@ const App = (): JSX.Element => {
    * answer, which is a worse dead end than the one it replaced.
    */
   const askAssistant = async (): Promise<void> => {
+    /*
+     * Opening the column is unconditional; the key wizard is the extra.
+     *
+     * This used to bail with no board at all, which was fine while it was
+     * only behind "Describe" — a control that was disabled without one. It is
+     * the nav's ✦ button now, and that button has to open the assistant on
+     * the empty state too, which is exactly where there is no board.
+     */
     const board = live.dashboard;
-    if (!board) return;
-    try {
-      const models = await api.models();
-      const hasModel = models.providers.anthropic || models.providers.openai;
-      if (!hasModel) await api.startSetup(board.id, undefined, "wizard");
-    } catch {
-      // A failure here is not worth blocking on: open the column either way
-      // and let whatever is wrong surface where it can be read.
+    if (board) {
+      try {
+        const models = await api.models();
+        const hasModel = models.providers.anthropic || models.providers.openai;
+        if (!hasModel) await api.startSetup(board.id, undefined, "wizard");
+      } catch {
+        // A failure here is not worth blocking on: open the column either way
+        // and let whatever is wrong surface where it can be read.
+      }
     }
     setChatOpen(true);
   };
@@ -746,13 +755,18 @@ const App = (): JSX.Element => {
       onDelete={(id) => void deleteDashboard(id)}
       onConnect={() => setConnectionsOpen(true)}
       onAddWidget={() => setLibraryOpen(true)}
-      onAskAssistant={() => void askAssistant()}
       addWidgetDisabled={!live.dashboard}
       layoutEditing={arranging}
       onToggleLayoutEditing={setArranging}
       layoutEditingDisabled={!live.dashboard}
       chatOpen={chatOpen}
-      onToggleChat={setChatOpen}
+      /*
+       * "Describe" is gone — it was the assistant button with an extra step.
+       * The one thing it did that a plain toggle did not was start the key
+       * wizard when no model is configured, so opening now goes through
+       * `askAssistant` and closing stays a plain close.
+       */
+      onToggleChat={(open) => (open ? void askAssistant() : setChatOpen(false))}
       theme={theme}
       onToggleTheme={toggleTheme}
     />

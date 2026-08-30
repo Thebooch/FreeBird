@@ -44,22 +44,49 @@ export interface HarnessDeps {
     spent: Budget,
   ) => Promise<Evidence | null>;
   /**
-   * Open the records a round matched, in full.
+   * Go further from the records a round matched.
    *
    * The step that turns "I found the task you mean but its notes are not in
-   * these rows" into an answer. A collection endpoint returns a summary of
-   * each record and the record's own endpoint returns everything, so a row
-   * that names the right record and lacks the asked-for field is not a dead
-   * end — it is an identifier. Returns null when the API exposes no by-id
-   * endpoint, when nothing could be opened, or when there is no identifier.
+   * these rows" into an answer. A row that names the right record and lacks
+   * the asked-for field is not a dead end — it is an identifier, and what it
+   * unlocks is whatever the relation graph says is reachable: the record's own
+   * fuller version, a collection attached to it, or a record it points at.
+   *
+   * `missing` is the steer, and it is the judge's own words for what the rows
+   * did not carry — so the choice of where to look next is made against what
+   * is actually still needed rather than against the question in general.
+   *
+   * Returns null when the API exposes nothing reachable from these records at
+   * all. Otherwise `considered` always names what was on offer, even when
+   * `evidence` is null, because "I looked at its record and its history and
+   * neither carries notes" is an answer and "I don't have notes" is not.
    */
-  readonly expand?:
-    | ((
-        matched: readonly Record<string, unknown>[],
-        from: Evidence,
-      ) => Promise<{ evidence: Evidence; note: string } | null>)
+  readonly reach?:
+    | ((input: {
+        readonly matched: readonly Record<string, unknown>[];
+        readonly from: Evidence;
+        readonly missing: string;
+      }) => Promise<{
+        readonly evidence: Evidence | null;
+        readonly note: string;
+        readonly considered: ReadonlyArray<{ readonly title: string; readonly note: string }>;
+      } | null>)
     | undefined;
   readonly budget?: Budget;
+  /**
+   * Whether the turn has spent its money ceiling, checked between rounds.
+   *
+   * Injected rather than read from `llm.ts`, so this file keeps knowing
+   * nothing about providers, prices or metering — the same reason
+   * `readCandidate` is a dependency instead of an import.
+   *
+   * It is checked at the TOP of a round rather than relied on to throw,
+   * because every step below catches its own errors and degrades: a budget
+   * refusal reaching `rankSources` would come back as "the model named no
+   * source", which is a statement about the question rather than about the
+   * wallet. Stopping deliberately keeps the reason legible.
+   */
+  readonly overBudget?: (() => boolean) | undefined;
   /**
    * How wide to look.
    *
@@ -83,6 +110,8 @@ export const runContextHarness = async (
   const budget = deps.budget ?? DEFAULT_BUDGET;
   const mode = deps.scope?.mode ?? "best";
   const evidence: Evidence[] = [];
+  const unreadable: { candidate: Candidate; reason: string }[] = [];
+  const considered: { title: string; note: string }[] = [];
   const tried: string[] = [];
   let requests = 0;
   let sources = 0;
@@ -104,6 +133,8 @@ export const runContextHarness = async (
       matchedFrom: null,
       spent: { requests: 0, sources: 0 },
       notes: [],
+      unreadable: [],
+      considered: [],
       canGoDeeper: false,
     };
   }
@@ -116,7 +147,15 @@ export const runContextHarness = async (
    * blind second guess into a directed one. Ranking is a cheap call against a
    * list that is already in memory; a wasted upstream read is not.
    */
+  let spentOut = false;
   while (sources < budget.sources && requests < budget.requests) {
+    // The money ran out even though the request budget had not. Treated the
+    // same way hitting `budget.sources` is treated — a cap reached, with
+    // whatever was found so far still worth reporting.
+    if (deps.overBudget?.()) {
+      spentOut = true;
+      break;
+    }
     const ranked = await rankSources(
       deps.llm,
       {
@@ -145,6 +184,20 @@ export const runContextHarness = async (
     });
     if (!read) continue;
     requests += read.requests;
+
+    /*
+     * The source said no. There is nothing to judge and nothing to pay for
+     * judging: a model call over zero rows can only ever return "miss", and a
+     * miss here would be a lie about the data rather than a fact about it.
+     *
+     * Kept, though, and kept separately — the reason is the most useful
+     * sentence the reply can carry, and losing it turns "your key expired" into
+     * "there is nothing there".
+     */
+    if (read.refused) {
+      unreadable.push({ candidate, reason: read.warnings.join("; ") });
+      continue;
+    }
 
     const verdict = await judgeEvidence(
       deps.llm,
@@ -210,45 +263,68 @@ export const runContextHarness = async (
      * itself was one request away.
      *
      * Only when a row was actually matched. Without one there is no identifier
-     * and nothing to open, and expanding on a whim would spend a request per
+     * and nothing to open, and reaching on a whim would spend a request per
      * turn for nothing.
      */
-    if (deps.expand && picked.length > 0 && requests < budget.requests) {
-      const opened = await deps.expand(picked, read);
+    if (deps.reach && picked.length > 0 && requests < budget.requests) {
+      const opened = await deps.reach({ matched: picked, from: read, missing });
       if (opened) {
-        requests += opened.evidence.requests;
-        evidence.push(opened.evidence);
-        notes.push(opened.note);
+        /*
+         * What was on offer is recorded whether or not any of it answered.
+         *
+         * This is the half that makes a dead end legible. A reply that can say
+         * "its own record and its history were both checked" tells somebody
+         * the search happened and where it went; "I don't have notes" tells
+         * them to ask again for the thing that was already tried.
+         */
+        considered.push(...opened.considered);
+        if (opened.note) notes.push(opened.note);
 
-        const second = await judgeEvidence(
-          deps.llm,
-          { question, evidence: opened.evidence },
-          {
-            ...(deps.model ? { model: deps.model } : {}),
-            ...(deps.signal ? { signal: deps.signal } : {}),
-          },
-        );
-        if (second.answer) answer = second.answer;
-        missing = second.verdict === "found" ? "" : second.missing || missing;
-        if (opened.evidence.rows.length > 0) {
-          matched = [...opened.evidence.rows];
-          matchedFrom = opened.evidence;
-        }
-        if (second.verdict === "found") {
-          answered = true;
-          break;
+        if (opened.evidence) {
+          requests += opened.evidence.requests;
+          evidence.push(opened.evidence);
+
+          const second = await judgeEvidence(
+            deps.llm,
+            { question, evidence: opened.evidence },
+            {
+              ...(deps.model ? { model: deps.model } : {}),
+              ...(deps.signal ? { signal: deps.signal } : {}),
+            },
+          );
+          if (second.answer) answer = second.answer;
+          missing = second.verdict === "found" ? "" : second.missing || missing;
+          if (opened.evidence.rows.length > 0) {
+            matched = [...opened.evidence.rows];
+            matchedFrom = opened.evidence;
+          }
+          if (second.verdict === "found") {
+            answered = true;
+            break;
+          }
         }
       }
     }
   }
 
-  const hitCap = sources >= budget.sources || requests >= budget.requests;
+  const hitCap = spentOut || sources >= budget.sources || requests >= budget.requests;
+  /*
+   * Nothing was read, and something refused to be read.
+   *
+   * Checked before `not-found` and before `exhausted`, because both of those
+   * are claims about the DATA — "none of it held the answer", "there was more
+   * to look at" — and neither is true when the reason the evidence is empty is
+   * that nobody could see it. Ranked under `answered` only: a source that
+   * refused does not undo an answer another source already gave.
+   */
   const outcome: HarnessOutcome = answered
     ? "found"
     : evidence.length === 0
-      ? hitCap
-        ? "exhausted"
-        : "not-found"
+      ? unreadable.length > 0
+        ? "unreadable"
+        : hitCap
+          ? "exhausted"
+          : "not-found"
       : hitCap
         ? "exhausted"
         : "partial";
@@ -263,6 +339,8 @@ export const runContextHarness = async (
     matchedFrom,
     spent: { requests, sources },
     notes,
+    unreadable,
+    considered,
     /*
      * Whether "dig deeper" is worth offering. Only true when something was
      * actually read and part of it was left unread - offering to go further

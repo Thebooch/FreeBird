@@ -280,10 +280,11 @@ describe("opening the record a row named", () => {
       candidates: [candidate("tasks"), candidate("other")],
       readCandidate: async (c) =>
         evidenceFor(c, [{ Id: 1, Title: "Turn" }, { Id: 2, Title: "Water on side of house" }]),
-      expand: async (matched, from) => {
+      reach: async ({ matched, from }) => {
         opened.push([...matched]);
         return {
           note: "Opened the full task record — 1 request(s).",
+          considered: [{ title: "The full task record", note: "every field the list left out" }],
           evidence: evidenceFor(
             from.candidate,
             [{ Id: 2, Title: "Water on side of house", Description: "water is pooling by the downpipe" }],
@@ -317,8 +318,9 @@ describe("opening the record a row named", () => {
       llm,
       candidates: [candidate("tasks")],
       readCandidate: async (c) => evidenceFor(c, [{ Id: 2, Title: "Water" }]),
-      expand: async (_matched, from) => ({
+      reach: async ({ from }) => ({
         note: "opened",
+        considered: [],
         evidence: evidenceFor(from.candidate, [{ Id: 2, Title: "Water", Description: "full" }], 1),
       }),
     });
@@ -336,7 +338,7 @@ describe("opening the record a row named", () => {
       llm,
       candidates: [candidate("tasks")],
       readCandidate: async (c) => evidenceFor(c, [{ Id: 1 }]),
-      expand: async () => {
+      reach: async () => {
         opened += 1;
         return null;
       },
@@ -358,10 +360,94 @@ describe("opening the record a row named", () => {
       llm,
       candidates: [candidate("tasks")],
       readCandidate: async (c) => evidenceFor(c, [{ Id: 1 }]),
-      expand: async () => null,
+      reach: async () => null,
     });
     expect(result.outcome).toBe("partial");
     expect(result.notes).toEqual([]);
+  });
+
+  /*
+   * The steer is what the judge said was missing, not the question.
+   *
+   * "Are there any notes on them? Any correlating issue?" cannot pick between
+   * a record's detail and a history collection. "The rows carry no notes" can.
+   */
+  it("hands the reach step what the judge said was still missing", async () => {
+    const llm = script(
+      { sources: ["tasks"], reason: "" },
+      { verdict: "partial", answer: "", missing: "no notes on these rows", matched: [0] },
+      { verdict: "found", answer: "the tenant opened it manually", missing: "" },
+    );
+    let steer = "";
+    await runContextHarness("are there any notes on them? any correlating issue?", {
+      llm,
+      candidates: [candidate("tasks")],
+      readCandidate: async (c) => evidenceFor(c, [{ Id: 1 }]),
+      reach: async ({ missing, from }) => {
+        steer = missing;
+        return {
+          note: "opened",
+          considered: [],
+          evidence: evidenceFor(from.candidate, [{ Note: "opened it manually" }], 1),
+        };
+      },
+    });
+    expect(steer).toBe("no notes on these rows");
+  });
+
+  /*
+   * The half that makes a dead end legible. Somebody told "I don't have notes"
+   * asks again for the thing that was already tried; somebody told what was
+   * checked knows the search happened and where it went.
+   */
+  it("records what it could check even when none of it held the answer", async () => {
+    const llm = script(
+      { sources: ["tasks"], reason: "" },
+      { verdict: "partial", answer: "", missing: "no notes here", matched: [0] },
+      { sources: [], reason: "nothing else could hold it" },
+    );
+    const result = await runContextHarness("any notes?", {
+      llm,
+      candidates: [candidate("tasks")],
+      readCandidate: async (c) => evidenceFor(c, [{ Id: 1 }]),
+      reach: async () => ({
+        note: "",
+        evidence: null,
+        considered: [
+          { title: "The full task record", note: "fields the list left out" },
+          { title: "History entries", note: "records of history entry" },
+        ],
+      }),
+    });
+
+    expect(result.considered.map((entry) => entry.title)).toEqual([
+      "The full task record",
+      "History entries",
+    ]);
+    // Nothing was read, so nothing is claimed to have been spent.
+    expect(result.notes).toEqual([]);
+    expect(result.spent.requests).toBe(0);
+  });
+
+  it("records what it checked when the answer did come from there", async () => {
+    const llm = script(
+      { sources: ["tasks"], reason: "" },
+      { verdict: "partial", answer: "", missing: "no notes here", matched: [0] },
+      { verdict: "found", answer: "opened manually", missing: "" },
+    );
+    const result = await runContextHarness("any notes?", {
+      llm,
+      candidates: [candidate("tasks")],
+      readCandidate: async (c) => evidenceFor(c, [{ Id: 1 }]),
+      reach: async ({ from }) => ({
+        note: "Read the history of 1 task — 1 request(s).",
+        considered: [{ title: "History entries", note: "records of history entry" }],
+        evidence: evidenceFor(from.candidate, [{ Note: "opened manually" }], 1),
+      }),
+    });
+    expect(result.outcome).toBe("found");
+    expect(result.considered).toHaveLength(1);
+    expect(result.notes).toEqual(["Read the history of 1 task — 1 request(s)."]);
   });
 
   it("does not open a record once the budget is spent", async () => {
@@ -375,7 +461,7 @@ describe("opening the record a row named", () => {
       candidates: [candidate("tasks")],
       budget: { sources: 2, requests: 1 },
       readCandidate: async (c) => evidenceFor(c, [{ Id: 1 }], 1),
-      expand: async () => {
+      reach: async () => {
         opened += 1;
         return null;
       },
@@ -491,5 +577,115 @@ describe("across every source", () => {
       },
     });
     expect(reads).toEqual(["a", "b"]);
+  });
+
+  /*
+   * A source that refused is not a source that answered "no".
+   *
+   * The distinction the whole `unreadable` path exists for: reporting an
+   * expired key as `not-found` is a confident claim about records nobody was
+   * able to see, and it is the answer the user is most likely to believe.
+   */
+  describe("when a source cannot be read at all", () => {
+    const refusal = (c: Candidate, reason: string): Evidence => ({
+      candidate: c,
+      rows: [],
+      columns: [],
+      coverage: { scanned: 0, of: null, orderedBy: null, partial: true },
+      warnings: [reason],
+      refused: true,
+      requests: 0,
+    });
+
+    it("reports 'unreadable' rather than 'not-found' when nothing could be read", async () => {
+      const llm = script({ sources: ["leases"], reason: "" });
+
+      const result = await runContextHarness("how many active leases?", {
+        llm,
+        candidates: [candidate("leases")],
+        readCandidate: async (c) => refusal(c, "the key has expired"),
+      });
+
+      expect(result.outcome).toBe("unreadable");
+      expect(result.evidence).toHaveLength(0);
+      expect(result.unreadable).toHaveLength(1);
+      expect(result.unreadable[0]?.reason).toContain("expired");
+      expect(result.unreadable[0]?.candidate.id).toBe("leases");
+    });
+
+    /*
+     * Judging zero rows can only ever return "miss", and a miss is a statement
+     * about the data. Paying a model to make a false one is the worst of both.
+     */
+    it("does not spend a judge call on a refusal", async () => {
+      // Two entries: a rank for each round. A judge call would consume one of
+      // them out of turn and the second rank would come back as the wrong
+      // shape, so mis-scripting fails loudly rather than passing by accident.
+      const llm = script(
+        { sources: ["leases"], reason: "" },
+        { sources: ["rent"], reason: "" },
+      );
+
+      const result = await runContextHarness("what is the highest rent?", {
+        llm,
+        candidates: [candidate("leases"), candidate("rent")],
+        readCandidate: async (c) => refusal(c, "403 from the API"),
+      });
+
+      expect(result.outcome).toBe("unreadable");
+      expect(result.unreadable).toHaveLength(2);
+    });
+
+    /* One dead source does not erase an answer another source gave. */
+    it("still reports 'found' when a later source answers", async () => {
+      const llm = script(
+        { sources: ["leases"], reason: "" },
+        { sources: ["rent"], reason: "" },
+        { verdict: "found", answer: "4,200", missing: "" },
+      );
+
+      const result = await runContextHarness("what is the highest rent?", {
+        llm,
+        candidates: [candidate("leases"), candidate("rent")],
+        readCandidate: async (c) =>
+          c.id === "leases"
+            ? refusal(c, "the key has expired")
+            : evidenceFor(c, [{ rent: 4200 }]),
+      });
+
+      expect(result.outcome).toBe("found");
+      expect(result.answer).toBe("4,200");
+      expect(result.unreadable).toHaveLength(1);
+      expect(result.unreadable[0]?.candidate.id).toBe("leases");
+    });
+  });
+
+  /*
+   * The money ceiling is a cap like the other two, and reaching it is
+   * `exhausted` for the same reason reaching `budget.sources` is: there was
+   * more that could have been looked at.
+   */
+  it("stops between rounds when the turn is out of budget", async () => {
+    const llm = script(
+      { sources: ["a"], reason: "" },
+      { verdict: "miss", answer: "", missing: "not here" },
+    );
+    const reads: string[] = [];
+    let spent = false;
+
+    const result = await runContextHarness("anything?", {
+      llm,
+      candidates: [candidate("a"), candidate("b")],
+      overBudget: () => spent,
+      readCandidate: async (c) => {
+        reads.push(c.id);
+        // The first read is what tips it over.
+        spent = true;
+        return evidenceFor(c, [{ text: "x" }]);
+      },
+    });
+
+    expect(reads).toEqual(["a"]);
+    expect(result.outcome).toBe("exhausted");
   });
 });

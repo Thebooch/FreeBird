@@ -171,6 +171,27 @@ describe("readWidget", () => {
       now: 0,
       timeZone: "UTC",
     });
+    expect(evidence).not.toBeNull();
+    expect(evidence?.refused).toBe(true);
+    expect(evidence?.rows).toEqual([]);
+    expect(evidence?.warnings.join(" ")).toContain("will not allow access");
+  });
+
+  /*
+   * The other half of the same line, and the reason `refused` is a flag rather
+   * than "no rows and a warning": a cache-only read that missed is a blank,
+   * carries no blame, and must stay null so nothing reports it as a refusal.
+   */
+  it("stays null when every source simply had nothing cached", async () => {
+    const evidence = await readWidget({
+      candidate,
+      widget: board([widgetSpec()]).widgets[0]!,
+      resolved,
+      read: async () => null,
+      cacheOnly: true,
+      now: 0,
+      timeZone: "UTC",
+    });
     expect(evidence).toBeNull();
   });
 

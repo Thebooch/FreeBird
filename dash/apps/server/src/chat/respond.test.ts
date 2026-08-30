@@ -61,6 +61,21 @@ describe("flowOf", () => {
   });
 
   /*
+   * "Nothing was found" and "nobody could look" are different sentences with
+   * different fixes, and only one of them is a claim about the user's data.
+   */
+  it("keeps a source that could not be read out of the not-found flow", () => {
+    expect(flowOf(ctx(), { harness: { outcome: "unreadable" } })).toBe("unreadable");
+  });
+
+  /* An answer found elsewhere still reads as an answer. */
+  it("does not let an unreadable source displace an answer that was found", () => {
+    expect(flowOf(ctx(), { harness: { outcome: "found", couldNotRead: true } })).toBe(
+      "answered",
+    );
+  });
+
+  /*
    * A deep read cost several times an ordinary answer and turned up things
    * nobody asked for. Reporting only the number wastes what was paid for.
    */

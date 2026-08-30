@@ -1,26 +1,16 @@
-import type {
-  ChildCollection,
-  ConciergeContext,
-  LlmAdapter,
-  LlmTool,
-} from "@freebirdai/dash-agent";
+import type { ConciergeContext, LlmAdapter, LlmTool } from "@freebirdai/dash-agent";
 import type { DashboardSpec, ResolvedParams } from "@freebirdai/dash-spec";
 import { z } from "zod";
 import type { WidgetHandle } from "../chat/handles.js";
-import { buildCandidates, narrowTo } from "./candidates.js";
+import { turnSpendSoFar } from "../llm.js";
+import { buildCandidates, narrowTo, unreadableConnections } from "./candidates.js";
 import { type Focus, type FocusStore, mergeRecords } from "./focus.js";
 import { recallFromFocus } from "./recall.js";
-import {
-  type LookupOption,
-  asOption,
-  identityFor,
-  pickOption,
-  readRelated,
-  relatedFor,
-} from "./related.js";
-import { bindingsFor, expansionFor, referencesFrom } from "../tools/bindings.js";
+import { identityFor, pickOption, readRelated } from "./related.js";
+import { describeOpenables, openFrom, openableFrom } from "./reach.js";
+import { bindingsFor } from "../tools/bindings.js";
 import { identityValue, readRecords, readReferenced } from "../tools/read.js";
-import type { Reference, ToolBinding, ToolDeps } from "../tools/types.js";
+import type { ToolDeps } from "../tools/types.js";
 import { CHUNK_SIZE, type DeepFinding, analyseDeep } from "./deep.js";
 import { type Budget, DEFAULT_BUDGET, runContextHarness } from "./harness.js";
 import { PAGE_SIZE, readEndpoint, readWidget } from "./read.js";
@@ -150,11 +140,44 @@ export interface AnswerResult {
    * nobody was told about is the kind of cost that gets a feature switched off.
    */
   readonly openedRelated?: string;
+  /**
+   * What could not be read, and why — the reply must say this too.
+   *
+   * `openedRelated` above exists because a cost nobody was told about erodes
+   * trust in the feature. This is the same obligation for accuracy rather than
+   * for money: a source that refused is the difference between "you have no
+   * overdue invoices" and "I could not open your invoicing account", and only
+   * one of those is something the user can act on. Both a connection skipped
+   * before ranking and a source that refused when read land here, because from
+   * the reply's side they are the same sentence.
+   */
+  readonly unreadable?: ReadonlyArray<{
+    readonly source: string;
+    readonly reason: string;
+  }>;
+  /**
+   * What else was reachable from the records found, in the API's own words.
+   *
+   * Present when the search went past the rows it matched. The reply should
+   * say what was checked — "its own record and its history" — because the
+   * alternative is a user who has to guess at the product's plumbing to
+   * unlock an answer, having been told only that something was not there.
+   *
+   * Never op ids and never the word "endpoint": these are the names the API
+   * gives its own things, which is the closest thing to the user's vocabulary
+   * that exists without inventing one.
+   */
+  readonly couldCheck?: ReadonlyArray<{
+    readonly title: string;
+    readonly note: string;
+  }>;
   readonly findings: ReadonlyArray<{
     readonly source: string;
     readonly tab?: string;
     /** Which connection this source belongs to, so an answer can itemize. */
     readonly from?: string;
+    /** The field carrying each record's identity, never narrowed away. */
+    readonly idField?: string;
     /** What the judge read out of this source alone. */
     readonly answer?: string;
     /** How many of its records the question was about. */
@@ -219,6 +242,9 @@ export const answerFromData = async (
   if (!deps.llm) {
     return { error: "there is no AI key configured, so the data cannot be searched" };
   }
+  // Captured after the guard: narrowing a property does not survive into the
+  // callbacks below, and `reach` is one.
+  const llm = deps.llm;
 
   const everywhere = buildCandidates({
     handles: deps.handles,
@@ -312,52 +338,13 @@ export const answerFromData = async (
       /*
        * Everything that can be opened from the records in hand, as one list.
        *
-       * Three mechanisms, one decision. The record's own fuller version, a
-       * collection attached to it, and a record it points at are different
-       * things to an API and the same thing to somebody asking "what are the
-       * notes on that?" — an API models notes as a subcollection, the next one
-       * as a field on the record you have to fetch, and a picker that could
-       * only see collections could only ever find half of them. That is
-       * exactly how the transcript failed: it looked for a notes collection,
-       * found none, and never considered that the record itself had more.
+       * Built by `openableFrom`, which the SEARCH path also calls. They were
+       * two separate walks of the same relation graph and the search's was the
+       * poorer one — it saw only the record's own detail — so whether a
+       * question could be answered depended on whether it arrived as a
+       * follow-up or as a fresh search. One function, so that cannot recur.
        */
-      const expansion = expansionFor(bindings, focus.op);
-      const references = referencesFrom(deps.context, focus.op, bindings);
-
-      type Openable = LookupOption &
-        (
-          | { readonly kind: "record"; readonly binding: ToolBinding }
-          | { readonly kind: "collection"; readonly child: ChildCollection }
-          | { readonly kind: "reference"; readonly reference: Reference }
-        );
-
-      const options: Openable[] = [
-        ...(expansion
-          ? [
-              {
-                id: "the-record-itself",
-                title: `The full ${expansion.resource} record`,
-                note:
-                  "every field the collection left out — descriptions, notes and anything " +
-                  "else only the record itself carries",
-                kind: "record" as const,
-                binding: expansion,
-              },
-            ]
-          : []),
-        ...relatedFor(deps.context, focus.op).map((child) => ({
-          ...asOption(child),
-          kind: "collection" as const,
-          child,
-        })),
-        ...references.map((reference) => ({
-          id: `points-at-${reference.field}`,
-          title: reference.title,
-          note: `the ${reference.to.resource} this record points at, by its ${reference.field}`,
-          kind: "reference" as const,
-          reference,
-        })),
-      ];
+      const options = openableFrom({ context: deps.context, bindings, op: focus.op });
 
       const chosen = await pickOption(
         deps.llm,
@@ -374,6 +361,9 @@ export const answerFromData = async (
               : `none of what can be opened from these records holds ${recalled.wants}`,
           answer: "",
           usedContext: true,
+          // What was on offer, so the reply can name it rather than leaving
+          // the user to guess what else there might have been.
+          ...(options.length > 0 ? { couldCheck: describeOpenables(options) } : {}),
           findings: [],
           requests: 0,
         };
@@ -549,44 +539,53 @@ export const answerFromData = async (
     /*
      * The rows named the record and did not carry the answer.
      *
-     * A collection returns a summary of each record; the record's own endpoint
-     * returns everything. So a matched row that lacks the asked-for field is
-     * not a dead end, it is an identifier — and following it is one request,
-     * against an API that has already told us which endpoint takes it.
+     * Everything reachable from them is offered, and the model chooses against
+     * what the judge said was still missing. This used to open the record's own
+     * detail and nothing else, which could only find what an API happens to
+     * model as a field — so a user asking about notes an API keeps in a
+     * subcollection was told they did not exist, and had to name the mechanism
+     * themselves to get them. See `reach.ts` for the transcript.
      */
-    expand: async (matched, from) => {
-      const binding = expansionFor(bindings, from.candidate.op);
-      if (!binding?.idField) return null;
+    reach: async ({ matched, from, missing }) => {
+      const options = openableFrom({
+        context: deps.context,
+        bindings,
+        op: from.candidate.op,
+      });
+      if (options.length === 0) return null;
 
-      const ids = matched.flatMap((record) =>
-        identityValue(record, binding.idField as string, binding.idField),
+      const considered = describeOpenables(options);
+      /*
+       * Steered by what is still missing rather than by the question. The
+       * judge has just read the rows and said what they did not carry, and
+       * that sentence is a far better brief than the original wording — "the
+       * notes are not in these rows" picks a notes collection; "any correlating
+       * issue?" does not.
+       */
+      const chosen = await pickOption(
+        llm,
+        { wants: missing || parsed.data.question, options },
+        { ...(deps.model ? { model: deps.model } : {}) },
       );
-      const opened = await readRecords({ binding, ids, deps: toolDeps });
-      if (opened.records.length === 0) return null;
+      // Nothing on offer fits. Still worth reporting what was on offer — that
+      // is the difference between a dead end and a silent one.
+      if (!chosen) return { evidence: null, note: "", considered };
 
-      return {
-        note: opened.note,
-        evidence: {
-          candidate: {
-            ...from.candidate,
-            // Named as what it is, so the reply can say where the answer came
-            // from without implying the whole collection was re-read.
-            title: `${from.candidate.title} — opened in full`,
-            op: binding.op,
-            cached: false,
-          },
-          rows: opened.records,
-          columns: [...new Set(opened.records.flatMap((row) => Object.keys(row)))],
-          coverage: {
-            scanned: opened.records.length,
-            of: opened.records.length,
-            orderedBy: null,
-            partial: false,
-          },
-          warnings: opened.warnings,
-          requests: opened.requests,
-        },
-      };
+      const reached = await openFrom({
+        chosen,
+        subject: matched,
+        from: from.candidate,
+        fallbackIdField: identityFor(deps.context, from.candidate.op),
+        deps: toolDeps,
+        read: deps.read,
+        resolved: deps.resolved,
+        rowsOf: deps.rowsOf,
+        rowsPath: deps.rowsPathFor(
+          chosen.kind === "collection" ? chosen.child.op : from.candidate.op,
+        ),
+        limit,
+      });
+      return { evidence: reached.evidence, note: reached.note, considered };
     },
     /*
      * "Has anyone mentioned running late?" is a different question from "what
@@ -596,6 +595,16 @@ export const answerFromData = async (
      */
     ...(parsed.data.across ? { scope: { mode: "all" as const } } : {}),
     ...(deps.budget ? { budget: deps.budget } : { budget: DEFAULT_BUDGET }),
+    /*
+     * The request's money ceiling, alongside its source and request budgets.
+     * Null outside a metered request — every existing caller, including the
+     * tests and the eval harness — where it reads as "no ceiling" and the loop
+     * behaves exactly as it did.
+     */
+    overBudget: () => {
+      const turn = turnSpendSoFar();
+      return turn !== null && turn.usd >= turn.ceilingUsd;
+    },
   });
 
   /*
@@ -646,14 +655,69 @@ export const answerFromData = async (
     );
   }
 
+  /*
+   * What the reply has to admit it could not see.
+   *
+   * The two halves are reported on different terms, on purpose:
+   *
+   *   A source that REFUSED was chosen — the ranker looked at the question and
+   *   judged this the likeliest place for the answer — so its failure is part
+   *   of the story of this question whatever else was found.
+   *
+   *   A connection SKIPPED for having no key was never about this question.
+   *   Naming it on a turn that was answered perfectly well is noise, and noise
+   *   attached to every reply is how a caveat stops being read. It earns its
+   *   place only when the search came back without an answer, where "one of
+   *   your accounts is not connected" is very often the actual reason.
+   */
+  const unreadable = [
+    ...result.unreadable.map((entry) => ({
+      source: entry.candidate.title,
+      reason: entry.reason,
+    })),
+    ...(result.outcome === "found"
+      ? []
+      : unreadableConnections(deps.context).map((entry) => ({
+          source: entry.title,
+          reason: entry.reason,
+        }))),
+  ];
+
   return {
     outcome: result.outcome,
     looked: result.tried,
-    missing: result.missing,
+    /*
+     * The harness says "there is nothing connected to read" when it is handed
+     * no candidates, which was the only way that could happen until connections
+     * without a key started being filtered out before ranking. Now it can be
+     * flatly untrue — there may be several connections, all of them unreadable
+     * — and it would contradict the `unreadable` list in the same payload. The
+     * harness has no business knowing about credentials, so the correction is
+     * made here, where both facts are in hand.
+     */
+    missing:
+      result.outcome === "no-sources" && unreadable.length > 0
+        ? "nothing that is connected can currently be read"
+        : result.missing,
     answer: result.answer,
     // Anything that cost a request nobody explicitly asked for. The reply is
     // required to say it happened.
     ...(result.notes.length > 0 ? { openedRelated: result.notes.join(" ") } : {}),
+    /*
+     * Sources that refused when read, plus connections that were never offered
+     * to the ranker because they hold no key. Merged deliberately: the user
+     * does not care which side of the read the obstacle sat on, only that a
+     * place the answer might have been was not looked at, and why.
+     */
+    ...(unreadable.length > 0 ? { unreadable } : {}),
+    /*
+     * Where the search went beyond the rows it matched. Carried on every
+     * outcome — on a hit it names the thing the answer came out of, and on a
+     * miss it is the difference between "neither its record nor its history
+     * carries notes" and "I don't have notes", which is the sentence that sent
+     * a real user back to ask for what had already been tried.
+     */
+    ...(result.considered.length > 0 ? { couldCheck: result.considered } : {}),
     findings: result.evidence.map((evidence) => ({
       source: evidence.candidate.title,
       ...(evidence.candidate.tab ? { tab: evidence.candidate.tab } : {}),
@@ -663,6 +727,9 @@ export const answerFromData = async (
        * written from a combined total.
        */
       from: evidence.candidate.connection,
+      // So the reply's own narrowing cannot drop the field every follow-up
+      // needs — the same protection the judge gets.
+      ...(evidence.candidate.idField ? { idField: evidence.candidate.idField } : {}),
       ...(evidence.answer ? { answer: evidence.answer } : {}),
       ...(evidence.matched !== undefined ? { matched: evidence.matched } : {}),
       describes: evidence.candidate.describes,

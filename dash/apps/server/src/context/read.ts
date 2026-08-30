@@ -158,8 +158,35 @@ export const readWidget = async (input: ReadWidgetInput): Promise<Evidence | nul
     got += 1;
   }
 
-  // Nothing came back at all: not evidence, and not worth a caveat either.
-  if (got === 0) return null;
+  /*
+   * Nothing came back at all — and *why* decides whether that is evidence.
+   *
+   * `readEndpoint` below already draws this line: a refusal is an answer
+   * somebody can act on, and returning null reports it as though nothing had
+   * been tried. This path did not draw it, and the asymmetry ran the wrong
+   * way: a widget with ONE dead source surfaced the reason in `warnings`, and
+   * a widget whose sources were ALL refused returned null and threw the
+   * reasons away. The more total the failure, the less the user was told —
+   * and upstream, an empty search reads as "I looked and it is not there",
+   * which is a confident claim about data nobody was able to see.
+   *
+   * So the two cases are separated here rather than collapsed. `ReadOutcome`
+   * already distinguishes them (see `context/types.ts`): a null outcome is a
+   * cache-only miss and "carries no blame", while `ok: false` is the API
+   * saying no, in its own words.
+   */
+  if (got === 0) {
+    if (refusals.length === 0) return null;
+    return {
+      candidate: input.candidate,
+      rows: [],
+      columns: [],
+      coverage: { scanned: 0, of: null, orderedBy: null, partial: true },
+      warnings: refusals,
+      refused: true,
+      requests,
+    };
+  }
 
   /*
    * `executeWidget` routes on `spec.sources`, so a single-source widget must be
@@ -269,6 +296,7 @@ export const readEndpoint = async (
       columns: [],
       coverage: { scanned: 0, of: null, orderedBy: null, partial: true },
       warnings: [outcome.reason],
+      refused: true,
       requests: 0,
     };
   }

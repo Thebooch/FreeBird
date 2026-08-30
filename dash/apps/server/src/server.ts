@@ -49,10 +49,12 @@ import {
   type ModelChoices,
   availableProviders,
   defaultModelId,
+  enterTurnBudget,
   llmSpend,
   modelForTask,
   preferredProvider,
   sourceForTask,
+  turnCeilingUsd,
 } from "./llm.js";
 import {
   type LlmTask,
@@ -312,6 +314,24 @@ const querySchema = z.object({
 export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   const { store, keys } = options;
   const app = Fastify({ logger: options.logger ?? false, bodyLimit: 1_000_000 });
+
+  /*
+   * Every request gets a spend ceiling.
+   *
+   * Each mechanism that reaches for a model is already bounded on its own —
+   * the harness at four sources, a deep read at twenty chunks, a page at fifty
+   * rows — but one request can reach several of them in sequence and nothing
+   * bounded the total. `llm.ts` has the meter that sees every call; this is
+   * what gives it something to enforce. See `DEFAULT_TURN_CEILING_USD` for how
+   * the number was chosen and how to switch it off.
+   *
+   * On the hook rather than around the chat route because the authoring agent
+   * and the concierge spend money too, and a limit that covers only the
+   * cheapest of the three is a limit in name.
+   */
+  app.addHook("onRequest", async () => {
+    enterTurnBudget(turnCeilingUsd());
+  });
 
   const registry = new AdapterRegistry().register(new RestAdapter(options.http ?? nodeHttp));
 

@@ -36,6 +36,20 @@ export interface Candidate {
   readonly fields: readonly string[];
   /** True when reading this is known to cost no upstream request. */
   readonly cached: boolean;
+  /**
+   * The field carrying each record's identity, where one is established.
+   *
+   * Carried so that narrowing a sample can never drop it. It is the field that
+   * turns an answer into a next step — every record that can be opened, and
+   * everything hanging off it, is reached through this — and it is worth a few
+   * characters at any budget. Sorting by size nearly protects it for free, but
+   * only nearly: squeezed hard enough, `UnitId` survives over `Id` purely
+   * because the unit number is a shorter number.
+   *
+   * Null when the API establishes no identity, which is reported rather than
+   * guessed at.
+   */
+  readonly idField?: string | null;
   /** Which tab a widget sits on. Absent for a bare endpoint. */
   readonly tab?: string;
 }
@@ -86,6 +100,17 @@ export interface Evidence {
   readonly matched?: number;
   /** Caveats the runtime raised — dropped joins, page caps, coercion failures. */
   readonly warnings: readonly string[];
+  /**
+   * The source was asked and said no. Its `warnings` carry the API's reason.
+   *
+   * An explicit flag rather than something inferred from "no rows and a
+   * warning", because a source that was read perfectly well and happens to
+   * hold nothing can raise a warning too — a dropped join, a page cap — and
+   * that is a real, reportable answer rather than a failure to look. The two
+   * must not be told apart by a heuristic when the reader already knows
+   * which one it produced.
+   */
+  readonly refused?: boolean;
   /** Upstream requests this cost. Zero when it came out of the cache. */
   readonly requests: number;
 }
@@ -101,7 +126,18 @@ export type HarnessOutcome =
   /** The budget ran out before every candidate had been tried. */
   | "exhausted"
   /** There was nothing to read at all. */
-  | "no-sources";
+  | "no-sources"
+  /**
+   * Everything that could have held the answer refused to be read.
+   *
+   * Distinct from `not-found` and it is the distinction that matters: one
+   * means the data is not there, the other means nobody could look. Folding a
+   * refused source into "none of it held the answer" produces a confident
+   * claim about records that were never seen — usually because a key expired,
+   * which is both the likeliest cause and the easiest thing to fix once it is
+   * said out loud.
+   */
+  | "unreadable";
 
 export interface HarnessResult {
   readonly outcome: HarnessOutcome;
@@ -141,6 +177,36 @@ export interface HarnessResult {
    * feature switched off.
    */
   readonly notes: readonly string[];
+  /**
+   * Sources that were chosen and could not be read, with the API's own reason.
+   *
+   * Kept apart from `evidence` rather than mixed into it, because `evidence`
+   * is what the answer is drawn from and these carry no rows. Mixing them
+   * would make an empty search look like a search that found nothing, which
+   * is exactly the claim this field exists to prevent the reply from making.
+   */
+  readonly unreadable: ReadonlyArray<{
+    readonly candidate: Candidate;
+    /** The API's own words, already phrased for a person by the adapter. */
+    readonly reason: string;
+  }>;
+  /**
+   * What could be reached from the records that were matched, in plain words.
+   *
+   * Recorded whether or not any of it held the answer, because a search that
+   * went further and still came up short is a different — and far more
+   * useful — statement than one that stopped. "Its own record and its history
+   * were both checked and neither carries notes" ends the question; "I don't
+   * have notes" invites somebody to ask for exactly what was already tried,
+   * which is what the transcript in `reach.ts` shows a real user doing.
+   *
+   * Titles and plain-word notes only. The names here are the API's own for its
+   * own things; op ids and the word "endpoint" are this product's plumbing.
+   */
+  readonly considered: ReadonlyArray<{
+    readonly title: string;
+    readonly note: string;
+  }>;
   /** True when more could be read if the user asks for it. */
   readonly canGoDeeper: boolean;
 }

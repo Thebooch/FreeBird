@@ -603,18 +603,13 @@ export const ChatColumn = ({
   dashboardId,
   ...handlers
 }: ChatColumnProps): JSX.Element => {
+  /*
+   * No edge tab any more. The nav's ✦ button is the one way in — a second
+   * permanent affordance for the same drawer, floating over the right half of
+   * every board, was chrome the board had to work around.
+   */
   return (
     <>
-      <button
-        className="dash-chat__tab"
-        hidden={open}
-        onClick={() => onToggle(true)}
-        aria-label="Open the assistant"
-        data-testid="chat-open"
-      >
-        Assistant
-      </button>
-
       <aside
         className="dash-chat"
         data-open={open ? "true" : "false"}
