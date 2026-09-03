@@ -31,7 +31,13 @@ export const useSession = (opts: UseSessionOptions = {}): UseSessionReturn => {
       const s = await fb.transport.createSession(
         input ?? { topic: opts.topic, tags: opts.tags },
       );
-      fb.setSessionId(s.id);
+      /*
+       * `openSession` rather than `setSessionId`: creating a session *is*
+       * switching to one, and the conversation being left should not leak its
+       * messages or half-finished action into the new one. At first mount
+       * there is nothing to drop, so this costs nothing there.
+       */
+      fb.openSession(s.id);
       return s.id;
     },
     [fb, opts.topic, opts.tags],

@@ -185,6 +185,32 @@ const ChatBody = ({
    * Recovering once is right and twice is a loop, so it is attempted a single
    * time per mount: start a fresh session and let the user send again.
    */
+  /**
+   * Start a fresh conversation.
+   *
+   * Creating a session *is* switching to one, so `createSession` clears what
+   * the last conversation had on screen. The one being left is not saved
+   * anywhere and not deleted — it stays on the server untouched, which is the
+   * seam a chat history will pick up: nothing lists those sessions today, and
+   * when something does, `openSession` is already how you return to one.
+   *
+   * The stored id is cleared first so a reload during a failed create resumes
+   * nothing rather than the conversation the user just asked to leave.
+   */
+  const [startingChat, setStartingChat] = useState(false);
+  const startNewChat = useCallback(async () => {
+    if (startingChat) return;
+    setStartingChat(true);
+    writeStoredSession(null);
+    try {
+      await createSession();
+    } catch {
+      // The session callout already explains a server that cannot make one.
+    } finally {
+      setStartingChat(false);
+    }
+  }, [createSession, startingChat]);
+
   const recovered = useRef(false);
   useEffect(() => {
     const failure = freeBird.lastChatError;
@@ -411,6 +437,16 @@ const ChatBody = ({
         <button
           className="dash-iconbtn"
           style={{ marginLeft: "auto" }}
+          onClick={() => void startNewChat()}
+          disabled={startingChat || chat.streaming}
+          aria-label="Start a new chat"
+          title="Start a new chat"
+          data-testid="chat-new"
+        >
+          ＋
+        </button>
+        <button
+          className="dash-iconbtn"
           onClick={() => onToggle(false)}
           aria-label="Close the assistant"
           data-testid="chat-close"

@@ -867,6 +867,48 @@ export class FreeBirdStore {
     }
   }
 
+  /**
+   * Point the store at a different conversation.
+   *
+   * The primitive session management is built on: `null` means "no
+   * conversation yet", an id means that one. Everything the old conversation
+   * put on screen — its messages, its action journal, a half-answered
+   * question, an unsent notice, its last error — belongs to it and not to
+   * whatever comes next, so switching drops it.
+   *
+   * It does **not** load the new session's messages. `useChat` already
+   * refetches whenever the id changes, which is what will make opening a past
+   * conversation work when there is a history to open one from; duplicating
+   * that here would give the same job two owners.
+   *
+   * What it deliberately leaves alone is the workspace: tabs, active
+   * components and the layout on screen are where the user *is*, not what
+   * they were saying. Changing conversation should not move them.
+   *
+   * Nothing is done with the conversation being left. It stays on the server
+   * exactly as it was — not saved anywhere, not indexed, not deleted. That is
+   * the seam history plugs into: today nothing lists those sessions, and when
+   * something does, this method is already how you would return to one.
+   */
+  openSession(id: string | null): void {
+    // Whatever was streaming belongs to the conversation being left.
+    this.abortController?.abort();
+    this.abortController = null;
+    this.notices = emptyNoticeBuffer();
+    this.setState({
+      sessionId: id,
+      messages: [],
+      streaming: false,
+      streamingText: "",
+      latestReferences: [],
+      actionState: initialActionState,
+      supportState: initialSupportState(),
+      pendingQuestion: null,
+      lastChatError: null,
+      lastLlmUsage: null,
+    });
+  }
+
   async ensureMessagesLoaded(): Promise<void> {
     if (!this.state.sessionId) return;
     const msgs = await this.transport.listMessages(this.state.sessionId);

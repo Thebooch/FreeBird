@@ -52,6 +52,13 @@ export interface FreeBirdContextValue {
 
   // Setters / actions (delegate to store)
   setSessionId: (id: string | null) => void;
+  /**
+   * Switch to another conversation, dropping what the last one put on screen.
+   *
+   * `null` means "none yet". Pass an id to return to a past conversation once
+   * there is a history to pick one from — `useChat` loads its messages.
+   */
+  openSession: (id: string | null) => void;
   setLayout: (p: LayoutPlan | null) => void;
   toggleLock: (instanceId: string) => void;
   setTabs: (t: CustomTab[]) => void;
@@ -157,6 +164,7 @@ export const FreeBirdProvider: React.FC<FreeBirdProviderProps> = ({
       pausedRecords,
 
       setSessionId: (id) => store.setSessionId(id),
+      openSession: (id) => store.openSession(id),
       setLayout: (p) => store.setLayout(p),
       toggleLock: (id) => store.toggleLock(id),
       setTabs: (t) => store.setTabs(t),
