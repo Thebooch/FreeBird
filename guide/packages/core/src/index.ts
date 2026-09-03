@@ -88,6 +88,33 @@ export { DigestEngine, createDigestEngine, type DigestEngineOptions, type Digest
 export { parseCron, nextCronRun } from "./digest/cron.js";
 
 // ---------------------------------------------------------------------------
+// Ask user (a structured question that ends the turn until a human answers)
+// ---------------------------------------------------------------------------
+export {
+  ASK_USER_TOOL_NAME,
+  buildAnswersPrompt,
+  buildAskUserTool,
+  parseAskUserArgs,
+  toPendingQuestion,
+  type PendingQuestion,
+  type QuestionAnswer,
+  type QuestionOption,
+} from "./ask/index.js";
+
+// ---------------------------------------------------------------------------
+// Skills (instruction packs, resolved per turn from wherever the host keeps them)
+// ---------------------------------------------------------------------------
+export {
+  composeSkillProviders,
+  dbSkillProvider,
+  type Skill,
+  type SkillProvider,
+  type SkillUpsertInput,
+} from "./skills/index.js";
+export { buildSkillsPrompt, selectSkills, type BuildSkillsPromptOptions } from "./chat/skills-context.js";
+export { requireSkills, type SkillStore } from "./adapters/db.js";
+
+// ---------------------------------------------------------------------------
 // Permission modes (per-tenant posture; orthogonal to requiresConfirmation)
 // ---------------------------------------------------------------------------
 export {

@@ -6,6 +6,7 @@ import type {
   DigestConfig,
   LayoutPlan,
 } from "../types.js";
+import type { Skill, SkillUpsertInput } from "../skills/types.js";
 
 /**
  * Range for date-filtered queries. Both endpoints are inclusive. UTC.
@@ -173,9 +174,45 @@ export interface DbAdapter {
    */
   purgeExpiredScratch?: (now: Date) => Promise<number>;
 
+  // skills
+  /**
+   * Instruction packs available to this caller.
+   *
+   * Optional for the same reason scratch is: an adapter written before skills
+   * existed is still a valid `DbAdapter`, and a host that wants DB-backed
+   * skills should say so through `requireSkills` rather than crash on an
+   * undefined method. A host with no skill storage at all simply supplies no
+   * provider — that is a supported steady state, not a misconfiguration.
+   */
+  listSkills?: (auth: AuthContext) => Promise<Skill[]>;
+  putSkill?: (input: SkillUpsertInput, auth: AuthContext) => Promise<Skill>;
+  deleteSkill?: (id: string, auth: AuthContext) => Promise<void>;
+
   /** Optional distributed lock for digest scheduling. */
   locks?: LockAdapter;
 }
+
+/** The skills half of an adapter, or a clear error naming what is missing. */
+export interface SkillStore {
+  list: (auth: AuthContext) => Promise<Skill[]>;
+  put: (input: SkillUpsertInput, auth: AuthContext) => Promise<Skill>;
+  delete: (id: string, auth: AuthContext) => Promise<void>;
+}
+
+/** Helper to assert the DB adapter can store instruction packs. */
+export const requireSkills = (db: DbAdapter): SkillStore => {
+  if (!db.listSkills || !db.putSkill || !db.deleteSkill) {
+    throw new Error(
+      "FreeBird: this DB adapter does not support skills. " +
+        "Implement listSkills/putSkill/deleteSkill, or supply your own SkillProvider.",
+    );
+  }
+  return {
+    list: db.listSkills.bind(db),
+    put: db.putSkill.bind(db),
+    delete: db.deleteSkill.bind(db),
+  };
+};
 
 /** The scratch half of an adapter, or a clear error naming what is missing. */
 export interface ScratchStore {

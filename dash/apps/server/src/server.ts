@@ -77,6 +77,7 @@ import { mapRoutes } from "./routes/map.js";
 import type { Settings, SettingsStore } from "./settings.js";
 import { QueryCache, clampMaxAge } from "./cache/queryCache.js";
 import { extractRows, parsePath } from "@freebirdai/dash-expr";
+import { catalogEntryToVerify } from "./verified.js";
 import { splitOpInputs } from "./query.js";
 import { ANSWER_TOOL, answerFromData } from "./context/tool.js";
 import { bindingFor, bindingsFor } from "./tools/bindings.js";
@@ -939,6 +940,32 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         : typeof result.body === "object" && result.body !== null
           ? `${Object.keys(result.body).length} field(s)`
           : "a value";
+
+      /*
+       * This, and only this, is what verifies a catalog entry.
+       *
+       * A live response with rows where the dialect said they would be is the
+       * one thing that turns a hypothesis written from documentation into a
+       * proven envelope. The 403 branch below deliberately does not reach
+       * here: it proves the key, not the dialect.
+       */
+      let verified = false;
+      if (catalog && connection.catalog) {
+        const entryId = catalogEntryToVerify({
+          connection,
+          op: getOp(connection, opId),
+          body: result.body,
+          entry: catalog.get(connection.catalog),
+        });
+        if (entryId) {
+          const entry = catalog.get(entryId);
+          // Writes to the overlay, so proving a dialect locally never mutates
+          // the shipped seed — it records that this instance saw it work.
+          if (entry) catalog.put({ ...entry, verified: true });
+          verified = true;
+        }
+      }
+
       return {
         ok: true,
         // Descriptive only — the caller supplies the "Connected." so the two
@@ -946,6 +973,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         message: `${connection.title} responded with ${summary}.`,
         pages: result.meta.pages,
         truncated: result.meta.truncated,
+        verified,
       };
     } catch (error) {
       const adapterError = error instanceof AdapterError ? error : null;

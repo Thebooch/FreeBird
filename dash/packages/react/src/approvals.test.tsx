@@ -50,16 +50,16 @@ const probe = (approvals?: Readonly<Record<string, ApprovalVerdict>>): WidgetDat
     return null;
   };
   renderToStaticMarkup(
-    createElement(
-      DashboardProvider,
-      {
-        dashboard,
-        registry: registry(),
-        now: 1_700_000_000_000,
-        ...(approvals ? { approvals } : {}),
-      },
-      createElement(Probe),
-    ),
+    createElement(DashboardProvider, {
+      dashboard,
+      registry: registry(),
+      now: 1_700_000_000_000,
+      ...(approvals ? { approvals } : {}),
+      // In the props object rather than as a third argument: `children` is
+      // required on DashboardProviderProps, and the positional overload does
+      // not satisfy it.
+      children: createElement(Probe),
+    }),
   );
   if (!seen) throw new Error("probe did not render");
   return seen;

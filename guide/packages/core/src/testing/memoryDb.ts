@@ -15,6 +15,7 @@ import type {
   DbAdapter,
   LockAdapter,
 } from "../adapters/db.js";
+import type { Skill, SkillUpsertInput } from "../skills/types.js";
 
 /**
  * Zero-dependency in-memory adapter used by tests and the default dev
@@ -32,6 +33,39 @@ export class MemoryDb implements DbAdapter {
   private readonly messages = new Map<string, ChatMessage[]>();
   private readonly tabs = new Map<string, CustomTab>();
   private readonly heldLocks = new Map<string, number>();
+  /** Skills, keyed by tenant then id — so tests can prove tenant isolation. */
+  private readonly skills = new Map<string, Map<string, Skill>>();
+
+  private skillsFor(auth: AuthContext): Map<string, Skill> {
+    const key = auth.orgId ?? auth.userId ?? "";
+    let bucket = this.skills.get(key);
+    if (!bucket) {
+      bucket = new Map();
+      this.skills.set(key, bucket);
+    }
+    return bucket;
+  }
+
+  async listSkills(auth: AuthContext): Promise<Skill[]> {
+    return [...this.skillsFor(auth).values()];
+  }
+
+  async putSkill(input: SkillUpsertInput, auth: AuthContext): Promise<Skill> {
+    const skill: Skill = {
+      id: input.id,
+      body: input.body,
+      ...(input.title === undefined ? {} : { title: input.title }),
+      ...(input.description === undefined ? {} : { description: input.description }),
+      ...(input.appliesTo === undefined ? {} : { appliesTo: input.appliesTo }),
+    };
+    this.skillsFor(auth).set(skill.id, skill);
+    return skill;
+  }
+
+  async deleteSkill(id: string, auth: AuthContext): Promise<void> {
+    this.skillsFor(auth).delete(id);
+  }
+
 
   readonly locks: LockAdapter = {
     acquire: async (key, leaseMs) => {

@@ -8,7 +8,7 @@ import {
   stampTicket,
   resolveMode,
 } from "@freebirdai/core";
-import type { ModeInput } from "@freebirdai/core";
+import type { ModeInput, QuestionAnswer } from "@freebirdai/core";
 import type { ActionBlocker, SupportSink, Ticket } from "@freebirdai/core";
 
 /**
@@ -207,6 +207,8 @@ export interface ChatBody {
   lockedCells?: GridCell[];
   actionState?: ActionState;
   activeComponentIds?: string[];
+  /** Answers to questions the assistant asked on an earlier turn. */
+  answers?: QuestionAnswer[];
   supportContext?: {
     subject?: Record<string, unknown>;
     transcriptExcerpt?: string;
@@ -232,6 +234,7 @@ export const handleChat = (
       text: body.text,
       lockedCells: body.lockedCells,
       actionState: body.actionState,
+      answers: body.answers,
       activeComponentIds: body.activeComponentIds,
       supportContext: body.supportContext,
       // Always eligible, unlike the processing-tool catalog, which is exposed

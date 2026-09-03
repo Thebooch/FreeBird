@@ -10,6 +10,7 @@ import type {
   FileTicketBody,
 } from "@freebirdai/core";
 import type { FreeBirdTransport } from "./transport/types.js";
+import type { PendingQuestion, QuestionAnswer } from "@freebirdai/core";
 import {
   applyTransition,
   initialActionState,
@@ -67,6 +68,14 @@ export interface FreeBirdState {
    * start a fresh session instead of staying broken.
    */
   lastChatError: string | null;
+  /**
+   * A question the assistant is waiting on, or null.
+   *
+   * The turn genuinely ended: nothing is streaming and no request is open.
+   * Answering it starts a new turn carrying the answer, which is why this is
+   * state rather than a callback — a reload can re-render the card.
+   */
+  pendingQuestion: PendingQuestion | null;
   /** Customer-service ticket draft / filed state. */
   supportState: SupportState;
 }
@@ -133,6 +142,7 @@ export class FreeBirdStore {
       actionState: initial.actionState ?? initialActionState,
       activeComponentIds: initial.activeComponentIds ?? [],
       lastChatError: null,
+      pendingQuestion: initial.pendingQuestion ?? null,
       lastLlmUsage: initial.lastLlmUsage ?? null,
       supportState: initial.supportState ?? initialSupportState(),
     };
@@ -652,6 +662,8 @@ export class FreeBirdStore {
   async send(
     text: string,
     opts?: {
+      /** Answers to a question asked on an earlier turn. */
+      answers?: QuestionAnswer[];
       supportContext?: {
         subject?: Record<string, unknown>;
         transcriptExcerpt?: string;
@@ -664,6 +676,9 @@ export class FreeBirdStore {
     }
     // Scoped to this turn: a host reading it must not act on a stale failure.
     if (this.state.lastChatError !== null) this.setState({ lastChatError: null });
+    // A new turn supersedes whatever was being asked; the card must not
+    // outlive the question it belongs to.
+    if (this.state.pendingQuestion !== null) this.setState({ pendingQuestion: null });
 
     const trimmed = text.trim();
     const supportPhase = this.state.supportState.phase;
@@ -737,6 +752,7 @@ export class FreeBirdStore {
           lockedCells: this.getLockedCells(),
           actionState: this.state.actionState,
           activeComponentIds: this.state.activeComponentIds,
+          ...(opts?.answers ? { answers: opts.answers } : {}),
           supportContext: opts?.supportContext,
           signal: ac.signal,
         }),
@@ -745,6 +761,28 @@ export class FreeBirdStore {
       this.appendTransportErrorMessage(err);
       throw err;
     }
+  }
+
+  /**
+   * Answer the question the assistant is waiting on.
+   *
+   * Sends the chosen labels as the visible message — what a person would have
+   * typed — while the structured values travel separately as `answers`, so
+   * the model gets the exact option ids rather than having to re-match prose.
+   */
+  async answerQuestion(values: readonly string[]): Promise<void> {
+    const pending = this.state.pendingQuestion;
+    if (!pending) {
+      throw new Error("FreeBirdStore.answerQuestion: nothing is waiting on an answer.");
+    }
+    const labels = values.map(
+      (value) => pending.options.find((option) => option.value === value)?.label ?? value,
+    );
+    await this.send(labels.join(", "), {
+      answers: [
+        { questionId: pending.questionId, question: pending.question, values: [...values] },
+      ],
+    });
   }
 
   async explain(componentId: string): Promise<void> {
@@ -796,6 +834,9 @@ export class FreeBirdStore {
         switch (event.kind) {
           case "user_saved":
             if (event.userMessage) this.addMessage(event.userMessage);
+            break;
+          case "question_asked":
+            if (event.question) this.setState({ pendingQuestion: event.question });
             break;
           case "text_delta":
             if (event.textDelta) {

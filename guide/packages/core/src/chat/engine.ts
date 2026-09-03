@@ -24,6 +24,16 @@ import { resolveReferences } from "./references.js";
 import { resolveProcessingToolsForTurn } from "./processingTools.js";
 import { CITE_MARKER_RE, buildCitationsPrompt, extractCitations } from "./citations.js";
 import { buildKnowledgePrompt } from "./knowledge-context.js";
+import { buildSkillsPrompt } from "./skills-context.js";
+import {
+  ASK_USER_TOOL_NAME,
+  buildAnswersPrompt,
+  buildAskUserTool,
+  parseAskUserArgs,
+  toPendingQuestion,
+} from "../ask/index.js";
+import type { PendingQuestion, QuestionAnswer } from "../ask/types.js";
+import type { SkillProvider } from "../skills/types.js";
 import { buildSupportPrompt } from "../support/prompt.js";
 import { buildReviewPrompt } from "../review/prompt.js";
 import { REVIEW_ITEMS_TOOL_NAME, buildReviewItemsTool } from "../review/tool.js";
@@ -273,6 +283,35 @@ export interface ChatEngineOptions {
       text: string;
     }) => Promise<KnowledgeItem[] | null> | KnowledgeItem[] | null;
   };
+  /**
+   * Instruction packs — the procedures the assistant should follow.
+   *
+   * `provider` is **optional**, and its absence is a supported steady state
+   * rather than a misconfiguration: the harness exists, nothing is plugged
+   * into it, and no block or token is spent. That is what an open-source host
+   * gets until it decides what to feed in.
+   *
+   * The managed build layers its defaults under the tenant's own selections:
+   *
+   * ```ts
+   * skills: { provider: composeSkillProviders(defaults, dbSkillProvider(db)) }
+   * ```
+   *
+   * Resolved once per turn from that turn's `auth`, so one process serving
+   * many tenants cannot leak one tenant's instructions to another.
+   */
+  skills?: {
+    enabled?: boolean;
+    maxChars?: number;
+    provider?: SkillProvider;
+  };
+  /**
+   * Let the model ask one structured question and wait for the answer.
+   *
+   * Off by default: it changes the shape of a turn — the reply can now be a
+   * card instead of prose — and no existing client knows to render one.
+   */
+  askUser?: { enabled?: boolean };
 }
 
 export interface SupportEngineOptions {
@@ -309,6 +348,13 @@ export interface SendMessageInput {
    * error, not a request that gets quietly clamped — see `narrowMode`.
    */
   permissionMode?: PermissionMode;
+  /**
+   * Answers to questions asked on an earlier turn.
+   *
+   * Rendered into the prompt as settled fact rather than replayed as a user
+   * message: the user clicked an option, they did not type it.
+   */
+  answers?: QuestionAnswer[];
   /**
    * Optional host context for support escalation (e.g. a call log row from
    * a review modal). Attached to ticket drafts filed this turn.
@@ -383,7 +429,8 @@ export interface ChatStreamEvent {
     | "issue_classified"
     | "ticket_drafted"
     | "ticket_created"
-    | "ticket_failed";
+    | "ticket_failed"
+    | "question_asked";
   userMessage?: ChatMessage;
   textDelta?: string;
   assistantMessage?: ChatMessage;
@@ -403,6 +450,8 @@ export interface ChatStreamEvent {
   llmUsage?: LlmUsagePayload;
   /** Support / ticket escalation payloads. */
   ticket?: TicketStreamPayload;
+  /** For `question_asked`: what the client should render and answer. */
+  question?: PendingQuestion;
 }
 
 /**
@@ -446,6 +495,10 @@ export class ChatEngine {
   private readonly reviewEnabled: boolean;
   private readonly enablePlanLayout: boolean;
   private readonly citationsEnabled: boolean;
+  private readonly skillsEnabled: boolean;
+  private readonly skillsMaxChars: number;
+  private readonly skillProvider: SkillProvider | undefined;
+  private readonly askUserEnabled: boolean;
   private readonly knowledgeContextEnabled: boolean;
   private readonly knowledgeMaxChars: number;
   private readonly knowledgeRetrieve: NonNullable<
@@ -479,6 +532,12 @@ export class ChatEngine {
     this.reviewEnabled = opts.review?.enabled !== false;
     this.enablePlanLayout = opts.enablePlanLayout !== false;
     this.citationsEnabled = opts.citations?.enabled === true;
+    // Enabled by default *when a provider is given*; no provider means the
+    // whole feature is inert, which is the open-source default.
+    this.skillsEnabled = opts.skills?.enabled !== false;
+    this.skillsMaxChars = opts.skills?.maxChars ?? 6000;
+    this.skillProvider = opts.skills?.provider;
+    this.askUserEnabled = opts.askUser?.enabled === true;
     this.knowledgeContextEnabled = opts.knowledgeContext?.enabled !== false;
     this.knowledgeMaxChars = opts.knowledgeContext?.maxChars ?? 6000;
     this.knowledgeRetrieve = opts.knowledgeContext?.retrieve;
@@ -646,6 +705,38 @@ export class ChatEngine {
           baseMessages.push({ role: "system", content: knowledgePrompt });
         }
       }
+      /*
+       * Skills, after the facts and before the citation rules.
+       *
+       * A throwing provider costs the turn its instructions and nothing else.
+       * Failing the whole reply because a skill lookup went wrong would trade
+       * a degraded answer for no answer, which is never the better trade.
+       */
+      if (this.skillsEnabled && this.skillProvider) {
+        try {
+          const skills = await this.skillProvider({
+            auth,
+            sessionId: input.sessionId,
+            text: input.text,
+            activeComponentIds: input.activeComponentIds ?? [],
+          });
+          const skillsPrompt = buildSkillsPrompt(skills, {
+            maxChars: this.skillsMaxChars,
+            activeComponentIds: input.activeComponentIds ?? [],
+          });
+          if (skillsPrompt) baseMessages.push({ role: "system", content: skillsPrompt });
+        } catch (err) {
+           
+          console.warn("[freebird] skill provider failed; continuing without skills:", err);
+        }
+      }
+
+      // What was already asked and settled, so the model does not ask again.
+      if (input.answers && input.answers.length > 0) {
+        const answersPrompt = buildAnswersPrompt(input.answers);
+        if (answersPrompt) baseMessages.push({ role: "system", content: answersPrompt });
+      }
+
       if (this.citationsEnabled) {
         const citationsPrompt = buildCitationsPrompt(registry);
         if (citationsPrompt) {
@@ -686,6 +777,7 @@ export class ChatEngine {
 
       // 4. Inner step loop
       let assistantText = "";
+      let pendingQuestion: PendingQuestion | undefined;
       let layoutIntent: LayoutIntent | undefined;
       const extraToolResults: Array<{ name: string; args: unknown }> = [];
       const executedExtraTools: Array<{
@@ -720,6 +812,13 @@ export class ChatEngine {
       if (reviewable.length > 0 && this.executeExtraTool) {
         turnExtraTools[REVIEW_ITEMS_TOOL_NAME] = buildReviewItemsTool(reviewable);
       }
+      /*
+       * Not gated on the permission posture. A read-only session may still be
+       * asked which record it meant — asking is not acting, and refusing to
+       * disambiguate would make the restricted mode worse at reading, which
+       * is the one thing it is for.
+       */
+      const askUserTool = this.askUserEnabled ? buildAskUserTool() : null;
 
       for (let step = 0; step < this.maxToolSteps; step += 1) {
         // 4a. Tools + harness system messages for this step.
@@ -738,6 +837,10 @@ export class ChatEngine {
         ) {
           tools.plan_layout = buildPlanLayoutTool(registry);
         }
+        // Only while nothing has been asked yet: one question per turn, or a
+        // model could stack cards the user has to answer in an order nobody
+        // specified.
+        if (askUserTool && !pendingQuestion) tools[ASK_USER_TOOL_NAME] = askUserTool;
         const harness = buildHarnessTurn({
           registry,
           actionState,
@@ -856,6 +959,17 @@ export class ChatEngine {
             } else if (chunk.toolCall.name === "plan_layout") {
               layoutIntent = chunk.toolCall.args as LayoutIntent;
               stepLayoutCalled = true;
+            } else if (chunk.toolCall.name === ASK_USER_TOOL_NAME) {
+              /*
+               * The turn stops here.
+               *
+               * Every other tool feeds something back into the loop; this one
+               * waits on a human, so there is nothing further to say. Looping
+               * would only produce prose restating the question the card is
+               * already showing.
+               */
+              const parsedAsk = parseAskUserArgs(chunk.toolCall.args);
+              if (parsedAsk) pendingQuestion = toPendingQuestion(newId("q"), parsedAsk);
             } else if (turnExtraTools[chunk.toolCall.name] && this.executeExtraTool) {
               stepExtraToolCalls.push(chunk.toolCall);
             } else {
@@ -1092,6 +1206,9 @@ export class ChatEngine {
          * accumulated text carries it forward, so the user reads "I'll look
          * that up" followed by what was found. `maxToolSteps` still bounds it.
          */
+        // A question outranks every reason to loop: the next thing that
+        // happens is a person clicking, not another model call.
+        if (pendingQuestion) break;
         const shouldLoopForExtraTools = ranExtraTools && !stepLayoutCalled;
         const shouldLoop =
           shouldLoopForExtraTools ||
@@ -1291,6 +1408,18 @@ export class ChatEngine {
         clarificationQuestion,
       });
 
+      /*
+       * A question is the turn's visible outcome.
+       *
+       * Falling through to the generic "empty bubble" fallbacks would put a
+       * summary of nothing above a card that already says everything — so the
+       * question text becomes the reply when the model offered no prose of
+       * its own, and the fallbacks never run.
+       */
+      if (pendingQuestion && !finalContent) {
+        finalContent = pendingQuestion.question;
+      }
+
       // Empty bubble: prefer a summary of real tool results, then the
       // host-configured phrase, then the engine's generic phase summary.
       let hostPhraseApplied = false;
@@ -1439,6 +1568,11 @@ export class ChatEngine {
         assistantMessage,
         references,
       };
+      // After the reply is saved, so a client that renders the card beside the
+      // message has the message to attach it to.
+      if (pendingQuestion) {
+        yield { kind: "question_asked", question: pendingQuestion };
+      }
     } catch (err) {
       const errorText = err instanceof Error ? err.message : String(err);
       yield {

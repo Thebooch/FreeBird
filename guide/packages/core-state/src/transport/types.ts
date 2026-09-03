@@ -8,6 +8,7 @@ import type {
   LayoutPlan,
   FileTicketBody,
   Ticket,
+  QuestionAnswer,
 } from "@freebirdai/core";
 import type { ActionState } from "../actions/state.js";
 
@@ -46,6 +47,8 @@ export interface FreeBirdTransport {
     actionState?: ActionState;
     /** Component ids currently visible. Scopes `start_action` candidates. */
     activeComponentIds?: string[];
+    /** Answers to questions asked on an earlier turn. */
+    answers?: QuestionAnswer[];
     supportContext?: {
       subject?: Record<string, unknown>;
       transcriptExcerpt?: string;
