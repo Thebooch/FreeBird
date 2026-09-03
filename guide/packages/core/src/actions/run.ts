@@ -2,6 +2,13 @@ import type { ComponentRegistry } from "../components/registry.js";
 import type { ActionContext, ActionDefinition } from "../types.js";
 import { diffKeys, validateActionArgs } from "./diff.js";
 import { runActionPreflight, type ActionBlocker } from "./preflight.js";
+import {
+  actionGrantDeclaration,
+  actionGrantSubject,
+  type ActionGrantPort,
+} from "./grants.js";
+import { digest, evaluateGrant, type Capability, type GrantVerdict } from "../grants/index.js";
+import { allowsActions, type PermissionMode } from "../permissions/index.js";
 
 /** Where an action execution originated (for audit tagging). */
 export type ActionExecutionSource = "http" | "mcp" | "chat";
@@ -13,6 +20,21 @@ export interface RunActionInput<TAuth = unknown> {
   auth: TAuth;
   sessionId: string;
   recordId: string;
+  /**
+   * Confirmation store. Omit and no grant is required — every existing host
+   * keeps its current behaviour until it opts in by supplying this.
+   */
+  grants?: ActionGrantPort;
+  /**
+   * Posture for this caller, already resolved from its auth.
+   *
+   * Checked here as well as in the chat engine because the MCP execute tool
+   * reaches this function without passing through the engine at all — an
+   * external agent is exactly the caller a read-only posture is for.
+   *
+   * @default "full"
+   */
+  permissionMode?: PermissionMode;
 }
 
 export type RunActionOutcome =
@@ -33,6 +55,17 @@ export type RunActionOutcome =
       kind: "unauthorized";
       reason?: string;
       status: number;
+      args: Record<string, unknown>;
+    }
+  | {
+      /**
+       * Authorized in principle, but no live confirmation covers these exact
+       * arguments. The host should re-present the preview rather than execute.
+       */
+      kind: "grant_required";
+      reason: Exclude<GrantVerdict, "valid">;
+      /** Capabilities the stored confirmation never covered. */
+      added: Capability[];
       args: Record<string, unknown>;
     }
   | {
@@ -95,6 +128,17 @@ export const runAction = async <TAuth>(
     return { kind: "not_found", message: "unknown action" };
   }
 
+  // Before preflight: a read-only session must not run a host `preflight`
+  // hook either, since those read real data to decide readiness.
+  if (!allowsActions(input.permissionMode ?? "full")) {
+    return {
+      kind: "unauthorized",
+      reason: "this session is read-only",
+      status: 403,
+      args: input.args,
+    };
+  }
+
   const ctx: ActionContext<TAuth> = {
     auth: input.auth,
     sessionId: input.sessionId,
@@ -140,6 +184,25 @@ export const runAction = async <TAuth>(
       status: authz.status,
       args: execArgs as Record<string, unknown>,
     };
+  }
+
+  // Consent check, after authorization and before anything reads host state:
+  // an execution nobody confirmed should not even call readCurrent.
+  if (input.grants) {
+    const subject = actionGrantSubject(input.componentId, input.actionId, input.recordId);
+    const evaluation = evaluateGrant({
+      existing: await input.grants.read(subject),
+      digest: digest(execArgs as Record<string, unknown>),
+      declaration: actionGrantDeclaration(input.componentId, input.actionId),
+    });
+    if (evaluation.verdict !== "valid") {
+      return {
+        kind: "grant_required",
+        reason: evaluation.verdict,
+        added: evaluation.added,
+        args: execArgs as Record<string, unknown>,
+      };
+    }
   }
 
   let before: unknown = undefined;

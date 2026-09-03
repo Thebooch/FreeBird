@@ -98,12 +98,25 @@ import {
 import type { CacheStore } from "./cache/store.js";
 import { waitPhrase } from "./cache/cooldown.js";
 import { SpecStore } from "./store.js";
+import {
+  GrantStore,
+  approveWidget,
+  dashboardApprovals,
+  widgetGrantSubject,
+} from "./grants.js";
 import { KeyStore } from "./vault.js";
 
 export interface BuildServerOptions {
   readonly store: SpecStore;
   readonly keys: KeyStore;
   readonly catalog?: CatalogStore;
+  /**
+   * Which saved widgets a person has approved.
+   *
+   * Absent means no approval gate at all, which is what every existing
+   * deployment and test gets until it opts in by supplying a store.
+   */
+  readonly grants?: GrantStore;
   /**
    * Where confirmed narrowings are kept, per connection.
    *
@@ -1827,8 +1840,41 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   app.get<{ Params: { id: string } }>("/api/dashboards/:id", async (request, reply) => {
     const dashboard = store.getDashboard(request.params.id);
     if (!dashboard) return reply.status(404).send({ error: "no such dashboard" });
-    return dashboard;
+    // Approval state rides alongside the spec rather than inside it, so the
+    // board on the wire stays byte-for-byte the board on disk.
+    if (!options.grants) return dashboard;
+    return { ...dashboard, approvals: dashboardApprovals(options.grants, dashboard) };
   });
+
+  /**
+   * Approve one widget exactly as it currently stands.
+   *
+   * Deliberately no request body: approving means "this, as saved", and a
+   * payload would open the door to approving something other than what the
+   * approver was shown.
+   */
+  app.post<{ Params: { id: string; widgetId: string } }>(
+    "/api/dashboards/:id/widgets/:widgetId/approve",
+    async (request, reply) => {
+      const grants = options.grants;
+      if (!grants) return reply.status(404).send({ error: "approvals are not enabled" });
+      const dashboard = store.getDashboard(request.params.id);
+      if (!dashboard) return reply.status(404).send({ error: "no such dashboard" });
+      const widget = dashboard.widgets.find((entry) => entry.id === request.params.widgetId);
+      if (!widget) return reply.status(404).send({ error: "no such widget" });
+      return approveWidget(grants, dashboard.id, widget);
+    },
+  );
+
+  app.delete<{ Params: { id: string; widgetId: string } }>(
+    "/api/dashboards/:id/widgets/:widgetId/approve",
+    async (request, reply) => {
+      const grants = options.grants;
+      if (!grants) return reply.status(404).send({ error: "approvals are not enabled" });
+      grants.revoke(widgetGrantSubject(request.params.id, request.params.widgetId));
+      return { ok: true };
+    },
+  );
 
   /**
    * Create a board from a title alone.
@@ -1901,6 +1947,9 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
 
   app.delete<{ Params: { id: string } }>("/api/dashboards/:id", async (request) => {
     store.deleteDashboard(request.params.id);
+    // A board id can be reused; leaving its grants behind would silently
+    // pre-approve whatever gets created under the same name next.
+    options.grants?.revokeDashboard(request.params.id);
     return { ok: true };
   });
 

@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import type { PresentationSources } from "./presentation.js";
+import type { ApprovalVerdict } from "./useWidgetData.js";
 import { QueryClient } from "./store.js";
 
 export interface DashboardControls {
@@ -55,6 +56,15 @@ export interface DashboardContextValue {
    * entry, means every field wears the label its name implies.
    */
   readonly labels: Readonly<Record<string, FieldLabels>> | undefined;
+  /**
+   * Whether each widget is still covered by the approval it was given, keyed
+   * by widget id, from `GET /api/dashboards/:id`.
+   *
+   * Host-supplied for the same reason the labels are, and absent means the
+   * host runs no approval gate — every widget renders, which is what every
+   * deployment did before approvals existed.
+   */
+  readonly approvals: Readonly<Record<string, ApprovalVerdict>> | undefined;
   setPreset(preset: RangePreset, custom?: { start: number; end: number }): void;
   setGrain(grain: Grain | undefined): void;
   setFilter(key: string, value: string | number | boolean): void;
@@ -72,6 +82,8 @@ export interface DashboardProviderProps {
   readonly presentation?: PresentationSources;
   /** connection id → its field lexicon, from `GET /api/connections`. */
   readonly labels?: Readonly<Record<string, FieldLabels>>;
+  /** widget id → approval verdict, from `GET /api/dashboards/:id`. */
+  readonly approvals?: Readonly<Record<string, ApprovalVerdict>>;
   readonly children: ReactNode;
 }
 
@@ -85,6 +97,7 @@ export const DashboardProvider = ({
   locale,
   presentation,
   labels,
+  approvals,
   children,
 }: DashboardProviderProps): JSX.Element => {
   const [client] = useState(() => new QueryClient(registry));
@@ -159,6 +172,7 @@ export const DashboardProvider = ({
       timeZone: dashboard.params.timeZone,
       presentation,
       labels,
+      approvals,
       setPreset,
       setGrain,
       setFilter,
@@ -174,6 +188,7 @@ export const DashboardProvider = ({
       locale,
       presentation,
       labels,
+      approvals,
       setPreset,
       setGrain,
       setFilter,

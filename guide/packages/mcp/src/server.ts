@@ -46,6 +46,9 @@ export const createFreeBirdMcpServer = <TAuth = unknown>(
     executeReviewItems: options.executeReviewItems,
     defaultReadProps: options.defaultReadProps ?? {},
     confirmationTokens,
+    ...(options.permissionMode === undefined
+      ? {}
+      : { permissionMode: options.permissionMode }),
   };
 
   const mcp = new McpServer(

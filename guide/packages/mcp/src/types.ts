@@ -1,6 +1,7 @@
 import type {
   AuthContext,
   ComponentRegistry,
+  ModeInput,
   ReviewableItem,
 } from "@freebirdai/core";
 import type { McpAccessMode } from "./access.js";
@@ -75,6 +76,14 @@ export interface FreeBirdMcpServerOptions<TAuth = AuthContext> {
    * call (e.g. MCP disabled for this tenant/user).
    */
   getAuthContext: () => TAuth | null | Promise<TAuth | null>;
+  /**
+   * Posture for callers reaching the registry through MCP.
+   *
+   * Orthogonal to {@link mode}: that controls what this server *exposes*,
+   * this controls what the caller behind it may do. A `readonly` posture
+   * refuses execution even for an action the access mode exposes.
+   */
+  permissionMode?: ModeInput;
   /**
    * Session id scoped to the MCP client connection. Used for action audit
    * trails and confirmation tokens.

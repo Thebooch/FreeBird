@@ -3,7 +3,10 @@ import {
   newId,
   prepareActionArgs,
   runAction,
+  resolveMode,
+  type AuthContext,
   type ComponentRegistry,
+  type ModeInput,
 } from "@freebirdai/core";
 import {
   actionRequiresMcpConfirmation,
@@ -44,6 +47,12 @@ export interface McpRuntimeContext<TAuth> {
   executeReviewItems?: FreeBirdMcpServerOptions<TAuth>["executeReviewItems"];
   defaultReadProps: Record<string, unknown>;
   confirmationTokens: ConfirmationTokenStore;
+  /**
+   * Posture for MCP callers, fixed or resolved from the auth this connection
+   * carries. Distinct from {@link McpAccessMode}, which says what this server
+   * *exposes*; this says what the caller behind it is allowed to do.
+   */
+  permissionMode?: ModeInput;
 }
 
 const jsonResult = (payload: unknown) => ({
@@ -361,6 +370,7 @@ export const handleExecuteAction = async <TAuth>(
     auth: authResult.auth,
     sessionId: ctx.sessionId,
     recordId,
+    permissionMode: await resolveMode(ctx.permissionMode, authResult.auth as AuthContext),
   });
 
   const at = new Date();
@@ -418,6 +428,32 @@ export const handleExecuteAction = async <TAuth>(
         ok: false,
         error: outcome.reason ?? "not authorized",
       });
+    case "grant_required": {
+      // Permitted, but not covered by a live confirmation. This path never
+      // reaches the chat engine, so the check has to be repeated here — an
+      // external agent calling the tool directly is exactly the caller a
+      // confirmation is meant to bind.
+      const reason =
+        outcome.reason === "widened"
+          ? `this needs approval for ${outcome.added.join(", ")}`
+          : "the details changed since this was confirmed — prepare and confirm it again";
+      await emitEvent(
+        ctx,
+        {
+          kind: "action.unauthorized",
+          sessionId: ctx.sessionId,
+          recordId,
+          componentId: input.componentId,
+          actionId: input.actionId,
+          args: outcome.args,
+          reason,
+          source: "mcp",
+          at,
+        },
+        authResult.auth,
+      );
+      return jsonResult({ ok: false, error: reason });
+    }
     case "failed":
       await emitEvent(
         ctx,

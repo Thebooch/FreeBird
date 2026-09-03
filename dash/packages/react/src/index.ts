@@ -29,7 +29,7 @@ export type { QueryEntry, QueryParams, QueryStatus } from "./store.js";
 
 export { DASH_REACT_STYLES } from "./styles.js";
 export { labelColumns, useWidgetData } from "./useWidgetData.js";
-export type { WidgetData, WidgetState } from "./useWidgetData.js";
+export type { ApprovalVerdict, WidgetData, WidgetState } from "./useWidgetData.js";
 export { WidgetDetail } from "./WidgetDetail.js";
 export { RecordView } from "./RecordView.jsx";
 export { RecordPage, missingTokens } from "./RecordPage.jsx";

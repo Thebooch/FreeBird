@@ -3,6 +3,7 @@ import { looseObjectSchema } from "../schema/looseObject.js";
 import type { ComponentRegistry } from "../components/registry.js";
 import type { LlmMessage, LlmTool } from "../adapters/llm.js";
 import type { ActionRecord, ActionState } from "./types.js";
+import { allowsActions, type PermissionMode } from "../permissions/index.js";
 
 /**
  * Output of {@link buildHarnessTurn}: a per-turn slice of LLM-facing
@@ -73,6 +74,16 @@ export interface BuildHarnessTurnInput {
   activeComponentIds?: string[];
   /** @default "per_action" */
   argsMode?: HarnessArgsMode;
+  /**
+   * Posture for this turn. Already resolved by the caller from its auth.
+   *
+   * Under `readonly` no action tool is emitted at all: a model that cannot
+   * see a schema cannot propose calling it, which is a cheaper and more
+   * honest gate than letting it try and refusing afterwards.
+   *
+   * @default "full"
+   */
+  permissionMode?: PermissionMode;
 }
 
 /**
@@ -103,6 +114,17 @@ export const buildHarnessTurn = (
   const { registry, actionState, activeComponentIds } = input;
   const argsMode: HarnessArgsMode = input.argsMode ?? "per_action";
   const phase = actionState.phase;
+  const mode: PermissionMode = input.permissionMode ?? "full";
+
+  /*
+   * Read-only sessions get no action surface whatsoever — not the start
+   * tools, not the ones that steer an action already under way. Returning
+   * early rather than filtering at the end keeps that a single statement
+   * instead of a condition repeated in every phase branch.
+   */
+  if (!allowsActions(mode)) {
+    return { tools: {}, systemMessages: [], phase, activeActionIds: [] };
+  }
 
   const candidateActions = registry
     .listActions(

@@ -40,6 +40,26 @@ The docs site lives in `docs/` (Docusaurus): `pnpm --filter freebird-docs start`
 - Adapters must implement the interfaces in `guide/packages/core/src/adapters/`.
 - Every publishable package change needs a changeset: `pnpm changeset`.
 
+## Schema changes ship their migration
+
+**A change that makes existing user files invalid must land its migration in the same PR.**
+
+`manifestSchema.version` and every Dash `specVersion` are written into files that live on other people's disks — manifests, dashboards, connections, catalog overlays. Bumping one of those without a migration means every existing install breaks on upgrade with nothing to run but a hand edit.
+
+When you bump a schema version:
+
+1. Add a `Migration` rung to the matching ladder in [`guide/packages/codegen/src/doctor.ts`](./guide/packages/codegen/src/doctor.ts) (`MANIFEST_MIGRATIONS` or `DASH_SPEC_MIGRATIONS`).
+2. Rungs must be **adjacent** — `from: 2, to: 3`, never `from: 1, to: 3`. The walk climbs one at a time so every intermediate version is reachable.
+3. `describe()` returns one line saying what changes; it is what `freebird doctor` prints before writing anything.
+
+This is enforced, not merely asked for: `assertLadderComplete` runs over every shipped document kind in `doctor.test.ts`, so a version bump with no rung fails the build.
+
+Users repair with:
+
+```bash
+freebird doctor --fix
+```
+
 ## Adding an adapter
 
 1. Create `guide/packages/adapters-<kind>-<name>` and implement the relevant interface from `@freebirdai/core`.

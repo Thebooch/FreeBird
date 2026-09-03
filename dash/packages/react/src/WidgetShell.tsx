@@ -364,6 +364,24 @@ const WidgetBody = ({
         />
       );
 
+    case "unapproved":
+      /*
+       * Not an error: nothing is broken and nothing was fetched. The two
+       * reasons are worth telling apart — never approved is a setup step,
+       * while changed-since-approved means someone should look at what moved
+       * before it goes back on the board.
+       */
+      return (
+        <EmptyState
+          glyph="⏸"
+          title={
+            data.approval === "absent"
+              ? "This widget is waiting for approval."
+              : "This widget changed since it was approved."
+          }
+        />
+      );
+
     case "ok": {
       const registered = getComponent(data.widget.component);
       // An open component id can name something this build does not ship.

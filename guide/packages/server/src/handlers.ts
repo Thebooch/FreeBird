@@ -6,7 +6,9 @@ import {
   runAuthorize,
   fileTicketBodySchema,
   stampTicket,
+  resolveMode,
 } from "@freebirdai/core";
+import type { ModeInput } from "@freebirdai/core";
 import type { ActionBlocker, SupportSink, Ticket } from "@freebirdai/core";
 
 /**
@@ -110,6 +112,15 @@ export interface HandlerDeps {
   db: DbAdapter;
   registry: ComponentRegistry<any, any>;
   knowledge: KnowledgeGraph;
+  /**
+   * Posture for this deployment, fixed or resolved per caller.
+   *
+   * Configured here as well as on the engine because the confirm handler
+   * executes actions directly: the engine decides what may be *proposed*,
+   * this decides what may be *run*, and a host that set only one of them
+   * would have a gate with a hole in it.
+   */
+  permissionMode?: ModeInput;
   /**
    * Read-only tools the model may call on any turn, whose results are fed
    * back to it before it answers.
@@ -405,6 +416,7 @@ export const handleConfirmAction = async (
     auth: req.auth,
     sessionId: body.sessionId,
     recordId: body.recordId,
+    permissionMode: await resolveMode(deps.permissionMode, req.auth),
   });
 
   switch (outcome.kind) {
@@ -509,6 +521,42 @@ export const handleConfirmAction = async (
         status: outcome.status,
         body: { ok: false, recordId: body.recordId, error: outcome.reason ?? "not authorized" },
       };
+    case "grant_required": {
+      /*
+       * The action is permitted; this particular run is not covered by a live
+       * confirmation. Reported as `action.unauthorized` because that is what
+       * the audit journal already means by "refused before the handler ran" —
+       * a separate event kind would say nothing extra and would fan out
+       * through every consumer of the union.
+       *
+       * 409 rather than 403: nothing about the caller is wrong, the arguments
+       * simply moved away from the ones that were approved.
+       */
+      const reason =
+        outcome.reason === "widened"
+          ? `this needs approval for ${outcome.added.join(", ")}`
+          : "the details changed since this was confirmed — please review it again";
+      await emitActionEvent(
+        deps,
+        {
+          kind: "action.unauthorized",
+          sessionId: body.sessionId,
+          recordId: body.recordId,
+          componentId: body.componentId,
+          actionId: body.actionId,
+          args: outcome.args,
+          reason,
+          source: "http",
+          at: new Date(),
+        },
+        req.auth,
+      );
+      return {
+        kind: "json",
+        status: 409,
+        body: { ok: false, recordId: body.recordId, error: reason },
+      };
+    }
     case "failed":
       await persistActionAudit(deps, req.auth, {
         sessionId: body.sessionId,

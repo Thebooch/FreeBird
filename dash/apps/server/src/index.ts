@@ -13,6 +13,7 @@ import { buildServer } from "./server.js";
 import { NarrowingStore } from "./narrowings.js";
 import { SettingsStore } from "./settings.js";
 import { SpecStore } from "./store.js";
+import { GrantStore } from "./grants.js";
 import { KeyStore, LocalAesVault } from "./vault.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -32,6 +33,10 @@ const store = new SpecStore(
 );
 const vault = LocalAesVault.fromEnvOrDevFile(join(stateDir, "master-key"));
 const keys = new KeyStore(vault, join(stateDir, "vault.json"));
+
+// Which saved widgets a person has approved, bound to the digest of what they
+// approved. Beside the vault: it is instance state, not a shareable artifact.
+const grants = new GrantStore(join(stateDir, "grants.json"));
 
 // The repo seed lives at the workspace root; the overlay is per-instance.
 const repoRoot = resolve(here, "..", "..", "..");
@@ -137,6 +142,7 @@ const app = buildServer({
   store,
   keys,
   catalog,
+  grants,
   settings,
   narrowings,
   parts,

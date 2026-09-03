@@ -6,6 +6,7 @@ import {
   identFor,
   diffIds,
   canonicalIds,
+  runDoctor,
   type Framework,
 } from "@freebirdai/codegen";
 import { parseManifest, type RegistrationManifest } from "@freebirdai/manifest";
@@ -163,14 +164,49 @@ const runCheck = (cwd: string, flags: Args["flags"]): number => {
   return 1;
 };
 
+/**
+ * Repair configuration a schema change left behind.
+ *
+ * Reports by default and writes only with `--fix`, so the safe invocation is
+ * also the short one. Every write is preceded by a backup naming the version
+ * it holds.
+ */
+const runDoctorCommand = (cwd: string, flags: Args["flags"]): number => {
+  // Reporting is already the default, so `--dry-run` is only ever a no-op —
+  // but it is the obvious thing to reach for, and a flag that is silently
+  // ignored is worse than one that is redundant. It wins over `--fix`.
+  const fix = flags["fix"] === true && flags["dry-run"] !== true;
+  const result = runDoctor({ cwd, fix });
+
+  for (const diagnosis of result.diagnoses) {
+    if (diagnosis.status === "current") continue;
+    console.error(diagnosis.path);
+    console.error(`  ${diagnosis.message}`);
+    for (const step of diagnosis.steps) console.error(`    ${step}`);
+  }
+  for (const message of result.messages) console.log(message);
+
+  if (result.ok) return 0;
+  // Only when there is actually something `--fix` could do. A future-version
+  // or malformed file is not repairable, and telling someone to run a command
+  // that will not help them is worse than saying nothing.
+  if (!fix && result.diagnoses.some((d) => d.status === "migratable")) {
+    console.error("\nRun `freebird doctor --fix` to apply these.");
+  }
+  return 1;
+};
+
 const HELP = `freebird — scaffold and maintain a FreeBird integration
 
 Usage:
-  freebird init  [--framework next|react|vue|static] [--manifest <path>] [--out <dir>] [--dry-run] [--scaffold]
-  freebird check [--manifest <path>] [--out <dir>]
+  freebird init   [--framework next|react|vue|static] [--manifest <path>] [--out <dir>] [--dry-run] [--scaffold]
+  freebird check  [--manifest <path>] [--out <dir>]
+  freebird doctor [--fix] [--dry-run]
 
-init   Generate the FreeBird registry files + wiring steps from your manifest.
-check  Verify the generated registries have not drifted from the manifest ids.
+init    Generate the FreeBird registry files + wiring steps from your manifest.
+check   Verify the generated registries have not drifted from the manifest ids.
+doctor  Report configuration a schema change left behind. --fix repairs it,
+        backing up each file first.
 `;
 
 const fail = (msg: string): never => {
@@ -187,6 +223,9 @@ const main = (): void => {
       break;
     case "check":
       process.exit(runCheck(cwd, flags));
+      break;
+    case "doctor":
+      process.exit(runDoctorCommand(cwd, flags));
       break;
     case undefined:
     case "help":

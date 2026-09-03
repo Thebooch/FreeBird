@@ -80,11 +80,23 @@ const stampOf = (client: QueryClient, keys: readonly string[]): string =>
     })
     .join("|");
 
-export type WidgetState = "loading" | "ok" | "empty" | "error" | "invalid";
+export type WidgetState = "loading" | "ok" | "empty" | "error" | "invalid" | "unapproved";
+
+/**
+ * Whether a saved binding is still covered by the approval it was given.
+ *
+ * Mirrors `GrantVerdict` in `@freebirdai/core` rather than importing it: this
+ * package renders dashboards and has no Guide dependency, and gaining one for
+ * a four-member string union would be the wrong trade. The host resolves the
+ * verdict server-side and passes it in, the same way it passes labels.
+ */
+export type ApprovalVerdict = "valid" | "digest-changed" | "widened" | "absent";
 
 export interface WidgetData {
   readonly widget: WidgetSpec;
   readonly state: WidgetState;
+  /** Why the widget is or is not allowed to run. "valid" when ungated. */
+  readonly approval: ApprovalVerdict;
   /** Data older than the widget's `staleAfter`. Shown, but badged. */
   readonly stale: boolean;
   readonly rows: readonly Row[];
@@ -115,7 +127,18 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
    */
   const staleAfterMs = parseDuration(widget.refresh.staleAfter) ?? 900_000;
 
-  const { client, params: baseParams, now, timeZone, labels } = useDashboard();
+  const { client, params: baseParams, now, timeZone, labels, approvals } = useDashboard();
+
+  /**
+   * Whether this binding may run at all.
+   *
+   * Absent approvals means the host runs no gate, so everything is allowed —
+   * the state before this existed. The check gates the fetch rather than only
+   * the render: an unapproved widget must not reach the API in the first
+   * place, or the approval would be a label rather than a control.
+   */
+  const approval = approvals?.[widget.id] ?? "valid";
+  const approved = approval === "valid";
 
   /**
    * A drill-down runs the same machinery with one extra scope: the row it was
@@ -166,6 +189,7 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
   );
 
   useEffect(() => {
+    if (!approved) return;
     for (const request of direct) {
       void client.ensure({
         key: request.key,
@@ -179,7 +203,7 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
     }
     // `now` is deliberately excluded: the ticking clock must not re-fetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, direct, params, staleAfterMs]);
+  }, [client, direct, params, staleAfterMs, approved]);
 
   const plan = useMemo(
     () => (widget.sources.length > 0 ? compilePlan(widget) : null),
@@ -350,7 +374,10 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
   const stale = lastFetchedAt > 0 && now - lastFetchedAt > staleAfterMs;
 
   let state: WidgetState = "loading";
-  if (anyError) state = "error";
+  // Ahead of everything else: nothing was fetched, so "loading" would be a
+  // spinner that never resolves.
+  if (!approved) state = "unapproved";
+  else if (anyError) state = "error";
   else if (executed) {
     if (executed.errors.length > 0) state = "invalid";
     else if (executed.rows.length === 0) state = "empty";
@@ -366,6 +393,7 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
   return {
     widget,
     state,
+    approval,
     stale,
     rows: executed?.rows ?? [],
     /*

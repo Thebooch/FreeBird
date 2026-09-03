@@ -88,6 +88,48 @@ export { DigestEngine, createDigestEngine, type DigestEngineOptions, type Digest
 export { parseCron, nextCronRun } from "./digest/cron.js";
 
 // ---------------------------------------------------------------------------
+// Permission modes (per-tenant posture; orthogonal to requiresConfirmation)
+// ---------------------------------------------------------------------------
+export {
+  DEFAULT_MODE,
+  allowsActions,
+  clampConfirmation,
+  isAtLeastAsRestrictive,
+  isPermissionMode,
+  narrowMode,
+  resolveMode,
+  restrictiveness,
+  type ModeInput,
+  type ModeResolver,
+  type NarrowResult,
+  type PermissionMode,
+} from "./permissions/index.js";
+
+// ---------------------------------------------------------------------------
+// Grants (content-digest-bound approvals; shared by Guide and Dash)
+// ---------------------------------------------------------------------------
+export {
+  canonicalize,
+  digest,
+  sha256Hex,
+  normalizeDeclaration,
+  actionCapability,
+  connectionCapability,
+  opCapability,
+  widens,
+  addedCapabilities,
+  createGrant,
+  evaluateGrant,
+  isGranted,
+  type Capability,
+  type Declaration,
+  type EvaluateGrantInput,
+  type Grant,
+  type GrantEvaluation,
+  type GrantVerdict,
+} from "./grants/index.js";
+
+// ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------
 export * from "./actions/types.js";
@@ -102,6 +144,12 @@ export {
   validateActionArgs,
   type ValidateArgsResult,
 } from "./actions/diff.js";
+export {
+  actionGrantDeclaration,
+  actionGrantSubject,
+  grantForActionArgs,
+  type ActionGrantPort,
+} from "./actions/grants.js";
 export {
   deriveActionPreview,
   type ActionPreviewContent,

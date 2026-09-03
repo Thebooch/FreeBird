@@ -4,6 +4,14 @@ import type { ComponentRegistry } from "../components/registry.js";
 import type { KnowledgeGraph } from "../knowledge/graph.js";
 import { runActionPreflight } from "../actions/preflight.js";
 import {
+  allowsActions,
+  clampConfirmation,
+  narrowMode,
+  resolveMode,
+  type ModeInput,
+  type PermissionMode,
+} from "../permissions/index.js";
+import {
   buildHarnessTurn,
   resolvePerActionStartToolName,
   type HarnessArgsMode,
@@ -83,6 +91,12 @@ export interface ChatEngineOptions {
   llm: LlmAdapter;
   registry: ComponentRegistry<any, any>;
   knowledge: KnowledgeGraph;
+  /**
+   * How much latitude the agent has, as a fixed posture or resolved per
+   * caller from the turn's auth. Absent means `"full"`, which is exactly
+   * what every deployment did before this option existed.
+   */
+  permissionMode?: ModeInput;
   /** Global system prompt prepended to every chat. */
   systemPrompt?: string;
   /** Max prior messages to include in an LLM call. */
@@ -288,6 +302,13 @@ export interface SendMessageInput {
   activeComponentIds?: string[];
   /** Overrides the LLM adapter default model for this turn. */
   model?: string;
+  /**
+   * A tighter posture for this session than the deployment's.
+   *
+   * May only narrow. Asking for more latitude than the tenant allows is an
+   * error, not a request that gets quietly clamped — see `narrowMode`.
+   */
+  permissionMode?: PermissionMode;
   /**
    * Optional host context for support escalation (e.g. a call log row from
    * a review modal). Attached to ticket drafts filed this turn.
@@ -563,6 +584,24 @@ export class ChatEngine {
     yield { kind: "user_saved", userMessage };
 
     try {
+      /*
+       * Posture for this turn, resolved once from the caller's auth.
+       *
+       * Inside the try so a throwing resolver becomes a visible error rather
+       * than an empty 200 — and resolved once rather than per tool call, so
+       * one turn cannot straddle two postures.
+       */
+      const tenantMode: PermissionMode = await resolveMode(
+        this.opts.permissionMode,
+        auth,
+      );
+      const narrowed = narrowMode(tenantMode, input.permissionMode);
+      if (!narrowed.ok) {
+        yield { kind: "error", error: narrowed.reason };
+        return;
+      }
+      const permissionMode = narrowed.mode;
+
       // 2. Cross-chat references
       const { references, contextMessages } = await resolveReferences(db, knowledge, auth, {
         text: input.text,
@@ -704,6 +743,7 @@ export class ChatEngine {
           actionState,
           activeComponentIds: input.activeComponentIds,
           argsMode: this.harnessArgsMode,
+          permissionMode,
         });
         Object.assign(tools, harness.tools);
         if (this.supportEnabled && actionState.phase === "idle") {
@@ -790,6 +830,7 @@ export class ChatEngine {
             const handled = handleActionToolCall(chunk.toolCall, registry, actionState, {
               deriveActionReadiness: this.deriveActionReadiness,
               sanitizeActionArgs: this.sanitizeActionArgs,
+              permissionMode,
             });
             if (handled) {
               stepActionEvents.push(handled);
@@ -2174,6 +2215,8 @@ const resolvePhaseFromPending = (
 interface HandleActionToolContext {
   deriveActionReadiness?: ChatEngineOptions["deriveActionReadiness"];
   sanitizeActionArgs?: ChatEngineOptions["sanitizeActionArgs"];
+  /** Resolved for this turn. Absent means `"full"`. */
+  permissionMode?: PermissionMode;
 }
 
 /**
@@ -2199,7 +2242,12 @@ const buildStartedActionPayload = (
 ): ChatStreamEvent | null => {
   const def = registry.getAction(componentId, actionId);
   if (!def) return null;
-  const requiresConfirmation = def.requiresConfirmation ?? "preview";
+  const mode = ctx.permissionMode ?? "full";
+  // Belt and braces behind the harness, which under `readonly` never offered
+  // the tool that gets here. A model that hallucinates the tool name anyway
+  // must not be able to open an action.
+  if (!allowsActions(mode)) return null;
+  const requiresConfirmation = clampConfirmation(mode, def.requiresConfirmation ?? "preview");
   const mergedInitial = { ...initial };
   const args = ctx.sanitizeActionArgs?.(componentId, actionId, mergedInitial) ?? mergedInitial;
   const missing = computePendingMissing(registry, componentId, actionId, args, {
