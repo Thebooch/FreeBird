@@ -10,7 +10,13 @@ import type {
   FileTicketBody,
 } from "@freebirdai/core";
 import type { FreeBirdTransport } from "./transport/types.js";
-import type { PendingQuestion, QuestionAnswer } from "@freebirdai/core";
+import type { PendingQuestion, QuestionAnswer, StateNotice } from "@freebirdai/core";
+import {
+  appendNotice,
+  emptyNoticeBuffer,
+  flushNotices,
+  type NoticeBuffer,
+} from "./notices/state.js";
 import {
   applyTransition,
   initialActionState,
@@ -121,6 +127,8 @@ export class FreeBirdStore {
   private actionListeners = new Set<ActionEventListener>();
   private supportListeners = new Set<SupportEventListener>();
   private abortController: AbortController | null = null;
+  /** Tier-1 notices waiting for a turn to ride along with. */
+  private notices: NoticeBuffer = emptyNoticeBuffer();
   private readonly journalCap: number;
   private autoConfirmInFlight = false;
 
@@ -744,6 +752,16 @@ export class FreeBirdStore {
     this.abortController?.abort();
     const ac = new AbortController();
     this.abortController = ac;
+
+    /*
+     * Read the buffer now, clear it only once the turn is accepted.
+     *
+     * A send that throws must leave the notices where they were — the model
+     * never saw them, so dropping them would silently lose the fact that the
+     * user changed anything at all. Clearing after the stream completes is
+     * what makes a failed turn cost nothing.
+     */
+    const notices = flushNotices(this.notices);
     try {
       await this.runStream(
         this.transport.streamMessage({
@@ -753,14 +771,42 @@ export class FreeBirdStore {
           actionState: this.state.actionState,
           activeComponentIds: this.state.activeComponentIds,
           ...(opts?.answers ? { answers: opts.answers } : {}),
+          ...(notices.length > 0 ? { notices } : {}),
           supportContext: opts?.supportContext,
           signal: ac.signal,
         }),
       );
+      this.notices = emptyNoticeBuffer();
     } catch (err) {
       this.appendTransportErrorMessage(err);
       throw err;
     }
+  }
+
+  /**
+   * Tell the model something happened, without starting a turn.
+   *
+   * Tier 1 of three: this one is silent, `send` is the user speaking, and an
+   * action is the user acting. "The date filter moved to Q3" belongs here —
+   * the assistant should know it before its next reply and should absolutely
+   * not respond to it now.
+   *
+   * Deliberately synchronous and side-effect free: it touches no transport,
+   * starts no request, and cannot fail. A host wiring it to an onChange
+   * handler should never have to think about what it costs.
+   */
+  emitState(kind: string, summary: string, detail?: Record<string, unknown>): void {
+    this.notices = appendNotice(this.notices, {
+      kind,
+      summary,
+      ...(detail === undefined ? {} : { detail }),
+      at: Date.now(),
+    });
+  }
+
+  /** What would ride along with the next turn. Exposed for tests and HUDs. */
+  pendingNotices(): readonly StateNotice[] {
+    return this.notices.notices;
   }
 
   /**

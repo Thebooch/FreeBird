@@ -9,6 +9,7 @@ import type {
   FileTicketBody,
   Ticket,
   QuestionAnswer,
+  StateNotice,
 } from "@freebirdai/core";
 import type { ActionState } from "../actions/state.js";
 
@@ -49,6 +50,8 @@ export interface FreeBirdTransport {
     activeComponentIds?: string[];
     /** Answers to questions asked on an earlier turn. */
     answers?: QuestionAnswer[];
+    /** Tier-1 notices accumulated since the last reply. */
+    notices?: StateNotice[];
     supportContext?: {
       subject?: Record<string, unknown>;
       transcriptExcerpt?: string;

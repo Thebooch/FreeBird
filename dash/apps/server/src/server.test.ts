@@ -344,8 +344,9 @@ describe("connection routes", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.ok).toBe(true);
-    // Which endpoint was refused is useful, and is a note rather than a failure.
-    expect(body.forbidden).toBe("items");
+    // Which endpoints were refused is useful, and is a note rather than a
+    // failure. Plural since validation walks a candidate list.
+    expect(body.forbidden).toEqual(["items"]);
     expect(body.message).toMatch(/key works/);
   });
 });

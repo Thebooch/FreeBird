@@ -33,6 +33,14 @@ import {
   toPendingQuestion,
 } from "../ask/index.js";
 import type { PendingQuestion, QuestionAnswer } from "../ask/types.js";
+import { buildNoticesPrompt } from "./notices-context.js";
+import {
+  TOOL_DESCRIBE_NAME,
+  TOOL_SEARCH_NAME,
+  describeActionSchema,
+  searchActions,
+} from "../actions/tool-search.js";
+import type { StateNotice } from "../notices/types.js";
 import type { SkillProvider } from "../skills/types.js";
 import { buildSupportPrompt } from "../support/prompt.js";
 import { buildReviewPrompt } from "../review/prompt.js";
@@ -355,6 +363,13 @@ export interface SendMessageInput {
    * message: the user clicked an option, they did not type it.
    */
   answers?: QuestionAnswer[];
+  /**
+   * Things the user did without saying anything, since the last reply.
+   *
+   * Context for this message, never a request in their own right — see
+   * `buildNoticesPrompt`.
+   */
+  notices?: StateNotice[];
   /**
    * Optional host context for support escalation (e.g. a call log row from
    * a review modal). Attached to ticket drafts filed this turn.
@@ -731,6 +746,12 @@ export class ChatEngine {
         }
       }
 
+      // Background first: what changed, then what was settled, then the rules.
+      if (input.notices && input.notices.length > 0) {
+        const noticesPrompt = buildNoticesPrompt(input.notices);
+        if (noticesPrompt) baseMessages.push({ role: "system", content: noticesPrompt });
+      }
+
       // What was already asked and settled, so the model does not ask again.
       if (input.answers && input.answers.length > 0) {
         const answersPrompt = buildAnswersPrompt(input.answers);
@@ -892,6 +913,9 @@ export class ChatEngine {
           args: unknown;
         }> = [];
         let stepLayoutCalled = false;
+        // Searching or describing is never the end of a turn: the model asked
+        // a question of the registry and needs another step to act on it.
+        let ranSearchTool = false;
 
         for await (const chunk of llm.stream({
           messages,
@@ -959,6 +983,44 @@ export class ChatEngine {
             } else if (chunk.toolCall.name === "plan_layout") {
               layoutIntent = chunk.toolCall.args as LayoutIntent;
               stepLayoutCalled = true;
+            } else if (
+              chunk.toolCall.name === TOOL_SEARCH_NAME ||
+              chunk.toolCall.name === TOOL_DESCRIBE_NAME
+            ) {
+              /*
+               * Resolved here rather than through `executeExtraTool`: both
+               * answer from the registry the engine already holds, so routing
+               * them out to the host would make a lookup the host cannot do
+               * any better into something it is obliged to implement.
+               */
+              const args = (chunk.toolCall.args ?? {}) as Record<string, unknown>;
+              const result =
+                chunk.toolCall.name === TOOL_SEARCH_NAME
+                  ? {
+                      actions: searchActions(
+                        registry.listActions(
+                          input.activeComponentIds && input.activeComponentIds.length > 0
+                            ? { componentIds: input.activeComponentIds }
+                            : undefined,
+                        ).map((entry) => ({
+                          ref: `${entry.componentId}:${entry.action.id}`,
+                          componentId: entry.componentId,
+                          actionId: entry.action.id,
+                          description: entry.action.description,
+                        })),
+                        typeof args.query === "string" ? args.query : "",
+                      ),
+                    }
+                  : (describeActionSchema(registry, args.action) ?? {
+                      error: "no such action",
+                    });
+              executedExtraTools.push({
+                name: chunk.toolCall.name,
+                args: chunk.toolCall.args,
+                result,
+              });
+              extraToolResults.push({ name: chunk.toolCall.name, args: chunk.toolCall.args });
+              ranSearchTool = true;
             } else if (chunk.toolCall.name === ASK_USER_TOOL_NAME) {
               /*
                * The turn stops here.
@@ -1209,7 +1271,7 @@ export class ChatEngine {
         // A question outranks every reason to loop: the next thing that
         // happens is a person clicking, not another model call.
         if (pendingQuestion) break;
-        const shouldLoopForExtraTools = ranExtraTools && !stepLayoutCalled;
+        const shouldLoopForExtraTools = (ranExtraTools || ranSearchTool) && !stepLayoutCalled;
         const shouldLoop =
           shouldLoopForExtraTools ||
           (stepText.trim().length === 0 && madeProgress && !stepLayoutCalled && phaseIsLoopable);

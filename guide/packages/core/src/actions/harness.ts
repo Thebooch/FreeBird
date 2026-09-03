@@ -4,6 +4,13 @@ import type { ComponentRegistry } from "../components/registry.js";
 import type { LlmMessage, LlmTool } from "../adapters/llm.js";
 import type { ActionRecord, ActionState } from "./types.js";
 import { allowsActions, type PermissionMode } from "../permissions/index.js";
+import {
+  DEFAULT_TOOL_BUDGET_BYTES,
+  buildDeferredStartActionTool,
+  buildToolDescribeTool,
+  buildToolSearchTool,
+  serializedToolBytes,
+} from "./tool-search.js";
 
 /**
  * Output of {@link buildHarnessTurn}: a per-turn slice of LLM-facing
@@ -84,6 +91,13 @@ export interface BuildHarnessTurnInput {
    * @default "full"
    */
   permissionMode?: PermissionMode;
+  /**
+   * Byte budget for this turn's action tools before they are deferred behind
+   * `tool_search`. Set to `Infinity` to keep every schema inline.
+   *
+   * @default 24576
+   */
+  toolBudgetBytes?: number;
 }
 
 /**
@@ -147,6 +161,26 @@ export const buildHarnessTurn = (
   if (phase === "idle" || phase === "error") {
     if (candidateActions.length > 0) {
       mergeStartActionTools(tools, systemMessages, candidateActions, registry, argsMode);
+      /*
+       * Too much to send? Swap the whole set for a search pair.
+       *
+       * Built first and measured after, rather than predicted, because the
+       * cost is whatever the schemas actually serialize to and only building
+       * them tells you that. The tools are thrown away when over budget,
+       * which is cheap; guessing wrong is not.
+       */
+      const budget = input.toolBudgetBytes ?? DEFAULT_TOOL_BUDGET_BYTES;
+      if (serializedToolBytes(tools) > budget) {
+        for (const name of Object.keys(tools)) delete tools[name];
+        systemMessages.length = 0;
+        for (const tool of [
+          buildToolSearchTool(candidateActions.length),
+          buildToolDescribeTool(),
+          buildDeferredStartActionTool(),
+        ]) {
+          tools[tool.name] = tool;
+        }
+      }
     }
     if (pausedRecords.length > 0) {
       tools.resume_action = buildResumeActionTool(pausedRecords);

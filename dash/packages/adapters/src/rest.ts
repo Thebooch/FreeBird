@@ -1,4 +1,11 @@
-import { evalPath, parsePath } from "@freebirdai/dash-expr";
+import {
+  mergePages,
+  nextPageParams,
+  readPath,
+  rowsAt,
+  truthy,
+  withRows,
+} from "./paginate.js";
 import type { ConnectionSpec, OpSpec, PaginationSpec } from "@freebirdai/dash-spec";
 import { allowedHost, authKeyRefs, interpolate, missingInputs } from "@freebirdai/dash-spec";
 import {
@@ -45,56 +52,6 @@ const parseJson = (text: string, url: string): unknown => {
       userMessage:
         "That endpoint returned something other than JSON. It may be an error page, or the wrong URL.",
     });
-  }
-};
-
-const rowsAt = (body: unknown, rowsPath: string | undefined): unknown[] | null => {
-  if (!rowsPath) return Array.isArray(body) ? body : null;
-  try {
-    const matches = evalPath(parsePath(rowsPath), body);
-    if (matches.length === 1 && Array.isArray(matches[0])) return matches[0];
-    return matches.length > 0 ? matches : null;
-  } catch {
-    return null;
-  }
-};
-
-/**
- * Write the merged rows back where they came from, so the pipeline's
- * `extract` path works identically for one page or ten.
- */
-const withRows = (body: unknown, rowsPath: string | undefined, rows: unknown[]): unknown => {
-  if (!rowsPath) return rows;
-  const segments = parsePath(rowsPath).segments;
-  if (segments.length === 0) return rows;
-
-  const clone = structuredClone(body) as Record<string, unknown>;
-  let cursor: unknown = clone;
-  for (const segment of segments.slice(0, -1)) {
-    if (segment.kind === "key" && cursor && typeof cursor === "object") {
-      cursor = (cursor as Record<string, unknown>)[segment.key];
-    } else if (segment.kind === "index" && Array.isArray(cursor)) {
-      cursor = cursor[segment.index];
-    } else {
-      return rows; // Structure changed under us; hand back a plain array.
-    }
-  }
-  const last = segments[segments.length - 1]!;
-  if (last.kind === "key" && cursor && typeof cursor === "object") {
-    (cursor as Record<string, unknown>)[last.key] = rows;
-    return clone;
-  }
-  return rows;
-};
-
-const truthy = (value: unknown): boolean =>
-  value !== null && value !== undefined && value !== false && value !== "" && value !== 0;
-
-const readPath = (body: unknown, path: string): unknown => {
-  try {
-    return evalPath(parsePath(path), body)[0];
-  } catch {
-    return undefined;
   }
 };
 
@@ -262,7 +219,7 @@ export class RestAdapter implements SourceAdapter {
             url: response.url,
             status: 304,
             fetchedAt: ctx.now,
-            durationMs: 0,
+            durationMs: Date.now() - started,
             pages: 0,
             truncated: false,
             warnings: [],
@@ -366,7 +323,7 @@ export class RestAdapter implements SourceAdapter {
         url: redact(lastUrl, redactQueryParam),
         status: lastStatus,
         fetchedAt: started,
-        durationMs: 0,
+        durationMs: Date.now() - started,
         pages: pageIndex,
         truncated,
         warnings,
@@ -392,25 +349,6 @@ const redact = (url: string, param: string | null): string => {
   }
 };
 
-const mergePages = (
-  pages: readonly unknown[],
-  rowsPath: string | undefined,
-  warnings: string[],
-): unknown => {
-  const collected: unknown[] = [];
-  for (const page of pages) {
-    const rows = rowsAt(page, rowsPath);
-    if (rows === null) {
-      warnings.push(
-        "could not find the row list in a page, so only the first page was used — set rowsPath on this operation",
-      );
-      return pages[0];
-    }
-    collected.push(...rows);
-  }
-  return withRows(pages[0], rowsPath, collected);
-};
-
 const nextPageUrl = (input: {
   pagination: PaginationSpec;
   body: unknown;
@@ -421,43 +359,13 @@ const nextPageUrl = (input: {
   pageIndex: number;
 }): string | null => {
   const { pagination, body, response, rowsPath, base, query, pageIndex } = input;
-  const rows = rowsAt(body, rowsPath);
 
-  switch (pagination.kind) {
-    case "none":
-      return null;
+  // The decision is shared with MCP; only turning it into a URL is not.
+  const next = nextPageParams({ pagination, body, rowsPath, pageIndex });
+  if (next.kind === "none") return null;
+  if (next.kind === "link-header") return nextFromLinkHeader(response.header("link"));
 
-    case "link-header":
-      return nextFromLinkHeader(response.header("link"));
-
-    case "cursor": {
-      if (pagination.hasMorePath && !truthy(readPath(body, pagination.hasMorePath))) return null;
-      const cursor = readPath(body, pagination.cursorPath);
-      if (!truthy(cursor)) return null;
-      const next = new URLSearchParams(query);
-      next.set(pagination.param, String(cursor));
-      return withQuery(base, next);
-    }
-
-    case "offset": {
-      // Without a row count there is no honest termination condition, so stop
-      // rather than loop forever or guess.
-      if (rows === null || rows.length < pagination.pageSize) return null;
-      const next = new URLSearchParams(query);
-      next.set(pagination.param, String(pageIndex * pagination.pageSize));
-      next.set(pagination.limitParam, String(pagination.pageSize));
-      return withQuery(base, next);
-    }
-
-    case "page": {
-      if (rows === null || rows.length === 0) return null;
-      if (pagination.pageSize && rows.length < pagination.pageSize) return null;
-      const next = new URLSearchParams(query);
-      next.set(pagination.param, String(pagination.startsAt + pageIndex));
-      if (pagination.limitParam && pagination.pageSize) {
-        next.set(pagination.limitParam, String(pagination.pageSize));
-      }
-      return withQuery(base, next);
-    }
-  }
+  const params = new URLSearchParams(query);
+  for (const [name, value] of Object.entries(next.params)) params.set(name, value);
+  return withQuery(base, params);
 };

@@ -456,12 +456,21 @@ export const ConnectionManager = ({
        * will do; the sample is here to show real fields, not to test a
        * specific route.
        */
-      const forbidden = "forbidden" in result ? result.forbidden : undefined;
+      // Plural: validation walks a candidate list, so several endpoints can
+      // have been refused before one answered.
+      const forbidden = new Set(
+        ("forbidden" in result ? result.forbidden : undefined) ?? [],
+      );
+      // The one validation actually proved is the best thing to sample.
+      const proven = "validatedOpId" in result ? result.validatedOpId : undefined;
       const usable = draft.ops.filter(
-        (op) => op.id !== forbidden && !op.path.includes("{{param."),
+        (op) => !forbidden.has(op.id) && !op.path.includes("{{param."),
       );
       const opId =
-        (draft.validateOpId !== forbidden ? draft.validateOpId : undefined) ??
+        proven ??
+        (draft.validateOpId && !forbidden.has(draft.validateOpId)
+          ? draft.validateOpId
+          : undefined) ??
         usable[0]?.id ??
         draft.ops[0]?.id;
       if (opId) setSample(await api.sample(draftId, opId).catch(() => null));

@@ -669,13 +669,26 @@ export const api = {
   /**
    * Prove the credentials work.
    *
-   * `forbidden` names an endpoint the key was *not* allowed to read — which is
-   * still a pass, because being refused a resource means the API identified
-   * the caller first. The caller should sample something else.
+   * `forbidden` names the endpoints the key was *not* allowed to read — still
+   * a pass, because being refused a resource means the API identified the
+   * caller first. A list rather than one id: validation now walks a candidate
+   * list rather than concluding on the first refusal, so several can be
+   * refused before one answers. The caller should sample something else.
+   *
+   * `validatedOpId` names the one that did answer, when any did.
    */
   validate: (
     id: string,
-  ): Promise<{ ok: boolean; message: string; pages?: number; forbidden?: string }> =>
+  ): Promise<{
+    ok: boolean;
+    message: string;
+    pages?: number;
+    forbidden?: string[];
+    failed?: string[];
+    verified?: boolean;
+    validatedOpId?: string;
+    adoptedValidateOpId?: string;
+  }> =>
     request(`/api/connections/${id}/validate`, json({})),
 
   sample: (id: string, op: string): Promise<SampleResult> =>

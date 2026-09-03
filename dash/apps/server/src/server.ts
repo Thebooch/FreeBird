@@ -77,7 +77,7 @@ import { mapRoutes } from "./routes/map.js";
 import type { Settings, SettingsStore } from "./settings.js";
 import { QueryCache, clampMaxAge } from "./cache/queryCache.js";
 import { extractRows, parsePath } from "@freebirdai/dash-expr";
-import { catalogEntryToVerify } from "./verified.js";
+import { catalogEntryToVerify, validationCandidates } from "./verified.js";
 import { splitOpInputs } from "./query.js";
 import { ANSWER_TOOL, answerFromData } from "./context/tool.js";
 import { bindingFor, bindingsFor } from "./tools/bindings.js";
@@ -921,94 +921,149 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     // file in connections/, then validate it) fails until the server restarts.
     registry.addConnection(connection);
 
-    const opId = connection.validateOpId ?? connection.ops[0]?.id;
-    if (!opId) return reply.status(400).send({ error: "this connection has no operations to test" });
+    const candidates = validationCandidates(connection);
+    if (candidates.length === 0) {
+      return reply.status(400).send({ error: "this connection has no operations to test" });
+    }
 
     const params: ResolvedParams = {
       range: resolveRange({ preset: "24h", now: Date.now() }),
       filters: {},
     };
 
-    try {
-      const result = await registry.fetch(connection.id, opId, {}, {
-        params,
-        now: Date.now(),
-        resolveSecret: async (keyRef) => keys.get(keyRef),
-      });
-      const summary = Array.isArray(result.body)
-        ? `${result.body.length} item(s)`
-        : typeof result.body === "object" && result.body !== null
-          ? `${Object.keys(result.body).length} field(s)`
-          : "a value";
+    /*
+     * Try candidates until one answers, rather than concluding on the first
+     * refusal.
+     *
+     * A 403 still means the key works — that reading has not changed — but it
+     * says nothing about `rowsPath`, `pagination` or `timeFilter`, and those
+     * are what `verified` claims. Stopping there left an entry whose importer
+     * happened to pick an unlicensed module permanently unprovable. So a
+     * refusal moves to the next endpoint and only the last one gets to decide.
+     */
+    const forbidden: string[] = [];
+    /** Endpoint-specific failures that were not refusals. */
+    const refused: string[] = [];
+    let lastError: AdapterError | null = null;
 
-      /*
-       * This, and only this, is what verifies a catalog entry.
-       *
-       * A live response with rows where the dialect said they would be is the
-       * one thing that turns a hypothesis written from documentation into a
-       * proven envelope. The 403 branch below deliberately does not reach
-       * here: it proves the key, not the dialect.
-       */
-      let verified = false;
-      if (catalog && connection.catalog) {
-        const entryId = catalogEntryToVerify({
-          connection,
-          op: getOp(connection, opId),
-          body: result.body,
-          entry: catalog.get(connection.catalog),
+    for (const opId of candidates) {
+      try {
+        const result = await registry.fetch(connection.id, opId, {}, {
+          params,
+          now: Date.now(),
+          resolveSecret: async (keyRef) => keys.get(keyRef),
         });
-        if (entryId) {
-          const entry = catalog.get(entryId);
-          // Writes to the overlay, so proving a dialect locally never mutates
-          // the shipped seed — it records that this instance saw it work.
-          if (entry) catalog.put({ ...entry, verified: true });
-          verified = true;
+
+        const summary = Array.isArray(result.body)
+          ? `${result.body.length} item(s)`
+          : typeof result.body === "object" && result.body !== null
+            ? `${Object.keys(result.body).length} field(s)`
+            : "a value";
+
+        /*
+         * This, and only this, is what verifies a catalog entry: a live
+         * response with rows where the dialect said they would be.
+         */
+        let verified = false;
+        if (catalog && connection.catalog) {
+          const entryId = catalogEntryToVerify({
+            connection,
+            op: getOp(connection, opId),
+            body: result.body,
+            entry: catalog.get(connection.catalog),
+          });
+          if (entryId) {
+            const entry = catalog.get(entryId);
+            if (entry) catalog.put({ ...entry, verified: true });
+            verified = true;
+          }
         }
-      }
 
-      return {
-        ok: true,
-        // Descriptive only — the caller supplies the "Connected." so the two
-        // do not end up concatenated into "Connected. Connected. …".
-        message: `${connection.title} responded with ${summary}.`,
-        pages: result.meta.pages,
-        truncated: result.meta.truncated,
-        verified,
-      };
-    } catch (error) {
-      const adapterError = error instanceof AdapterError ? error : null;
+        /*
+         * Adopt the endpoint that actually worked.
+         *
+         * Without this the connection keeps the choice that just failed, and
+         * every future validate pays the same refusals again before arriving
+         * back here. Recorded rather than silent — the response names it.
+         */
+        const adopted = verified && connection.validateOpId !== opId;
+        if (adopted) store.putConnection({ ...connection, validateOpId: opId });
 
-      /*
-       * A 403 is a pass, and this is the whole point of validating.
-       *
-       * The question this step asks is "do these credentials work?" — and a
-       * 403 has already answered it: the API identified the caller and then
-       * declined *this resource*. The credential is proven. Reporting failure
-       * here strands somebody whose key is fine behind a wizard step they can
-       * never satisfy, which is exactly what happened: the endpoint picked for
-       * validation belonged to a product module the account was not licensed
-       * for, so verification failed forever while every other endpoint worked.
-       *
-       * Which endpoint was refused is worth saying, because it is genuinely
-       * useful — but it is a note, not a failure.
-       */
-      if (adapterError?.status === 403) {
         return {
           ok: true,
-          forbidden: opId,
-          message:
-            `The key works — ${connection.title} accepted it. It will not allow access to ` +
-            `"${opId}", which usually means that endpoint needs a scope this key does not ` +
-            `have, or belongs to a module this account does not use. Other endpoints are ` +
-            `unaffected.`,
+          message: `${connection.title} responded with ${summary}.`,
+          pages: result.meta.pages,
+          truncated: result.meta.truncated,
+          verified,
+          validatedOpId: opId,
+          ...(forbidden.length > 0 ? { forbidden } : {}),
+          // Endpoints that broke on the way here are worth surfacing even on
+          // success: nothing else in the product will mention them.
+          ...(refused.length > 0 ? { failed: refused } : {}),
+          ...(adopted ? { adoptedValidateOpId: opId } : {}),
         };
+      } catch (error) {
+        const adapterError = error instanceof AdapterError ? error : null;
+        /*
+         * A 401 is the only failure that is about the *connection* rather than
+         * the endpoint: the credential is wrong, so every candidate would fail
+         * identically and trying them proves nothing.
+         *
+         * Everything else — 403, 404, 422, even a 500 — is this endpoint's
+         * problem. Buildium demonstrated why that distinction matters: three
+         * refusals and a 422 stood between the importer's choice and the
+         * endpoint that actually works, and stopping at any of them left the
+         * dialect unprovable. The candidate cap is what keeps trying safe.
+         */
+        if (adapterError?.status === 401) {
+          lastError = adapterError;
+          break;
+        }
+        if (adapterError?.status === 403) forbidden.push(opId);
+        else refused.push(opId);
+        lastError = adapterError;
+        continue;
       }
+    }
 
-      return reply.status(adapterError?.status ?? 502).send({
+    /*
+     * Nothing answered with data. When every failure was a refusal the key is
+     * still proven, so this stays a pass — the same reading as before, now
+     * reached only after the alternatives are exhausted.
+     */
+    if (forbidden.length > 0 && refused.length === 0) {
+      return {
+        ok: true,
+        forbidden,
+        verified: false,
+        message:
+          `The key works — ${connection.title} accepted it. It would not allow access to ` +
+          `${forbidden.map((id) => `"${id}"`).join(", ")}, which usually means those endpoints ` +
+          `need a scope this key does not have, or belong to modules this account does not use. ` +
+          `Other endpoints are unaffected, but the dialect could not be proven against live data.`,
+      };
+    }
+
+    if (lastError?.status === 401) {
+      /*
+       * The adapter's own wording, not a phrase invented here: a missing key
+       * and a rejected key are different diagnoses, and only the layer that
+       * tried to build the request knows which one happened.
+       */
+      return reply.status(401).send({
         ok: false,
-        error: adapterError?.userMessage ?? "That connection could not be reached.",
+        error:
+          lastError.userMessage ??
+          `${connection.title} rejected the key. It may be wrong, expired, or revoked.`,
       });
     }
+    return reply.status(lastError?.status ?? 502).send({
+      ok: false,
+      ...(forbidden.length > 0 ? { forbidden } : {}),
+      ...(refused.length > 0 ? { failed: refused } : {}),
+      tried: candidates.length,
+      error: lastError?.userMessage ?? "That connection could not be reached.",
+    });
   });
 
   // ── query ───────────────────────────────────────────────────────────────

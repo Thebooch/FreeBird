@@ -1,4 +1,5 @@
 import { extractRows, parsePath } from "@freebirdai/dash-expr";
+import { requiredInputs, resolveOp } from "@freebirdai/dash-spec";
 import type { CatalogEntry, ConnectionSpec, OpSpec } from "@freebirdai/dash-spec";
 
 /**
@@ -77,4 +78,60 @@ export const catalogEntryToVerify = (input: {
   // Only ever false → true. Nothing here can un-verify a proven dialect.
   if (entry.verified) return null;
   return usableRows(rowsFromBody(body, op?.rowsPath)) ? entry.id : null;
+};
+
+/**
+ * Which endpoints to try when proving a dialect, in order.
+ *
+ * A 403 used to end the attempt, and that was defensible when nothing acted
+ * on the outcome. It stopped being defensible the moment `verified` started
+ * depending on it: an importer that picks an endpoint belonging to a module
+ * the account does not license leaves the entry permanently unproven, however
+ * well every other endpoint works. Buildium reproduces this exactly —
+ * `/v1/associations` is chosen deterministically from a clean import and 403s
+ * on an account without that module.
+ *
+ * So a refusal moves on to the next candidate instead of concluding. What
+ * makes that safe is the ordering: only endpoints that need no input, so
+ * nothing here can fire a request the caller would have had to fill in, and a
+ * hard cap so proving a dialect never turns into a sweep of someone's API.
+ */
+
+/** Never try more than this many endpoints to prove one dialect. */
+export const MAX_VALIDATION_CANDIDATES = 6;
+
+export const validationCandidates = (
+  connection: ConnectionSpec,
+  limit = MAX_VALIDATION_CANDIDATES,
+): string[] => {
+  const callable = (def: (typeof connection.ops)[number]): boolean => {
+    try {
+      return requiredInputs(resolveOp(connection, def)).length === 0;
+    } catch {
+      return false;
+    }
+  };
+
+  const ordered: string[] = [];
+  const add = (id: string | undefined): void => {
+    if (id && !ordered.includes(id)) ordered.push(id);
+  };
+
+  // The declared one first, always: it is the operator's own choice and may
+  // well work. This only ever adds fallbacks behind it.
+  add(connection.validateOpId);
+
+  // Then collections, which are what a dialect's rowsPath and pagination
+  // actually describe — a single-object endpoint proves much less.
+  for (const def of connection.ops) {
+    if (ordered.length >= limit) break;
+    if ((def.archetype ?? "list") === "list" && callable(def)) add(def.id);
+  }
+  // Then anything else callable, rather than giving up early.
+  for (const def of connection.ops) {
+    if (ordered.length >= limit) break;
+    if (callable(def)) add(def.id);
+  }
+
+  return ordered.slice(0, limit);
 };

@@ -41,3 +41,15 @@ export {
   type SupportTransition,
 } from "./support/state.js";
 export type { SupportEvent, SupportEventListener } from "./store.js";
+
+// Tier-1 state notices: told to the model, never a turn of their own.
+export {
+  appendNotice,
+  emptyNoticeBuffer,
+  flushNotices,
+  COALESCE_WINDOW_MS,
+  MAX_NOTICES,
+  MAX_SUMMARY_CHARS,
+  MAX_TOTAL_CHARS,
+  type NoticeBuffer,
+} from "./notices/state.js";

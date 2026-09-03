@@ -88,6 +88,15 @@ export { DigestEngine, createDigestEngine, type DigestEngineOptions, type Digest
 export { parseCron, nextCronRun } from "./digest/cron.js";
 
 // ---------------------------------------------------------------------------
+// State notices (tier 1: the model is told, no turn is started)
+// ---------------------------------------------------------------------------
+export type { StateNotice } from "./notices/types.js";
+export {
+  buildNoticesPrompt,
+  type BuildNoticesPromptOptions,
+} from "./chat/notices-context.js";
+
+// ---------------------------------------------------------------------------
 // Ask user (a structured question that ends the turn until a human answers)
 // ---------------------------------------------------------------------------
 export {
@@ -171,6 +180,20 @@ export {
   validateActionArgs,
   type ValidateArgsResult,
 } from "./actions/diff.js";
+export {
+  DEFAULT_TOOL_BUDGET_BYTES,
+  TOOL_DESCRIBE_NAME,
+  TOOL_SEARCH_NAME,
+  buildDeferredStartActionTool,
+  buildToolDescribeTool,
+  buildToolSearchTool,
+  describeActionSchema,
+  parseActionRef,
+  scoreCandidate,
+  searchActions,
+  serializedToolBytes,
+  type ActionCandidate,
+} from "./actions/tool-search.js";
 export {
   actionGrantDeclaration,
   actionGrantSubject,
