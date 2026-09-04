@@ -1,13 +1,40 @@
-import type { ComponentId, LayoutCell } from "@freebirdai/dash-spec";
+import type {
+  ComponentId,
+  LayoutCell,
+  WidgetGroup as GroupSpec,
+  WidgetSpec,
+} from "@freebirdai/dash-spec";
 import { contractFor } from "@freebirdai/dash-spec";
 import { useCallback, useMemo } from "react";
 import { ResponsiveGridLayout, type Layout, type LayoutItem } from "react-grid-layout";
 import { useMeasure } from "@freebirdai/dash-components";
 import { LazyWidget } from "./LazyWidget.jsx";
 import { WidgetErrorBoundary } from "./WidgetErrorBoundary.jsx";
+import { WidgetGroup } from "./WidgetGroup.jsx";
 import { WidgetShell } from "./WidgetShell.jsx";
 import { useDashboard } from "./context.jsx";
-import { completeLayout } from "./layout.js";
+import { completeLayout, persistCells } from "./layout.js";
+
+/**
+ * One thing the grid places: a widget on its own, or a group of them.
+ *
+ * The library matches children to layout items by key, so a group has to be a
+ * single child with a single key or it cannot be one rectangle. Everything
+ * below iterates units rather than widgets for that reason — and a lone widget
+ * is simply a unit of one, so there is no second code path.
+ */
+type GridUnit =
+  | { readonly kind: "widget"; readonly key: string; readonly widget: WidgetSpec }
+  | {
+      readonly kind: "group";
+      readonly key: string;
+      readonly group: GroupSpec;
+      readonly members: readonly WidgetSpec[];
+    };
+
+/** The layout key a widget is placed under — its group's, when it has one. */
+const unitKeyFor = (widgetId: string, group: string | undefined): string =>
+  group ? `group:${group}` : widgetId;
 
 const ROW_HEIGHT = 34;
 const MARGIN: readonly [number, number] = [12, 12];
@@ -64,14 +91,86 @@ export const DashboardGrid = ({
    * the moment the widget set changed — swapping dashboards or adding a widget
    * left a grid full of ids that no longer existed, and nothing rendered.
    */
-  const cells = useMemo(() => {
-    const requests = dashboard.widgets.map((widget) => ({
-      widgetId: widget.id,
-      component: widget.component,
-    }));
-    const live = new Set(requests.map((request) => request.widgetId));
+  const { placed, parked } = useMemo(() => {
+    const widgetById = new Map(dashboard.widgets.map((widget) => [widget.id, widget]));
+    const live = new Set(widgetById.keys());
     const saved = dashboard.layout.cells.filter((cell) => live.has(cell.widgetId));
-    return completeLayout(requests, saved, dashboard.layout.gridCols);
+
+    const membersByGroup = new Map<string, LayoutCell[]>();
+    for (const cell of saved) {
+      if (!cell.group) continue;
+      const list = membersByGroup.get(cell.group);
+      if (list) list.push(cell);
+      else membersByGroup.set(cell.group, [cell]);
+    }
+    for (const list of membersByGroup.values()) list.sort((a, b) => a.y - b.y || a.x - b.x);
+
+    /*
+     * A group needs two live members to still be one.
+     *
+     * Deleting a widget out of a pair leaves a declared group with one member,
+     * and a frame around a single widget is a card wearing a second title bar
+     * — it reads as the other half having failed to load. The survivor goes
+     * back to being an ordinary tile instead, which is what somebody deleting
+     * the other one meant to happen.
+     */
+    const groups = dashboard.groups.filter(
+      (group) => (membersByGroup.get(group.id)?.length ?? 0) >= 2,
+    );
+    const kept = new Set(groups.map((group) => group.id));
+    const groupOf = (widgetId: string): string | undefined => {
+      const id = saved.find((cell) => cell.widgetId === widgetId)?.group;
+      return id && kept.has(id) ? id : undefined;
+    };
+
+    const anchors = new Set(
+      groups.map((group) => membersByGroup.get(group.id)![0]!.widgetId),
+    );
+
+    /*
+     * Only units are placed, and that is what keeps a group from leaving a
+     * hole. The packer reserves space per rectangle it is given, so handing it
+     * every member of a group would have it set aside room for tiles nobody
+     * draws — pushing everything below the group down by the height of its
+     * hidden members.
+     *
+     * The rest are parked: their cells survive untouched so dissolving a group
+     * restores positions that were never lost, and they are never placed.
+     */
+    const placeable = dashboard.widgets.filter(
+      (widget) => !groupOf(widget.id) || anchors.has(widget.id),
+    );
+    const placeableIds = new Set(placeable.map((widget) => widget.id));
+    const cells = completeLayout(
+      placeable.map((widget) => ({ widgetId: widget.id, component: widget.component })),
+      saved.filter((cell) => placeableIds.has(cell.widgetId)),
+      dashboard.layout.gridCols,
+    );
+
+    const units = cells.map((cell) => {
+      const groupId = groupOf(cell.widgetId);
+      const group = groupId ? groups.find((entry) => entry.id === groupId) : undefined;
+      const unit: GridUnit = group
+        ? {
+            kind: "group",
+            key: unitKeyFor(cell.widgetId, group.id),
+            group,
+            members: (membersByGroup.get(group.id) ?? [])
+              .map((member) => widgetById.get(member.widgetId))
+              .filter((widget): widget is WidgetSpec => widget !== undefined),
+          }
+        : {
+            kind: "widget",
+            key: cell.widgetId,
+            widget: widgetById.get(cell.widgetId)!,
+          };
+      return { cell, unit };
+    });
+
+    return {
+      placed: units,
+      parked: saved.filter((cell) => !placeableIds.has(cell.widgetId)),
+    };
   }, [dashboard]);
 
   /**
@@ -90,21 +189,25 @@ export const DashboardGrid = ({
    * from memory rather than re-fetching.
    */
   const seedKey = useMemo(
-    () => cells.map((cell) => `${cell.widgetId}:${cell.x},${cell.y},${cell.w},${cell.h}`).join("|"),
-    [cells],
+    () =>
+      placed
+        .map(({ cell, unit }) => `${unit.key}:${cell.x},${cell.y},${cell.w},${cell.h}`)
+        .join("|"),
+    [placed],
   );
 
-  const items = useMemo<LayoutItem[]>(() => {
-    const componentOf = new Map(dashboard.widgets.map((widget) => [widget.id, widget.component]));
-    return cells.map((cell) => ({
-      i: cell.widgetId,
-      x: cell.x,
-      y: cell.y,
-      w: cell.w,
-      h: cell.h,
-      ...sizeBounds(componentOf.get(cell.widgetId)),
-    }));
-  }, [cells, dashboard.widgets]);
+  const items = useMemo<LayoutItem[]>(
+    () =>
+      placed.map(({ cell, unit }) => ({
+        i: unit.key,
+        x: cell.x,
+        y: cell.y,
+        w: cell.w,
+        h: cell.h,
+        ...unitBounds(unit),
+      })),
+    [placed],
+  );
 
   /**
    * Turn a finished drag into saved cells.
@@ -118,19 +221,14 @@ export const DashboardGrid = ({
     (layout: Layout) => {
       if (!onLayoutChange) return;
       onLayoutChange(
-        layout.map((item) => ({
-          widgetId: item.i,
-          x: item.x,
-          y: item.y,
-          w: item.w,
-          h: item.h,
-          // Everything on the board is a position somebody can see and move,
-          // so there is no longer a meaningful unlocked cell.
-          locked: true,
-        })),
+        persistCells(
+          placed.map(({ cell, unit }) => ({ cell, key: unit.key })),
+          parked,
+          layout,
+        ),
       );
     },
-    [onLayoutChange],
+    [onLayoutChange, placed, parked],
   );
 
   return (
@@ -146,7 +244,7 @@ export const DashboardGrid = ({
        * only the second is visible in the DOM. Keeping the first one readable
        * is what turned a layout bug from guesswork into one measurement.
        */
-      data-layout={cells.map((cell) => `${cell.widgetId}:${cell.x},${cell.y}`).join(" ")}
+      data-layout={placed.map(({ cell, unit }) => `${unit.key}:${cell.x},${cell.y}`).join(" ")}
     >
       {width > 0 && (
         <ResponsiveGridLayout
@@ -169,26 +267,41 @@ export const DashboardGrid = ({
           onDragStop={(layout: Layout) => persist(layout)}
           onResizeStop={(layout: Layout) => persist(layout)}
         >
-          {dashboard.widgets.map((widget) => {
-            const cell = cells.find((entry) => entry.widgetId === widget.id);
-            const rows = cell?.h ?? 6;
+          {placed.map(({ cell, unit }) => {
+            const rows = cell.h;
             return (
-              <div className="dash-grid__cell" key={widget.id} data-widget-id={widget.id}>
+              <div
+                className="dash-grid__cell"
+                key={unit.key}
+                {...(unit.kind === "widget"
+                  ? { "data-widget-id": unit.widget.id }
+                  : { "data-group-id": unit.group.id })}
+              >
                 {/*
                  * Two wrappers, each with one job: hold the space until the
                  * tile is worth fetching, and keep a render crash inside this
                  * cell rather than letting it take the board down.
                  */}
                 <LazyWidget minHeight={rows * ROW_HEIGHT + (rows - 1) * MARGIN[1]}>
-                  <WidgetErrorBoundary widgetTitle={widget.title}>
-                    <WidgetShell
-                      widget={widget}
-                      hero={widget.id === heroWidgetId}
-                      {...(onRemoveWidget ? { onRemove: onRemoveWidget } : {})}
-                      {...(onCustomiseWidget ? { onCustomise: onCustomiseWidget } : {})}
-                      {...(onOpenRecordPage ? { onOpenPage: onOpenRecordPage } : {})}
+                  {unit.kind === "group" ? (
+                    <WidgetGroup
+                      group={unit.group}
+                      members={unit.members}
+                      {...(onRemoveWidget ? { onRemoveWidget } : {})}
+                      {...(onCustomiseWidget ? { onCustomiseWidget } : {})}
+                      {...(onOpenRecordPage ? { onOpenRecordPage } : {})}
                     />
-                  </WidgetErrorBoundary>
+                  ) : (
+                    <WidgetErrorBoundary widgetTitle={unit.widget.title}>
+                      <WidgetShell
+                        widget={unit.widget}
+                        hero={unit.widget.id === heroWidgetId}
+                        {...(onRemoveWidget ? { onRemove: onRemoveWidget } : {})}
+                        {...(onCustomiseWidget ? { onCustomise: onCustomiseWidget } : {})}
+                        {...(onOpenRecordPage ? { onOpenPage: onOpenRecordPage } : {})}
+                      />
+                    </WidgetErrorBoundary>
+                  )}
                 </LazyWidget>
 
                 {/*
@@ -226,6 +339,32 @@ const sizeBounds = (
   return {
     minW: Math.min(...sizes.map((size) => size.w)),
     minH: Math.min(...sizes.map((size) => size.h)),
+    maxW: 12,
+    maxH: 24,
+  };
+};
+
+/** Rows the group's own title and tab strip take before any member is drawn. */
+const GROUP_CHROME_ROWS = 2;
+
+/**
+ * What a unit may be shrunk to.
+ *
+ * A group has no contract of its own — it is a frame, not a component — so its
+ * floor is the largest floor among its members plus its own chrome. Taking the
+ * smallest instead would let a frame be crushed to the size its least
+ * demanding member tolerates, and the others would render inside it at a width
+ * their own contracts already refuse.
+ */
+const unitBounds = (
+  unit: GridUnit,
+): { minW: number; minH: number; maxW: number; maxH: number } => {
+  if (unit.kind === "widget") return sizeBounds(unit.widget.component);
+
+  const bounds = unit.members.map((member) => sizeBounds(member.component));
+  return {
+    minW: Math.max(1, ...bounds.map((bound) => bound.minW)),
+    minH: Math.max(2, ...bounds.map((bound) => bound.minH)) + GROUP_CHROME_ROWS,
     maxW: 12,
     maxH: 24,
   };

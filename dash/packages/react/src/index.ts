@@ -5,6 +5,7 @@ export { LazyWidget } from "./LazyWidget.jsx";
 export { WidgetErrorBoundary } from "./WidgetErrorBoundary.jsx";
 export { ParamBar } from "./ParamBar.jsx";
 export { WidgetInspector } from "./WidgetInspector.jsx";
+export { WidgetGroup, arrangementFor } from "./WidgetGroup.jsx";
 export { WidgetShell } from "./WidgetShell.jsx";
 
 export { DashboardProvider, useDashboard, useOptionalDashboard } from "./context.jsx";
@@ -14,7 +15,7 @@ export type {
   DashboardProviderProps,
 } from "./context.jsx";
 
-export { clampCell, completeLayout, solveLayout } from "./layout.js";
+export { clampCell, completeLayout, persistCells, solveLayout } from "./layout.js";
 export type { PlacementRequest, SolveLayoutOptions, SolveLayoutResult } from "./layout.js";
 
 export {

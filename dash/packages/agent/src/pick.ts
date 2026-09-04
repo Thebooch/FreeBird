@@ -44,15 +44,23 @@ export interface PickResult {
   /** A second endpoint to bring alongside, when the request spans two. */
   readonly secondary: string | null;
   /**
-   * What the second endpoint is for: detail on the first's rows, or a separate
-   * measurement drawn beside it. Null when there is no second endpoint.
+   * What the second endpoint is for: detail on the first's rows, a separate
+   * measurement drawn beside it, or neither. Null when there is no second.
    *
    * The distinction decides the entire shape of the widget, and getting it
    * wrong is not recoverable downstream — a comparison forced through a join
    * has nothing to match on, so it silently becomes a chart of the first
    * endpoint alone.
+   *
+   * `alongside` is the third answer, and it was missing. Asked to show all the
+   * properties *and* the available listings, a model with only the first two
+   * words has to call that "enrich" — so a join is attempted, finds nothing to
+   * match on, and quietly degrades to the properties alone while the reply
+   * says the listings are there. Two independent collections somebody wants to
+   * see together are not an attribute of one another and are not two
+   * measurements over a shared axis. They are simply two things.
    */
-  readonly relationship: "enrich" | "compare" | null;
+  readonly relationship: "enrich" | "compare" | "alongside" | null;
   /**
    * A different reading of the request, when one genuinely exists.
    *
@@ -88,14 +96,16 @@ const pickSchema = z.object({
       "A second endpoint id, only when the request genuinely needs both. Omit otherwise.",
     ),
   relationship: z
-    .enum(["enrich", "compare"])
+    .enum(["enrich", "compare", "alongside"])
     .optional()
     .describe(
       "Only when you name a second endpoint. \"enrich\" means the second adds detail to rows " +
         "of the first — each row of the first points at one of the second. \"compare\" means " +
-        "both are measured separately and shown side by side, which is what \"X versus Y\" and " +
-        "\"how many X against how many Y\" mean. If neither set of rows is an attribute of the " +
-        "other, it is a comparison.",
+        "both are measured separately against a shared axis, which is what \"X versus Y\" and " +
+        "\"how many X against how many Y\" mean. \"alongside\" means the user simply wants to " +
+        "see both — \"show me my X and also my Y\" — where neither is an attribute of the other " +
+        "and nothing is being measured against anything. Do not call that one \"enrich\": " +
+        "joining two unrelated collections finds nothing to match on and shows only the first.",
     ),
   alternatives: z
     .array(
@@ -155,7 +165,14 @@ export const PICK_SYSTEM_PROMPT = [
   "  which kind of second it is. If the second supplies a field the first's rows point at,",
   "  that is \"enrich\" and the first should be the records being listed. If the request asks",
   "  how two different things compare — counts of each over time, one against the other —",
-  "  that is \"compare\", and neither is subordinate to the other.",
+  "  that is \"compare\", and neither is subordinate to the other. If it asks to SEE both and",
+  "  neither of those is true — \"my properties and also my listings\" — that is \"alongside\".",
+  "- \"and also\" is usually \"alongside\", not \"enrich\". Enrich means each row of the first",
+  "  literally carries the second's identity — a lease pointing at its unit. Two collections",
+  "  someone wants on screen together carry nothing of each other, and calling that enrich",
+  "  produces a join with nothing to match on: the second endpoint silently disappears and",
+  "  the user is told it is there. Only say enrich when you can name the field that links",
+  "  them.",
   "- Pick the best available endpoint even if it is an imperfect fit. Refusing helps nobody;",
   "  the user sees what you chose and can change it.",
   "- Commit when the request is clear. Almost every request is: name your pick and move on.",

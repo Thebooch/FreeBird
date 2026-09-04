@@ -565,8 +565,136 @@ describe("the revise schema declares every patch field", () => {
       "offer",
       "choice",
       "model",
+      /*
+       * A two-widget setup, and how the two are shown. Added because they were
+       * missing: the patch carried them, this schema had not heard of them, and
+       * zod stripped them — so a REST revise proposing a second widget applied
+       * the first, dropped the second silently, and reported success. Exactly
+       * the trap the comment in that file warns about, sprung a second time.
+       */
+      "parts",
+      "group",
+      "interleave",
     ]) {
       expect(declared).toContain(field);
     }
+  });
+});
+
+/**
+ * Swapping how several widgets are shown together.
+ *
+ * With no model configured the reshape is still deterministic and still
+ * applies — the fields for a merge or a list are chosen by convention instead,
+ * which is worse and never wrong. That is the path this exercises, because it
+ * is the one a self-hoster with no key actually gets.
+ */
+describe("arrangements", () => {
+  /** Two widgets from one endpoint, which is enough to have something to arrange. */
+  const twoParts = async (app: ReturnType<typeof makeApp>) => {
+    await app.inject({
+      method: "POST",
+      url: "/api/concierge/ops/start",
+      payload: { intent: "items twice", mode: "assisted" },
+    });
+    return app.inject({
+      method: "POST",
+      url: "/api/concierge/ops/revise",
+      payload: {
+        endpoint: "items",
+        component: "table",
+        roles: { columns: ["Name"] },
+        title: "Items",
+        parts: [
+          { endpoint: "items", component: "table", roles: { columns: ["Name"] }, title: "Again" },
+        ],
+        group: { title: "Both", display: "tabs" },
+      },
+    });
+  };
+
+  it("offers nothing to arrange for a one-widget setup", async () => {
+    const app = makeApp();
+    await app.inject({ method: "POST", url: "/api/concierge/ops/start", payload: {} });
+    const state = (await app.inject({ method: "GET", url: "/api/concierge/ops" })).json() as {
+      arrangements: unknown[];
+    };
+    expect(state.arrangements).toEqual([]);
+  });
+
+  it("carries a second widget through the revise schema", async () => {
+    const app = makeApp();
+    const revised = (await twoParts(app)).json() as { widgets: unknown[]; rejected: unknown[] };
+    // The regression guard: zod strips what it has not declared, so a `parts`
+    // this schema had not heard of would arrive as a silent no-op.
+    expect(revised.rejected).toEqual([]);
+    expect(revised.widgets).toHaveLength(2);
+  });
+
+  it("offers the frames once there are two widgets", async () => {
+    const app = makeApp();
+    await twoParts(app);
+    const state = (await app.inject({ method: "GET", url: "/api/concierge/ops" })).json() as {
+      arrangements: { id: string; applied: boolean; extraRequests: number }[];
+    };
+    expect(state.arrangements.map((option) => option.id)).toEqual(
+      expect.arrayContaining(["tabs", "row", "stack"]),
+    );
+    expect(state.arrangements.find((option) => option.id === "tabs")?.applied).toBe(true);
+    // A frame reads the same endpoints either way.
+    expect(state.arrangements.every((option) => option.extraRequests === 0)).toBe(true);
+  });
+
+  it("applies a frame without touching the widgets", async () => {
+    const app = makeApp();
+    await twoParts(app);
+    const swapped = await app.inject({
+      method: "POST",
+      url: "/api/concierge/ops/arrangement",
+      payload: { arrangement: "row" },
+    });
+
+    expect(swapped.statusCode).toBe(200);
+    const state = swapped.json() as { group: { display: string } | null; widgets: unknown[] };
+    expect(state.group?.display).toBe("row");
+    expect(state.widgets).toHaveLength(2);
+  });
+
+  /*
+   * The card can only show what it was given, so a click that arrives after
+   * the draft moved on is refused rather than reshaping into something that no
+   * longer makes sense.
+   */
+  it("refuses an arrangement it never offered", async () => {
+    const app = makeApp();
+    await app.inject({ method: "POST", url: "/api/concierge/ops/start", payload: {} });
+    const refused = await app.inject({
+      method: "POST",
+      url: "/api/concierge/ops/arrangement",
+      payload: { arrangement: "row" },
+    });
+    expect(refused.statusCode).toBe(409);
+    expect((refused.json() as { error: string }).error).toContain("not one of the ways");
+  });
+
+  it("refuses an arrangement that is not a thing at all", async () => {
+    const app = makeApp();
+    await twoParts(app);
+    const refused = await app.inject({
+      method: "POST",
+      url: "/api/concierge/ops/arrangement",
+      payload: { arrangement: "carousel" },
+    });
+    expect(refused.statusCode).toBe(400);
+  });
+
+  it("says there is no setup rather than starting one", async () => {
+    const app = makeApp();
+    const none = await app.inject({
+      method: "POST",
+      url: "/api/concierge/ops/arrangement",
+      payload: { arrangement: "row" },
+    });
+    expect(none.statusCode).toBe(409);
   });
 });

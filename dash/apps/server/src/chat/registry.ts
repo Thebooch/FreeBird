@@ -6,7 +6,7 @@ import type {
   RangePreset,
   WidgetSpec,
 } from "@freebirdai/dash-spec";
-import { parseWidget, rangePresetSchema, widgetSources } from "@freebirdai/dash-spec";
+import { groupSize, parseDashboard, parseWidget, rangePresetSchema, widgetSources } from "@freebirdai/dash-spec";
 import type { ComponentDefinition } from "@freebirdai/core";
 import { createComponentRegistry } from "@freebirdai/core";
 import { z } from "zod";
@@ -114,6 +114,30 @@ const removeWidgetSchema = z.object({
     .string()
     .min(1)
     .describe("Id of a widget that exists, from the WIDGETS list. Any tab."),
+});
+
+const groupWidgetsSchema = z.object({
+  widgetIds: z
+    .array(z.string().min(1))
+    .min(2)
+    .max(4)
+    .describe(
+      "Ids of two to four widgets that already exist, from the WIDGETS list. They must all " +
+        "be on the same tab.",
+    ),
+  title: z.string().min(1).max(120).describe("What to call the frame holding them."),
+  display: z
+    .enum(["tabs", "row", "stack"])
+    .optional()
+    .describe(
+      "How they sit together: \"tabs\" shows one at a time behind a strip and is the default, " +
+        "\"row\" puts them side by side, \"stack\" puts them one above the other. A row of more " +
+        "than two is narrow on most screens.",
+    ),
+});
+
+const ungroupWidgetsSchema = z.object({
+  groupId: z.string().min(1).describe("Id of a group that exists on the current tab."),
 });
 
 const setRangeSchema = z.object({
@@ -326,6 +350,191 @@ const boardActions = (
           dashboardId: found.dashboardId,
           title: found.widget.title,
         };
+      },
+    },
+
+    /* ── groups ───────────────────────────────────────────────────────── */
+
+    /*
+     * Several widgets drawn inside one frame.
+     *
+     * This is where "show my properties and also my listings" lands. The two
+     * are not joinable and not comparable — they are two things somebody wants
+     * to see together — so they stay two widgets with two datasets, two caches
+     * and two refresh clocks, and only the frame is new.
+     *
+     * A group is a fact about the layout, which is why this touches
+     * `layout.cells` and `groups` and never a widget. Nothing about being
+     * grouped changes what a widget is or how it is fetched.
+     */
+    {
+      id: "group_widgets",
+      description:
+        "Draw several existing widgets inside one frame, as tabs, a row or a stack. Use this " +
+        "when someone wants two things seen together that are not one dataset — separate " +
+        "collections that do not join. The widgets must already exist and be on the same tab.",
+      schema: groupWidgetsSchema,
+      requiresConfirmation: "preview",
+      authorize: (args: { widgetIds: string[] }) => {
+        const missing = args.widgetIds.filter((id) => resolveHandle(handles, id) === null);
+        if (missing.length > 0) {
+          return {
+            ok: false as const,
+            reason: `${missing.map((id) => `"${id}"`).join(", ")} is not a widget in this workspace.`,
+            status: 404,
+          };
+        }
+        const tabs = new Set(
+          args.widgetIds.map((id) => resolveHandle(handles, id)!.dashboardId),
+        );
+        if (tabs.size > 1) {
+          return {
+            ok: false as const,
+            reason: "those widgets are on different tabs, and a group lives on one tab.",
+            status: 409,
+          };
+        }
+        return true;
+      },
+      readCurrent: (args: { widgetIds: string[]; title: string }) => ({
+        title: args.title,
+        widgets: args.widgetIds
+          .map((id) => resolveHandle(handles, id)?.widget.title)
+          .filter((title): title is string => title !== undefined),
+      }),
+      handler: async (args: { widgetIds: string[]; title: string; display?: string }) => {
+        const found = args.widgetIds
+          .map((id) => resolveHandle(handles, id))
+          .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+        const first = found[0];
+        if (!first) throw new Error("no widgets to group");
+
+        const board =
+          input.board.getDashboardById?.(first.dashboardId) ??
+          (first.current ? input.board.getDashboard() : null);
+        if (!board) throw new Error("that tab no longer exists");
+
+        const memberIds = found.map((entry) => entry.widgetId);
+        const display = (args.display ?? "tabs") as "tabs" | "row" | "stack";
+        const groupId = `g-${Date.now().toString(36)}`;
+
+        /*
+         * The frame's rectangle, from what its members wanted, placed where
+         * the first of them already was — so a group appears where the user
+         * was looking rather than at the bottom of the board. Only a starting
+         * point: from the first drag onwards the anchor cell holds the real
+         * geometry and `groupSize` is not consulted again.
+         */
+        const size = groupSize(
+          memberIds
+            .map((id) => board.widgets.find((widget) => widget.id === id)?.component)
+            .filter((component): component is string => component !== undefined),
+          display,
+          board.layout.gridCols,
+        );
+        const existing = board.layout.cells.filter((cell) => memberIds.includes(cell.widgetId));
+        const anchor = [...existing].sort((a, b) => a.y - b.y || a.x - b.x)[0];
+        const baseY = anchor?.y ?? 0;
+
+        /*
+         * Every member needs a cell, because membership is recorded on cells.
+         * One that was never placed gets a position now — parked beside the
+         * anchor, never drawn from, and waiting for the group to be dissolved.
+         *
+         * Members are ordered by cell position, so the tab order is the order
+         * the caller listed rather than wherever the widgets happened to sit.
+         * Only the anchor's rectangle is ever drawn, so the rest is bookkeeping
+         * that nothing renders.
+         */
+        const cells = [
+          ...board.layout.cells.filter((cell) => !memberIds.includes(cell.widgetId)),
+          ...memberIds.map((widgetId, index) => {
+            const previous = existing.find((cell) => cell.widgetId === widgetId);
+            const base = previous ?? { widgetId, x: 0, y: baseY, w: size.w, h: size.h, locked: true };
+            if (index === 0) {
+              return { ...base, group: groupId, x: anchor?.x ?? 0, y: baseY, w: size.w, h: size.h };
+            }
+            /*
+             * Parked geometry still has to be a legal cell.
+             *
+             * Nothing draws it, but the schema checks every cell against the
+             * grid — and a member with no previous cell inherits the *frame's*
+             * width, which for a row is the full twelve columns. Offset by one
+             * to keep the ordering, that ran past the right-hand edge and the
+             * whole grouping was refused.
+             */
+            const width = Math.max(1, Math.min(base.w, board.layout.gridCols - index));
+            return { ...base, group: groupId, x: index, y: baseY + 1, w: width };
+          }),
+        ];
+
+        const next = {
+          ...board,
+          groups: [...board.groups, { id: groupId, title: args.title, display }],
+          layout: { ...board.layout, cells },
+        };
+
+        /*
+         * Re-parsed rather than trusted, the same rule `add_widget` follows.
+         * A group of one, or a cell naming a group nobody declared, is a shape
+         * the schema refuses — and this is the call that writes.
+         */
+        const checked = parseDashboard(next);
+        if (!checked.ok || !checked.value) {
+          throw new Error(checked.errors.join("; ") || "that grouping did not validate");
+        }
+
+        input.board.putDashboard(checked.value);
+        input.board.onChanged?.();
+        return {
+          grouped: true,
+          groupId,
+          title: args.title,
+          display,
+          widgets: found.map((entry) => entry.widget.title),
+        };
+      },
+    },
+
+    {
+      id: "ungroup_widgets",
+      description:
+        "Take a frame apart, leaving its widgets on the board as ordinary tiles. Nothing is " +
+        "deleted.",
+      schema: ungroupWidgetsSchema,
+      requiresConfirmation: "preview",
+      readCurrent: (args: { groupId: string }) => {
+        const group = input.board.getDashboard()?.groups.find((entry) => entry.id === args.groupId);
+        return group ? { title: group.title } : null;
+      },
+      handler: async (args: { groupId: string }) => {
+        const board = input.board.getDashboard();
+        if (!board) throw new Error("that tab no longer exists");
+        const group = board.groups.find((entry) => entry.id === args.groupId);
+        if (!group) throw new Error(`there is no group "${args.groupId}"`);
+
+        /*
+         * A member's own cell was never overwritten while it was grouped —
+         * only the anchor's was read — so dropping the `group` field restores
+         * positions that were never lost.
+         */
+        const next = {
+          ...board,
+          groups: board.groups.filter((entry) => entry.id !== args.groupId),
+          layout: {
+            ...board.layout,
+            cells: board.layout.cells.map(({ group: member, ...cell }) =>
+              member === args.groupId ? cell : { ...cell, group: member },
+            ),
+          },
+        };
+        const checked = parseDashboard(next);
+        if (!checked.ok || !checked.value) {
+          throw new Error(checked.errors.join("; ") || "that did not validate");
+        }
+        input.board.putDashboard(checked.value);
+        input.board.onChanged?.();
+        return { ungrouped: true, groupId: args.groupId, title: group.title };
       },
     },
 

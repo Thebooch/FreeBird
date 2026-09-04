@@ -105,13 +105,17 @@ export type {
 } from "./report.js";
 
 export {
+  anchorCell,
   dashboardSchema,
+  groupMembers,
+  groupSize,
   layoutCellSchema,
   layoutSchema,
   parseDashboard,
   parseDuration,
   parseWidget,
   refreshSchema,
+  widgetGroupSchema,
   widgetSchema,
   widgetSources,
   widgetSourceSchema,
@@ -123,6 +127,7 @@ export type {
   Layout,
   LayoutCell,
   ParseResult,
+  WidgetGroup,
   WidgetSpec,
 } from "./dashboard.js";
 

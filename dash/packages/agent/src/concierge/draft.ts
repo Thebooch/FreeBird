@@ -288,6 +288,50 @@ export const drilldownDraftSchema = z.object({
 
 export type DrilldownDraft = z.infer<typeof drilldownDraftSchema>;
 
+/**
+ * Four, matching the cap a widget's own `sources` already carries.
+ *
+ * Not arbitrary: every part is at least one request when the card previews it,
+ * and a frame of five things is a filing cabinet rather than a view.
+ */
+export const MAX_PARTS = 4;
+
+/**
+ * One widget inside a setup.
+ *
+ * Exactly the fields that describe a single widget, lifted out of the draft
+ * unchanged — same names, same shapes, same defaults. That identity is what
+ * lets `partView` hand any part to machinery written for a one-widget draft:
+ * the two are the same object seen at different scopes, not two formats with a
+ * translation between them.
+ *
+ * `answered` and `skipped` live here rather than on the draft because they are
+ * answers about *this* widget. A component chosen for the listings says
+ * nothing about what the properties still need.
+ */
+export const draftPartSchema = z.object({
+  connection: z.string().min(1).optional(),
+  op: z.string().min(1).optional(),
+  rowsPath: z.string().default("$"),
+  join: joinDraftSchema.optional(),
+  series: z.array(seriesDraftSchema).max(3).default([]),
+  offer: seriesDraftSchema.optional(),
+  choice: choiceDraftSchema.optional(),
+  narrow: narrowDraftSchema.optional(),
+  shape: widgetShapeSchema.optional(),
+  component: z.string().min(1).optional(),
+  roles: z.record(z.string(), z.union([z.string(), z.array(z.string())])).default({}),
+  options: z.array(z.string().max(64)).max(20).default([]),
+  drilldown: drilldownDraftSchema.optional(),
+  extras: z.array(fieldName).max(40).default([]),
+  highlights: z.array(fieldName).max(8).default([]),
+  title: z.string().max(120).optional(),
+  answered: z.array(z.string().max(64)).max(60).default([]),
+  skipped: z.array(z.string().max(64)).max(60).default([]),
+});
+
+export type DraftPart = z.infer<typeof draftPartSchema>;
+
 export const conciergeDraftSchema = z.object({
   id: z.string().min(1),
   /**
@@ -395,9 +439,141 @@ export const conciergeDraftSchema = z.object({
   answered: z.array(z.string().max(64)).max(60).default([]),
   /** Steps explicitly skipped. Distinct from unanswered. */
   skipped: z.array(z.string().max(64)).max(60).default([]),
+  /**
+   * Every widget this setup is going to produce.
+   *
+   * The draft could only ever describe one, which made "show my properties and
+   * also my listings" unanswerable in a single turn: two collections that do
+   * not join and are not measured against each other are two widgets, and
+   * there was nowhere to put the second.
+   *
+   * Empty means exactly what it always meant — a one-widget setup described by
+   * the fields above. Nothing migrates and no stored draft changes shape;
+   * `partsOf` simply reads those fields as part zero. When a second part
+   * appears the array is materialised, and part zero is kept in step with the
+   * fields above so everything that reads them keeps seeing the primary.
+   */
+  parts: z.array(draftPartSchema).max(MAX_PARTS).default([]),
+  /**
+   * How the finished widgets are shown together.
+   *
+   * Absent for a one-widget setup, and absent is not a default — several
+   * widgets with no group is a legitimate thing to ask for, and it means they
+   * land on the board as ordinary tiles.
+   */
+  group: z
+    .object({
+      title: z.string().min(1).max(120),
+      display: z.enum(["tabs", "row", "stack"]).default("tabs"),
+    })
+    .optional(),
+  /**
+   * Stack the parts into one badged list instead of building each separately.
+   *
+   * The third way two collections can be shown together, and the only one that
+   * produces a single widget: a join merges them row by row, a group draws
+   * them side by side, and this interleaves them and marks each row with where
+   * it came from — which is what somebody means by a feed of everything.
+   *
+   * A property of the setup rather than of any part, like `group`, because it
+   * describes how they relate rather than what any one of them is.
+   */
+  interleave: z.boolean().default(false),
 });
 
 export type ConciergeDraft = z.infer<typeof conciergeDraftSchema>;
+
+/* ── parts ─────────────────────────────────────────────────────────────── */
+
+/**
+ * The fields of the draft that describe one widget.
+ *
+ * Read off the schema rather than listed again, so a field added to a draft
+ * cannot be silently left out of the second widget — the failure that would
+ * produce is a setting that works on part one and is quietly ignored on part
+ * two.
+ */
+const PART_KEYS = Object.keys(draftPartSchema.shape) as ReadonlyArray<keyof DraftPart>;
+
+/** Part zero, read off the draft's own fields. */
+const primaryPart = (draft: ConciergeDraft): DraftPart =>
+  draftPartSchema.parse(
+    Object.fromEntries(
+      PART_KEYS.map((key) => [key, (draft as unknown as Record<string, unknown>)[key]]).filter(
+        ([, value]) => value !== undefined,
+      ),
+    ),
+  );
+
+/**
+ * Every widget this draft describes, always at least one.
+ *
+ * The single accessor. Nothing else should branch on whether `parts` has been
+ * materialised, because that is the difference between a draft written before
+ * multi-part setups existed and one written after — and no caller should have
+ * to care which it is holding.
+ */
+export const partsOf = (draft: ConciergeDraft): readonly DraftPart[] =>
+  draft.parts.length > 0 ? draft.parts : [primaryPart(draft)];
+
+export const partCount = (draft: ConciergeDraft): number => partsOf(draft).length;
+
+/**
+ * A step's id, scoped to the part it belongs to.
+ *
+ * Part zero's steps keep their bare ids, deliberately. Every stored draft,
+ * every existing answer and every control on the card names a step by its
+ * plain id, and prefixing them all would have invalidated the lot for the sake
+ * of symmetry. A one-widget setup is therefore identical to what it was.
+ */
+export const partStep = (index: number, stepId: string): string =>
+  index === 0 ? stepId : `p${index}:${stepId}`;
+
+/** The inverse. An unprefixed id belongs to part zero. */
+export const splitPartStep = (stepId: string): { index: number; step: string } => {
+  const match = /^p(\d+):(.+)$/.exec(stepId);
+  return match ? { index: Number(match[1]), step: match[2]! } : { index: 0, step: stepId };
+};
+
+/**
+ * One part, shaped as the single-widget draft every existing function expects.
+ *
+ * This is what kept the step machine from having to be rewritten. `allSteps`,
+ * `applyStep`, `settle`, `readiness` and `buildFromDraft` are eleven hundred
+ * lines that correctly answer "what does this one widget still need"; run them
+ * against a view of each part and they answer it for every widget, without a
+ * line of them learning that parts exist.
+ */
+export const partView = (draft: ConciergeDraft, index: number): ConciergeDraft => {
+  const part = partsOf(draft)[index];
+  if (!part) return draft;
+  return { ...draft, ...part, parts: [], group: undefined };
+};
+
+/**
+ * Fold a modified view back into the draft.
+ *
+ * Part zero is written to the top-level fields as well as to `parts[0]`, so
+ * the two never disagree — every reader of `draft.op` or `draft.component`
+ * goes on seeing the primary widget, whether or not this setup has grown a
+ * second part.
+ */
+export const withPart = (
+  draft: ConciergeDraft,
+  index: number,
+  view: ConciergeDraft,
+): ConciergeDraft => {
+  const updated = primaryPart(view);
+  const parts = partsOf(draft).map((part, at) => (at === index ? updated : part));
+  if (index >= parts.length) parts.push(updated);
+  return { ...draft, ...(index === 0 ? updated : {}), parts };
+};
+
+/** Append an empty part, so a patch has somewhere to land. */
+export const addPart = (draft: ConciergeDraft): ConciergeDraft => ({
+  ...draft,
+  parts: [...partsOf(draft), draftPartSchema.parse({})],
+});
 
 export const newDraft = (
   id: string,

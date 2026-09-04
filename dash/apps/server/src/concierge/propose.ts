@@ -262,6 +262,15 @@ export const proposeSetup = async (input: ProposeSetupInput): Promise<ProposedSe
       shape: WidgetShape;
       fanOut: { from: string; field: string; as?: string; maxRows?: number };
     };
+    parts?: Array<{
+      connection: string;
+      endpoint: string;
+      component?: string;
+      title?: string;
+      roles?: Record<string, readonly string[]>;
+      shape?: WidgetShape;
+    }>;
+    group?: { title: string; display: "tabs" | "row" | "stack" };
     choiceBetween?: {
       role: "primary" | "secondary";
       options: Array<{
@@ -372,15 +381,89 @@ export const proposeSetup = async (input: ProposeSetupInput): Promise<ProposedSe
    * leave the person asking.
    */
   /*
-   * A comparison, which is not a join and cannot be built as one.
+   * Two things somebody wants to see together, built as two widgets.
    *
-   * Handled before the join path because the two are mutually exclusive and
-   * because the failure mode of guessing wrong is silent: forced through a
-   * join, "listings per month against applications per month" finds nothing to
-   * match on and quietly becomes a chart of listings alone — which is exactly
-   * what it did, with rent on the value axis.
+   * "All my properties and also my available listings" used to arrive here as
+   * "enrich", because that was the only word available for it — so a join was
+   * attempted, found nothing to match on, degraded to the properties alone,
+   * and the reply announced the listings anyway.
+   *
+   * They are not one dataset and forcing them into one was the original sin.
+   * They are two: two endpoints, two bindings, two caches, drawn inside one
+   * frame. So the second endpoint gets its own binding call — it has its own
+   * fields and its own idea of what a good view of them is, and reusing the
+   * first's answer would bind the listings to the properties' columns.
+   *
+   * The frame is recorded, not built. Widgets do not exist until confirm, and
+   * there is nothing to group before then.
    */
-  if (picked.secondary && picked.relationship === "compare") {
+  if (picked.secondary && picked.relationship === "alongside") {
+    const other = context.ops.find((candidate) => candidate.id === picked.secondary);
+    const otherShape = context.shapes[picked.secondary];
+    const otherConnection = other
+      ? context.connections.find((candidate) => candidate.id === other.connection)
+      : undefined;
+
+    if (other && otherShape && otherShape.fields.length > 0) {
+      const second = await proposeWidget({
+        llm: input.llm,
+        shape: otherShape,
+        connection: other.connection,
+        connectionTitle: otherConnection?.title ?? other.connection,
+        op: other.id,
+        opTitle: other.title,
+        intent: input.intent,
+        ...(input.model ? { model: input.model } : {}),
+        ...(input.signal ? { signal: input.signal } : {}),
+      });
+
+      if (second.widget) {
+        patch.parts = [
+          {
+            connection: other.connection,
+            endpoint: other.id,
+            component: second.widget.component,
+            ...(second.widget.title ? { title: second.widget.title } : {}),
+            ...(Object.keys(second.widget.roles ?? {}).length > 0
+              ? {
+                  roles: Object.fromEntries(
+                    Object.entries(second.widget.roles ?? {}).map(([role, bound]) => [
+                      role,
+                      Array.isArray(bound) ? bound.map(String) : [String(bound)],
+                    ]),
+                  ),
+                }
+              : {}),
+            ...(second.measurement && !isEmptyShape(second.measurement)
+              ? { shape: second.measurement }
+              : {}),
+          },
+        ];
+        /*
+         * Named from the two widgets' own titles, which the model wrote for a
+         * person to read. Building it from the endpoint titles instead would
+         * put "Retrieve all properties and Retrieve all listings" above the
+         * frame, which is the API's vocabulary rather than anybody's.
+         */
+        const first = proposal.widget?.title ?? op.title;
+        patch.group = {
+          title: `${first} and ${second.widget.title}`.slice(0, 120),
+          display: "tabs",
+        };
+      } else {
+        notes.push(
+          `${other.title} could not be bound to a view, so this is built from ${op.title} ` +
+            `alone: ${second.errors.join("; ")}`,
+        );
+      }
+    } else {
+      notes.push(
+        `${op.title} and ${other?.title ?? picked.secondary} are two separate sets of records, ` +
+          `but nothing has been read from ${other?.title ?? "the second endpoint"} — so there ` +
+          `are no fields to build it from and this is ${op.title} alone.`,
+      );
+    }
+  } else if (picked.secondary && picked.relationship === "compare") {
     const nested = expandable.get(picked.secondary);
     const other =
       context.ops.find((candidate) => candidate.id === picked.secondary) ??

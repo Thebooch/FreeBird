@@ -953,6 +953,69 @@ export const DASH_REACT_STYLES = `
   border-radius: var(--dash-radius);
   background: var(--dash-plane);
   padding: var(--dash-space-2);
+  /* Several widgets stack, because a setup can now produce more than one and
+     each has to be judged at a size worth judging. */
+  display: flex;
+  flex-direction: column;
+  gap: var(--dash-space-2);
+}
+/* The other ways these could be shown, as small abstract pictures.
+   Never a question and never a gate: what is on screen is what happens if
+   nobody touches them. */
+.dash-arrange {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dash-space-1);
+  padding: var(--dash-space-2) 0 0;
+}
+.dash-arrange__label {
+  font-size: var(--dash-text-xs);
+  color: var(--dash-muted);
+}
+.dash-arrange__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--dash-space-2);
+}
+.dash-arrange__chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: var(--dash-space-2);
+  background: var(--dash-surface);
+  border: 1px solid var(--dash-border);
+  border-radius: var(--dash-radius-sm);
+  cursor: pointer;
+  transition: border-color var(--dash-dur-base) var(--dash-ease);
+}
+.dash-arrange__chip:hover:not(:disabled) { border-color: var(--dash-accent); }
+.dash-arrange__chip:disabled { opacity: 0.5; cursor: default; }
+.dash-arrange__mock { width: 72px; height: 48px; display: block; }
+/* Grey bars and nothing else. A mock carrying plausible values would be a
+   promise about data nobody has read yet. */
+.dash-arrange__body { fill: var(--dash-border); }
+.dash-arrange__on { fill: var(--dash-muted); }
+.dash-arrange__off { fill: var(--dash-border); }
+.dash-arrange__name {
+  font-size: var(--dash-text-xs);
+  font-weight: 600;
+  color: var(--dash-text);
+}
+.dash-arrange__cost {
+  font-size: var(--dash-text-xs);
+  color: var(--dash-muted);
+}
+
+/* What the frame will be called, under the widgets that go in it. */
+.dash-setup__frame {
+  margin: 0;
+  font-size: var(--dash-text-xs);
+  color: var(--dash-muted);
+  text-align: center;
 }
 /*
  * A fixed height, because the pane must not resize under someone every time a
@@ -1072,4 +1135,75 @@ export const DASH_REACT_STYLES = `
   0%, 70% { box-shadow: 0 0 0 2px var(--dash-accent); }
   100% { box-shadow: 0 0 0 0 transparent; }
 }
+
+/* ── widget groups ─────────────────────────────────────────────────────────
+   Several widgets inside one frame. The frame owns the card — border, radius,
+   shadow — and each member is quieted to borderless through the presentation
+   system, so a group reads as one object rather than as cards inside a card. */
+.dash-group {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  background: var(--dash-surface);
+  border: 1px solid var(--dash-border);
+  border-radius: var(--dash-radius);
+  box-shadow: var(--dash-shadow-sm);
+  overflow: hidden;
+}
+.dash-group__head {
+  display: flex;
+  align-items: center;
+  gap: var(--dash-space-2);
+  padding: var(--dash-space-3) var(--dash-space-4) 0;
+}
+.dash-group__title {
+  margin: 0;
+  font-size: var(--dash-text-sm);
+  font-weight: 600;
+  color: var(--dash-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dash-group__tabs {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.dash-group__tabs .dash-tabs { padding: 0 var(--dash-space-4); }
+.dash-group__panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: var(--dash-space-3) var(--dash-space-4) var(--dash-space-4);
+}
+
+/* A row or a stack. The .dash-widget rule sets height:100%, which is right
+   when it owns a whole grid cell and wrong when several share one — so members
+   are flex children with their own min-size floor instead. */
+.dash-group__lane {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  gap: var(--dash-space-4);
+  padding: var(--dash-space-3) var(--dash-space-4) var(--dash-space-4);
+}
+.dash-group[data-arrangement="row"] .dash-group__lane { flex-direction: row; }
+.dash-group[data-arrangement="stack"] .dash-group__lane {
+  flex-direction: column;
+  overflow-y: auto;
+}
+.dash-group__member {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+/* A stacked member sizes to its content rather than being squeezed to an
+   equal share of a height it cannot know. */
+.dash-group[data-arrangement="stack"] .dash-group__member { flex: 0 0 auto; }
 `;

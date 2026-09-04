@@ -2,7 +2,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AdapterRegistry, AdapterError, RestAdapter, type HttpFetch } from "@freebirdai/dash-adapters";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
-import type { ConciergeContext, InferredShape } from "@freebirdai/dash-agent";
+import type {
+  Arrangement,
+  ConciergeContext,
+  ConciergeDraft,
+  InferredShape,
+} from "@freebirdai/dash-agent";
 import { inferShape, mapReviewProposal, reviewSuggestions, suggestWidgets } from "@freebirdai/dash-agent";
 import type {
   ConnectionSpec,
@@ -36,6 +41,7 @@ import {
 } from "./chat/concierge-actions.js";
 import { buildChatRegistry } from "./chat/registry.js";
 import { buildConciergeContext } from "./concierge/context.js";
+import { rearrangeSetup } from "./concierge/arrange.js";
 import { planDetailSetup } from "./concierge/detail.js";
 import type { DetailPlanRequest, DetailSetup } from "./concierge/detail.js";
 import { planNarrowing } from "./concierge/drilldown.js";
@@ -778,11 +784,32 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     return planDetailSetup({ llm: model, context: conciergeContext(), ...input });
   };
 
+  /**
+   * Re-read a widget's fields when an arrangement changes what it is.
+   *
+   * Only for the two arrangements that do: a merge and a list change what a
+   * widget reads, and which field is its title is a question the records
+   * answer rather than the schema. The frames — tabs, a row, a stack — never
+   * reach this, so the common swap stays instant and free.
+   */
+  const rearrangeFor = async (input: {
+    draft: ConciergeDraft;
+    arrangement: Arrangement;
+  }): Promise<{ draft: ConciergeDraft; notes: readonly string[]; error?: string }> => {
+    const model = resolveLlm("bind");
+    return rearrangeSetup({
+      ...(model ? { llm: model } : {}),
+      context: conciergeContext(),
+      ...input,
+    });
+  };
+
   void app.register(
     conciergeRoutes({
       drafts,
       context: conciergeContext,
       planDetail: planDetailFor,
+      rearrange: rearrangeFor,
       getDashboard: (id) => store.getDashboard(id),
       putDashboard: (spec) => store.putDashboard(spec),
       /*

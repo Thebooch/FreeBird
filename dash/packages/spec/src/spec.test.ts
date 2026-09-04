@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest";
 import { parseAggregation } from "./aggregation.js";
 import { connectionSchema, getOp } from "./connection.js";
 import { COMPONENT_CONTRACTS, type ColumnMeta, validateBinding } from "./contracts.js";
-import { parseDashboard, parseDuration, parseWidget } from "./dashboard.js";
+import {
+  anchorCell,
+  groupMembers,
+  layoutSchema,
+  parseDashboard,
+  parseDuration,
+  parseWidget,
+} from "./dashboard.js";
 import {
   type ResolvedParams,
   defaultGrainFor,
@@ -549,5 +556,136 @@ describe("highlights", () => {
       roles: { columns: ["a"] },
     });
     expect(parsed.value?.highlights).toEqual([]);
+  });
+});
+
+/**
+ * Several widgets drawn inside one frame.
+ *
+ * A group is a fact about the *layout*, never about a widget. Two things
+ * somebody wants behind tabs are still two datasets with two caches and two
+ * refresh clocks, and nothing about wanting them together makes them one — so
+ * members keep their own cells and the widget schema is untouched by any of
+ * this.
+ */
+describe("widget groups", () => {
+  const widgetAt = (id: string) => ({
+    id,
+    title: id,
+    component: "table",
+    source: { connection: "api", op: "list" },
+    roles: { columns: ["a"] },
+  });
+
+  const board = (over: Record<string, unknown> = {}) =>
+    parseDashboard({
+      id: "d",
+      title: "D",
+      widgets: [widgetAt("one"), widgetAt("two")],
+      groups: [{ id: "pair", title: "Both" }],
+      layout: {
+        cells: [
+          { widgetId: "one", x: 0, y: 0, w: 6, h: 5, group: "pair" },
+          { widgetId: "two", x: 6, y: 0, w: 6, h: 5, group: "pair" },
+        ],
+      },
+      ...over,
+    });
+
+  it("accepts a group whose members are ordinary cells", () => {
+    const result = board();
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("defaults a group to tabs", () => {
+    expect(board().value?.groups[0]?.display).toBe("tabs");
+  });
+
+  it("leaves boards with no groups exactly as they were", () => {
+    const result = parseDashboard({
+      id: "d",
+      title: "D",
+      widgets: [widgetAt("one")],
+      layout: { cells: [{ widgetId: "one", x: 0, y: 0, w: 6, h: 5 }] },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.value?.groups).toEqual([]);
+    expect(result.value?.layout.cells[0]?.group).toBeUndefined();
+  });
+
+  it("rejects a cell naming a group nobody declared", () => {
+    const result = board({ groups: [] });
+    expect(result.errors.join()).toMatch(/names group "pair", which is not declared/);
+  });
+
+  it("rejects duplicate group ids", () => {
+    const result = board({
+      groups: [
+        { id: "pair", title: "Both" },
+        { id: "pair", title: "Again" },
+      ],
+    });
+    expect(result.errors.join()).toMatch(/duplicate group id/);
+  });
+
+  /*
+   * The failure this prevents is silent rather than loud: a one-member group
+   * renders a tab strip with a single tab, which reads as the other half
+   * having failed to load.
+   */
+  it("rejects a group of one", () => {
+    const result = board({
+      layout: {
+        cells: [
+          { widgetId: "one", x: 0, y: 0, w: 6, h: 5, group: "pair" },
+          { widgetId: "two", x: 6, y: 0, w: 6, h: 5 },
+        ],
+      },
+    });
+    expect(result.errors.join()).toMatch(/a group needs at least two/);
+  });
+
+  it("rejects a group nothing belongs to", () => {
+    const result = board({
+      layout: {
+        cells: [
+          { widgetId: "one", x: 0, y: 0, w: 6, h: 5 },
+          { widgetId: "two", x: 6, y: 0, w: 6, h: 5 },
+        ],
+      },
+    });
+    expect(result.errors.join()).toMatch(/holds 0 widget\(s\)/);
+  });
+
+  describe("the anchor", () => {
+    const layout = layoutSchema.parse({
+      cells: [
+        { widgetId: "lower", x: 0, y: 4, w: 6, h: 5, group: "pair" },
+        { widgetId: "right", x: 6, y: 0, w: 6, h: 5, group: "pair" },
+        { widgetId: "upper", x: 0, y: 0, w: 6, h: 5, group: "pair" },
+        { widgetId: "loose", x: 0, y: 9, w: 6, h: 5 },
+      ],
+    });
+
+    it("reads top-left, so the group sits where its first member did", () => {
+      expect(anchorCell(layout, "pair")?.widgetId).toBe("upper");
+    });
+
+    it("orders members the way they are drawn", () => {
+      expect(groupMembers(layout, "pair").map((cell) => cell.widgetId)).toEqual([
+        "upper",
+        "right",
+        "lower",
+      ]);
+    });
+
+    it("ignores cells belonging to no group", () => {
+      expect(groupMembers(layout, "pair").map((cell) => cell.widgetId)).not.toContain("loose");
+    });
+
+    it("has no anchor for a group with no members", () => {
+      expect(anchorCell(layout, "nothing")).toBeUndefined();
+    });
   });
 });

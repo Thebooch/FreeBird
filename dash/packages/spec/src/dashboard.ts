@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { componentIdSchema } from "./contracts.js";
+import { componentIdSchema, contractFor } from "./contracts.js";
 import { dashboardParamsSchema } from "./params.js";
 import { highlightSchema, pipelineSchema } from "./pipeline.js";
 import { presentationSchema } from "./presentation.js";
@@ -469,9 +469,40 @@ export const layoutCellSchema = z.object({
   h: z.number().int().min(1).max(24),
   locked: z.boolean().default(false),
   sizeVariant: z.string().optional(),
+  /**
+   * The group this widget is shown inside, if any.
+   *
+   * On the cell rather than on the widget, and that is the whole design. Two
+   * things somebody wants side by side, or behind tabs, are still two widgets:
+   * two datasets, two components, two caches, two refresh clocks. Nothing
+   * about wanting to see them together makes them one, and a `panes` array on
+   * the widget would have made composition a data concern — every role
+   * contract, every validation and the whole runtime would have had to learn
+   * about sub-widgets to render what is really an arrangement.
+   *
+   * So a group is a fact about the layout. Members keep their own cells, which
+   * keeps the invariant the whole layout layer rests on — a cell names a real
+   * widget — and means ungrouping restores positions that were never lost.
+   */
+  group: idSchema.optional(),
 });
 
 export type LayoutCell = z.infer<typeof layoutCellSchema>;
+
+/**
+ * Several widgets drawn inside one frame.
+ *
+ * `display` is a preference rather than a guarantee: a frame too narrow for
+ * tabs stacks instead, the same way a record sheet does. The renderer decides,
+ * because only it knows how much room there is.
+ */
+export const widgetGroupSchema = z.object({
+  id: idSchema,
+  title: z.string().min(1).max(120),
+  display: z.enum(["tabs", "row", "stack"]).default("tabs"),
+});
+
+export type WidgetGroup = z.infer<typeof widgetGroupSchema>;
 
 export const layoutSchema = z.object({
   gridCols: z.literal(12).default(12),
@@ -479,6 +510,79 @@ export const layoutSchema = z.object({
 });
 
 export type Layout = z.infer<typeof layoutSchema>;
+
+/** A group's cells, in the order they are drawn. */
+export const groupMembers = (
+  layout: Layout,
+  groupId: string,
+): readonly LayoutCell[] =>
+  layout.cells
+    .filter((cell) => cell.group === groupId)
+    .sort((a, b) => a.y - b.y || a.x - b.x);
+
+/**
+ * The cell whose geometry the whole group occupies.
+ *
+ * A group is one rectangle on the grid, so exactly one of its members has to
+ * own the position — otherwise dragging it would have to rewrite every
+ * member's cell and the packer would have several rectangles claiming the same
+ * space. The first member reading top-left is that one; the others keep their
+ * geometry untouched and unread, waiting for the group to be dissolved.
+ */
+export const anchorCell = (
+  layout: Layout,
+  groupId: string,
+): LayoutCell | undefined => groupMembers(layout, groupId)[0];
+
+/** Rows the tab strip needs above the member it is switching between. */
+const TAB_STRIP_ROWS = 1;
+
+/** What one component asks to be drawn at, left to itself. */
+const preferredBox = (component: string): { w: number; h: number } => {
+  const grid = contractFor(component)?.grid;
+  const sizes = grid?.sizes ?? [];
+  if (sizes.length === 0) return { w: 6, h: 6 };
+  const named = grid?.preferredSize
+    ? sizes.find((size) => size.name === grid.preferredSize)
+    : undefined;
+  const chosen = named ?? [...sizes].sort((a, b) => b.w * b.h - a.w * a.h)[0]!;
+  return { w: chosen.w, h: chosen.h };
+};
+
+/**
+ * The rectangle a group asks for when it is first placed.
+ *
+ * Only ever a starting point. Once somebody drags the frame, its anchor cell
+ * holds the real geometry and this is not consulted again — which is why it
+ * can afford to be a simple reading of what the members wanted rather than
+ * anything the packer has to agree with.
+ *
+ * The three arrangements want genuinely different room, and getting that wrong
+ * is what makes a new group look broken: tabs show one member at a time and
+ * need one member's worth of space plus the strip, a row needs every member's
+ * width at once, and a stack needs every member's height.
+ */
+export const groupSize = (
+  components: readonly string[],
+  display: "tabs" | "row" | "stack" = "tabs",
+  gridCols = 12,
+): { w: number; h: number } => {
+  const boxes = components.map(preferredBox);
+  if (boxes.length === 0) return { w: Math.min(6, gridCols), h: 6 };
+
+  const widest = Math.max(...boxes.map((box) => box.w));
+  const tallest = Math.max(...boxes.map((box) => box.h));
+
+  if (display === "row") {
+    const total = boxes.reduce((sum, box) => sum + box.w, 0);
+    return { w: Math.min(gridCols, total), h: tallest };
+  }
+  if (display === "stack") {
+    const total = boxes.reduce((sum, box) => sum + box.h, 0);
+    return { w: Math.min(gridCols, widest), h: total };
+  }
+  return { w: Math.min(gridCols, widest), h: tallest + TAB_STRIP_ROWS };
+};
 
 export const dashboardSchema = z
   .object({
@@ -493,6 +597,15 @@ export const dashboardSchema = z
     }),
     widgets: z.array(widgetSchema).default([]),
     layout: layoutSchema.default({ gridCols: 12, cells: [] }),
+    /**
+     * Frames holding several widgets each.
+     *
+     * Declared on the board rather than inferred from the cells, so a group
+     * has a title and a preferred arrangement of its own — an inferred one
+     * would have nowhere to put either, and "Properties" above two tabs is
+     * most of what makes a group read as one thing.
+     */
+    groups: z.array(widgetGroupSchema).default([]),
     /**
      * Board-wide look, keyed by component id (plus `widget` for the frame).
      *
@@ -531,6 +644,48 @@ export const dashboardSchema = z
           code: z.ZodIssueCode.custom,
           message: `cell for "${cell.widgetId}" runs past the grid (x ${cell.x} + w ${cell.w} > ${dashboard.layout.gridCols})`,
           path: ["layout", "cells", index],
+        });
+      }
+    });
+
+    const groupIds = new Set<string>();
+    dashboard.groups.forEach((group, index) => {
+      if (groupIds.has(group.id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `duplicate group id "${group.id}"`,
+          path: ["groups", index, "id"],
+        });
+      }
+      groupIds.add(group.id);
+    });
+
+    dashboard.layout.cells.forEach((cell, index) => {
+      if (cell.group !== undefined && !groupIds.has(cell.group)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `cell for "${cell.widgetId}" names group "${cell.group}", which is not declared`,
+          path: ["layout", "cells", index, "group"],
+        });
+      }
+    });
+
+    /*
+     * A group of one is not a group, and the failure it produces is silent.
+     *
+     * The frame would render a tab strip with one tab, or a row with one
+     * column — a widget wearing a second title bar and looking, to anyone who
+     * did not build it, like the other half failed to load. Refusing here is
+     * the same call the widget schema makes about a join needing two different
+     * sources: a shape that cannot mean anything should not be storable.
+     */
+    dashboard.groups.forEach((group, index) => {
+      const members = dashboard.layout.cells.filter((cell) => cell.group === group.id);
+      if (members.length < 2) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `group "${group.id}" holds ${members.length} widget(s) — a group needs at least two`,
+          path: ["groups", index],
         });
       }
     });

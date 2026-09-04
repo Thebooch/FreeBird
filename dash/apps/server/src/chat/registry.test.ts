@@ -302,3 +302,137 @@ describe("chat registry across tabs", () => {
     expect(ids).toContain("leases--finance");
   });
 });
+
+/**
+ * Several widgets in one frame, formed from the board rather than at build
+ * time.
+ *
+ * The request that produced all of this — "show all my properties and also my
+ * available listings" — is two collections that do not join and are not being
+ * measured against each other. They stay two widgets; only the frame is new.
+ * So grouping touches `layout.cells` and `groups`, and never a widget.
+ */
+describe("grouping widgets", () => {
+  const pair = () =>
+    board("ops", "Ops", [widget("properties", "Properties"), widget("listings", "Listings")]);
+
+  const run = async (
+    registry: ReturnType<typeof build>,
+    id: string,
+    args: unknown,
+  ): Promise<Record<string, unknown>> => {
+    const action = actionOf(registry, id)!;
+    return (await action.handler(args as never, {} as never)) as Record<string, unknown>;
+  };
+
+  it("asks before writing, like everything else that changes the board", () => {
+    const registry = build({ dashboard: pair() });
+    expect(actionOf(registry, "group_widgets")?.requiresConfirmation).toBe("preview");
+    expect(actionOf(registry, "ungroup_widgets")?.requiresConfirmation).toBe("preview");
+  });
+
+  it("refuses a widget it never showed", async () => {
+    const registry = build({ dashboard: pair() });
+    const action = actionOf(registry, "group_widgets")!;
+    expect(
+      await action.authorize?.(
+        { widgetIds: ["properties", "ghost"], title: "Both" } as never,
+        {} as never,
+      ),
+    ).toMatchObject({ ok: false, status: 404 });
+  });
+
+  it("declares the group and marks its members", async () => {
+    const dashboard = pair();
+    const store = new Map<string, DashboardSpec>([[dashboard.id, dashboard]]);
+    const registry = build({
+      dashboard,
+      board: {
+        getDashboard: () => store.get(dashboard.id) ?? null,
+        getDashboardById: (id) => store.get(id) ?? null,
+        putDashboard: (spec) => void store.set(spec.id, spec),
+      },
+    });
+
+    const result = await run(registry, "group_widgets", {
+      widgetIds: ["properties", "listings"],
+      title: "Portfolio",
+      display: "row",
+    });
+    expect(result["grouped"]).toBe(true);
+
+    const saved = store.get("ops")!;
+    expect(saved.groups).toHaveLength(1);
+    expect(saved.groups[0]).toMatchObject({ title: "Portfolio", display: "row" });
+
+    const groupId = saved.groups[0]!.id;
+    const members = saved.layout.cells.filter((cell) => cell.group === groupId);
+    expect(members.map((cell) => cell.widgetId).sort()).toEqual(["listings", "properties"]);
+  });
+
+  it("leaves the widgets themselves completely alone", async () => {
+    const dashboard = pair();
+    const store = new Map<string, DashboardSpec>([[dashboard.id, dashboard]]);
+    const registry = build({
+      dashboard,
+      board: {
+        getDashboard: () => store.get(dashboard.id) ?? null,
+        getDashboardById: (id) => store.get(id) ?? null,
+        putDashboard: (spec) => void store.set(spec.id, spec),
+      },
+    });
+
+    await run(registry, "group_widgets", {
+      widgetIds: ["properties", "listings"],
+      title: "Portfolio",
+    });
+    // Grouping is a layout fact. If it ever starts editing widgets, the whole
+    // reason it was built this way has been lost.
+    expect(store.get("ops")!.widgets).toEqual(dashboard.widgets);
+  });
+
+  it("defaults to tabs", async () => {
+    const dashboard = pair();
+    const store = new Map<string, DashboardSpec>([[dashboard.id, dashboard]]);
+    const registry = build({
+      dashboard,
+      board: {
+        getDashboard: () => store.get(dashboard.id) ?? null,
+        getDashboardById: (id) => store.get(id) ?? null,
+        putDashboard: (spec) => void store.set(spec.id, spec),
+      },
+    });
+    await run(registry, "group_widgets", {
+      widgetIds: ["properties", "listings"],
+      title: "Portfolio",
+    });
+    expect(store.get("ops")!.groups[0]?.display).toBe("tabs");
+  });
+
+  it("gives the members back when the frame is taken apart", async () => {
+    const dashboard = pair();
+    const store = new Map<string, DashboardSpec>([[dashboard.id, dashboard]]);
+    const registry = build({
+      dashboard,
+      board: {
+        getDashboard: () => store.get(dashboard.id) ?? null,
+        getDashboardById: (id) => store.get(id) ?? null,
+        putDashboard: (spec) => void store.set(spec.id, spec),
+      },
+    });
+
+    await run(registry, "group_widgets", {
+      widgetIds: ["properties", "listings"],
+      title: "Portfolio",
+    });
+    const groupId = store.get("ops")!.groups[0]!.id;
+
+    await run(registry, "ungroup_widgets", { groupId });
+
+    const saved = store.get("ops")!;
+    expect(saved.groups).toEqual([]);
+    expect(saved.layout.cells.some((cell) => cell.group !== undefined)).toBe(false);
+    // Nothing is deleted by taking a frame apart.
+    expect(saved.widgets).toHaveLength(2);
+  });
+});

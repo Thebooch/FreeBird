@@ -55,6 +55,11 @@ const ALWAYS = [
   "  as the number, in your own words - not as a disclaimer bolted on the end.",
   "- When something could not be read or did not answer the question, say which and what that",
   "  leaves unknown. A stated gap is worth more than a confident guess.",
+  "- Never say a widget shows something unless you were told it does. Describing a widget is",
+  "  not a free sentence: the user is looking at it, so inventing a second set of records in",
+  "  it is caught immediately and costs you every other claim in the reply. If the draft or",
+  "  the system's conclusion says an endpoint was dropped, or that fewer sources were used",
+  "  than were asked for, that is the first thing you say and you say it plainly.",
   "- Cite a widget you drew on by appending [[cite:<id>]] at the end of your reply. Only ids",
   "  you were given. Never mention the marker itself.",
   "- Do not offer to do things nobody asked for, and do not end with a question unless you",
@@ -112,10 +117,26 @@ export const RESPONSE_PROMPTS: Record<Flow, readonly string[]> = {
     "You ran out of the budget for this question before checking everything. Say what you looked at, what you found, and that there is more that could be read.",
     "You stopped before exhausting the sources. Give what you have, then say plainly that the search was cut short rather than that nothing exists.",
   ],
+  /*
+   * Every one of these asks for a confident sentence about what the widget
+   * shows, and that is right for the widget that got built. It is dangerous
+   * for the one that half got built.
+   *
+   * Asked for properties *and* listings, the endpoints were joined, the join
+   * had nothing to match on, the listings were dropped, and a note said so.
+   * The reply said the widget showed "your properties alongside their
+   * available listings, linking listing details to each property where the
+   * records match." The user was looking at a table of properties.
+   *
+   * The shortfall cannot reach here as a field — an action's result is not
+   * part of the final-reply context, only its name is — so the instruction is
+   * to carry forward what the mid-turn draft already knows. The draft is
+   * written by a model that did see the note, and it is passed in.
+   */
   built: [
-    "A live preview of the widget is ALREADY on screen in front of them, above your reply. Describe what it shows in one sentence, in the past or present tense. Never say you are building it, will build it, or will let them know when it is done - by the time they read this they are looking at it.",
-    "The preview is already visible; it was built before you were asked to write this. Say what it is measuring and over what, in one sentence, and mention the one thing they are most likely to want to adjust. Do not announce, do not promise, do not use the future tense about the widget.",
-    "They can see the widget already. Say what it turned out to show - a number from it if there is one - in one sentence. Nothing about building, nothing about waiting.",
+    "A live preview of the widget is ALREADY on screen in front of them, above your reply. Describe what it shows in one sentence, in the past or present tense. Never say you are building it, will build it, or will let them know when it is done - by the time they read this they are looking at it. If the draft says part of what they asked for was left out, lead with that instead and describe what was built second.",
+    "The preview is already visible; it was built before you were asked to write this. Say what it is measuring and over what, in one sentence, and mention the one thing they are most likely to want to adjust. Do not announce, do not promise, do not use the future tense about the widget. Say only what it actually contains - if the draft reports a dropped endpoint or a source that could not be included, that is the sentence, not the description.",
+    "They can see the widget already. Say what it turned out to show - a number from it if there is one - in one sentence. Nothing about building, nothing about waiting. If it turned out to show less than they asked for, say which part is missing before anything else; do not describe records that are not in it.",
   ],
   deciding: [
     "Something needs their decision before it can go ahead. Ask for exactly that, in their words, and nothing else.",

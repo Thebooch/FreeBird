@@ -357,6 +357,17 @@ export interface ConciergeControl extends ConciergeStep {
   required: boolean;
 }
 
+/** One way several widgets could be shown together. */
+export interface ArrangementOption {
+  id: "tabs" | "row" | "stack" | "list" | "merged";
+  label: string;
+  description: string;
+  /** True of the one the setup is currently built as. */
+  applied: boolean;
+  /** Requests this costs beyond what the setup already spends. */
+  extraRequests: number;
+}
+
 export interface ConciergeSummary {
   widgetId: string;
   title: string;
@@ -404,6 +415,25 @@ export interface ConciergeActive {
    * so what is previewed is what lands.
    */
   widget: WidgetSpec | null;
+  /**
+   * Every widget the setup will write, in order.
+   *
+   * One for almost every setup, and `widget` is its first entry — so anything
+   * that only ever cared about a single widget goes on reading that. Two or
+   * more when the request was for separate things seen together, which is not
+   * one widget with two datasets but two widgets.
+   */
+  widgets: WidgetSpec[];
+  /** How they are to be shown together, when the setup asked for a frame. */
+  group: { title: string; display: "tabs" | "row" | "stack" } | null;
+  /**
+   * The other ways these could be shown, each with what it costs.
+   *
+   * Empty for a setup of one widget, which is almost all of them. Every entry
+   * was derived from the endpoints, so anything offered here can really be
+   * built — the picker never shows a possibility that turns out not to be one.
+   */
+  arrangements: ArrangementOption[];
   summary: ConciergeSummary | null;
   warnings: string[];
   errors: string[];
@@ -506,6 +536,23 @@ export const api = {
     patch: ConciergePatch,
   ): Promise<ConciergeState & { rejected: ConciergeRejection[] }> =>
     request(`/api/concierge/${encodeURIComponent(dashboardId)}/revise`, json(patch)),
+
+  /**
+   * Swap how several widgets are shown together.
+   *
+   * Its own call rather than a field on `reviseSetup`, because it is a
+   * different kind of change: revise adjusts one widget's bindings, and this
+   * can turn two widgets into one. It may also spend a model call re-reading
+   * the fields, which revise promises not to.
+   */
+  setArrangement: (
+    dashboardId: string,
+    arrangement: ArrangementOption["id"],
+  ): Promise<ConciergeState & { notes?: string[] }> =>
+    request(
+      `/api/concierge/${encodeURIComponent(dashboardId)}/arrangement`,
+      json({ arrangement }),
+    ),
 
   /**
    * Record one answer and get the next question.

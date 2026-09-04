@@ -16,6 +16,8 @@ import type { Ambiguity } from "../propose.js";
 import { flatten, highlightCandidates, pane } from "../suggest.js";
 import type { AuthoredWidget } from "../suggest.js";
 import type { ConciergeDraft } from "./draft.js";
+import { partView, partsOf } from "./draft.js";
+import type { DraftPart } from "./draft.js";
 import {
   SERIES_BUCKET,
   SERIES_COUNT,
@@ -729,5 +731,255 @@ export const buildFromDraft = (
     errors: [],
     warnings,
     requiresFilters,
+  };
+};
+
+/* ── every widget in the setup ─────────────────────────────────────────── */
+
+export interface BuildAllResult {
+  /** One per part, in order. Empty when any of them failed. */
+  readonly widgets: readonly WidgetSpec[];
+  readonly authored: readonly AuthoredWidget[];
+  /** Scoped by widget, so "which one is short" is answerable. */
+  readonly errors: readonly string[];
+  readonly warnings: readonly string[];
+  readonly requiresFilters: readonly FilterDecl[];
+  /** How the finished widgets are shown together, if the setup asked. */
+  readonly group?: { readonly title: string; readonly display: "tabs" | "row" | "stack" };
+}
+
+/**
+ * Build every widget the setup describes.
+ *
+ * All or nothing, and deliberately: a setup that wrote the properties and
+ * silently dropped the listings is the half-success this whole tier exists to
+ * stop. If any part fails, none of them are returned and every failure is
+ * named against the widget it belongs to.
+ *
+ * Ids are kept unique across the batch by carrying `taken` forward — two parts
+ * built from the same endpoint would otherwise both want the same id, and the
+ * second would overwrite the first on a board that stores widgets by id.
+ */
+export const buildAll = (
+  input: ConciergeDraft,
+  context: ConciergeContext,
+  options: { readonly taken?: ReadonlySet<string>; readonly now?: () => Date } = {},
+): BuildAllResult => {
+  /*
+   * One list rather than several widgets, when the setup asked for that.
+   *
+   * Checked before anything is built because it is a different shape of
+   * answer, not a variation on this one: it produces a single widget whose
+   * sources are every part, where the branch below produces one widget per
+   * part. Interleaving a single part is meaningless and falls through.
+   */
+  if (input.interleave && partsOf(input).length > 1) {
+    return buildInterleaved(input, context, options);
+  }
+
+  const taken = new Set(options.taken ?? []);
+  const widgets: WidgetSpec[] = [];
+  const authored: AuthoredWidget[] = [];
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const requiresFilters: FilterDecl[] = [];
+  const parts = partsOf(input);
+
+  parts.forEach((_, index) => {
+    const result = buildFromDraft(partView(input, index), context, { ...options, taken });
+    /*
+     * A single-widget setup says "no endpoint chosen yet"; a three-widget one
+     * has to say which of the three. The prefix is only added when there is
+     * more than one, so nothing about the existing message changes.
+     */
+    const label = parts.length > 1 ? `widget ${index + 1}: ` : "";
+    errors.push(...result.errors.map((message) => `${label}${message}`));
+    warnings.push(...result.warnings.map((message) => `${label}${message}`));
+    requiresFilters.push(...result.requiresFilters);
+    if (result.widget) {
+      widgets.push(result.widget);
+      taken.add(result.widget.id);
+    }
+    if (result.authored) authored.push(result.authored);
+  });
+
+  if (errors.length > 0 || widgets.length !== parts.length) {
+    return { widgets: [], authored: [], errors, warnings, requiresFilters: [] };
+  }
+
+  return {
+    widgets,
+    authored,
+    errors: [],
+    warnings,
+    requiresFilters,
+    /*
+     * A group of one is not a group. The schema refuses to store one, so a
+     * setup that asked for a frame and then lost a part should arrive as two
+     * ordinary tiles rather than as a spec nothing will accept.
+     */
+    ...(input.group && widgets.length > 1 ? { group: input.group } : {}),
+  };
+};
+
+/* ── one list, two kinds of record ─────────────────────────────────────── */
+
+/**
+ * Components whose roles are few enough to align two endpoints onto.
+ *
+ * The restriction is the design, not a stopgap. A list asks for a title, a
+ * subtitle and a trailing detail, and "which field of the listings is its
+ * title" is a question with an answer. A table asks for its columns, and there
+ * is no honest way to decide that the properties' `Address` and the listings'
+ * `Rent` are the same column — the result is a wide grid half full of blanks,
+ * which reads as data having gone missing rather than as two kinds of row.
+ */
+const INTERLEAVABLE = new Set(["list", "feed", "cards", "timeline"]);
+
+/**
+ * Several endpoints stacked into one list, badged by which they came from.
+ *
+ * The third arrangement. A join answers "what else is true of this row" and a
+ * frame answers "show me these side by side"; this answers "show me all of
+ * them together, and tell me which is which" — one list in date order with a
+ * badge per row, which is what somebody usually means by a feed.
+ *
+ * No schema needed a single change for it. `runPlan`'s union already stacks
+ * rows without requiring the sources to share columns, `namedSource.pipeline`
+ * already shapes each endpoint on its own, and `select`, `rename` and
+ * `highlight` have all shipped for months. The only thing missing was
+ * something to write them: each part renames its own bound fields onto the
+ * component's role names, so two endpoints that share no vocabulary arrive as
+ * rows that do.
+ */
+export const buildInterleaved = (
+  input: ConciergeDraft,
+  context: ConciergeContext,
+  options: { readonly taken?: ReadonlySet<string>; readonly now?: () => Date } = {},
+): BuildAllResult => {
+  const parts = partsOf(input);
+  const fail = (message: string): BuildAllResult => ({
+    widgets: [],
+    authored: [],
+    errors: [message],
+    warnings: [],
+    requiresFilters: [],
+  });
+
+  const component = parts[0]?.component;
+  if (!component) return fail("no view chosen yet");
+  if (!INTERLEAVABLE.has(component)) {
+    return fail(
+      `${component} cannot show two kinds of record in one list — its columns would be half ` +
+        `empty. Use one of ${[...INTERLEAVABLE].join(", ")}, or keep them as separate widgets.`,
+    );
+  }
+  const contract = COMPONENT_CONTRACTS[component as keyof typeof COMPONENT_CONTRACTS];
+  if (!contract) return fail(`"${component}" is not a component this build knows`);
+
+  const connection = parts[0]?.connection;
+  if (!connection) return fail("no API chosen yet");
+
+  /*
+   * A role is only usable if EVERY part binds it.
+   *
+   * One that only some parts fill leaves those rows blank in that position,
+   * and a blank subtitle on half a list looks like the data failed to load
+   * rather than like it was never there. Dropping the role is the honest
+   * version: the list simply does not show that line for anybody.
+   */
+  const singleRoles = contract.roles.filter((role) => role.multi !== true);
+  const boundFor = (part: DraftPart, role: string): string | undefined => {
+    const value = part.roles[role];
+    const name = Array.isArray(value) ? value[0] : value;
+    return typeof name === "string" && name.length > 0 ? name : undefined;
+  };
+  const shared = singleRoles
+    .map((role) => role.role)
+    .filter((role) => parts.every((part) => boundFor(part, role) !== undefined));
+
+  const missing = singleRoles
+    .filter((role) => role.required && !shared.includes(role.role))
+    .map((role) => role.role);
+  if (missing.length > 0) {
+    return fail(
+      `every widget has to say what its ${missing.join(" and ")} is before they can share a ` +
+        "list — otherwise half the rows would have nothing in that position",
+    );
+  }
+
+  const sources = parts.map((part, index) => {
+    const label = part.title ?? part.op ?? `Source ${index + 1}`;
+    /*
+     * `select` before `rename` so the row carries only what the list draws.
+     * A field bound to two roles is renamed once and the second role drops
+     * out of `shared` above rather than silently taking the first's column.
+     */
+    const chosen: string[] = [];
+    const renames: Record<string, string> = {};
+    for (const role of shared) {
+      const field = boundFor(part, role)!;
+      if (chosen.includes(field)) continue;
+      chosen.push(field);
+      renames[field] = role;
+    }
+    return {
+      as: (part.op ?? `s${index}`).replace(/[^a-zA-Z0-9_-]/g, "_"),
+      connection: part.connection ?? connection,
+      op: part.op!,
+      params: {},
+      label,
+      hidden: false,
+      pipeline: [
+        { op: "extract" as const, path: part.rowsPath || "$" },
+        ...(chosen.length > 0 ? [{ op: "select" as const, fields: chosen }] : []),
+        ...(Object.keys(renames).length > 0
+          ? [{ op: "rename" as const, fields: renames }]
+          : []),
+      ],
+    };
+  });
+
+  if (parts.some((part) => !part.op)) return fail("no endpoint chosen yet");
+
+  /*
+   * A badge per source, so a row says what it is.
+   *
+   * This is the whole point of the arrangement — without it the list is two
+   * kinds of record shuffled together and indistinguishable, which is strictly
+   * worse than two widgets.
+   */
+  const tones = ["neutral", "good", "warning", "serious"] as const;
+  const highlights = sources.slice(0, 8).map((source, index) => ({
+    id: `series-${index}`,
+    when: `${SERIES_LABEL} == '${String(source.label).replace(/'/g, "")}'`,
+    tone: tones[index % tones.length]!,
+    label: String(source.label).slice(0, 60),
+    scope: "row" as const,
+  }));
+
+  const widget = parseWidget({
+    id: widgetId(input.title ?? "combined", options.taken ?? new Set()),
+    title: input.group?.title ?? input.title ?? "Combined",
+    component,
+    sources,
+    combine: { op: "union", as: SERIES_LABEL },
+    roles: Object.fromEntries(shared.map((role) => [role, role])),
+    highlights,
+    ...(input.model
+      ? { producedBy: { model: input.model, at: (options.now ?? (() => new Date()))().toISOString() } }
+      : {}),
+  });
+  if (!widget.ok || !widget.value) return fail(widget.errors.join("; "));
+
+  return {
+    widgets: [widget.value],
+    authored: [],
+    errors: [],
+    warnings: [
+      `${sources.map((source) => source.label).join(" and ")} are shown as one list, ` +
+        "badged by which they came from — only the fields all of them have are drawn",
+    ],
+    requiresFilters: [],
   };
 };

@@ -10,30 +10,49 @@ export {
 } from "./bind.js";
 export type { BindableField, BuildInput, RoleBinding } from "./bind.js";
 export {
+  MAX_PARTS,
   ROLE_STEP,
+  addPart,
   applyAnswer,
   conciergeDraftSchema,
+  draftPartSchema,
   drilldownDraftSchema,
   isRoleStep,
   joinDraftSchema,
   newDraft,
+  partCount,
+  partStep,
+  partView,
+  partsOf,
   roleOfStep,
   skipStep,
+  splitPartStep,
+  withPart,
 } from "./concierge/draft.js";
 export type {
   ConciergeDraft,
+  DraftPart,
   DrilldownDraft,
   JoinDraft,
   FieldGroupDraft,
   HeaderDraft,
   SectionDraft,
 } from "./concierge/draft.js";
-export { buildFromDraft } from "./concierge/build.js";
-export type { BuildResult } from "./concierge/build.js";
+export { buildAll, buildFromDraft, buildInterleaved } from "./concierge/build.js";
+export {
+  applyArrangement,
+  feasibleArrangements,
+  pairEndpoints,
+  pairFields,
+} from "./concierge/arrange.js";
+export type { Arrangement, ArrangementOption, JoinPairing } from "./concierge/arrange.js";
+export type { BuildAllResult, BuildResult } from "./concierge/build.js";
 export {
   EFFECT_STEPS,
   allSteps,
+  allStepsAcross,
   applyStep,
+  applyStepAcross,
   describeField,
   emptyContext,
   extraFieldOptions,
@@ -42,11 +61,17 @@ export {
   highlightOptions,
   labelsFor,
   nextStep,
+  nextStepAcross,
   preferredForRole,
   readiness,
+  readinessAcross,
   remainingSteps,
+  remainingStepsAcross,
   settle,
+  settleAcross,
+  valueOfAcross,
   viewOptions,
+  withJoinedColumns,
 } from "./concierge/steps.js";
 export { revise } from "./concierge/revise.js";
 export type { DraftPatch, Rejection, ReviseResult } from "./concierge/revise.js";
