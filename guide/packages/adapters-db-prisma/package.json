@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/adapters-db-prisma",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Prisma DB adapter for FreeBird.",
   "license": "MIT",
   "repository": {
