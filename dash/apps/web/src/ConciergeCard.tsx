@@ -90,7 +90,43 @@ const remember = (key: string): void => {
  * chose. Re-opening a chip is the opposite situation: a deliberate change to
  * something already decided, which is exactly what `revise` is for.
  */
+/**
+ * Declining a decision, aimed at the widget it belongs to.
+ *
+ * The same scoping `patchFor` needs, for the same reason: a bare `skip` on a
+ * scoped id was recorded against the first widget, where nothing reads it.
+ */
+const skipPatchFor = (stepId: string): ConciergePatch => {
+  const scoped = /^p(\d+):(.+)$/.exec(stepId);
+  if (!scoped) return { skip: [stepId] };
+  const index = Number(scoped[1]);
+  const parts: ConciergePatch[] = [];
+  for (let at = 1; at < index; at += 1) parts.push({});
+  parts.push({ skip: [scoped[2]!] });
+  return { parts };
+};
+
 const patchFor = (stepId: string, values: string[]): ConciergePatch => {
+  /*
+   * A control for one of the other widgets in the setup.
+   *
+   * Its id is scoped — `p1:role:title` — and every branch below matches on a
+   * bare one, so without this the whole function fell through to its default
+   * and returned an empty patch. The request succeeded, nothing changed, and
+   * the card redrew identically: the flicker with no effect.
+   *
+   * Nested rather than flattened, because `parts` is what the machine reads
+   * and index zero there is the second widget.
+   */
+  const scoped = /^p(\d+):(.+)$/.exec(stepId);
+  if (scoped) {
+    const index = Number(scoped[1]);
+    const parts: ConciergePatch[] = [];
+    // Earlier parts are left untouched by an empty patch of their own.
+    for (let at = 1; at < index; at += 1) parts.push({});
+    parts.push(patchFor(scoped[2]!, values));
+    return { parts };
+  }
   if (stepId.startsWith("role:")) {
     return { roles: { [stepId.slice("role:".length)]: values } };
   }
@@ -144,7 +180,7 @@ const CONTROL_LABELS: Readonly<Record<string, string>> = {
   groupBy: "Grouped by",
   filter: "Only",
   offer: "Also count",
-  options: "Controls",
+  options: "Switched on",
   drilldown: "On click",
   drilldownFields: "Record shows",
   extras: "Also showing",
@@ -152,17 +188,43 @@ const CONTROL_LABELS: Readonly<Record<string, string>> = {
   title: "Name",
 };
 
+/** The step's own id, with any part scope stripped off. */
+const bareStep = (stepId: string): string => stepId.replace(/^p\d+:/, "");
+
+/**
+ * The two decisions worth having on screen for every widget.
+ *
+ * Its name, and what it lets people do. Everything else is a consequence of
+ * what was asked for — the endpoint, the view, which field fills which slot —
+ * and belongs behind the disclosure with the rest. These two are the ones
+ * somebody wants to reach for on a widget that is already right.
+ */
+const PROMINENT = new Set(["title", "options"]);
+
+/**
+ * Which widget a control belongs to, when there is more than one.
+ *
+ * Two rows both reading "Name" is not a label, it is a coin toss. The first
+ * widget carries no marker: a setup builds one widget almost every time, and
+ * numbering the only thing on screen would be noise on every ordinary build.
+ */
+const partSuffix = (stepId: string): string => {
+  const scoped = /^p(\d+):/.exec(stepId);
+  return scoped ? ` · widget ${Number(scoped[1]) + 1}` : "";
+};
+
 const controlLabel = (control: ConciergeControl): string => {
-  const known = CONTROL_LABELS[control.stepId];
-  if (known) return known;
+  const known = CONTROL_LABELS[bareStep(control.stepId)];
+  if (known) return known + partSuffix(control.stepId);
   // Every measurement drawn beside the first gets a row of its own, so one can
   // be taken off without starting the widget again.
-  if (control.stepId.startsWith("series:")) return "Compared with";
-  if (control.stepId.startsWith("role:")) {
-    const role = control.stepId.slice("role:".length);
-    return role.charAt(0).toUpperCase() + role.slice(1);
+  const bare = bareStep(control.stepId);
+  if (bare.startsWith("series:")) return "Compared with" + partSuffix(control.stepId);
+  if (bare.startsWith("role:")) {
+    const role = bare.slice("role:".length);
+    return role.charAt(0).toUpperCase() + role.slice(1) + partSuffix(control.stepId);
   }
-  return control.stepId;
+  return bare + partSuffix(control.stepId);
 };
 
 /** What a control reads as, using the option labels rather than the raw ids. */
@@ -205,6 +267,17 @@ const Question = ({
   const [typed, setTyped] = useState(step.freeText ? (suggested?.value ?? "") : "");
   const [filter, setFilter] = useState("");
   const [showAll, setShowAll] = useState(false);
+  /*
+   * A name is typed, not chosen from a list.
+   *
+   * "What should it be called?" was rendered like every other question — a
+   * column of options with a text box beneath captioned "Or type your own" —
+   * so a step whose whole point is that you write something read as a picker,
+   * and read as a picker of *fields*, which is what the question one step
+   * earlier really is. The suggestions still exist behind the arrow; they are
+   * simply no longer the first thing offered.
+   */
+  const [showSuggestions, setShowSuggestions] = useState(false);
 
   /*
    * A long list is narrowed, not scrolled.
@@ -237,7 +310,36 @@ const Question = ({
         </p>
       )}
 
-      {step.options.length > VISIBLE_OPTIONS && (
+      {step.freeText && (
+        <div className="dash-setup__namerow">
+          <input
+            className="dash-setup__name"
+            value={typed}
+            disabled={busy}
+            aria-label={step.question}
+            data-testid="concierge-text"
+            onChange={(event) => setTyped(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && typed.trim()) onAnswer([typed.trim()], false);
+            }}
+          />
+          {step.options.length > 0 && (
+            <button
+              type="button"
+              className="dash-setup__namemore"
+              disabled={busy}
+              aria-expanded={showSuggestions}
+              aria-label="Other suggestions"
+              data-testid="concierge-suggestions"
+              onClick={() => setShowSuggestions((open) => !open)}
+            >
+              ▾
+            </button>
+          )}
+        </div>
+      )}
+
+      {step.options.length > VISIBLE_OPTIONS && !step.freeText && (
         <input
           className="dash-setup__text"
           value={filter}
@@ -249,6 +351,15 @@ const Question = ({
         />
       )}
 
+      {/*
+       * Rendered conditionally rather than hidden with the attribute.
+       *
+       * `.dash-setup__options` sets its own `display`, which beats the `hidden`
+       * attribute's user-agent rule — so the list stayed on screen under the
+       * name box and the step went on reading as a picker, which is the whole
+       * thing this change exists to stop.
+       */}
+      {!(step.freeText && !showSuggestions) && (
       <ul className="dash-setup__options">
         {visible.map((option) => {
           const on = chosen.includes(option.value);
@@ -286,8 +397,9 @@ const Question = ({
           );
         })}
       </ul>
+      )}
 
-      {hidden > 0 && (
+      {hidden > 0 && !step.freeText && (
         <button
           type="button"
           className="dash-setup__more"
@@ -299,20 +411,6 @@ const Question = ({
       )}
       {needle && matching.length === 0 && (
         <p className="dash-setup__help">Nothing matches “{filter.trim()}”.</p>
-      )}
-
-      {step.freeText && (
-        <input
-          className="dash-setup__text"
-          value={typed}
-          disabled={busy}
-          placeholder="Or type your own"
-          data-testid="concierge-text"
-          onChange={(event) => setTyped(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && typed.trim()) onAnswer([typed.trim()], false);
-          }}
-        />
       )}
 
       <div className="dash-row dash-row--end" style={{ marginTop: 10, gap: 6 }}>
@@ -488,6 +586,50 @@ const MOCKS: Record<string, JSX.Element> = {
       <rect x="24" y="20" width="22" height="4" rx="1" className="dash-arrange__off" />
     </svg>
   ),
+};
+
+/**
+ * The decisions worth having on screen without opening anything.
+ *
+ * The disclosure was the right answer when every decision behind it was a
+ * consequence of what somebody asked for — the endpoint, the view, which field
+ * fills which slot. Two of them are not: what the widget is called, and what it
+ * lets people do. Those are wanted on a widget that is already correct, and
+ * putting them behind the same fold as eleven bindings made the common
+ * adjustment the hardest one to find.
+ */
+const ProminentSettings = ({
+  controls,
+  busy,
+  onEdit,
+}: {
+  readonly controls: readonly ConciergeControl[];
+  readonly busy: boolean;
+  readonly onEdit: (stepId: string) => void;
+}): JSX.Element | null => {
+  if (controls.length === 0) return null;
+  return (
+    <ul className="dash-primary" data-testid="concierge-primary">
+      {controls.map((control) => (
+        <li key={control.stepId}>
+          <button
+            type="button"
+            className="dash-primary__row"
+            disabled={busy}
+            data-unset={control.settled ? "false" : "true"}
+            data-testid={`concierge-chip-${control.stepId}`}
+            onClick={() => onEdit(control.stepId)}
+          >
+            <span className="dash-primary__name">{controlLabel(control)}</span>
+            <span className="dash-primary__value">{controlValue(control)}</span>
+            <span className="dash-primary__go" aria-hidden="true">
+              ›
+            </span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
 };
 
 const ArrangementChips = ({
@@ -731,7 +873,7 @@ export const ConciergeCard = ({
     void run(async () => {
       const next = await api.reviseSetup(
         dashboardId,
-        skip ? { skip: [stepId] } : patchFor(stepId, values),
+        skip ? skipPatchFor(stepId) : patchFor(stepId, values),
       );
       if (next.rejected.length > 0) {
         setError(next.rejected.map((entry) => entry.reason).join("; "));
@@ -815,8 +957,16 @@ export const ConciergeCard = ({
        * and set it, which is why it is closed by default.
        */}
       {!state.step && !openControl && state.controls.length > 0 && (
+        <ProminentSettings
+          controls={state.controls.filter((control) => PROMINENT.has(bareStep(control.stepId)))}
+          busy={busy}
+          onEdit={setEditing}
+        />
+      )}
+
+      {!state.step && !openControl && state.controls.length > 0 && (
         <SettingsPanel
-          controls={state.controls}
+          controls={state.controls.filter((control) => !PROMINENT.has(bareStep(control.stepId)))}
           busy={busy}
           open={settingsOpen}
           onToggle={() => setSettingsOpen((value) => !value)}

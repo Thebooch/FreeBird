@@ -698,6 +698,18 @@ export const proposeSetup = async (input: ProposeSetupInput): Promise<ProposedSe
     patch,
     reason: picked.reason,
     notes,
-    ambiguities: patch.seriesWith || patch.offerSeries ? [] : proposal.ambiguities,
+    /*
+     * Doubts from a call that only saw one endpoint, discarded when a second
+     * is being built.
+     *
+     * The comment further up says exactly this about a comparison, and the
+     * same trap caught `alongside`: the primary binding call is shown the
+     * properties and nothing else, so it reliably reports that the listings
+     * are not in this response — true of what it was shown, and false of what
+     * is being built. Passed on, it had the assistant announce "available
+     * listings have not been included yet" above a widget that included them.
+     */
+    ambiguities:
+      patch.seriesWith || patch.offerSeries || patch.parts ? [] : proposal.ambiguities,
   };
 };

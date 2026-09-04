@@ -118,6 +118,7 @@ export {
   widgetGroupSchema,
   widgetSchema,
   widgetSources,
+  withoutWidget,
   widgetSourceSchema,
   widgetStatesSchema,
 } from "./dashboard.js";

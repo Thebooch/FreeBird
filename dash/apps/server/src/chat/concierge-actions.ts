@@ -1,16 +1,16 @@
 import type { ConciergeContext, ConciergeDraft, DraftPatch } from "@freebirdai/dash-agent";
 import {
   EFFECT_STEPS,
-  allSteps,
-  applyStep,
+  allStepsAcross,
+  applyStepAcross,
   buildAll,
   describeField,
   fieldPool,
   newDraft,
-  nextStep,
-  readiness,
+  nextStepAcross,
+  readinessAcross,
   revise,
-  skipStep,
+  skipStepAcross,
 } from "@freebirdai/dash-agent";
 import type { DashboardSpec, FilterDecl } from "@freebirdai/dash-spec";
 import { COMPONENT_CONTRACTS, parseWidget } from "@freebirdai/dash-spec";
@@ -693,7 +693,7 @@ export const conciergeActions = (ops: ConciergeOps): ComponentDefinition["action
           status: 409,
         };
       }
-      const current = nextStep(draft, ops.context);
+      const current = nextStepAcross(draft, ops.context);
       /*
        * A stale card cannot answer a question that has moved on.
        *
@@ -741,8 +741,10 @@ export const conciergeActions = (ops: ConciergeOps): ComponentDefinition["action
       }
 
       const next = args.skip
-        ? skipStep(draft, args.stepId)
-        : applyStep(draft, args.stepId, args.values, ops.context);
+        // Scoped: a question about the second widget arrives as `p1:...`, and
+        // the unscoped pair silently applied it to the first.
+        ? skipStepAcross(draft, args.stepId)
+        : applyStepAcross(draft, args.stepId, args.values, ops.context);
       await ops.putDraft(next);
       return stateOf(next, ops);
     },
@@ -829,7 +831,7 @@ export const conciergeActions = (ops: ConciergeOps): ComponentDefinition["action
        * are controls the user is already looking at.
        */
       if (draft.mode === "assisted") {
-        const state = readiness(draft, ops.context);
+        const state = readinessAcross(draft, ops.context);
         return (
           state.ready || {
             ok: false as const,
@@ -838,7 +840,7 @@ export const conciergeActions = (ops: ConciergeOps): ComponentDefinition["action
           }
         );
       }
-      const pending = nextStep(draft, ops.context);
+      const pending = nextStepAcross(draft, ops.context);
       return (
         pending === null || {
           ok: false as const,
@@ -990,8 +992,8 @@ export const conciergeKnowledge = (ops: ConciergeOps): Array<{ text: string }> =
     return facts;
   }
 
-  const state = readiness(draft, ops.context);
-  const step = nextStep(draft, ops.context);
+  const state = readinessAcross(draft, ops.context);
+  const step = nextStepAcross(draft, ops.context);
 
   facts.push({
     text:
@@ -1172,7 +1174,7 @@ const idleGuidance = (ops: ConciergeOps): string => {
 /** The lists the assistant chooses from, for the endpoint currently in play. */
 const materials = (draft: ConciergeDraft, ops: ConciergeOps): string => {
   const parts: string[] = [];
-  const entries = allSteps(draft, ops.context);
+  const entries = allStepsAcross(draft, ops.context);
   const optionsOf = (stepId: string): string =>
     (entries.find((entry) => entry.step.id === stepId)?.step.options ?? [])
       .map((option) => option.value)

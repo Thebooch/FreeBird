@@ -6,7 +6,14 @@ import type {
   RangePreset,
   WidgetSpec,
 } from "@freebirdai/dash-spec";
-import { groupSize, parseDashboard, parseWidget, rangePresetSchema, widgetSources } from "@freebirdai/dash-spec";
+import {
+  groupSize,
+  parseDashboard,
+  parseWidget,
+  rangePresetSchema,
+  widgetSources,
+  withoutWidget,
+} from "@freebirdai/dash-spec";
 import type { ComponentDefinition } from "@freebirdai/core";
 import { createComponentRegistry } from "@freebirdai/core";
 import { z } from "zod";
@@ -335,14 +342,14 @@ const boardActions = (
           input.board.getDashboardById?.(found.dashboardId) ??
           (found.current ? input.board.getDashboard() : null);
         if (!board) throw new Error("that tab no longer exists");
-        input.board.putDashboard({
-          ...board,
-          widgets: board.widgets.filter((widget) => widget.id !== found.widgetId),
-          layout: {
-            ...board.layout,
-            cells: board.layout.cells.filter((cell) => cell.widgetId !== found.widgetId),
-          },
-        });
+        /*
+         * One call, because removing a widget is three edits and the third is
+         * easy to forget: the widget, its cell, and any frame that has just
+         * lost its second member. A group of one is a shape the schema
+         * refuses, so forgetting it made the board unsaveable rather than
+         * slightly wrong.
+         */
+        input.board.putDashboard(withoutWidget(board, found.widgetId));
         input.board.onChanged?.();
         return {
           removed: true,

@@ -361,6 +361,52 @@ describe("a comparison rather than a join", () => {
     expect(result.patch.group?.title).toBe("Things by status and Owners");
   });
 
+  /*
+   * The primary binding call is shown one endpoint and reliably worries that
+   * the other one's data is missing — true of what it was shown, false of what
+   * is being built. Passed on, it had the assistant announce "available
+   * listings have not been included yet" above a widget that included them.
+   */
+  it("drops the primary call's doubts once a second widget is being built", async () => {
+    const llm = fakeLlm([
+      { args: { ...compare, relationship: "alongside" } },
+      {
+        args: {
+          ...binding,
+          ambiguities: [
+            {
+              field: "OwnerId",
+              question: "This response has no owner data. Is there another endpoint?",
+              options: ["yes", "no"],
+            },
+          ],
+        },
+      },
+      { args: ownerBinding },
+    ]);
+    const result = await proposeSetup({ llm, intent: "my things and also my owners", context });
+
+    expect(result.patch.parts).toHaveLength(1);
+    // The doubt was about the endpoint it was shown, not about what was built.
+    expect(result.ambiguities).toEqual([]);
+  });
+
+  it("keeps the doubts when only one widget is being built", async () => {
+    const llm = fakeLlm([
+      { args: { primary: "list_things", reason: "your things" } },
+      {
+        args: {
+          ...binding,
+          ambiguities: [
+            { field: "Amount", question: "Cents or dollars?", options: ["cents", "dollars"] },
+          ],
+        },
+      },
+    ]);
+    const result = await proposeSetup({ llm, intent: "things", context });
+    expect(result.ambiguities).toHaveLength(1);
+  });
+
   it("falls back to the primary alone, and says so, when the second cannot be bound", async () => {
     const llm = fakeLlm([
       { args: { ...compare, relationship: "alongside" } },

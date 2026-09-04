@@ -9,7 +9,7 @@ import type {
   Presentation,
   WidgetSpec,
 } from "@freebirdai/dash-spec";
-import { connectionSchema, parseDashboard } from "@freebirdai/dash-spec";
+import { connectionSchema, parseDashboard, withoutWidget } from "@freebirdai/dash-spec";
 import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { api } from "./api.js";
@@ -326,14 +326,9 @@ const App = (): JSX.Element => {
   const removeWidget = async (widgetId: string): Promise<void> => {
     if (!live.dashboard) return;
     setRemoveError(null);
-    const next = {
-      ...live.dashboard,
-      widgets: live.dashboard.widgets.filter((widget) => widget.id !== widgetId),
-      layout: {
-        ...live.dashboard.layout,
-        cells: live.dashboard.layout.cells.filter((cell) => cell.widgetId !== widgetId),
-      },
-    };
+    // The widget, its cell, and any frame left with only one member — which
+    // the schema refuses, so leaving it behind made the whole board unsaveable.
+    const next = withoutWidget(live.dashboard, widgetId);
 
     const response = await fetch(`/api/dashboards/${live.dashboard.id}`, {
       method: "PUT",

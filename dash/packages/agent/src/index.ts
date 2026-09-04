@@ -69,6 +69,7 @@ export {
   remainingStepsAcross,
   settle,
   settleAcross,
+  skipStepAcross,
   valueOfAcross,
   viewOptions,
   withJoinedColumns,

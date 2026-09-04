@@ -587,6 +587,17 @@ export const revise = (
 ): ReviseResult => {
   const primary = reviseOne(input, patch, context);
   let draft = primary.draft;
+  /*
+   * Part zero lives in two places once `parts` is materialised — the top-level
+   * fields and `parts[0]` — and `reviseOne` only knows about the first.
+   *
+   * Without this re-sync the two silently disagree the moment a setup grows a
+   * second widget: `partsOf` reads the array, so every later edit to the first
+   * widget was written to the fields, read back from the stale array, and
+   * appeared to do nothing at all. That is most of what "I click and only get
+   * a flicker" was.
+   */
+  if (draft.parts.length > 0) draft = withPart(draft, 0, draft);
   const rejected: Rejection[] = [...primary.rejected];
 
   (patch.parts ?? []).forEach((sub, offset) => {

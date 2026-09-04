@@ -547,7 +547,18 @@ export const splitPartStep = (stepId: string): { index: number; step: string } =
 export const partView = (draft: ConciergeDraft, index: number): ConciergeDraft => {
   const part = partsOf(draft)[index];
   if (!part) return draft;
-  return { ...draft, ...part, parts: [], group: undefined };
+  /*
+   * The draft's own part fields are cleared before the part's are laid over
+   * them, and that is not tidiness — it is a correctness fix.
+   *
+   * An optional field absent from a part is absent from the object, so a plain
+   * spread does not overwrite anything: a second widget with no title of its
+   * own inherited the first widget's, along with its endpoint and its view.
+   * The setup then described two widgets that were quietly the same one.
+   */
+  const base = { ...draft } as Record<string, unknown>;
+  for (const field of PART_KEYS) delete base[field];
+  return { ...(base as ConciergeDraft), ...part, parts: [], group: undefined };
 };
 
 /**

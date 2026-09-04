@@ -21,6 +21,7 @@ import {
   partView,
   partsOf,
   roleOfStep,
+  skipStep,
   splitPartStep,
   withPart,
   type ConciergeDraft,
@@ -575,7 +576,7 @@ export const optionalRoleStep = (
   const noun = humanLabel(role.role).toLowerCase();
   return {
     id: `${ROLE_STEP}${role.role}`,
-    question: `Which field should be the ${noun}?`,
+    question: role.prompt ?? `Which field should be the ${noun}?`,
     ...(role.description ? { help: role.description } : {}),
     options: candidates.map((field) => fieldOption(field, false, names)),
     multiple: role.multi === true,
@@ -1244,7 +1245,18 @@ export const allSteps = (input: ConciergeDraft, context: ConciergeContext): Step
       add(
         {
           id: `${ROLE_STEP}${role.role}`,
-          question: `Which field should be the ${humanLabel(role.role).toLowerCase()}?`,
+          /*
+           * The contract's own question, in the words a person would use.
+           *
+           * Generated from the slot's name it read "Which field should be the
+           * title?" — which collides with the widget's own name — and "Which
+           * field should be the columns?", which is not even grammatical. The
+           * slot names are ours; the question is theirs. The generated form
+           * survives only for a component that ships without one.
+           */
+          question:
+            role.prompt ??
+            `Which field should be the ${humanLabel(role.role).toLowerCase()}?`,
           help: role.description,
           options: candidates.map((field) =>
             fieldOption(field, field.name === preferred?.name, names),
@@ -1295,7 +1307,15 @@ export const allSteps = (input: ConciergeDraft, context: ConciergeContext): Step
     add(
       {
         id: "options",
-        question: "Any controls on this widget?",
+        /*
+         * "Controls" is our word for it. What is on offer here is a search
+         * box, following the board's date range, and a few display switches —
+         * so the question names those rather than the category we file them
+         * under.
+         */
+        question: "Anything to switch on for this widget?",
+        help:
+          "Searching, following the board's date range, and display options like striped rows.",
         options: controls,
         multiple: true,
         skippable: true,
@@ -1936,6 +1956,21 @@ export const applyStepAcross = (
   const { index, step } = splitPartStep(stepId);
   if (index >= partCount(draft)) return draft;
   return withPart(draft, index, applyStep(partView(draft, index), step, values, context));
+};
+
+/**
+ * Mark a step skipped, in whichever part it belongs to.
+ *
+ * The counterpart to `applyStepAcross`, and its absence was the whole of the
+ * bug: `nextStepAcross` hands out scoped ids, so a question about the second
+ * widget arrives as `p1:role:title` — and the unscoped `skipStep` writes that
+ * literal string into part zero's `skipped` list, where nothing ever reads it.
+ * The question is asked again, unchanged, and the flow cannot advance.
+ */
+export const skipStepAcross = (draft: ConciergeDraft, stepId: string): ConciergeDraft => {
+  const { index, step } = splitPartStep(stepId);
+  if (index >= partCount(draft)) return draft;
+  return withPart(draft, index, skipStep(partView(draft, index), step));
 };
 
 export const valueOfAcross = (draft: ConciergeDraft, stepId: string): readonly string[] => {

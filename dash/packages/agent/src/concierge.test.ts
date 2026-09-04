@@ -14,11 +14,13 @@ import {
   allStepsAcross,
   applyStep,
   applyStepAcross,
+  skipStepAcross,
   emptyContext,
   extraFieldOptions,
   fieldPool,
   nextStep,
   preferredForRole,
+  nextStepAcross,
   readiness,
   readinessAcross,
   remainingSteps,
@@ -2598,5 +2600,116 @@ describe("one list, two kinds of record", () => {
     expect(result.widgets).toHaveLength(1);
     // The ordinary single-widget path, not the union.
     expect(result.widgets[0]?.sources).toEqual([]);
+  });
+});
+
+/**
+ * Answering a question about the second widget.
+ *
+ * The reported failure, and it had three layers. `nextStepAcross` hands out
+ * scoped ids — `p1:role:title` — and every path that consumed one was still
+ * the unscoped version: the answer route, the chat action, and the card's own
+ * patch builder. Each wrote the scoped string somewhere nothing reads it, so
+ * the answer applied to nothing, the same question came back, and the card
+ * redrew identically. From the outside: a flicker, and a flow that could
+ * neither advance nor go back.
+ */
+describe("answering a scoped question", () => {
+  const context = () => contextFor({ list: FLAT, owners: OWNERS }, { joins: [] });
+
+  const twoParts = (ctx: ConciergeContext) =>
+    revise(
+      newDraft("d", "", "assisted"),
+      {
+        endpoint: "list",
+        component: "table",
+        roles: { columns: ["name"] },
+        title: "Things",
+        // Roles before a title, because that is the order `ORDER` applies them
+        // in — a part with nothing bound has no title step to set yet.
+        parts: [
+          {
+            endpoint: "owners",
+            component: "table",
+            roles: { columns: ["ownerName"] },
+            title: "Owners",
+          },
+        ],
+      },
+      ctx,
+    ).draft;
+
+  /** Roles hold one name or several; the question is which widget got it. */
+  const bound = (draft: ReturnType<typeof twoParts>, index: number): string[] => {
+    const value = partsOf(draft)[index]?.roles["columns"];
+    return Array.isArray(value) ? value : value ? [value] : [];
+  };
+
+  it("applies an answer to the widget it was asked about", () => {
+    const ctx = context();
+    const draft = applyStepAcross(twoParts(ctx), "p1:role:columns", ["region"], ctx);
+    expect(bound(draft, 1)).toEqual(["region"]);
+    // And leaves the first widget exactly as it was.
+    expect(bound(draft, 0)).toEqual(["name"]);
+  });
+
+  it("records a skip against the widget it was asked about", () => {
+    const ctx = context();
+    const draft = skipStepAcross(twoParts(ctx), "p1:drilldown");
+    expect(partsOf(draft)[1]?.skipped).toContain("drilldown");
+    expect(partsOf(draft)[0]?.skipped).not.toContain("drilldown");
+  });
+
+  it("moves the next question on rather than asking it again", () => {
+    const ctx = context();
+    /*
+     * A second widget with nothing bound, so something really is blocking.
+     * A fully answered setup has no next question at all in assisted mode,
+     * which is right and makes for a test that proves nothing.
+     */
+    let draft = revise(
+      newDraft("d", "", "assisted"),
+      {
+        endpoint: "list",
+        component: "table",
+        roles: { columns: ["name"] },
+        parts: [{ endpoint: "owners", component: "table" }],
+      },
+      ctx,
+    ).draft;
+
+    const first = nextStepAcross(draft, ctx);
+    expect(first).not.toBeNull();
+    // The blocking question belongs to the second widget, and says so.
+    expect(first!.id.startsWith("p1:")).toBe(true);
+
+    draft = applyStepAcross(draft, first!.id, [first!.options[0]!.value], ctx);
+    const second = nextStepAcross(draft, ctx);
+    // The stuck flow was the same id coming back forever.
+    expect(second?.id).not.toBe(first!.id);
+  });
+
+  /*
+   * The third layer, and the subtlest. Part zero lives in two places once
+   * `parts` is materialised, and `revise` only knew about one of them — so
+   * every later edit to the FIRST widget was written to the top-level fields,
+   * read back from a stale `parts[0]`, and appeared to do nothing.
+   */
+  it("keeps an edit to the first widget once a second exists", () => {
+    const ctx = context();
+    const started = twoParts(ctx);
+    const edited = revise(started, { title: "Renamed" }, ctx).draft;
+
+    expect(edited.title).toBe("Renamed");
+    expect(partsOf(edited)[0]?.title).toBe("Renamed");
+    // And the second widget is untouched by it.
+    expect(partsOf(edited)[1]?.title).toBe("Owners");
+  });
+
+  it("routes a scoped patch to the right widget", () => {
+    const ctx = context();
+    const edited = revise(twoParts(ctx), { parts: [{ title: "Also renamed" }] }, ctx).draft;
+    expect(partsOf(edited)[1]?.title).toBe("Also renamed");
+    expect(partsOf(edited)[0]?.title).toBe("Things");
   });
 });

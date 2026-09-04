@@ -1,7 +1,7 @@
 import type { Arrangement, ConciergeContext, ConciergeDraft } from "@freebirdai/dash-agent";
 import {
   EFFECT_STEPS,
-  applyStep,
+  applyStepAcross,
   applyArrangement,
   buildAll,
   feasibleArrangements,
@@ -9,7 +9,7 @@ import {
   nextStepAcross,
   readinessAcross,
   revise,
-  skipStep,
+  skipStepAcross,
 } from "@freebirdai/dash-agent";
 import type { DashboardSpec } from "@freebirdai/dash-spec";
 import { commitSetup } from "../concierge/commit.js";
@@ -308,8 +308,14 @@ export const conciergeRoutes =
         }
 
         const next = parsed.data.skip
-          ? skipStep(draft, parsed.data.stepId)
-          : applyStep(draft, parsed.data.stepId, parsed.data.values, deps.context());
+          /*
+           * Scoped, because `nextStepAcross` hands out scoped ids. The
+           * unscoped pair wrote `p1:role:title` into part zero, where nothing
+           * reads it — so the answer applied to nothing, the same question
+           * came back, and the card flickered and stuck.
+           */
+          ? skipStepAcross(draft, parsed.data.stepId)
+          : applyStepAcross(draft, parsed.data.stepId, parsed.data.values, deps.context());
         await deps.drafts.put(id, next);
         return stateOf(next, deps, id);
       },

@@ -959,6 +959,75 @@ export const DASH_REACT_STYLES = `
   flex-direction: column;
   gap: var(--dash-space-2);
 }
+/* The two decisions worth reaching without opening anything: what the widget
+   is called, and what it lets people do. Above the disclosure, not inside it. */
+.dash-primary {
+  list-style: none;
+  margin: var(--dash-space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--dash-space-1);
+}
+.dash-primary__row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--dash-space-2);
+  padding: var(--dash-space-2);
+  text-align: left;
+  background: var(--dash-surface);
+  border: 1px solid var(--dash-border);
+  border-radius: var(--dash-radius-sm);
+  cursor: pointer;
+}
+.dash-primary__row:hover:not(:disabled) { border-color: var(--dash-accent); }
+.dash-primary__row:disabled { opacity: 0.6; cursor: default; }
+.dash-primary__name {
+  font-size: var(--dash-text-xs);
+  font-weight: 600;
+  color: var(--dash-text);
+  flex: 0 0 auto;
+}
+.dash-primary__value {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--dash-text-xs);
+  color: var(--dash-muted);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Unset is worth noticing on a row this prominent. */
+.dash-primary__row[data-unset="true"] .dash-primary__value { color: var(--dash-accent); }
+.dash-primary__go { color: var(--dash-muted); flex: 0 0 auto; }
+
+/* A name is typed, not picked. The suggestions live behind the arrow, so the
+   box is the first thing offered rather than a footnote under a list. */
+.dash-setup__namerow { display: flex; gap: var(--dash-space-1); align-items: stretch; }
+.dash-setup__name {
+  flex: 1;
+  min-width: 0;
+  padding: var(--dash-space-2);
+  font: inherit;
+  color: var(--dash-text);
+  background: var(--dash-surface);
+  border: 1px solid var(--dash-border);
+  border-radius: var(--dash-radius-sm);
+}
+.dash-setup__name:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: -1px; }
+.dash-setup__namemore {
+  padding: 0 var(--dash-space-2);
+  color: var(--dash-muted);
+  background: var(--dash-surface);
+  border: 1px solid var(--dash-border);
+  border-radius: var(--dash-radius-sm);
+  cursor: pointer;
+}
+.dash-setup__namemore:hover:not(:disabled) { color: var(--dash-accent); border-color: var(--dash-accent); }
+.dash-setup__namemore[aria-expanded="true"] { color: var(--dash-accent); }
+
 /* The other ways these could be shown, as small abstract pictures.
    Never a question and never a gate: what is on screen is what happens if
    nobody touches them. */

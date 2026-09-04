@@ -534,6 +534,49 @@ export const anchorCell = (
   groupId: string,
 ): LayoutCell | undefined => groupMembers(layout, groupId)[0];
 
+/**
+ * Take a widget off a board, leaving the board still valid.
+ *
+ * Removing a widget is three edits, not one, and the third is easy to forget:
+ * the widget, its cell, and any frame that just lost its second member. A
+ * group of one is a shape this schema refuses — correctly, since it renders as
+ * a widget wearing an extra title bar — so forgetting it does not produce a
+ * slightly-wrong board, it produces one that will not save at all.
+ *
+ * That is what happened: two call sites each removed the widget and its cell,
+ * neither knew about groups, and deleting either half of a pair made the whole
+ * dashboard unsaveable with "invalid". Hence one function, so the rule lives
+ * in the same place as the constraint it satisfies.
+ */
+export const withoutWidget = <T extends DashboardSpec>(dashboard: T, widgetId: string): T => {
+  const cells = dashboard.layout.cells.filter((cell) => cell.widgetId !== widgetId);
+
+  /*
+   * A frame that has dropped below two members is dissolved rather than
+   * emptied. Its survivor goes back to being an ordinary tile, which is what
+   * somebody deleting the other one meant to happen.
+   */
+  const surviving = new Set(
+    dashboard.groups
+      .map((group) => group.id)
+      .filter((id) => cells.filter((cell) => cell.group === id).length >= 2),
+  );
+
+  return {
+    ...dashboard,
+    widgets: dashboard.widgets.filter((widget) => widget.id !== widgetId),
+    groups: dashboard.groups.filter((group) => surviving.has(group.id)),
+    layout: {
+      ...dashboard.layout,
+      cells: cells.map((cell) =>
+        cell.group && !surviving.has(cell.group)
+          ? { ...cell, group: undefined }
+          : cell,
+      ),
+    },
+  };
+};
+
 /** Rows the tab strip needs above the member it is switching between. */
 const TAB_STRIP_ROWS = 1;
 

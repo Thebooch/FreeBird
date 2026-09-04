@@ -4,6 +4,7 @@ import { connectionSchema, getOp } from "./connection.js";
 import { COMPONENT_CONTRACTS, type ColumnMeta, validateBinding } from "./contracts.js";
 import {
   anchorCell,
+  withoutWidget,
   groupMembers,
   layoutSchema,
   parseDashboard,
@@ -687,5 +688,68 @@ describe("widget groups", () => {
     it("has no anchor for a group with no members", () => {
       expect(anchorCell(layout, "nothing")).toBeUndefined();
     });
+  });
+});
+
+
+/**
+ * Taking a widget off a board without breaking it.
+ *
+ * Removing one is three edits and the third is easy to forget: the widget, its
+ * cell, and any frame that has just lost its second member. Forgetting it does
+ * not produce a slightly-wrong board — a group of one is a shape this schema
+ * refuses, so the whole dashboard stops saving with "invalid".
+ */
+describe("withoutWidget", () => {
+  const widgetAt = (id: string) => ({
+    id,
+    title: id,
+    component: "table",
+    source: { connection: "api", op: "list" },
+    roles: { columns: ["a"] },
+  });
+
+  const paired = () =>
+    parseDashboard({
+      id: "d",
+      title: "D",
+      widgets: [widgetAt("one"), widgetAt("two"), widgetAt("solo")],
+      groups: [{ id: "pair", title: "Both" }],
+      layout: {
+        cells: [
+          { widgetId: "one", x: 0, y: 0, w: 6, h: 5, group: "pair" },
+          { widgetId: "two", x: 6, y: 0, w: 6, h: 5, group: "pair" },
+          { widgetId: "solo", x: 0, y: 5, w: 6, h: 5 },
+        ],
+      },
+    }).value!;
+
+  it("takes the widget and its cell", () => {
+    const next = withoutWidget(paired(), "solo");
+    expect(next.widgets.map((widget) => widget.id)).toEqual(["one", "two"]);
+    expect(next.layout.cells.map((cell) => cell.widgetId)).toEqual(["one", "two"]);
+  });
+
+  it("leaves an untouched group alone", () => {
+    expect(withoutWidget(paired(), "solo").groups).toHaveLength(1);
+  });
+
+  /* The bug: a frame left holding one widget is a board that will not save. */
+  it("dissolves a frame that has lost its second member", () => {
+    const next = withoutWidget(paired(), "two");
+    expect(next.groups).toEqual([]);
+    expect(next.layout.cells.find((cell) => cell.widgetId === "one")?.group).toBeUndefined();
+  });
+
+  it("leaves a board the schema still accepts", () => {
+    for (const id of ["one", "two", "solo"]) {
+      const result = parseDashboard(withoutWidget(paired(), id));
+      expect(result.errors, `removing ${id} produced an invalid board`).toEqual([]);
+    }
+  });
+
+  it("does nothing for a widget that is not there", () => {
+    const board = paired();
+    expect(withoutWidget(board, "ghost").widgets).toHaveLength(3);
   });
 });

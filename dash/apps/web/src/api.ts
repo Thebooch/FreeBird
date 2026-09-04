@@ -487,6 +487,17 @@ export interface ConciergePatch {
   title?: string;
   /** Step ids to mark declined, which is not the same as setting nothing. */
   skip?: string[];
+  /**
+   * The same patch, aimed at one of the other widgets in the setup.
+   *
+   * Index zero here is the *second* widget: the patch's own fields are the
+   * first. Declared because zod strips what it has not heard of, so a control
+   * for the second widget without this arrives as a patch that changes
+   * nothing and reports success.
+   */
+  parts?: ConciergePatch[];
+  group?: { title: string; display?: "tabs" | "row" | "stack" };
+  interleave?: boolean;
 }
 
 export interface MapState {
