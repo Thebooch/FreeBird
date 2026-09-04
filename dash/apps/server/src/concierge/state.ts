@@ -1,5 +1,12 @@
 import type { ConciergeContext, ConciergeDraft, Step, StepEntry } from "@freebirdai/dash-agent";
-import { allSteps, buildFromDraft, nextStep, readiness, remainingSteps } from "@freebirdai/dash-agent";
+import {
+  allStepsAcross,
+  buildAll,
+  nextStepAcross,
+  feasibleArrangements,
+  readinessAcross,
+  remainingStepsAcross,
+} from "@freebirdai/dash-agent";
 import type { DashboardSpec, WidgetSpec } from "@freebirdai/dash-spec";
 
 /**
@@ -58,7 +65,7 @@ const nextAction = (
   draft: ConciergeDraft,
   context: ConciergeContext,
   ready: boolean,
-  missing: ReturnType<typeof readiness>["missing"],
+  missing: ReturnType<typeof readinessAcross>["missing"],
 ): string => {
   if (ready) {
     return (
@@ -94,8 +101,8 @@ export const conciergeState = (input: StateInput) => {
   if (!draft) return { active: false as const };
 
   const taken = new Set((board?.widgets ?? []).map((widget) => widget.id));
-  const step = nextStep(draft, context);
-  const state = readiness(draft, context);
+  const step = nextStepAcross(draft, context);
+  const state = readinessAcross(draft, context);
 
   /*
    * Built whenever it can be, not only when every question has been answered.
@@ -105,8 +112,18 @@ export const conciergeState = (input: StateInput) => {
    * the decisions from a queue of questions into adjustments to something on
    * screen. `buildFromDraft` already refuses a draft that cannot produce one.
    */
-  const built = state.ready ? buildFromDraft(draft, context, { taken }) : null;
-  const widget: WidgetSpec | null = built?.widget ?? null;
+  const built = state.ready ? buildAll(draft, context, { taken }) : null;
+  /*
+   * The primary, kept as its own field.
+   *
+   * Everything that reads this state — the card's preview, the assistant's
+   * summary, the tests — was written when a setup produced exactly one widget,
+   * and for the overwhelmingly common case it still does. `widgets` is the
+   * whole truth; `widget` is the first of them, so nothing that only cares
+   * about a single-widget setup had to learn to count.
+   */
+  const widgets: readonly WidgetSpec[] = built?.widgets ?? [];
+  const widget: WidgetSpec | null = widgets[0] ?? null;
 
   return {
     active: true as const,
@@ -131,20 +148,40 @@ export const conciergeState = (input: StateInput) => {
     /** The next question. Null in assisted mode once nothing blocks a widget. */
     step: step ? renderStep(step) : null,
     /** Every decision, for the controls on the approval card. */
-    controls: allSteps(draft, context).map(renderControl),
+    controls: allStepsAcross(draft, context).map(renderControl),
     /** Only meaningful while questions are being walked one at a time. */
-    remaining: step ? remainingSteps(draft, context) : 0,
+    remaining: step ? remainingStepsAcross(draft, context) : 0,
     /** The thing itself, for the live preview. */
     widget,
-    summary: built?.authored
+    /**
+     * Every widget this setup will write, in order.
+     *
+     * One for almost every setup. Two or more when the request was for
+     * separate things seen together — which is not a widget with two datasets
+     * but two widgets, so the card previews each of them.
+     */
+    widgets,
+    /** How they are to be shown together, when the setup asked for a frame. */
+    group: built?.group ?? null,
+    /**
+     * The other ways these could be shown, each with what it costs.
+     *
+     * Empty for a setup of one widget, which is almost all of them — a picker
+     * on every build is the endpoint list this whole flow exists to replace.
+     * Derived rather than proposed: what is feasible is a fact about the
+     * endpoints, so the model never adds to this list, only picks from it.
+     */
+    arrangements: feasibleArrangements(draft, context),
+    summary: built && built.authored.length > 0
       ? {
-          widgetId: built.authored.id,
+          widgetId: built.authored[0]?.id ?? "",
           title: widget?.title ?? "",
           component: widget?.component ?? "",
-          headline: built.authored.headline,
-          why: built.authored.why,
-          requests: built.authored.cost.requests,
-          onOpen: built.authored.cost.onOpen,
+          headline: built.authored.map((entry) => entry.headline).join(" "),
+          why: built.authored.flatMap((entry) => entry.why),
+          /* Every widget is its own request, so the price is the sum. */
+          requests: built.authored.reduce((total, entry) => total + entry.cost.requests, 0),
+          onOpen: built.authored.reduce((total, entry) => total + entry.cost.onOpen, 0),
         }
       : null,
     /*

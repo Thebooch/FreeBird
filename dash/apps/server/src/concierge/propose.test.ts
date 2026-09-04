@@ -74,6 +74,14 @@ const report: CapabilityReport = capabilityReportSchema.parse({
 
 const context = buildConciergeContext({ connections: [connection], reports: [report] });
 
+/** What a binding call returns for the owners endpoint, in its own fields. */
+const ownerBinding = {
+  component: "table",
+  title: "Owners",
+  rowsPath: "$.data",
+  columns: ["OwnerName"],
+};
+
 /** What call B returns for "things by status" — `proposalSchema`'s own shape. */
 const binding = {
   component: "metricRow",
@@ -314,31 +322,58 @@ describe("a comparison rather than a join", () => {
    * the enum the model had to answer "enrich"; the join then found nothing to
    * match on, degraded to the first endpoint, and the reply announced both.
    */
-  it("does not attempt a join when the two are simply two things", async () => {
+  it("builds a second widget instead of forcing a join", async () => {
+    /*
+     * The reported failure, end to end. "Show all my properties and also my
+     * available listings" is two collections that do not join and are not
+     * measured against each other — so it is two widgets, and each gets its
+     * own binding call because each has its own fields and its own idea of a
+     * good view of them.
+     */
     const llm = fakeLlm([
       { args: { ...compare, relationship: "alongside" } },
       { args: binding },
+      { args: ownerBinding },
     ]);
     const result = await proposeSetup({ llm, intent: "my things and also my owners", context });
 
     expect(result.patch.joinWith).toBeUndefined();
     expect(result.patch.seriesWith).toBeUndefined();
-    // Built from the primary, which is a real answer rather than a dead end.
     expect(result.patch.endpoint).toBe("list_things");
+    expect(result.patch.parts).toHaveLength(1);
+    expect(result.patch.parts?.[0]).toMatchObject({
+      endpoint: "list_owners",
+      component: "table",
+      title: "Owners",
+    });
   });
 
-  it("names the endpoint it could not include, rather than dropping it silently", async () => {
+  it("asks for a frame, named from the widgets rather than the endpoints", async () => {
     const llm = fakeLlm([
       { args: { ...compare, relationship: "alongside" } },
       { args: binding },
+      { args: ownerBinding },
     ]);
     const result = await proposeSetup({ llm, intent: "my things and also my owners", context });
 
-    const notes = result.notes.join(" ");
-    expect(notes).toContain("List owners");
-    expect(notes).toContain("List things");
-    // The note has to be usable as a sentence to the user, not a status code.
-    expect(notes).toContain("second widget");
+    expect(result.patch.group).toMatchObject({ display: "tabs" });
+    // The model's own widget titles, not "Retrieve all …" from the API.
+    expect(result.patch.group?.title).toBe("Things by status and Owners");
+  });
+
+  it("falls back to the primary alone, and says so, when the second cannot be bound", async () => {
+    const llm = fakeLlm([
+      { args: { ...compare, relationship: "alongside" } },
+      { args: binding },
+      { args: { component: "nonsense", rowsPath: "$.data" } },
+    ]);
+    const result = await proposeSetup({ llm, intent: "my things and also my owners", context });
+
+    expect(result.patch.parts).toBeUndefined();
+    expect(result.patch.group).toBeUndefined();
+    // A widget was still built, and the shortfall is named rather than silent.
+    expect(result.patch.endpoint).toBe("list_things");
+    expect(result.notes.join(" ")).toContain("List owners");
   });
 
   it("still joins when the second endpoint is enriching the first", async () => {

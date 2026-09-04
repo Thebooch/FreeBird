@@ -953,6 +953,69 @@ export const DASH_REACT_STYLES = `
   border-radius: var(--dash-radius);
   background: var(--dash-plane);
   padding: var(--dash-space-2);
+  /* Several widgets stack, because a setup can now produce more than one and
+     each has to be judged at a size worth judging. */
+  display: flex;
+  flex-direction: column;
+  gap: var(--dash-space-2);
+}
+/* The other ways these could be shown, as small abstract pictures.
+   Never a question and never a gate: what is on screen is what happens if
+   nobody touches them. */
+.dash-arrange {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dash-space-1);
+  padding: var(--dash-space-2) 0 0;
+}
+.dash-arrange__label {
+  font-size: var(--dash-text-xs);
+  color: var(--dash-muted);
+}
+.dash-arrange__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--dash-space-2);
+}
+.dash-arrange__chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: var(--dash-space-2);
+  background: var(--dash-surface);
+  border: 1px solid var(--dash-border);
+  border-radius: var(--dash-radius-sm);
+  cursor: pointer;
+  transition: border-color var(--dash-dur-base) var(--dash-ease);
+}
+.dash-arrange__chip:hover:not(:disabled) { border-color: var(--dash-accent); }
+.dash-arrange__chip:disabled { opacity: 0.5; cursor: default; }
+.dash-arrange__mock { width: 72px; height: 48px; display: block; }
+/* Grey bars and nothing else. A mock carrying plausible values would be a
+   promise about data nobody has read yet. */
+.dash-arrange__body { fill: var(--dash-border); }
+.dash-arrange__on { fill: var(--dash-muted); }
+.dash-arrange__off { fill: var(--dash-border); }
+.dash-arrange__name {
+  font-size: var(--dash-text-xs);
+  font-weight: 600;
+  color: var(--dash-text);
+}
+.dash-arrange__cost {
+  font-size: var(--dash-text-xs);
+  color: var(--dash-muted);
+}
+
+/* What the frame will be called, under the widgets that go in it. */
+.dash-setup__frame {
+  margin: 0;
+  font-size: var(--dash-text-xs);
+  color: var(--dash-muted);
+  text-align: center;
 }
 /*
  * A fixed height, because the pane must not resize under someone every time a

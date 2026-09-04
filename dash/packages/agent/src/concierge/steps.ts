@@ -16,7 +16,13 @@ import {
   ROLE_STEP,
   applyAnswer,
   isRoleStep,
+  partCount,
+  partStep,
+  partView,
+  partsOf,
   roleOfStep,
+  splitPartStep,
+  withPart,
   type ConciergeDraft,
 } from "./draft.js";
 
@@ -1875,3 +1881,104 @@ export const remainingSteps = (draft: ConciergeDraft, context: ConciergeContext)
   }
   return count;
 };
+
+/* ── across every part ─────────────────────────────────────────────────── */
+
+/**
+ * The step machine, run over every widget in the setup.
+ *
+ * Everything above answers "what does this one widget still need", and does it
+ * well enough that none of it is worth rewriting to count to two. So these run
+ * it once per part against `partView` and scope the ids on the way out.
+ *
+ * A one-part setup produces exactly what it always produced — `partStep`
+ * leaves part zero's ids bare — so every stored answer, every control on the
+ * card and every test above this line is untouched by any of it.
+ */
+
+export const allStepsAcross = (
+  draft: ConciergeDraft,
+  context: ConciergeContext,
+): StepEntry[] =>
+  partsOf(draft).flatMap((_, index) =>
+    allSteps(partView(draft, index), context).map((entry) => ({
+      ...entry,
+      step: { ...entry.step, id: partStep(index, entry.step.id) },
+    })),
+  );
+
+/**
+ * The next unanswered question anywhere in the setup.
+ *
+ * Parts in order, and that ordering is the whole of the wizard's behaviour
+ * with several widgets: the first is finished before the second is started.
+ * Interleaving them would ask which endpoint the second widget uses before
+ * anybody has said what the first one shows.
+ */
+export const nextStepAcross = (
+  draft: ConciergeDraft,
+  context: ConciergeContext,
+): Step | null => {
+  const parts = partsOf(draft);
+  for (let index = 0; index < parts.length; index += 1) {
+    const step = nextStep(partView(draft, index), context);
+    if (step) return { ...step, id: partStep(index, step.id) };
+  }
+  return null;
+};
+
+export const applyStepAcross = (
+  draft: ConciergeDraft,
+  stepId: string,
+  values: readonly string[],
+  context: ConciergeContext,
+): ConciergeDraft => {
+  const { index, step } = splitPartStep(stepId);
+  if (index >= partCount(draft)) return draft;
+  return withPart(draft, index, applyStep(partView(draft, index), step, values, context));
+};
+
+export const valueOfAcross = (draft: ConciergeDraft, stepId: string): readonly string[] => {
+  const { index, step } = splitPartStep(stepId);
+  if (index >= partCount(draft)) return [];
+  return valueOf(partView(draft, index), step);
+};
+
+/**
+ * Whether a widget can be built for every part.
+ *
+ * All of them, not any: a setup that would write one widget and drop another
+ * is the silent half-success this codebase refuses everywhere else. The
+ * missing pieces are scoped, so the reply can say which widget is short.
+ */
+export const readinessAcross = (
+  draft: ConciergeDraft,
+  context: ConciergeContext,
+): { ready: boolean; missing: MissingPiece[] } => {
+  const missing = partsOf(draft).flatMap((_, index) =>
+    readiness(partView(draft, index), context).missing.map((piece) => ({
+      ...piece,
+      stepId: partStep(index, piece.stepId),
+    })),
+  );
+  return { ready: missing.length === 0, missing };
+};
+
+export const remainingStepsAcross = (
+  draft: ConciergeDraft,
+  context: ConciergeContext,
+): number =>
+  partsOf(draft).reduce(
+    (total, _, index) => total + remainingSteps(partView(draft, index), context),
+    0,
+  );
+
+/** `settle` for every part, folded back together. */
+export const settleAcross = (
+  draft: ConciergeDraft,
+  context: ConciergeContext,
+): ConciergeDraft =>
+  partsOf(draft).reduce<ConciergeDraft>(
+    (carried, _, index) => withPart(carried, index, settle(partView(carried, index), context)),
+    draft,
+  );

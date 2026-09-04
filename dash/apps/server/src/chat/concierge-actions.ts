@@ -3,7 +3,7 @@ import {
   EFFECT_STEPS,
   allSteps,
   applyStep,
-  buildFromDraft,
+  buildAll,
   describeField,
   fieldPool,
   newDraft,
@@ -15,6 +15,7 @@ import {
 import type { DashboardSpec, FilterDecl } from "@freebirdai/dash-spec";
 import { COMPONENT_CONTRACTS, parseWidget } from "@freebirdai/dash-spec";
 import type { ComponentDefinition } from "@freebirdai/core";
+import { commitSetup } from "../concierge/commit.js";
 import { conciergeState } from "../concierge/state.js";
 import { settleDetail } from "../concierge/detail.js";
 import type { DetailPlanRequest, DetailSetup } from "../concierge/detail.js";
@@ -180,6 +181,16 @@ const proposalFields = {
     )
     .optional()
     .describe("Which field fills which role. One entry per role."),
+  interleave: z
+    .boolean()
+    .optional()
+    .describe(
+      "Set true when the user wants several kinds of record shuffled into ONE list, each row " +
+        "badged with which it came from — \"everything in one feed\", \"show them together in " +
+        "one list\". Leave it out to keep them as separate widgets side by side, which is the " +
+        "default. Only works for list, feed, cards and timeline: a table's columns cannot be " +
+        "aligned across two kinds of record and would be half empty.",
+    ),
   measure: z
     .string()
     .optional()
@@ -314,6 +325,7 @@ const patchFrom = (args: {
   joinEndpoint?: string;
   joinLeftField?: string;
   joinRightField?: string;
+  interleave?: boolean;
   skip?: string[];
 }) => ({
   ...(args.endpoint ? { endpoint: args.endpoint } : {}),
@@ -321,6 +333,7 @@ const patchFrom = (args: {
   ...(args.measure ? { measure: args.measure } : {}),
   ...(args.groupBy ? { groupBy: args.groupBy } : {}),
   ...(args.join ? { join: args.join } : {}),
+  ...(args.interleave !== undefined ? { interleave: args.interleave } : {}),
   ...(args.joinEndpoint && args.joinLeftField && args.joinRightField
     ? {
         joinWith: {
@@ -860,34 +873,16 @@ export const conciergeActions = (ops: ConciergeOps): ComponentDefinition["action
       named = settled.draft;
       const detail = settled.detail;
 
-      const built = buildFromDraft(named, ops.context, {
+      const built = buildAll(named, ops.context, {
         taken: new Set(board.widgets.map((widget) => widget.id)),
       });
-      if (!built.widget) {
-        throw new Error(`that widget did not validate: ${built.errors.join("; ") || "unknown"}`);
+      const commit = commitSetup({ board, built });
+      if (!commit.ok || !commit.next) {
+        throw new Error(`that setup did not validate: ${commit.error ?? "unknown"}`);
       }
+      const parsed = { value: commit.widgets[0]! };
 
-      const parsed = parseWidget(built.widget);
-      if (!parsed.ok || !parsed.value) {
-        throw new Error(`that widget no longer validates: ${parsed.errors.join("; ") || "unknown"}`);
-      }
-
-      /*
-       * A `{{param.x}}` the board has not declared is a parse error, so a
-       * widget that wants a search box has to arrive with the filter that
-       * feeds it. Merged rather than replaced: a filter the board already
-       * declares belongs to whatever else is using it.
-       */
-      const declared = new Set(board.params.filters.map((filter) => filter.key));
-      const added: FilterDecl[] = built.requiresFilters.filter(
-        (filter) => !declared.has(filter.key),
-      );
-
-      ops.putDashboard({
-        ...board,
-        params: { ...board.params, filters: [...board.params.filters, ...added] },
-        widgets: [...board.widgets, parsed.value],
-      });
+      ops.putDashboard(commit.next);
       /*
        * Confirming the widget is what confirms the narrowing.
        *
@@ -912,8 +907,17 @@ export const conciergeActions = (ops: ConciergeOps): ComponentDefinition["action
 
       return {
         added: true,
+        // The primary, under its old name. Everything that only ever cared
+        // about one widget goes on reading this and is right.
         widgetId: parsed.value.id,
         title: parsed.value.title,
+        ...(commit.widgets.length > 1
+          ? {
+              widgetIds: commit.widgets.map((widget): string => widget.id),
+              titles: commit.widgets.map((widget): string => widget.title),
+            }
+          : {}),
+        ...(commit.groupId ? { groupId: commit.groupId, group: built.group?.title } : {}),
         warnings: built.warnings,
         /*
          * What the record shows and what else it could have shown.
@@ -941,7 +945,7 @@ export const conciergeActions = (ops: ConciergeOps): ComponentDefinition["action
               },
             }
           : {}),
-        ...(added.length > 0 ? { filtersAdded: added.map((filter) => filter.key) } : {}),
+        ...(commit.filtersAdded.length > 0 ? { filtersAdded: commit.filtersAdded } : {}),
       };
     },
   },

@@ -1,17 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { buildFromDraft } from "./concierge/build.js";
-import { applyAnswer, newDraft, skipStep } from "./concierge/draft.js";
+import { buildAll, buildFromDraft } from "./concierge/build.js";
+import {
+  applyAnswer,
+  newDraft,
+  partCount,
+  partView,
+  partsOf,
+  skipStep,
+  withPart,
+} from "./concierge/draft.js";
 import {
   allSteps,
+  allStepsAcross,
   applyStep,
+  applyStepAcross,
   emptyContext,
   extraFieldOptions,
   fieldPool,
   nextStep,
   preferredForRole,
   readiness,
+  readinessAcross,
   remainingSteps,
   settle,
+  valueOfAcross,
   viewOptions,
   type ConciergeContext,
   type Step,
@@ -2209,5 +2221,382 @@ describe("a join and its columns in one patch", () => {
     const bound = draft.roles["columns"] ?? [];
     const columns = Array.isArray(bound) ? bound : [bound];
     expect(columns.some((name) => name.startsWith("owners_"))).toBe(false);
+  });
+});
+
+/**
+ * A setup that builds more than one widget.
+ *
+ * "Show my properties and also my listings" is two collections that neither
+ * join nor compare. Forcing them into one widget is what produced the original
+ * failure; the answer is that they were never one widget. So a draft describes
+ * a list of them, and the step machine — eleven hundred lines that correctly
+ * answer "what does this ONE widget still need" — is run once per part against
+ * a view rather than rewritten to count.
+ */
+describe("a setup of several widgets", () => {
+  const context = () => contextFor({ list: FLAT, owners: OWNERS }, { joins: [] });
+
+  const twoParts = (ctx: ConciergeContext) =>
+    revise(
+      newDraft("d", "my things and also my owners", "assisted"),
+      {
+        endpoint: "list",
+        component: "table",
+        roles: { columns: ["name"] },
+        title: "Things",
+        parts: [
+          {
+            endpoint: "owners",
+            component: "table",
+            roles: { columns: ["ownerName"] },
+            title: "Owners",
+          },
+        ],
+        group: { title: "Things and Owners", display: "tabs" },
+      },
+      ctx,
+    );
+
+  it("reads as one part when nothing said otherwise", () => {
+    const ctx = context();
+    const one = revise(newDraft("d", "", "assisted"), { endpoint: "list" }, ctx).draft;
+    expect(partCount(one)).toBe(1);
+    // Nothing is materialised, so a draft written before any of this parses
+    // and behaves exactly as it did.
+    expect(one.parts).toEqual([]);
+  });
+
+  it("takes a second part from the patch", () => {
+    const { draft, rejected } = twoParts(context());
+    expect(rejected).toEqual([]);
+    expect(partCount(draft)).toBe(2);
+    expect(partsOf(draft)[1]).toMatchObject({ op: "owners", component: "table", title: "Owners" });
+  });
+
+  it("keeps the primary readable where it always was", () => {
+    const { draft } = twoParts(context());
+    // Everything written before parts existed reads `draft.op`; it still sees
+    // the first widget rather than undefined or the last one written.
+    expect(draft.op).toBe("list");
+    expect(draft.title).toBe("Things");
+    expect(partsOf(draft)[0]?.op).toBe("list");
+  });
+
+  it("holds the frame without building it", () => {
+    const { draft } = twoParts(context());
+    expect(draft.group).toMatchObject({ title: "Things and Owners", display: "tabs" });
+  });
+
+  it("checks each part's fields against its own endpoint", () => {
+    const ctx = context();
+    const { rejected } = revise(
+      newDraft("d", "", "assisted"),
+      {
+        endpoint: "list",
+        component: "table",
+        parts: [{ endpoint: "owners", component: "table", roles: { columns: ["name"] } }],
+      },
+      ctx,
+    );
+    // `name` is a field on `list`, not on `owners`. A patch that names it for
+    // the second widget is refused exactly as it would be for the first.
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]?.stepId).toBe("p1:role:columns");
+  });
+
+  it("scopes a second part's steps and leaves the first's bare", () => {
+    const ctx = context();
+    const ids = allStepsAcross(twoParts(ctx).draft, ctx).map((entry) => entry.step.id);
+    expect(ids).toContain("component");
+    expect(ids).toContain("p1:component");
+    expect(ids.filter((id) => id.startsWith("p1:")).length).toBeGreaterThan(0);
+  });
+
+  it("reads and writes an answer through a scoped id", () => {
+    const ctx = context();
+    let draft = twoParts(ctx).draft;
+    draft = applyStepAcross(draft, "p1:title", ["Renamed"], ctx);
+    expect(valueOfAcross(draft, "p1:title")).toEqual(["Renamed"]);
+    // The first widget is untouched by an answer about the second.
+    expect(valueOfAcross(draft, "title")).toEqual(["Things"]);
+  });
+
+  it("is ready only when every part is", () => {
+    const ctx = context();
+    const half = revise(
+      newDraft("d", "", "assisted"),
+      {
+        endpoint: "list",
+        component: "table",
+        roles: { columns: ["name"] },
+        parts: [{ endpoint: "owners" }],
+      },
+      ctx,
+    ).draft;
+    const state = readinessAcross(half, ctx);
+    expect(state.ready).toBe(false);
+    // And it says which widget is short, rather than just that something is.
+    expect(state.missing.some((piece) => piece.stepId.startsWith("p1:"))).toBe(true);
+  });
+
+  it("builds every widget, with ids that do not collide", () => {
+    const ctx = context();
+    const result = buildAll(twoParts(ctx).draft, ctx);
+    expect(result.errors).toEqual([]);
+    expect(result.widgets).toHaveLength(2);
+    expect(new Set(result.widgets.map((widget) => widget.id)).size).toBe(2);
+    expect(result.widgets.map((widget) => widget.title)).toEqual(["Things", "Owners"]);
+    expect(result.group).toMatchObject({ title: "Things and Owners", display: "tabs" });
+  });
+
+  /*
+   * All or nothing. A setup that wrote the properties and silently dropped the
+   * listings is the exact half-success this whole tier exists to stop.
+   */
+  it("returns nothing at all when one part cannot be built", () => {
+    const ctx = context();
+    const good = twoParts(ctx).draft;
+    // A part with no view is the simplest thing `buildFromDraft` refuses, and
+    // refusing it is the behaviour under test rather than how it got that way.
+    const broken = withPart(good, 1, {
+      ...partView(good, 1),
+      // An endpoint nothing has been read from: no fields, so no role can be
+      // filled and no default can rescue it.
+      op: "ghost",
+      component: undefined,
+      roles: {},
+    });
+    const result = buildAll(broken, ctx);
+    expect(result.widgets).toEqual([]);
+    // And the failure names which widget it is about.
+    expect(result.errors.join(" ")).toContain("widget 2");
+  });
+
+  it("does not report a frame for a single widget", () => {
+    const ctx = context();
+    const one = revise(
+      newDraft("d", "", "assisted"),
+      {
+        endpoint: "list",
+        component: "table",
+        roles: { columns: ["name"] },
+        group: { title: "Alone" },
+      },
+      ctx,
+    ).draft;
+    expect(buildAll(one, ctx).group).toBeUndefined();
+  });
+
+  it("builds a one-part setup exactly as it always did", () => {
+    const ctx = context();
+    const draft = revise(
+      newDraft("d", "", "assisted"),
+      { endpoint: "list", component: "table", roles: { columns: ["name"] }, title: "Things" },
+      ctx,
+    ).draft;
+    const one = buildFromDraft(draft, ctx);
+    const all = buildAll(draft, ctx);
+    expect(all.widgets).toHaveLength(1);
+    expect(all.widgets[0]).toEqual(one.widget);
+  });
+});
+
+/**
+ * Two kinds of record in one list, badged by which they came from.
+ *
+ * The third arrangement, and the one that needed no schema change at all:
+ * `runPlan`'s union already stacks rows without requiring the sources to share
+ * columns, each source already has its own pipeline, and `select`, `rename`
+ * and `highlight` have all shipped for months. What was missing was something
+ * to write them — so each part renames its own bound fields onto the
+ * component's role names, and two endpoints that share no vocabulary arrive as
+ * rows that do.
+ */
+describe("one list, two kinds of record", () => {
+  const context = () => contextFor({ list: FLAT, owners: OWNERS }, { joins: [] });
+
+  const interleaved = (ctx: ConciergeContext, component = "list") =>
+    revise(
+      newDraft("d", "everything in one list", "assisted"),
+      {
+        endpoint: "list",
+        component,
+        roles: { title: ["name"], subtitle: ["status"] },
+        title: "Things",
+        parts: [
+          {
+            endpoint: "owners",
+            component,
+            roles: { title: ["ownerName"], subtitle: ["region"] },
+            title: "Owners",
+          },
+        ],
+        interleave: true,
+      },
+      ctx,
+    ).draft;
+
+  it("produces one widget rather than one per part", () => {
+    const ctx = context();
+    const result = buildAll(interleaved(ctx), ctx);
+    expect(result.errors).toEqual([]);
+    expect(result.widgets).toHaveLength(1);
+  });
+
+  it("reads every part as a source of that one widget", () => {
+    const ctx = context();
+    const widget = buildAll(interleaved(ctx), ctx).widgets[0];
+    expect(widget?.sources.map((source) => source.op)).toEqual(["list", "owners"]);
+    expect(widget?.combine).toMatchObject({ op: "union" });
+  });
+
+  /*
+   * The heart of it. Two endpoints that share no field names arrive as rows
+   * that do, because each renames its own fields onto the role.
+   */
+  it("renames each endpoint's own fields onto the shared role names", () => {
+    const ctx = context();
+    const widget = buildAll(interleaved(ctx), ctx).widgets[0];
+    const renameOf = (as: string) =>
+      widget?.sources
+        .find((source) => source.as === as)
+        ?.pipeline.find((step) => step.op === "rename");
+
+    expect(renameOf("list")).toMatchObject({ fields: { name: "title", status: "subtitle" } });
+    expect(renameOf("owners")).toMatchObject({
+      fields: { ownerName: "title", region: "subtitle" },
+    });
+    expect(widget?.roles).toMatchObject({ title: "title", subtitle: "subtitle" });
+  });
+
+  it("carries only the columns the list draws", () => {
+    const ctx = context();
+    const widget = buildAll(interleaved(ctx), ctx).widgets[0];
+    const select = widget?.sources[0]?.pipeline.find((step) => step.op === "select");
+    expect(select).toMatchObject({ fields: ["name", "status"] });
+  });
+
+  /*
+   * Without a badge the list is two kinds of record shuffled together and
+   * indistinguishable, which is strictly worse than two widgets.
+   */
+  it("badges every row with where it came from", () => {
+    const ctx = context();
+    const widget = buildAll(interleaved(ctx), ctx).widgets[0];
+    expect(widget?.highlights).toHaveLength(2);
+    expect(widget?.highlights.map((entry) => entry.label)).toEqual(["Things", "Owners"]);
+    expect(widget?.highlights[0]?.when).toContain("series ==");
+  });
+
+  it("says what it left out", () => {
+    const ctx = context();
+    expect(buildAll(interleaved(ctx), ctx).warnings.join(" ")).toContain(
+      "only the fields all of them have",
+    );
+  });
+
+  /*
+   * A table has no honest way to decide that the properties' address and the
+   * listings' rent are the same column. The result is a wide grid half full of
+   * blanks, which reads as data having gone missing.
+   */
+  it("refuses a component whose columns cannot be aligned", () => {
+    const ctx = context();
+    const result = buildAll(interleaved(ctx, "table"), ctx);
+    expect(result.widgets).toEqual([]);
+    expect(result.errors.join(" ")).toContain("half");
+  });
+
+  it("refuses when a required role is missing on one part", () => {
+    const ctx = context();
+    const half = revise(
+      newDraft("d", "", "assisted"),
+      {
+        endpoint: "list",
+        component: "list",
+        roles: { title: ["name"] },
+        parts: [{ endpoint: "owners", component: "list" }],
+        interleave: true,
+      },
+      ctx,
+    ).draft;
+    const result = buildAll(half, ctx);
+    expect(result.widgets).toEqual([]);
+    expect(result.errors.join(" ")).toContain("title");
+  });
+
+  /*
+   * A role only some parts bind would leave those rows blank in that position,
+   * which looks like a load failure rather than an absence. Dropping the role
+   * is the honest version.
+   */
+  it("drops an optional role that not every part binds", () => {
+    const ctx = context();
+    const uneven = revise(
+      newDraft("d", "", "assisted"),
+      {
+        endpoint: "list",
+        component: "list",
+        roles: { title: ["name"], subtitle: ["status"] },
+        parts: [{ endpoint: "owners", component: "list", roles: { title: ["ownerName"] } }],
+        interleave: true,
+      },
+      ctx,
+    ).draft;
+    const widget = buildAll(uneven, ctx).widgets[0];
+    expect(widget?.roles["title"]).toBe("title");
+    expect(widget?.roles["subtitle"]).toBeUndefined();
+  });
+
+  /*
+   * A spec the schema accepts is not the same as a widget that works. This is
+   * the one that matters: real rows from two endpoints that share no field
+   * name, through the real runtime, arriving as one list.
+   */
+  it("really stacks both endpoints' rows into one list", () => {
+    const ctx = context();
+    const widget = buildAll(interleaved(ctx), ctx).widgets[0]!;
+    const executed = executeWidget(widget, { list: FLAT, owners: OWNERS }, {
+      now: Date.parse("2026-08-01T00:00:00Z"),
+      params: {
+        range: resolveRange({ preset: "12mo", now: Date.parse("2026-08-01T00:00:00Z") }),
+        filters: {},
+      },
+    });
+
+    expect(executed.errors).toEqual([]);
+    // Four things and two owners, in one list.
+    expect(executed.rows).toHaveLength(6);
+    expect(executed.rows.map((row) => row["title"])).toEqual([
+      "Alpha",
+      "Beta",
+      "Gamma",
+      "Delta",
+      "North",
+      "South",
+    ]);
+    // And every row says which endpoint it came from.
+    expect(new Set(executed.rows.map((row) => row["series"]))).toEqual(
+      new Set(["Things", "Owners"]),
+    );
+  });
+
+  it("ignores the flag for a setup of one widget", () => {
+    const ctx = context();
+    const alone = revise(
+      newDraft("d", "", "assisted"),
+      {
+        endpoint: "list",
+        component: "list",
+        roles: { title: ["name"] },
+        interleave: true,
+      },
+      ctx,
+    ).draft;
+    const result = buildAll(alone, ctx);
+    expect(result.widgets).toHaveLength(1);
+    // The ordinary single-widget path, not the union.
+    expect(result.widgets[0]?.sources).toEqual([]);
   });
 });

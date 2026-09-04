@@ -1,15 +1,18 @@
-import type { ConciergeContext, ConciergeDraft } from "@freebirdai/dash-agent";
+import type { Arrangement, ConciergeContext, ConciergeDraft } from "@freebirdai/dash-agent";
 import {
   EFFECT_STEPS,
   applyStep,
-  buildFromDraft,
+  applyArrangement,
+  buildAll,
+  feasibleArrangements,
   newDraft,
-  nextStep,
-  readiness,
+  nextStepAcross,
+  readinessAcross,
   revise,
   skipStep,
 } from "@freebirdai/dash-agent";
-import type { DashboardSpec, FilterDecl } from "@freebirdai/dash-spec";
+import type { DashboardSpec } from "@freebirdai/dash-spec";
+import { commitSetup } from "../concierge/commit.js";
 import { settleDetail } from "../concierge/detail.js";
 import type { DetailPlanRequest, DetailSetup } from "../concierge/detail.js";
 import { parseWidget, widgetShapeSchema } from "@freebirdai/dash-spec";
@@ -82,6 +85,35 @@ export const reviseSchema = z.object({
   extras: z.array(z.string().max(200)).max(40).optional(),
   highlights: z.array(z.string().max(120)).max(8).optional(),
   title: z.string().max(120).optional(),
+  /*
+   * The other widgets this setup builds, and how they are shown together.
+   *
+   * Declared for the reason stated above, which is not hypothetical: zod
+   * strips what it has not heard of, so a two-widget proposal arriving here
+   * without these would apply its first widget, drop the second without a
+   * word, and report success.
+   */
+  parts: z
+    .array(
+      z.object({
+        connection: z.string().max(120).optional(),
+        endpoint: z.string().max(120).optional(),
+        component: z.string().max(64).optional(),
+        roles: z.record(z.string().max(64), z.array(z.string().max(200)).max(40)).optional(),
+        title: z.string().max(120).optional(),
+        shape: widgetShapeSchema.optional(),
+      }),
+    )
+    .max(3)
+    .optional(),
+  group: z
+    .object({
+      title: z.string().min(1).max(120),
+      display: z.enum(["tabs", "row", "stack"]).optional(),
+    })
+    .optional(),
+  /** Stack the parts into one badged list rather than building each on its own. */
+  interleave: z.boolean().optional(),
   /** Which model proposed this, recorded on the widget it builds. */
   model: z.string().max(120).optional(),
   /**
@@ -143,6 +175,10 @@ const answerSchema = z.object({
 
 const confirmSchema = z.object({ title: z.string().max(120).optional() });
 
+const arrangementSchema = z.object({
+  arrangement: z.enum(["tabs", "row", "stack", "list", "merged"]),
+});
+
 export interface ConciergeRouteDeps {
   readonly drafts: DraftStore;
   /** Rebuilt per request from what is on disk, so a new read is visible at once. */
@@ -167,6 +203,20 @@ export interface ConciergeRouteDeps {
    * silently produced records with no related collections as a result.
    */
   readonly planDetail?: ((input: DetailPlanRequest) => Promise<DetailSetup>) | undefined;
+  /**
+   * Re-read the fields when an arrangement changes what a widget is.
+   *
+   * Optional for the same reason `planDetail` is: a server with no AI key has
+   * none, and the arrangement still applies — its fields are chosen by
+   * convention instead, which is worse and never wrong.
+   */
+  readonly rearrange?:
+    | ((input: { draft: ConciergeDraft; arrangement: Arrangement }) => Promise<{
+        draft: ConciergeDraft;
+        notes: readonly string[];
+        error?: string;
+      }>)
+    | undefined;
 }
 
 /** The shared state shape, with this route's own dependencies supplied. */
@@ -217,7 +267,7 @@ export const conciergeRoutes =
          * a role nobody chose it for. A 409 with the current step lets the
          * client re-render rather than guess.
          */
-        const current = nextStep(draft, deps.context());
+        const current = nextStepAcross(draft, deps.context());
         if (!current || current.id !== parsed.data.stepId) {
           return reply.status(409).send({
             error: current
@@ -273,6 +323,48 @@ export const conciergeRoutes =
      * patch is validated against the derived option sets; what does not
      * survive comes back as `rejected` rather than being quietly dropped.
      */
+    /*
+     * Swap how the widgets are shown together.
+     *
+     * Its own route rather than a field on `revise`, because it is a different
+     * kind of change: revise adjusts one widget's bindings, and this can turn
+     * two widgets into one. It also may spend a model call, which the revise
+     * route promises not to.
+     */
+    app.post<{ Params: Params; Body: unknown }>(
+      "/api/concierge/:dashboardId/arrangement",
+      async (request, reply) => {
+        const parsed = arrangementSchema.safeParse(request.body ?? {});
+        if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
+
+        const id = request.params.dashboardId;
+        const draft = await deps.drafts.get(id);
+        if (!draft) return reply.status(409).send({ error: "no setup is in progress" });
+
+        const context = deps.context();
+        /*
+         * Only an arrangement the machine actually offered. The card can only
+         * show what it was given, so this refuses a stale click after the
+         * draft moved on rather than reshaping into something that no longer
+         * makes sense.
+         */
+        const offered = feasibleArrangements(draft, context);
+        if (!offered.some((option) => option.id === parsed.data.arrangement)) {
+          return reply
+            .status(409)
+            .send({ error: `"${parsed.data.arrangement}" is not one of the ways these can be shown` });
+        }
+
+        const outcome = deps.rearrange
+          ? await deps.rearrange({ draft, arrangement: parsed.data.arrangement })
+          : { ...applyArrangement(draft, parsed.data.arrangement, context), notes: [] as string[] };
+        if (outcome.error) return reply.status(400).send({ error: outcome.error });
+
+        await deps.drafts.put(id, outcome.draft);
+        return { ...stateOf(outcome.draft, deps, id), notes: outcome.notes };
+      },
+    );
+
     app.post<{ Params: Params; Body: unknown }>(
       "/api/concierge/:dashboardId/revise",
       async (request, reply) => {
@@ -310,14 +402,14 @@ export const conciergeRoutes =
          * rest of the decisions are controls the user is looking at.
          */
         if (draft.mode === "assisted") {
-          const state = readiness(draft, context);
+          const state = readinessAcross(draft, context);
           if (!state.ready) {
             return reply
               .status(409)
               .send({ error: `still missing: ${state.missing.map((m) => m.stepId).join(", ")}` });
           }
         } else {
-          const pending = nextStep(draft, context);
+          const pending = nextStepAcross(draft, context);
           if (pending) {
             return reply
               .status(409)
@@ -339,45 +431,28 @@ export const conciergeRoutes =
          */
         const { draft: named } = await settleDetail(titled, deps.planDetail);
 
-        const built = buildFromDraft(named, context, {
+        const built = buildAll(named, context, {
           taken: new Set(board.widgets.map((widget) => widget.id)),
         });
-        if (!built.widget) {
-          return reply.status(400).send({ error: built.errors.join("; ") || "it did not validate" });
+        const commit = commitSetup({ board, built });
+        if (!commit.ok || !commit.next) {
+          return reply.status(400).send({ error: commit.error ?? "it did not validate" });
         }
 
-        /*
-         * Re-parsed rather than trusted. It was validated when the summary was
-         * rendered, but this is the call that writes — the same rule
-         * `add_widget` follows, for the same reason.
-         */
-        const revalidated = parseWidget(built.widget);
-        if (!revalidated.ok || !revalidated.value) {
-          return reply
-            .status(400)
-            .send({ error: revalidated.errors.join("; ") || "it no longer validates" });
-        }
-
-        // A `{{param.x}}` the board has not declared is a parse error, so a
-        // widget wanting a search box arrives with the filter that feeds it.
-        const declared = new Set(board.params.filters.map((filter) => filter.key));
-        const added: FilterDecl[] = built.requiresFilters.filter(
-          (filter) => !declared.has(filter.key),
-        );
-
-        deps.putDashboard({
-          ...board,
-          params: { ...board.params, filters: [...board.params.filters, ...added] },
-          widgets: [...board.widgets, revalidated.value],
-        });
+        deps.putDashboard(commit.next);
         await deps.drafts.clear(id);
 
+        const first = commit.widgets[0]!;
         return {
           added: true,
-          widgetId: revalidated.value.id,
-          title: revalidated.value.title,
+          // The primary, kept under its old name so nothing reading one
+          // widget's id has to learn to count.
+          widgetId: first.id,
+          title: first.title,
+          widgetIds: commit.widgets.map((widget) => widget.id),
+          ...(commit.groupId ? { groupId: commit.groupId } : {}),
           warnings: built.warnings,
-          filtersAdded: added.map((filter) => filter.key),
+          filtersAdded: commit.filtersAdded,
         };
       },
     );

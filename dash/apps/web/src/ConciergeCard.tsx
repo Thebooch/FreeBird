@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ApiError,
   api,
+  type ArrangementOption,
   type ConciergeControl,
   type ConciergePatch,
   type ConciergeState,
@@ -431,6 +432,113 @@ const SettingsPanel = ({
   );
 };
 
+
+/**
+ * The other ways these widgets could be shown, as pictures.
+ *
+ * Deliberately abstract: grey bars and the real widget names, never invented
+ * field values or plausible-looking rows. A realistic mock of an arrangement
+ * that turns out not to work is exactly the confident-and-wrong failure this
+ * whole area exists to remove — and the mocks cost nothing to draw, which is
+ * the point of their being mocks rather than live previews.
+ *
+ * The recommended arrangement is already applied and previewing live above.
+ * These are alternates, so nothing here ever blocks: a person who does not
+ * care never has to notice there was a choice.
+ */
+const MOCKS: Record<string, JSX.Element> = {
+  tabs: (
+    <svg viewBox="0 0 48 32" className="dash-arrange__mock" aria-hidden="true">
+      <rect x="2" y="3" width="14" height="5" rx="1" className="dash-arrange__on" />
+      <rect x="18" y="3" width="14" height="5" rx="1" className="dash-arrange__off" />
+      <rect x="2" y="11" width="44" height="18" rx="1" className="dash-arrange__body" />
+    </svg>
+  ),
+  row: (
+    <svg viewBox="0 0 48 32" className="dash-arrange__mock" aria-hidden="true">
+      <rect x="2" y="3" width="21" height="26" rx="1" className="dash-arrange__body" />
+      <rect x="25" y="3" width="21" height="26" rx="1" className="dash-arrange__body" />
+    </svg>
+  ),
+  stack: (
+    <svg viewBox="0 0 48 32" className="dash-arrange__mock" aria-hidden="true">
+      <rect x="2" y="3" width="44" height="12" rx="1" className="dash-arrange__body" />
+      <rect x="2" y="17" width="44" height="12" rx="1" className="dash-arrange__body" />
+    </svg>
+  ),
+  list: (
+    <svg viewBox="0 0 48 32" className="dash-arrange__mock" aria-hidden="true">
+      <rect x="2" y="4" width="6" height="4" rx="1" className="dash-arrange__on" />
+      <rect x="10" y="4" width="36" height="4" rx="1" className="dash-arrange__body" />
+      <rect x="2" y="11" width="6" height="4" rx="1" className="dash-arrange__off" />
+      <rect x="10" y="11" width="36" height="4" rx="1" className="dash-arrange__body" />
+      <rect x="2" y="18" width="6" height="4" rx="1" className="dash-arrange__on" />
+      <rect x="10" y="18" width="36" height="4" rx="1" className="dash-arrange__body" />
+      <rect x="2" y="25" width="6" height="4" rx="1" className="dash-arrange__off" />
+      <rect x="10" y="25" width="36" height="4" rx="1" className="dash-arrange__body" />
+    </svg>
+  ),
+  merged: (
+    <svg viewBox="0 0 48 32" className="dash-arrange__mock" aria-hidden="true">
+      <rect x="2" y="6" width="20" height="4" rx="1" className="dash-arrange__on" />
+      <rect x="24" y="6" width="22" height="4" rx="1" className="dash-arrange__off" />
+      <rect x="2" y="13" width="20" height="4" rx="1" className="dash-arrange__on" />
+      <rect x="24" y="13" width="22" height="4" rx="1" className="dash-arrange__off" />
+      <rect x="2" y="20" width="20" height="4" rx="1" className="dash-arrange__on" />
+      <rect x="24" y="20" width="22" height="4" rx="1" className="dash-arrange__off" />
+    </svg>
+  ),
+};
+
+const ArrangementChips = ({
+  options,
+  busy,
+  onPick,
+}: {
+  readonly options: readonly ArrangementOption[];
+  readonly busy: boolean;
+  readonly onPick: (id: ArrangementOption["id"]) => void;
+}): JSX.Element | null => {
+  // One option is whatever is already applied, so a single entry is no choice.
+  if (options.length < 2) return null;
+
+  return (
+    <section className="dash-arrange" data-testid="concierge-arrangements">
+      <span className="dash-arrange__label">or show them as</span>
+      <ul className="dash-arrange__list">
+        {options
+          .filter((option) => !option.applied)
+          .map((option) => (
+            <li key={option.id}>
+              <button
+                type="button"
+                className="dash-arrange__chip"
+                disabled={busy}
+                title={option.description}
+                data-testid={`concierge-arrangement-${option.id}`}
+                onClick={() => onPick(option.id)}
+              >
+                {MOCKS[option.id]}
+                <span className="dash-arrange__name">{option.label}</span>
+                {/*
+                 * The price, on the offer rather than discovered afterwards —
+                 * the same rule the join options follow. Most arrangements read
+                 * exactly the same endpoints and cost nothing, and saying so is
+                 * worth more than saying nothing.
+                 */}
+                <span className="dash-arrange__cost">
+                  {option.extraRequests === 0
+                    ? "no extra requests"
+                    : `${option.extraRequests} extra request${option.extraRequests === 1 ? "" : "s"}`}
+                </span>
+              </button>
+            </li>
+          ))}
+      </ul>
+    </section>
+  );
+};
+
 export const ConciergeCard = ({
   dashboardId,
   revision = 0,
@@ -453,6 +561,28 @@ export const ConciergeCard = ({
    * the conversational flow replaced.
    */
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  /**
+   * Swap the arrangement, and say so if it could not be done.
+   *
+   * Some swaps re-read the fields through a model, so this can take a moment —
+   * `busy` disables the chips meanwhile rather than letting two swaps race and
+   * leave the draft describing neither.
+   */
+  const pickArrangement = useCallback(
+    async (arrangement: ArrangementOption["id"]) => {
+      setBusy(true);
+      setError(null);
+      try {
+        setState(await api.setArrangement(dashboardId, arrangement));
+      } catch (cause) {
+        setError(cause instanceof ApiError ? cause.message : String(cause));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [dashboardId],
+  );
 
   const load = useCallback(async () => {
     try {
@@ -639,8 +769,37 @@ export const ConciergeCard = ({
        */}
       {state.widget && (
         <div className="dash-setup__preview" data-testid="concierge-preview">
-          <WidgetShell widget={state.widget} />
+          {/*
+           * Every widget the setup will write, not just the first.
+           *
+           * A setup usually produces one and this is a list of one. When the
+           * request was for separate things seen together it produces two, and
+           * previewing only the first would be the same failure the whole
+           * change exists to fix — the user told the second one was there
+           * while looking at a card that shows one.
+           */}
+          {(state.widgets.length > 0 ? state.widgets : [state.widget]).map((entry) => (
+            <WidgetShell key={entry.id} widget={entry} />
+          ))}
+          {state.group && state.widgets.length > 1 && (
+            <p className="dash-setup__frame" data-testid="concierge-frame">
+              {`Shown together as "${state.group.title}"`}
+            </p>
+          )}
         </div>
+      )}
+
+      {/*
+       * The alternates, beside the thing itself.
+       *
+       * Never a question and never a gate: what is on screen is what happens
+       * if nobody touches these, which is the same rule `choiceBetween`
+       * follows. They appear only when there is genuinely more than one way to
+       * show what was asked for, so an ordinary one-widget build never sees
+       * them.
+       */}
+      {state.widget && (
+        <ArrangementChips options={state.arrangements} busy={busy} onPick={pickArrangement} />
       )}
 
       {/*

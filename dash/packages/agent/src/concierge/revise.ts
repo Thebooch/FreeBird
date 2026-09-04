@@ -1,7 +1,16 @@
 import type { WidgetShape } from "@freebirdai/dash-spec";
 import { shapeProblems } from "@freebirdai/dash-spec";
 import type { ChoiceDraft, ConciergeDraft } from "./draft.js";
-import { ROLE_STEP, skipStep } from "./draft.js";
+import {
+  MAX_PARTS,
+  ROLE_STEP,
+  addPart,
+  partCount,
+  partStep,
+  partView,
+  skipStep,
+  withPart,
+} from "./draft.js";
 import {
   allSteps,
   applyStep,
@@ -177,6 +186,27 @@ export interface DraftPatch {
       }>
     | undefined;
 
+  /**
+   * The other widgets this setup builds, one sub-patch each.
+   *
+   * The same shape as the patch itself, recursively — a widget is a widget
+   * whether it is the first or the third, and giving the extra ones a reduced
+   * vocabulary would mean the second could not be joined, measured or drilled
+   * into. Index zero is the patch's own fields; these are one, two and three.
+   */
+  readonly parts?: readonly DraftPatch[] | undefined;
+  /**
+   * How the finished widgets are shown together.
+   *
+   * Recorded, never acted on here: the widgets do not exist until confirm, so
+   * there is nothing to group yet.
+   */
+  readonly group?:
+    | { readonly title: string; readonly display?: "tabs" | "row" | "stack" | undefined }
+    | undefined;
+  /** Stack the parts into one badged list rather than building each on its own. */
+  readonly interleave?: boolean | undefined;
+
   readonly narrowWith?:
     | {
         readonly field: string;
@@ -312,7 +342,14 @@ const answersFor = (
   }
 };
 
-export const revise = (
+/**
+ * One widget's worth of a patch, applied to a single-part view.
+ *
+ * This is the function `revise` used to be, unchanged. It is now reached once
+ * per part, which is why it can go on assuming the draft it is handed
+ * describes exactly one widget — `partView` guarantees it.
+ */
+const reviseOne = (
   input: ConciergeDraft,
   patch: DraftPatch,
   context: ConciergeContext,
@@ -526,6 +563,76 @@ export const revise = (
    * showing `listings_Address` for a join that no longer exists.
    */
   draft = withJoinedColumns(draft, context);
+
+  return { draft, rejected };
+};
+
+/**
+ * A whole setup, across however many widgets it describes.
+ *
+ * The patch's own fields are the primary widget, unchanged — which is what
+ * keeps every existing caller, every stored draft and every test above this
+ * line working exactly as before. `parts` carries the rest, one sub-patch per
+ * additional widget, and each is applied through the same `reviseOne` and held
+ * to the same rules: a field the model invented is refused by name, whichever
+ * widget it was invented for.
+ *
+ * Rejections come back scoped, so "that is not a field on this widget" can say
+ * which widget it means.
+ */
+export const revise = (
+  input: ConciergeDraft,
+  patch: DraftPatch,
+  context: ConciergeContext,
+): ReviseResult => {
+  const primary = reviseOne(input, patch, context);
+  let draft = primary.draft;
+  const rejected: Rejection[] = [...primary.rejected];
+
+  (patch.parts ?? []).forEach((sub, offset) => {
+    const index = offset + 1;
+    if (index >= MAX_PARTS) {
+      rejected.push({
+        stepId: partStep(index, "endpoint"),
+        value: sub.endpoint ?? "",
+        available: [],
+        reason: `a setup builds at most ${MAX_PARTS} widgets`,
+      });
+      return;
+    }
+    /*
+     * A part the draft does not have yet is added rather than refused. The
+     * model is describing a setup, not editing one — on the first pass none of
+     * the extra parts exist, and rejecting them all would make a two-widget
+     * proposal impossible to state.
+     */
+    if (index >= partCount(draft)) draft = addPart(draft);
+
+    const outcome = reviseOne(partView(draft, index), sub, context);
+    draft = withPart(draft, index, outcome.draft);
+    rejected.push(
+      ...outcome.rejected.map((entry) => ({
+        ...entry,
+        stepId: partStep(index, entry.stepId),
+      })),
+    );
+  });
+
+  /*
+   * How they are shown together, held rather than acted on.
+   *
+   * A group is a fact about the board's layout, so nothing here can create
+   * one — the widgets do not exist yet. This records what was asked for; the
+   * confirm step writes it when there is something to write it about.
+   */
+  if (patch.group) {
+    draft = {
+      ...draft,
+      group: { title: patch.group.title, display: patch.group.display ?? "tabs" },
+    };
+  }
+
+  if (patch.interleave !== undefined) draft = { ...draft, interleave: patch.interleave };
 
   return { draft, rejected };
 };
