@@ -2101,3 +2101,113 @@ describe("nested fields, offered and bound", () => {
     expect(ops).toEqual(["extract"]);
   });
 });
+
+/**
+ * A join and its bindings arriving together, which is how they really arrive.
+ *
+ * Every join test above applies the join in one `revise` and the roles in the
+ * next, and they all passed while the feature was broken — because a proposal
+ * does not arrive in two calls. `proposeSetup` returns ONE patch carrying the
+ * endpoint, the component, the roles and the join, and in that shape the order
+ * inside `revise` decided the outcome:
+ *
+ *   1. roles were validated against a pool the join had not been added to yet,
+ *      so any joined column was refused for naming a field that did not exist;
+ *   2. `applyOpenJoin` then cleared `roles` outright — correctly, since the
+ *      pool had changed — discarding whatever had survived step 1.
+ *
+ * The widget fetched the second endpoint, paid for it, and rendered the first
+ * one alone. Asked for properties alongside their listings, that is a table of
+ * properties and a request spent on nothing.
+ */
+describe("a join and its columns in one patch", () => {
+  const context = () => contextFor({ list: FLAT, owners: OWNERS }, { joins: [] });
+
+  /** Exactly the shape `proposeSetup` produces: everything at once. */
+  const proposed = (ctx: ConciergeContext) =>
+    revise(
+      newDraft("d", "properties and their owners", "assisted"),
+      {
+        endpoint: "list",
+        component: "table",
+        roles: { columns: ["name", "status"] },
+        joinWith: { endpoint: "owners", leftField: "id", rightField: "ownerId" },
+        title: "Both",
+      },
+      ctx,
+    );
+
+  it("keeps the join", () => {
+    const { draft } = proposed(context());
+    expect(draft.join).toMatchObject({ op: "owners", leftField: "id", rightField: "ownerId" });
+  });
+
+  it("rejects nothing — the columns were always legitimate", () => {
+    const { rejected } = proposed(context());
+    expect(rejected).toEqual([]);
+  });
+
+  it("does not throw the proposed columns away", () => {
+    const { draft } = proposed(context());
+    expect(draft.roles["columns"]).toContain("name");
+    expect(draft.roles["columns"]).toContain("status");
+  });
+
+  /*
+   * The other half. The binding call is only ever shown the primary
+   * endpoint's schema, so it cannot name a joined column even in principle —
+   * which means "the roles survived" is not enough on its own. Something has
+   * to put the second endpoint on screen, or the join is still invisible.
+   */
+  it("shows the joined endpoint's own columns", () => {
+    const { draft } = proposed(context());
+    const columns = draft.roles["columns"] ?? [];
+    expect(columns).toContain("owners_ownerName");
+  });
+
+  it("does not add the key it just matched on, which is not what anyone meant", () => {
+    const { draft } = proposed(context());
+    expect(draft.roles["columns"]).not.toContain("owners_ownerId");
+  });
+
+  it("builds a widget carrying both endpoints", () => {
+    const ctx = context();
+    const result = buildFromDraft(proposed(ctx).draft, ctx);
+    expect(result.errors).toEqual([]);
+    expect(result.widget?.sources.map((source) => source.op)).toEqual(["list", "owners"]);
+    expect(result.widget?.roles["columns"]).toContain("owners_ownerName");
+  });
+
+  /*
+   * A comparison clears the join, so the columns it produced must not outlive
+   * it — a widget showing `owners_ownerName` for a join that is gone renders a
+   * column of blanks and says nothing about why.
+   */
+  it("adds nothing when a series has cleared the join", () => {
+    const ctx = contextFor({ list: FLAT, owners: OWNERS }, { joins: [] });
+    const { draft } = revise(
+      newDraft("d", "", "assisted"),
+      {
+        endpoint: "list",
+        component: "table",
+        joinWith: { endpoint: "owners", leftField: "id", rightField: "ownerId" },
+        seriesWith: [
+          {
+            endpoint: "owners",
+            label: "Owners",
+            shape: {
+              groupBy: [{ field: "region" }],
+              measures: [{ as: "count", agg: "count" }],
+              sort: [],
+            },
+          },
+        ],
+      },
+      ctx,
+    );
+    expect(draft.join).toBeUndefined();
+    const bound = draft.roles["columns"] ?? [];
+    const columns = Array.isArray(bound) ? bound : [bound];
+    expect(columns.some((name) => name.startsWith("owners_"))).toBe(false);
+  });
+});

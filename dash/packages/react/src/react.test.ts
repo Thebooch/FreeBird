@@ -3,13 +3,15 @@ import type { LayoutCell, ResolvedParams } from "@freebirdai/dash-spec";
 import { connectionSchema, parseWidget, resolveRange, widgetSchema } from "@freebirdai/dash-spec";
 import { type TrailEntry, detailPanes, popTrail, truncateTrail } from "./detail.js";
 import { describe, expect, it } from "vitest";
-import { clampCell, completeLayout, solveLayout } from "./layout.js";
+import { clampCell, completeLayout, persistCells, solveLayout } from "./layout.js";
 import { QueryClient, queryKey } from "./store.js";
 import { labelColumns } from "./useWidgetData.js";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { useDashboard, useOptionalDashboard } from "./context.jsx";
 import { describeFailure } from "./WidgetShell.jsx";
+import { arrangementFor } from "./WidgetGroup.jsx";
+import { groupSize } from "@freebirdai/dash-spec";
 
 describe("solveLayout", () => {
   it("packs widgets without overlapping", () => {
@@ -593,5 +595,169 @@ describe("labelColumns", () => {
   it("does nothing at all with no lexicon", () => {
     const plain = labelColumns(columns("IsActive"), widget(), undefined);
     expect(plain[0]?.label).toBeUndefined();
+  });
+});
+
+/**
+ * The frame's arbitration between what it was asked for and what it can do.
+ *
+ * `display` is a preference, not a guarantee — only the renderer knows how
+ * much room there is. Three tables side by side in three hundred pixels is not
+ * a row, it is three columns of ellipsis, so a narrow frame stacks. That is
+ * the same call `relatedPanes` makes for a record sheet, deliberately, rather
+ * than a second rule that would drift from it.
+ */
+describe("arrangementFor", () => {
+  it("keeps a row when there is room for every member", () => {
+    expect(arrangementFor("row", 2, 900)).toBe("row");
+  });
+
+  it("stacks a row that would be slivers", () => {
+    expect(arrangementFor("row", 3, 400)).toBe("stack");
+  });
+
+  it("gets stricter as members are added, since each needs its own width", () => {
+    expect(arrangementFor("row", 2, 600)).toBe("row");
+    expect(arrangementFor("row", 3, 600)).toBe("stack");
+  });
+
+  /*
+   * Zero means nothing has been measured yet, not that the frame is narrow.
+   * Reading it as narrow flashes a stack on first paint before settling into a
+   * row, which reads as the layout breaking and repairing itself.
+   */
+  it("does not treat an unmeasured frame as a narrow one", () => {
+    expect(arrangementFor("row", 4, 0)).toBe("row");
+  });
+
+  it("never downgrades tabs, which need no room at all", () => {
+    expect(arrangementFor("tabs", 5, 10)).toBe("tabs");
+  });
+
+  it("leaves a stack alone", () => {
+    expect(arrangementFor("stack", 2, 2000)).toBe("stack");
+  });
+});
+
+/**
+ * The rectangle a new group asks for.
+ *
+ * Only ever a starting point — once the frame is dragged, its anchor cell
+ * holds the real geometry. But getting it wrong is what makes a new group look
+ * broken on arrival, and the three arrangements want genuinely different room.
+ */
+describe("groupSize", () => {
+  it("gives a row every member's width at once", () => {
+    const row = groupSize(["table", "table"], "row");
+    const one = groupSize(["table"], "tabs");
+    expect(row.w).toBeGreaterThan(one.w);
+  });
+
+  it("gives a stack every member's height", () => {
+    const stack = groupSize(["table", "table"], "stack");
+    const tabs = groupSize(["table", "table"], "tabs");
+    expect(stack.h).toBeGreaterThan(tabs.h);
+  });
+
+  it("gives tabs one member's room plus the strip", () => {
+    const tabs = groupSize(["table", "table"], "tabs");
+    const alone = groupSize(["table"], "tabs");
+    // Tabs show one at a time, so a second member costs width nothing.
+    expect(tabs.w).toBe(alone.w);
+    expect(tabs.h).toBe(alone.h);
+  });
+
+  it("never asks for more than the grid has", () => {
+    const wide = groupSize(["table", "table", "table", "table"], "row");
+    expect(wide.w).toBeLessThanOrEqual(12);
+  });
+
+  it("survives a component with no contract", () => {
+    const size = groupSize(["nothing-ships-this"], "tabs");
+    expect(size.w).toBeGreaterThan(0);
+    expect(size.h).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Folding a finished drag back into the board.
+ *
+ * The one piece of the grid with a way to lose data silently. A group is a
+ * single rectangle to the library, so its non-anchor members are never handed
+ * over — and the fields that make a cell more than a rectangle live on the
+ * cell, not on the item that comes back.
+ */
+describe("persistCells", () => {
+  const cell = (widgetId: string, over: Partial<LayoutCell> = {}): LayoutCell => ({
+    widgetId,
+    x: 0,
+    y: 0,
+    w: 6,
+    h: 6,
+    locked: false,
+    ...over,
+  });
+
+  it("moves a plain widget to where it was dropped", () => {
+    const result = persistCells(
+      [{ cell: cell("solo"), key: "solo" }],
+      [],
+      [{ i: "solo", x: 6, y: 2, w: 4, h: 8 }],
+    );
+    expect(result[0]).toMatchObject({ widgetId: "solo", x: 6, y: 2, w: 4, h: 8, locked: true });
+  });
+
+  /*
+   * The regression that matters. Rebuilding the cell from the library's item
+   * drops `group`, so the first drag of a frame would quietly dissolve it and
+   * the two widgets would spring apart.
+   */
+  it("keeps a group's membership through a drag", () => {
+    const result = persistCells(
+      [{ cell: cell("properties", { group: "portfolio" }), key: "group:portfolio" }],
+      [cell("listings", { group: "portfolio", x: 1, y: 1 })],
+      [{ i: "group:portfolio", x: 3, y: 4, w: 6, h: 9 }],
+    );
+    expect(result).toHaveLength(2);
+    expect(result.every((entry) => entry.group === "portfolio")).toBe(true);
+  });
+
+  it("writes the new rectangle to the anchor only", () => {
+    const result = persistCells(
+      [{ cell: cell("properties", { group: "portfolio" }), key: "group:portfolio" }],
+      [cell("listings", { group: "portfolio", x: 1, y: 1 })],
+      [{ i: "group:portfolio", x: 3, y: 4, w: 6, h: 9 }],
+    );
+    expect(result.find((entry) => entry.widgetId === "properties")).toMatchObject({ x: 3, y: 4 });
+    // The parked member keeps the geometry it is holding for the day the
+    // group is taken apart.
+    expect(result.find((entry) => entry.widgetId === "listings")).toMatchObject({ x: 1, y: 1 });
+  });
+
+  it("never drops a parked member, which would take the group with it", () => {
+    const result = persistCells(
+      [{ cell: cell("properties", { group: "portfolio" }), key: "group:portfolio" }],
+      [cell("listings", { group: "portfolio" }), cell("photos", { group: "portfolio" })],
+      [{ i: "group:portfolio", x: 0, y: 0, w: 6, h: 6 }],
+    );
+    expect(result.map((entry) => entry.widgetId).sort()).toEqual([
+      "listings",
+      "photos",
+      "properties",
+    ]);
+  });
+
+  it("preserves fields the library knows nothing about", () => {
+    const result = persistCells(
+      [{ cell: cell("solo", { sizeVariant: "wide" }), key: "solo" }],
+      [],
+      [{ i: "solo", x: 1, y: 1, w: 6, h: 6 }],
+    );
+    expect(result[0]?.sizeVariant).toBe("wide");
+  });
+
+  it("leaves a cell the library did not report alone", () => {
+    const result = persistCells([{ cell: cell("solo", { x: 2 }), key: "solo" }], [], []);
+    expect(result[0]).toMatchObject({ x: 2, locked: true });
   });
 });

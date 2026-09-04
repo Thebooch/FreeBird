@@ -274,3 +274,66 @@ describe("a second reading of the request", () => {
     expect(PICK_SYSTEM_PROMPT).toContain("Do NOT use alternatives to hedge");
   });
 });
+
+/**
+ * Two things somebody wants to see together.
+ *
+ * The enum had two words — one for "the second describes rows of the first"
+ * and one for "the two are measured against a shared axis" — and a request for
+ * properties *and* listings is neither. With nothing else to say, the model
+ * said "enrich"; a join was attempted, found nothing to match on, and the
+ * widget quietly became the properties alone while the reply announced both.
+ *
+ * So the third word is not a convenience. It is the difference between a
+ * wrong widget described confidently and a right one described honestly.
+ */
+describe("alongside", () => {
+  const candidates = [
+    { id: "list_properties", title: "Retrieve all properties", path: "/properties" },
+    { id: "list_listings", title: "Retrieve all listings", path: "/listings" },
+  ];
+
+  const pick = async (args: Record<string, unknown>) =>
+    pickEndpoints(fakeLlm([{ args }]), {
+      intent: "show all my properties and also my available listings",
+      candidates,
+    });
+
+  it("carries the relationship through when the model names it", async () => {
+    const result = await pick({
+      primary: "list_properties",
+      secondary: "list_listings",
+      relationship: "alongside",
+      reason: "Your properties, and your listings beside them.",
+    });
+    expect(result.primary).toBe("list_properties");
+    expect(result.secondary).toBe("list_listings");
+    expect(result.relationship).toBe("alongside");
+    expect(result.error).toBeNull();
+  });
+
+  it("is meaningless without a second endpoint, so it is not carried alone", async () => {
+    const result = await pick({
+      primary: "list_properties",
+      relationship: "alongside",
+      reason: "Your properties.",
+    });
+    expect(result.relationship).toBeNull();
+  });
+
+  /* The default is unchanged: a model that names a second and omits the kind
+     still gets a join attempted, which degrades honestly on its own. */
+  it("still defaults to enrich when the model says nothing", async () => {
+    const result = await pick({
+      primary: "list_properties",
+      secondary: "list_listings",
+      reason: "r",
+    });
+    expect(result.relationship).toBe("enrich");
+  });
+
+  it("tells the model that \"and also\" is not enrichment", () => {
+    expect(PICK_SYSTEM_PROMPT).toContain("that is \"alongside\"");
+    expect(PICK_SYSTEM_PROMPT).toContain("Only say enrich when you can name the field that links");
+  });
+});

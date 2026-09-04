@@ -47,6 +47,7 @@ export {
   remainingSteps,
   settle,
   viewOptions,
+  withJoinedColumns,
 } from "./concierge/steps.js";
 export { revise } from "./concierge/revise.js";
 export type { DraftPatch, Rejection, ReviseResult } from "./concierge/revise.js";

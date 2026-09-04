@@ -595,7 +595,37 @@ export const conciergeActions = (ops: ConciergeOps): ComponentDefinition["action
         rejected: rejectionsFor(result.rejected),
         ...(narrowed?.found ? { narrowing: narrowed.found } : {}),
         ...(derived?.reason ? { picked: derived.reason } : {}),
-        ...(derived && derived.notes.length > 0 ? { notes: derived.notes } : {}),
+        ...(derived && derived.notes.length > 0
+          ? {
+              notes: derived.notes,
+              /*
+               * The notes were already being sent and were already true. What
+               * was missing is any indication that they outrank the pleasant
+               * sentence the model was about to write.
+               *
+               * Asked for properties *and* listings, the pick came back as a
+               * join, the join found nothing to match on, and a note said so
+               * in as many words — "built from the first alone". The reply
+               * read: "the widget shows your properties alongside their
+               * available listings, linking listing details to each property
+               * where the records match." Every part of that was false, and
+               * the true version was sitting in the same payload as an
+               * unlabelled array the prompt never mentioned.
+               *
+               * `unsure` has carried an instruction like this since the day it
+               * was added, for the same reason and to good effect. This is
+               * that, for the notes.
+               */
+              notesGuidance:
+                "These are shortfalls in the widget that was just built, and they outrank " +
+                "describing it. If one says an endpoint was dropped, or that the widget was " +
+                "built from one source rather than the two that were asked for, say THAT " +
+                "first and in your own words — before, not after, whatever the widget does " +
+                "show. Never describe data the notes say is not there. The user is looking " +
+                "at the widget: claiming it contains something it visibly does not is worse " +
+                "than saying plainly that you could not do the whole thing.",
+            }
+          : {}),
         /*
          * What the model said it was unsure of, handed straight back to it.
          *

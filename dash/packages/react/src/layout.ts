@@ -203,3 +203,44 @@ export const clampCell = (cell: LayoutCell, gridCols = 12): LayoutCell => {
     y: Math.max(0, cell.y),
   };
 };
+
+/** One rectangle the grid library reports back after a drag or resize. */
+export interface MovedItem {
+  readonly i: string;
+  readonly x: number;
+  readonly y: number;
+  readonly w: number;
+  readonly h: number;
+}
+
+/**
+ * Fold a finished drag back into the board's cells.
+ *
+ * Extracted from the grid because it is the one piece of that component with
+ * a way to lose data, and losing it is silent. Two rules matter:
+ *
+ * The cell is *spread*, never rebuilt. A cell carries more than its rectangle
+ * — `group` above all — and constructing a fresh object from the library's
+ * item drops every one of those fields, which would dissolve a group the first
+ * time anybody dragged it.
+ *
+ * Parked cells are written back untouched. A group's non-anchor members are
+ * never given to the library, so nothing moves them; omitting them here would
+ * delete them from the layout and take the group's membership with them.
+ */
+export const persistCells = (
+  placed: ReadonlyArray<{ cell: LayoutCell; key: string }>,
+  parked: readonly LayoutCell[],
+  moved: readonly MovedItem[],
+): LayoutCell[] => {
+  const byKey = new Map(moved.map((item) => [item.i, item]));
+  return [
+    ...placed.map(({ cell, key }) => {
+      const item = byKey.get(key);
+      return item
+        ? { ...cell, x: item.x, y: item.y, w: item.w, h: item.h, locked: true }
+        : { ...cell, locked: true };
+    }),
+    ...parked.map((cell) => ({ ...cell, locked: true })),
+  ];
+};

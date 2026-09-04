@@ -305,6 +305,42 @@ describe("a comparison rather than a join", () => {
     expect(result.notes.join(" ")).toContain("no date field");
   });
 
+  /*
+   * The third reading, and the one that had no word for it.
+   *
+   * "Show all my properties and also my available listings" is not enrichment
+   * — neither endpoint's rows are an attribute of the other's — and it is not
+   * a comparison, because nothing is being measured. With only two words in
+   * the enum the model had to answer "enrich"; the join then found nothing to
+   * match on, degraded to the first endpoint, and the reply announced both.
+   */
+  it("does not attempt a join when the two are simply two things", async () => {
+    const llm = fakeLlm([
+      { args: { ...compare, relationship: "alongside" } },
+      { args: binding },
+    ]);
+    const result = await proposeSetup({ llm, intent: "my things and also my owners", context });
+
+    expect(result.patch.joinWith).toBeUndefined();
+    expect(result.patch.seriesWith).toBeUndefined();
+    // Built from the primary, which is a real answer rather than a dead end.
+    expect(result.patch.endpoint).toBe("list_things");
+  });
+
+  it("names the endpoint it could not include, rather than dropping it silently", async () => {
+    const llm = fakeLlm([
+      { args: { ...compare, relationship: "alongside" } },
+      { args: binding },
+    ]);
+    const result = await proposeSetup({ llm, intent: "my things and also my owners", context });
+
+    const notes = result.notes.join(" ");
+    expect(notes).toContain("List owners");
+    expect(notes).toContain("List things");
+    // The note has to be usable as a sentence to the user, not a status code.
+    expect(notes).toContain("second widget");
+  });
+
   it("still joins when the second endpoint is enriching the first", async () => {
     const llm = fakeLlm([
       { args: { ...compare, relationship: "enrich" } },

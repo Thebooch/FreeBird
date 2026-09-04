@@ -184,6 +184,43 @@ describe("renderDashReply", () => {
     }
   });
 
+  /*
+   * The reply that made this necessary: "the widget shows your properties
+   * alongside their available listings, linking listing details to each
+   * property where the records match", written over a table containing only
+   * properties. The join had found nothing to match on and a note said so.
+   *
+   * The note itself cannot reach this prompt — an action's result is not part
+   * of the final-reply context, only its name is — so the rule lives in the
+   * instructions instead, and applies to whatever the mid-turn draft carries.
+   */
+  it("forbids claiming widget contents it was not told about", () => {
+    for (const over of [{}, { error: "boom" }, { clarificationQuestion: "which?" }]) {
+      const prompt = renderDashReply(ctx(over), { sessionId: "s1", rotate });
+      expect(prompt).toContain("Never say a widget shows something unless you were told it does");
+      expect(prompt).toContain("fewer sources were used");
+    }
+  });
+
+  it("tells a built reply to lead with what was left out", () => {
+    /*
+     * Every `built` phrasing is rotated through, because the rule has to hold
+     * in all of them — one variant that still asks only for a confident
+     * description is the one the user eventually sees.
+     */
+    const fresh = createPromptRotation();
+    const built = { actionsRun: [{ componentId: "concierge", actionId: "start_setup" }] };
+    const seen = new Set<string>();
+    for (let turn = 0; turn < 6; turn += 1) {
+      const prompt = renderDashReply(ctx(built), { sessionId: "s1", rotate: fresh });
+      expect(prompt).toMatch(/left out|could not be included|less than they asked for/);
+      seen.add(prompt);
+    }
+    // The rotation is doing its job, so the assertion above covered more than
+    // one phrasing rather than the same one six times.
+    expect(seen.size).toBeGreaterThan(1);
+  });
+
   it("shows the tool results the reply has to be drawn from", () => {
     const prompt = render({
       executedExtraTools: [harnessTool("found", { findings: [{ source: "Leases" }] })],

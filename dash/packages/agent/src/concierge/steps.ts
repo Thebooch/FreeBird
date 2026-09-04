@@ -2,6 +2,7 @@ import type { ComponentContract, ParamDef, RoleContract } from "@freebirdai/dash
 import {
   COMPONENT_CONTRACTS,
   PRESENTATION_MANIFESTS,
+  contractFor,
   fieldLabel,
   humanLabel,
   isEmptyShape,
@@ -471,6 +472,73 @@ export const preferredForRole = (
  */
 export const extrasRole = (contract: ComponentContract): RoleContract | undefined =>
   contract.roles.find((role) => role.multi === true);
+
+/** How much of the joined endpoint a widget shows before somebody chooses. */
+const JOINED_COLUMN_LIMIT = 4;
+
+/**
+ * The joined endpoint's own columns, added to the role that can hold them.
+ *
+ * A join fetches a second endpoint, pays for it, prefixes its columns and puts
+ * them in the pool — and then nothing bound them, so the widget rendered the
+ * first endpoint alone. Asked to show properties alongside their listings, the
+ * listings were retrieved and invisible: every symptom of a join that had not
+ * happened, with the request cost of one that had.
+ *
+ * The binding call cannot fix this on its own, because it is only ever shown
+ * the primary endpoint's schema — it has no way to name a column it was never
+ * told exists. So the columns are added here instead, deterministically, from
+ * the pool the join produced.
+ *
+ * Ranking is `preferredForRole`'s and the role's own acceptance test is
+ * `fieldsForRole`'s; nothing here re-decides either. Identifiers are skipped
+ * because the join already matched on one and a second copy of it is not what
+ * anybody meant by "show me the listings". Capped, because a wide endpoint
+ * would otherwise push the columns somebody did ask for off the right-hand
+ * edge — and every one of these is adjustable in the control afterwards.
+ */
+export const withJoinedColumns = (
+  draft: ConciergeDraft,
+  context: ConciergeContext,
+): ConciergeDraft => {
+  if (!draft.join || !draft.component) return draft;
+
+  const contract = contractFor(draft.component);
+  const target = contract ? extrasRole(contract) : undefined;
+  if (!target) return draft;
+
+  const bound = draft.roles[target.role];
+  const already = new Set(Array.isArray(bound) ? bound : bound ? [bound] : []);
+
+  const prefix = `${draft.join.op}_`;
+  const joined = fieldPool(draft, context).filter(
+    (field) =>
+      field.name.startsWith(prefix) &&
+      !already.has(field.name) &&
+      !looksLikeIdentifier(field.name),
+  );
+
+  /*
+   * Ranked by asking the role for its favourite, then its next favourite.
+   * `preferredForRole` returns one field, so this is simply that, repeatedly —
+   * which keeps the ordering rule in one place rather than growing a second
+   * one here that would drift from it.
+   */
+  const picked: string[] = [];
+  let remaining = fieldsForRole(target, joined);
+  while (picked.length < JOINED_COLUMN_LIMIT && remaining.length > 0) {
+    const next = preferredForRole(target, remaining);
+    if (!next) break;
+    picked.push(next.name);
+    remaining = remaining.filter((field) => field.name !== next.name);
+  }
+  if (picked.length === 0) return draft;
+
+  return {
+    ...draft,
+    roles: { ...draft.roles, [target.role]: [...already, ...picked] },
+  };
+};
 
 /**
  * The control for one optional role, or nothing when there is none to show.

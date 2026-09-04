@@ -1072,4 +1072,75 @@ export const DASH_REACT_STYLES = `
   0%, 70% { box-shadow: 0 0 0 2px var(--dash-accent); }
   100% { box-shadow: 0 0 0 0 transparent; }
 }
+
+/* ── widget groups ─────────────────────────────────────────────────────────
+   Several widgets inside one frame. The frame owns the card — border, radius,
+   shadow — and each member is quieted to borderless through the presentation
+   system, so a group reads as one object rather than as cards inside a card. */
+.dash-group {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  background: var(--dash-surface);
+  border: 1px solid var(--dash-border);
+  border-radius: var(--dash-radius);
+  box-shadow: var(--dash-shadow-sm);
+  overflow: hidden;
+}
+.dash-group__head {
+  display: flex;
+  align-items: center;
+  gap: var(--dash-space-2);
+  padding: var(--dash-space-3) var(--dash-space-4) 0;
+}
+.dash-group__title {
+  margin: 0;
+  font-size: var(--dash-text-sm);
+  font-weight: 600;
+  color: var(--dash-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dash-group__tabs {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.dash-group__tabs .dash-tabs { padding: 0 var(--dash-space-4); }
+.dash-group__panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: var(--dash-space-3) var(--dash-space-4) var(--dash-space-4);
+}
+
+/* A row or a stack. The .dash-widget rule sets height:100%, which is right
+   when it owns a whole grid cell and wrong when several share one — so members
+   are flex children with their own min-size floor instead. */
+.dash-group__lane {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  gap: var(--dash-space-4);
+  padding: var(--dash-space-3) var(--dash-space-4) var(--dash-space-4);
+}
+.dash-group[data-arrangement="row"] .dash-group__lane { flex-direction: row; }
+.dash-group[data-arrangement="stack"] .dash-group__lane {
+  flex-direction: column;
+  overflow-y: auto;
+}
+.dash-group__member {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+/* A stacked member sizes to its content rather than being squeezed to an
+   equal share of a height it cannot know. */
+.dash-group[data-arrangement="stack"] .dash-group__member { flex: 0 0 auto; }
 `;

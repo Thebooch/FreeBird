@@ -10,6 +10,7 @@ import {
   optionalRoleStep,
   settle,
   valueOf,
+  withJoinedColumns,
   type ConciergeContext,
 } from "./steps.js";
 
@@ -341,6 +342,28 @@ export const revise = (
   }
 
   for (const key of ORDER) {
+    /*
+     * The open join lands here, between the endpoint and everything bound
+     * against it — and where it lands is the whole of the fix.
+     *
+     * It used to be applied after this loop had finished, which broke the same
+     * widget twice. Roles were validated against a pool that did not yet hold
+     * the joined columns, so a proposal naming one was refused for inventing a
+     * field; and `applyOpenJoin` then cleared `roles` outright, on the correct
+     * reasoning that the pool had changed under them — discarding the bindings
+     * the loop had just finished making. The result was a widget that fetched
+     * a second endpoint, paid for it, and rendered the first one alone.
+     *
+     * `join` — the map-derived form, answered as an ordinary step — is already
+     * ordered before `component` for exactly this reason. This is the same
+     * position for the form a proposal supplies directly.
+     */
+    if (key === "component" && patch.joinWith) {
+      const outcome = applyOpenJoin(draft, patch.joinWith, context);
+      if (outcome.rejection) rejected.push(outcome.rejection);
+      else draft = outcome.draft;
+    }
+
     for (const { stepId, values } of answersFor(key, patch)) {
       // Re-derived after every application, because the previous one may have
       // changed what this one is allowed to be.
@@ -445,12 +468,6 @@ export const revise = (
     }
   }
 
-  if (patch.joinWith) {
-    const outcome = applyOpenJoin(draft, patch.joinWith, context);
-    if (outcome.rejection) rejected.push(outcome.rejection);
-    else draft = outcome.draft;
-  }
-
   if (patch.narrowWith) {
     const outcome = applyNarrow(draft, patch.narrowWith, context);
     if (outcome.rejection) rejected.push(outcome.rejection);
@@ -500,6 +517,15 @@ export const revise = (
   for (const stepId of patch.skip ?? []) {
     draft = skipStep(draft, stepId);
   }
+
+  /*
+   * Last, because only here is it settled whether there is still a join.
+   *
+   * `applySeries` clears one — a comparison and a join are different widget
+   * shapes — so binding the joined columns any earlier could leave a widget
+   * showing `listings_Address` for a join that no longer exists.
+   */
+  draft = withJoinedColumns(draft, context);
 
   return { draft, rejected };
 };

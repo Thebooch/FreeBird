@@ -372,15 +372,30 @@ export const proposeSetup = async (input: ProposeSetupInput): Promise<ProposedSe
    * leave the person asking.
    */
   /*
-   * A comparison, which is not a join and cannot be built as one.
+   * Two things somebody wants to see together, which one widget cannot yet be.
    *
-   * Handled before the join path because the two are mutually exclusive and
-   * because the failure mode of guessing wrong is silent: forced through a
-   * join, "listings per month against applications per month" finds nothing to
-   * match on and quietly becomes a chart of listings alone — which is exactly
-   * what it did, with rent on the value axis.
+   * Handled first and deliberately does nothing but say so. A request like
+   * "all my properties and also my available listings" used to arrive here as
+   * "enrich", because that was the only word available for it — so a join was
+   * attempted, found nothing to match on, degraded to the properties alone,
+   * and the reply announced the listings anyway.
+   *
+   * There is no honest widget to build for this from one endpoint, so the
+   * primary is built and the gap is named. That is the whole of the fix at
+   * this tier: the widget is right about what it contains, and the note is the
+   * only thing that knows the request wanted more. When widget groups land,
+   * this branch is where they get built instead of where the shortfall is
+   * reported.
    */
-  if (picked.secondary && picked.relationship === "compare") {
+  if (picked.secondary && picked.relationship === "alongside") {
+    const other = context.ops.find((candidate) => candidate.id === picked.secondary);
+    const otherTitle = other?.title ?? picked.secondary;
+    notes.push(
+      `${op.title} and ${otherTitle} are two separate sets of records rather than one — ` +
+        "neither is a detail of the other, so they cannot share a widget yet. This is built " +
+        `from ${op.title} alone. ${otherTitle} would need a second widget of its own.`,
+    );
+  } else if (picked.secondary && picked.relationship === "compare") {
     const nested = expandable.get(picked.secondary);
     const other =
       context.ops.find((candidate) => candidate.id === picked.secondary) ??
