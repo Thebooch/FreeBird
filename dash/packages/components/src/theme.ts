@@ -13,23 +13,38 @@ const seriesVars = (colors: readonly string[]): string =>
  * media block below the toggle in specificity).
  */
 const DARK_TOKENS = `
-  --dash-surface: #141a17;
-  --dash-plane: #0c100e;
-  --dash-ink: #f2f5f3;
-  --dash-ink-secondary: #b9c2be;
-  --dash-muted: #808b86;
-  --dash-grid: #232b27;
-  --dash-axis: #333d38;
+  /*
+   * #14171a is the dark surface at the *same lightness* as the #141a17 it
+   * replaces — a pure hue rotation off the old green cast onto the neutral one
+   * the refresh uses everywhere. The series palette's dark separation was
+   * proved against that lightness, and rotating the backdrop's hue at equal
+   * luminance does not move an adjacent-pair delta-E, so the validated figures
+   * in palette.ts still stand. Changing its *lightness* would not be free.
+   */
+  --dash-surface: #14171a;
+  --dash-plane: #0e1013;
+  --dash-ink: #f4f4f2;
+  --dash-ink-secondary: #b9bcc2;
+  --dash-muted: #8a8d93;
+  --dash-grid: #262b31;
+  --dash-axis: #363c43;
   --dash-border: rgba(255, 255, 255, 0.1);
-  --dash-delta-up: #5fa882;
-  --dash-track: #1e2b24;
+  --dash-border-strong: rgba(255, 255, 255, 0.16);
+  --dash-delta-up: #7fe0d5;
+  --dash-track: #23282d;
   --dash-wash: rgba(255, 255, 255, 0.04);
 
-  --dash-accent: #5fa882;
-  --dash-accent-strong: #7bbd99;
-  --dash-accent-ink: #08120d;
-  --dash-accent-wash: rgba(95, 168, 130, 0.14);
-  --dash-accent-line: rgba(95, 168, 130, 0.34);
+  /*
+   * Dark mode takes the *mint* end of the brand ramp, not the deep teal.
+   * #0f4d52 is a 9.7:1 accent on white and a 1.4:1 smudge on #14171a — the
+   * same hue has to step up in lightness to survive the swap, which is what
+   * the design's own dark chrome does with #3fb5ad.
+   */
+  --dash-accent: #3fb5ad;
+  --dash-accent-strong: #4ecdc4;
+  --dash-accent-ink: #08201f;
+  --dash-accent-wash: rgba(63, 181, 173, 0.14);
+  --dash-accent-line: rgba(63, 181, 173, 0.34);
 
   /*
    * Elevation on a dark plane is light, not shadow.
@@ -38,13 +53,13 @@ const DARK_TOKENS = `
    * a shade and carries a hairline top highlight instead. Same three tokens as
    * light mode, so nothing downstream branches on the mode.
    */
-  --dash-surface-raised: #1a221e;
-  --dash-surface-sunken: #101614;
+  --dash-surface-raised: #23282d;
+  --dash-surface-sunken: #101215;
   --dash-shadow: none;
   --dash-shadow-sm: 0 1px 0 rgba(255, 255, 255, 0.03) inset;
   --dash-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
   --dash-shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.6), 0 1px 0 rgba(255, 255, 255, 0.05) inset;
-  --dash-ring: rgba(95, 168, 130, 0.32);
+  --dash-ring: rgba(63, 181, 173, 0.32);
 ${seriesVars(SERIES_DARK)}
 `;
 
@@ -52,30 +67,33 @@ export const DASH_STYLES = `
 .dash-root {
   color-scheme: light;
   /*
-   * Neutrals are cool and near-achromatic with a faint green cast, so the
-   * accent reads as deliberate rather than as a colour that wandered in. A
-   * crisp white card on a soft plane is the enterprise convention: it makes
-   * the widget the object and everything else the background.
+   * Neutrals are warm and near-achromatic — a bone plane rather than the cool
+   * green-grey one, so the teal accent reads as the only saturated thing in
+   * the chrome. A crisp white card on a warm plane is what separates the
+   * widget from its background without drawing an edge around everything.
    *
-   * "--dash-surface" is deliberately unchanged at #ffffff (and #141a17 dark).
-   * The series palette's colourblind separation was proved against exactly
-   * those two values, and slot order is the safety mechanism — so the restyle
-   * moves the *plane* and the elevation and leaves the two surfaces marks are
-   * drawn on alone. Anything that changes them has to re-run the validator.
+   * "--dash-surface" is deliberately unchanged at #ffffff. The series
+   * palette's colourblind separation was proved against exactly that value in
+   * light mode, and slot order is the safety mechanism — so the restyle moves
+   * the *plane*, the elevation and the chrome, and leaves the surface marks
+   * are drawn on alone. The design agrees: every chart colour in it is
+   * byte-identical to the SERIES_LIGHT slot it came from.
    */
   --dash-surface: #ffffff;
   --dash-surface-raised: #ffffff;
-  --dash-surface-sunken: #f0f2f1;
-  --dash-plane: #f2f5f3;
-  --dash-ink: #0d1211;
-  --dash-ink-secondary: #454e4b;
-  --dash-muted: #69736f;
-  --dash-grid: #e5e8e6;
-  --dash-axis: #c8cecb;
-  --dash-border: rgba(15, 20, 19, 0.09);
-  --dash-delta-up: #1f7a4d;
-  --dash-track: #dde8e2;
-  --dash-wash: rgba(15, 20, 19, 0.035);
+  --dash-surface-sunken: #faf9f6;
+  --dash-plane: #eceae4;
+  --dash-ink: #16171a;
+  --dash-ink-secondary: #3f4147;
+  --dash-muted: #767a80;
+  --dash-grid: #e7e5df;
+  --dash-axis: #c9c6be;
+  --dash-border: rgba(22, 23, 26, 0.09);
+  /* The edge a card takes on hover — one step up from the resting one. */
+  --dash-border-strong: rgba(22, 23, 26, 0.13);
+  --dash-delta-up: #16751b;
+  --dash-track: #e2e0d8;
+  --dash-wash: rgba(22, 23, 26, 0.04);
 
   /*
    * The brand accent, and deliberately NOT a series colour.
@@ -85,20 +103,21 @@ export const DASH_STYLES = `
    * this did) means a palette change silently restyles the app, and it puts a
    * data colour on things that carry no data.
    *
-   * Muted forest at 6.3:1 on the surface — comfortable for text and icons, and
-   * for white text on a filled control.
+   * Deep teal at 9.7:1 on the surface — it carries white text on a filled
+   * control and still reads as ink-dark beside body copy, which the old
+   * forest green at 6.3:1 did not quite manage at small sizes.
    */
-  --dash-accent: #2f6b4f;
-  --dash-accent-strong: #24563f;
+  --dash-accent: #0f4d52;
+  --dash-accent-strong: #146066;
   --dash-accent-ink: #ffffff;
-  --dash-accent-wash: rgba(47, 107, 79, 0.09);
+  --dash-accent-wash: rgba(15, 77, 82, 0.07);
   /* A visible edge in accent, for tints that need a border without a fill. */
-  --dash-accent-line: rgba(47, 107, 79, 0.28);
-  --dash-ring: rgba(47, 107, 79, 0.28);
+  --dash-accent-line: rgba(15, 77, 82, 0.22);
+  --dash-ring: rgba(15, 77, 82, 0.28);
 ${seriesVars(SERIES_LIGHT)}
 
   /* Reserved status palette — never themed, never reused as a series. */
-  --dash-good: #0ca30c;
+  --dash-good: #16751b;
   --dash-warning: #fab219;
   --dash-serious: #ec835a;
   --dash-critical: #d03b3b;
@@ -113,16 +132,16 @@ ${seriesVars(SERIES_LIGHT)}
    * calendar day cell and a chart tick — and nowhere else.
    */
   --dash-text-micro: 10px;
-  --dash-text-2xs: 11px;
+  --dash-text-2xs: 11.5px;
   --dash-text-xs: 12px;
   --dash-text-sm: 13px;
-  --dash-text-md: 15px;
+  --dash-text-md: 14.5px;
   --dash-text-lg: 17px;
   --dash-text-xl: 21px;
-  --dash-text-2xl: 27px;
-  --dash-text-3xl: 36px;
+  --dash-text-2xl: 25px;
+  --dash-text-3xl: 32px;
   /* One value, alone on a tile, and the only place type gets this big. */
-  --dash-text-hero: 46px;
+  --dash-text-hero: 50px;
 
   --dash-weight-normal: 400;
   --dash-weight-medium: 500;
@@ -133,8 +152,13 @@ ${seriesVars(SERIES_LIGHT)}
   --dash-leading-normal: 1.5;
   --dash-leading-relaxed: 1.65;
 
-  /* Small caps-ish label treatment, used by every eyebrow in the app. */
-  --dash-tracking-label: 0.055em;
+  /*
+   * Eyebrows are set in the mono face, uppercase and widely tracked — the
+   * refresh leans on that one treatment to mark every label, count and
+   * timestamp as chrome rather than as data. 0.055em was too tight to read as
+   * deliberate once the face changed.
+   */
+  --dash-tracking-label: 0.12em;
 
   /* ── space ─────────────────────────────────────────────────────────────
    * A 4px rhythm. Component padding reads from the density block below, which
@@ -150,6 +174,8 @@ ${seriesVars(SERIES_LIGHT)}
   --dash-space-7: 32px;
   --dash-space-8: 40px;
 
+  /* Chips, badges and swatches — the step below a control. */
+  --dash-radius-xs: 6px;
   --dash-radius-sm: 8px;
   --dash-radius: 14px;
   --dash-radius-lg: 20px;
@@ -161,10 +187,16 @@ ${seriesVars(SERIES_LIGHT)}
    * the page (menu, tooltip), "lg" is a sheet. "--dash-shadow" is kept as the
    * name the existing rules use and aliases "sm".
    */
-  --dash-shadow-sm: 0 1px 2px rgba(15, 20, 19, 0.05), 0 1px 3px rgba(15, 20, 19, 0.04);
-  --dash-shadow-md: 0 4px 12px rgba(15, 20, 19, 0.08), 0 12px 28px rgba(15, 20, 19, 0.07);
-  --dash-shadow-lg: 0 8px 24px rgba(15, 20, 19, 0.1), 0 32px 64px rgba(15, 20, 19, 0.12);
+  --dash-shadow-sm: 0 1px 2px rgba(22, 23, 26, 0.04), 0 12px 26px -20px rgba(22, 23, 26, 0.4);
+  --dash-shadow-md: 0 2px 6px rgba(22, 23, 26, 0.05), 0 6px 16px -8px rgba(22, 23, 26, 0.35);
+  --dash-shadow-lg: 0 2px 5px rgba(22, 23, 26, 0.05), 0 24px 56px -24px rgba(22, 23, 26, 0.5);
   --dash-shadow: var(--dash-shadow-sm);
+  /*
+   * The lift a card takes on hover. The negative spread keeps the throw long
+   * and the contact shadow tight, so the card reads as picked up rather than
+   * as blurred.
+   */
+  --dash-shadow-hover: 0 2px 5px rgba(22, 23, 26, 0.05), 0 20px 40px -22px rgba(22, 23, 26, 0.5);
 
   /* ── motion ────────────────────────────────────────────────────────────
    * Durations are tokens so the reduced-motion block below can zero all of
@@ -178,8 +210,14 @@ ${seriesVars(SERIES_LIGHT)}
   --dash-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   --dash-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 
-  --dash-font: system-ui, -apple-system, "Segoe UI", sans-serif;
-  --dash-font-mono: ui-monospace, SFMono-Regular, "Cascadia Mono", monospace;
+  /*
+   * Geist is named first but never required: this sheet ships inside a library
+   * that cannot load a webfont on a consumer's behalf, so the stack has to
+   * degrade to the system face on its own. The app pulls the real thing in
+   * apps/web/index.html.
+   */
+  --dash-font: Geist, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --dash-font-mono: "Geist Mono", ui-monospace, SFMono-Regular, "Cascadia Mono", monospace;
 
   font-family: var(--dash-font);
   font-size: var(--dash-text-sm);
@@ -255,8 +293,22 @@ ${seriesVars(SERIES_LIGHT)}
   border-radius: var(--dash-radius);
   box-shadow: var(--dash-shadow-sm);
   overflow: hidden;
-  transition: box-shadow var(--dash-dur-base) var(--dash-ease);
+  transition: box-shadow var(--dash-dur-base) var(--dash-ease),
+              border-color var(--dash-dur-base) var(--dash-ease);
 }
+/*
+ * The card answers the pointer.
+ *
+ * Only the shadow and the edge move — no transform. A tile that lifts
+ * geometrically drags every neighbour's alignment with it in a dense grid,
+ * and the widget is also a drag handle, so a hover that shifts the target is
+ * a hover that makes the thing harder to grab.
+ */
+.dash-widget:hover {
+  box-shadow: var(--dash-shadow-hover);
+  border-color: var(--dash-border-strong);
+}
+.dash-widget[data-border="off"]:hover { box-shadow: none; border-color: transparent; }
 /* Borderless: a widget that sits directly on the plane rather than on a card.
    The background goes too — a white panel with no edge on a near-white plane
    reads as a rendering fault rather than as a deliberate choice. */
@@ -326,7 +378,15 @@ ${seriesVars(SERIES_LIGHT)}
   padding: var(--dash-space-2) var(--dash-pad-x);
   border-top: 1px solid var(--dash-border);
   background: var(--dash-surface-sunken);
-  font-size: var(--dash-text-2xs);
+  /*
+   * Set as chrome, not as data: mono, uppercase and tracked, so a row count
+   * and a timestamp are never mistaken at a glance for a figure the widget is
+   * reporting. It is the same treatment every eyebrow in the app uses.
+   */
+  font-family: var(--dash-font-mono);
+  font-size: var(--dash-text-micro);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
   color: var(--dash-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -398,13 +458,20 @@ ${seriesVars(SERIES_LIGHT)}
 /* Dimmed and not-allowed, but still legible: a disabled control nobody can
    read is one nobody can work out how to enable. */
 .dash-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+/*
+ * Lit from above, like every other filled control in the refresh: a one-pixel
+ * inset highlight on top and a coloured contact shadow below. Brightness on
+ * hover rather than a second colour, so the ramp needs only the two accent
+ * tokens and stays correct when dark mode swaps both.
+ */
 .dash-btn[data-tone="primary"] {
-  background: var(--dash-accent); border-color: var(--dash-accent);
+  background: linear-gradient(180deg, var(--dash-accent-strong), var(--dash-accent));
+  border-color: transparent;
   color: var(--dash-accent-ink); font-weight: 600;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 2px 8px -2px var(--dash-ring);
+  transition: filter var(--dash-dur-fast) var(--dash-ease);
 }
-.dash-btn[data-tone="primary"]:hover:not(:disabled) {
-  background: var(--dash-accent-strong); border-color: var(--dash-accent-strong);
-}
+.dash-btn[data-tone="primary"]:hover:not(:disabled) { filter: brightness(1.12); }
 .dash-btn[data-tone="ghost"] { border-color: transparent; background: transparent; }
 .dash-btn[data-tone="danger"] { color: var(--dash-critical); }
 .dash-btn[data-tone="danger"]:hover:not(:disabled) { border-color: var(--dash-critical); }
@@ -428,9 +495,18 @@ ${seriesVars(SERIES_LIGHT)}
 .dash-iconbtn[data-tone="danger"] { color: var(--dash-critical); }
 .dash-iconbtn[aria-pressed="true"] { background: var(--dash-accent-wash); color: var(--dash-accent); }
 
+/*
+ * A ring rather than a border: an inset shadow does not take part in layout,
+ * so a badge can gain and lose its edge as its tone changes without nudging
+ * the header text beside it by a pixel.
+ */
 .dash-badge {
-  font-size: var(--dash-text-2xs); padding: 1px 6px; border-radius: var(--dash-radius-pill);
+  display: inline-flex; align-items: center; gap: 5px;
+  font-family: var(--dash-font-mono);
+  font-size: var(--dash-text-micro); letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 3px 8px; border-radius: var(--dash-radius-xs);
   background: var(--dash-wash); color: var(--dash-muted); white-space: nowrap;
+  box-shadow: inset 0 0 0 1px var(--dash-border);
 }
 .dash-badge--stale, .dash-badge[data-tone="stale"] { color: var(--dash-serious); }
 .dash-badge--warn, .dash-badge[data-tone="warn"] { color: var(--dash-warning); }
@@ -535,19 +611,38 @@ ${seriesVars(SERIES_LIGHT)}
 .dash-toolbar__start { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; }
 .dash-toolbar__end { display: flex; align-items: center; gap: 6px; flex: none; }
 
+/*
+ * A band, not an underline.
+ *
+ * The rule starts at the label and fades out across the row, which groups the
+ * widgets under it without drawing a hard line the eye has to cross. It is a
+ * pseudo-element so the band needs no extra node in the markup, and the
+ * order property places it between the label and the meta regardless of
+ * where they sit in the DOM.
+ */
 .dash-section-head {
-  display: flex; align-items: baseline; gap: var(--dash-space-2);
-  margin-bottom: var(--dash-space-2); padding-bottom: var(--dash-space-1);
-  border-bottom: 1px solid var(--dash-border);
+  display: flex; align-items: center; gap: var(--dash-space-3);
+  margin: var(--dash-space-6) 0 var(--dash-space-3);
+}
+.dash-section-head::after {
+  content: ""; order: 50; flex: 1 1 auto; height: 1px; min-width: var(--dash-space-4);
+  background: linear-gradient(90deg, var(--dash-border-strong), transparent);
 }
 .dash-section-head__title {
-  margin: 0;
-  font-size: var(--dash-text-2xs); font-weight: var(--dash-weight-semi);
+  margin: 0; order: 10;
+  font-family: var(--dash-font-mono);
+  font-size: var(--dash-text-micro); font-weight: var(--dash-weight-medium);
   text-transform: uppercase; letter-spacing: var(--dash-tracking-label);
   color: var(--dash-muted);
 }
-.dash-section-head__meta { font-size: var(--dash-text-xs); color: var(--dash-muted); }
-.dash-section-head__actions { margin-left: auto; display: inline-flex; gap: 4px; }
+.dash-section-head__meta {
+  order: 60; flex: none;
+  font-family: var(--dash-font-mono); font-size: var(--dash-text-micro);
+  letter-spacing: 0.08em; color: var(--dash-axis);
+}
+/* The rule already pushes these right, so an auto left margin would only add
+   a second, competing spring. */
+.dash-section-head__actions { order: 70; display: inline-flex; gap: 4px; flex: none; }
 
 .dash-kbd {
   font-size: var(--dash-text-2xs); font-family: ui-monospace, SFMono-Regular, monospace;

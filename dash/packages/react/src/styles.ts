@@ -330,23 +330,53 @@ export const DASH_REACT_STYLES = `
  * because the tabs are how you move around and a long board should not
  * strand you at the bottom of it.
  */
+/*
+ * The bar is dark in both modes.
+ *
+ * It is the one piece of chrome that never belongs to the page: a charcoal
+ * rail top and bottom frames the board the same way whichever theme is on,
+ * and it stops the white nav and the white widget cards from running together
+ * into one undifferentiated sheet.
+ *
+ * The palette below is deliberately NOT named --dash-*. The overflow popover
+ * is absolutely positioned *inside* this element (and hosts the model sheet),
+ * so anything written into the --dash-* scope here would be inherited by a
+ * menu that is drawn on the light plane. Re-declaring the light values on the
+ * popover to undo that would be worse: it would hard-code light and break
+ * real dark mode. Bar-local names cannot leak, because nothing downstream
+ * reads them.
+ */
 .dash-nav {
+  --nav-ink: #f4f4f2;
+  --nav-ink-dim: rgba(244, 244, 242, 0.60);
+  --nav-ink-faint: rgba(244, 244, 242, 0.45);
+  --nav-fill: rgba(255, 255, 255, 0.04);
+  --nav-fill-hover: rgba(255, 255, 255, 0.07);
+  --nav-fill-active: rgba(255, 255, 255, 0.10);
+  --nav-line: rgba(255, 255, 255, 0.13);
+  --nav-mint: #7fd8d0;
+
   position: sticky; top: 0; z-index: 20;
-  display: flex; align-items: center; gap: var(--dash-space-4);
-  padding: var(--dash-space-3) var(--dash-space-5);
-  background: var(--dash-surface);
-  border-bottom: 1px solid var(--dash-border);
+  display: flex; align-items: center; gap: 18px;
+  padding: var(--dash-space-2) 22px; min-height: 56px;
+  background: linear-gradient(180deg, #22262b, #15171a);
+  /* Light, not shadow: a drop shadow under a dark bar on a warm plane reads as
+     a smudge, where a one-pixel top highlight reads as a lit edge. */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  border-bottom: none;
 }
 .dash-nav__brand {
-  display: inline-flex; align-items: center; gap: var(--dash-space-2); flex: none;
+  display: inline-flex; align-items: center; gap: 9px; flex: none;
   font-size: var(--dash-text-md); font-weight: var(--dash-weight-semi);
-  letter-spacing: -0.02em; color: var(--dash-ink);
-  padding-right: var(--dash-space-4); border-right: 1px solid var(--dash-border);
+  letter-spacing: -0.02em; color: var(--nav-ink);
+  padding-right: 18px; border-right: 1px solid var(--nav-line);
 }
 .dash-nav__mark {
-  width: 14px; height: 14px; border-radius: 5px; flex: none;
-  background: linear-gradient(140deg, var(--dash-accent-strong), var(--dash-accent));
-  box-shadow: 0 0 0 3px var(--dash-accent-wash);
+  width: 20px; height: 20px; border-radius: var(--dash-radius-xs); flex: none;
+  /* Mint to deep teal: the full brand ramp in one 20px tile, which is the only
+     place both ends of it appear together. */
+  background: linear-gradient(140deg, #3fb5ad, var(--dash-accent));
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.10), 0 2px 6px rgba(0, 0, 0, 0.4);
 }
 
 .dash-nav__rail {
@@ -355,75 +385,119 @@ export const DASH_REACT_STYLES = `
   overflow-x: auto; scrollbar-width: none;
 }
 .dash-nav__rail::-webkit-scrollbar { display: none; }
-.dash-nav__hint { font-size: var(--dash-text-xs); color: var(--dash-muted); white-space: nowrap; }
+.dash-nav__hint { font-size: var(--dash-text-xs); color: var(--nav-ink-faint); white-space: nowrap; }
 
 .dash-nav__tab {
   font: inherit; font-size: var(--dash-text-sm); font-weight: var(--dash-weight-medium);
   white-space: nowrap; flex: none;
   border: 1px solid transparent; border-radius: var(--dash-radius-pill);
   padding: var(--dash-space-1) var(--dash-space-3); min-height: 32px;
-  background: transparent; color: var(--dash-ink-secondary);
+  background: transparent; color: var(--nav-ink-dim);
   cursor: pointer;
   transition: background var(--dash-dur-fast) var(--dash-ease),
               color var(--dash-dur-fast) var(--dash-ease),
               border-color var(--dash-dur-fast) var(--dash-ease);
 }
-.dash-nav__tab:hover { background: var(--dash-wash); color: var(--dash-ink); }
+.dash-nav__tab:hover { background: var(--nav-fill-hover); color: var(--nav-ink); }
 /* The active tab is a tint plus a ring, not a solid fill: at this size a
-   filled pill next to five others reads as a button, not as "you are here". */
+   filled pill next to five others reads as a button, not as "you are here".
+   On the dark bar the tint is white rather than accent — the deep teal that
+   marks selection on the light plane is a 1.4:1 smudge on charcoal. */
 .dash-nav__tab[data-active="true"] {
-  background: var(--dash-accent-wash);
-  border-color: var(--dash-accent-line);
-  color: var(--dash-accent);
+  background: var(--nav-fill-active);
+  border-color: var(--nav-line);
+  color: #ffffff;
   font-weight: var(--dash-weight-semi);
 }
-.dash-nav__tab:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 1px; }
+.dash-nav__tab:focus-visible { outline: 2px solid var(--nav-mint); outline-offset: 1px; }
 
 .dash-nav__tab--editing {
   display: inline-flex; align-items: center; gap: 2px; flex: none;
-  border: 1px solid var(--dash-border); border-radius: var(--dash-radius-pill);
-  padding: 2px var(--dash-space-1) 2px var(--dash-space-3); background: var(--dash-surface-sunken);
+  border: 1px solid var(--nav-line); border-radius: var(--dash-radius-pill);
+  padding: 2px var(--dash-space-1) 2px var(--dash-space-3); background: var(--nav-fill-hover);
 }
 .dash-nav__rename {
   font: inherit; font-size: var(--dash-text-sm); width: 11ch; min-width: 6ch;
-  border: none; background: transparent; color: var(--dash-ink); padding: 3px 0;
+  border: none; background: transparent; color: var(--nav-ink); padding: 3px 0;
 }
 .dash-nav__rename:focus-visible { outline: none; }
 .dash-nav__x, .dash-nav__confirm {
   font: inherit; border: none; background: transparent; cursor: pointer;
-  color: var(--dash-muted); border-radius: var(--dash-radius-pill);
+  color: var(--nav-ink-faint); border-radius: var(--dash-radius-pill);
   padding: 3px var(--dash-space-2); line-height: 1;
 }
 .dash-nav__x { font-size: var(--dash-text-2xs); }
-.dash-nav__x:hover { color: var(--dash-critical); background: var(--dash-surface); }
+/* #d03b3b is a 3.4:1 warning on white and 2.6:1 here, so destructive intent on
+   the bar is carried by the lighter step of the same hue. */
+.dash-nav__x:hover { color: #ff8b8b; background: var(--nav-fill-hover); }
 .dash-nav__confirm {
-  font-size: var(--dash-text-xs); color: var(--dash-critical);
+  font-size: var(--dash-text-xs); color: #ff8b8b;
   font-weight: var(--dash-weight-semi);
 }
 
 .dash-nav__add {
   font: inherit; font-size: var(--dash-text-sm); white-space: nowrap; flex: none;
-  border: 1px dashed var(--dash-border); border-radius: var(--dash-radius-pill);
+  border: 1px dashed rgba(255, 255, 255, 0.16); border-radius: var(--dash-radius-pill);
   padding: var(--dash-space-1) var(--dash-space-3); min-height: 32px;
-  background: transparent; color: var(--dash-muted); cursor: pointer;
+  background: transparent; color: var(--nav-ink-faint); cursor: pointer;
   transition: border-color var(--dash-dur-fast) var(--dash-ease),
               color var(--dash-dur-fast) var(--dash-ease);
 }
-.dash-nav__add:hover { border-color: var(--dash-accent); color: var(--dash-accent); }
+.dash-nav__add:hover { border-color: rgba(63, 181, 173, 0.6); color: var(--nav-mint); }
 
 .dash-nav__actions { display: flex; align-items: center; gap: var(--dash-space-2); flex: none; }
 .dash-nav__icon {
   font: inherit; font-size: var(--dash-text-sm); cursor: pointer;
   width: 34px; height: 34px; border-radius: var(--dash-radius-sm);
   display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid var(--dash-border); background: var(--dash-surface); color: var(--dash-muted);
+  border: 1px solid rgba(255, 255, 255, 0.10); background: var(--nav-fill);
+  color: rgba(244, 244, 242, 0.66);
   transition: color var(--dash-dur-fast) var(--dash-ease),
               border-color var(--dash-dur-fast) var(--dash-ease),
               background var(--dash-dur-fast) var(--dash-ease);
 }
-.dash-nav__icon:hover { color: var(--dash-ink); border-color: var(--dash-axis); }
+.dash-nav__icon:hover { color: var(--nav-ink); background: var(--nav-fill-active); }
 .dash-nav__icon[data-on="true"] {
-  border-color: var(--dash-accent-line); background: var(--dash-accent-wash); color: var(--dash-accent);
+  border-color: rgba(63, 181, 173, 0.34); background: rgba(63, 181, 173, 0.14);
+  color: var(--nav-mint);
+}
+/*
+ * The assistant is the one promoted action in the bar, so it carries the
+ * filled accent while the edit and overflow icons beside it stay neutral.
+ *
+ * It stays a 34px square with only the glyph in it. Labelling it "Assistant"
+ * would widen the one control whose position people learn fastest, and the
+ * title and aria-label already name it for anyone who needs the word.
+ *
+ * Written as its own attribute rather than by recolouring the shared
+ * dash-nav__icon rule, which the edit and overflow buttons also use. Both
+ * selectors below out-specify the data-on rule above and sit after it, so
+ * the open state restyles the fill instead of reverting it to the neutral
+ * wash.
+ */
+/*
+ * Literal teal, not var(--dash-accent).
+ *
+ * The bar it sits on is the same charcoal in both themes, so a button that
+ * followed the accent token would be deep teal in light mode and mint in dark
+ * — two different buttons on an identical bar. The backdrop is fixed, so the
+ * fill on it is fixed too. White on #0f4d52 is 9.7:1 either way.
+ */
+.dash-nav__icon[data-accent="true"] {
+  border-color: transparent;
+  background: linear-gradient(180deg, #146066, #0f4d52);
+  color: #ffffff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 2px 8px -2px rgba(15, 77, 82, 0.5);
+  transition: filter var(--dash-dur-fast) var(--dash-ease);
+}
+.dash-nav__icon[data-accent="true"]:hover {
+  color: #ffffff; border-color: transparent; filter: brightness(1.12);
+}
+/* Open reads as pressed: the ramp inverts and the lift becomes a recess. */
+.dash-nav__icon[data-accent="true"][data-on="true"] {
+  background: linear-gradient(180deg, #0f4d52, #146066);
+  color: #ffffff; border-color: transparent;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 .dash-control[data-on="true"] {
   border-color: var(--dash-accent-line); background: var(--dash-accent-wash); color: var(--dash-accent);

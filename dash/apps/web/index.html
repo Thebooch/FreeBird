@@ -4,12 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>FreeBird Dash</title>
+    <!-- The face the theme's font stack names first. The stack degrades to
+         system-ui on its own, so a blocked or slow CDN costs the typeface and
+         nothing else. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
     <style>
       html, body, #root { height: 100%; margin: 0; }
       /* Mirrors `--dash-plane` so the page is painted before React mounts and
          the first frame is not a white flash. Keep in step with theme.ts. */
-      body { background: #f6f7f6; }
-      @media (prefers-color-scheme: dark) { body { background: #0c100e; } }
+      body { background: #eceae4; }
+      @media (prefers-color-scheme: dark) { body { background: #0e1013; } }
     </style>
   </head>
   <body>

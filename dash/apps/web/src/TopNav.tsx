@@ -330,6 +330,7 @@ export const TopNav = ({
         <button
           type="button"
           className="dash-nav__icon"
+          data-accent="true"
           data-on={chatOpen}
           onClick={() => onToggleChat(!chatOpen)}
           title={chatOpen ? "Close the assistant" : "Open the assistant"}
