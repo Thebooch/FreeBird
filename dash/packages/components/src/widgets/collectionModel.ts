@@ -1,3 +1,4 @@
+import { facetKey } from "@freebirdai/dash-spec";
 import type { Row } from "@freebirdai/dash-runtime";
 
 /**
@@ -26,8 +27,9 @@ export const bucketBy = (rows: readonly Row[], column: string): readonly Bucket[
   const groups = new Map<string, Row[]>();
 
   for (const row of rows) {
-    const value = row[column];
-    const key = value === null || value === undefined || value === "" ? "—" : String(value);
+    // The same bucketing a facet uses, so a board column and a filter tile
+    // over one field can never disagree about what an empty value looks like.
+    const key = facetKey(row[column]);
     const existing = groups.get(key);
     if (existing) existing.push(row);
     else {

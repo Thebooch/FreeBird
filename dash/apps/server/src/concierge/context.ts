@@ -343,6 +343,9 @@ export const buildConciergeContext = (input: ContextInput): ConciergeContext => 
         ...(described ? { description: described } : {}),
         ...(resource ? { resource } : {}),
         ...(params && params.length > 0 ? { params } : {}),
+        // Only the map has this: it is a fact about the API rather than about
+        // any account's data, which is why it travels with the catalog.
+        ...(mappedOps.get(op.id)?.facet ? { facet: mappedOps.get(op.id)!.facet } : {}),
       });
 
     }

@@ -70,6 +70,15 @@ export interface ChatScope {
    * is two ids and a kind, and the transport already carries headers.
    */
   readonly view: string | null;
+  /**
+   * Which widgets the reader has narrowed with a filter strip, and to what.
+   *
+   * Sent because a facet changes what a widget *says* without changing its
+   * spec: the server can rebuild the rows exactly and still be looking at four
+   * hundred records while the person asking can see twelve. Null whenever
+   * nothing is filtering, which is almost always.
+   */
+  readonly filters: string | null;
 }
 
 /**
@@ -116,14 +125,29 @@ export const ChatScopeReporter = ({
     ? `record:${encodeURIComponent(openRecord.widgetId)}:${encodeURIComponent(openRecord.recordId)}`
     : "board";
 
+  /*
+   * URI-encoded JSON rather than the colon grammar the other two use: a
+   * summary is prose ("Status: Open, Overdue"), so it carries the delimiter
+   * itself and would need escaping anyway. Headers must be ASCII, which the
+   * encoding also settles.
+   */
+  const summaries = dashboard?.facetSummaries ?? {};
+  const filters =
+    Object.keys(summaries).length > 0 ? encodeURIComponent(JSON.stringify(summaries)) : null;
+
   useEffect(() => {
-    report?.({ dashboardId, range: encoded, view });
-  }, [report, dashboardId, encoded, view]);
+    report?.({ dashboardId, range: encoded, view, filters });
+  }, [report, dashboardId, encoded, view, filters]);
   return null;
 };
 
 export const ChatSession = ({ children }: ChatSessionProps): JSX.Element => {
-  const scopeRef = useRef<ChatScope>({ dashboardId: null, range: null, view: null });
+  const scopeRef = useRef<ChatScope>({
+    dashboardId: null,
+    range: null,
+    view: null,
+    filters: null,
+  });
   const report = useMemo(
     () => (scope: ChatScope) => {
       scopeRef.current = scope;
@@ -147,6 +171,7 @@ export const ChatSession = ({ children }: ChatSessionProps): JSX.Element => {
           ...(current.dashboardId ? { "x-dash-dashboard": current.dashboardId } : {}),
           ...(current.range ? { "x-dash-range": current.range } : {}),
           ...(current.view ? { "x-dash-view": current.view } : {}),
+          ...(current.filters ? { "x-dash-filters": current.filters } : {}),
         };
       },
     }),

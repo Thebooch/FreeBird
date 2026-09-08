@@ -366,6 +366,13 @@ const CHROME_MANIFEST: PresentationManifest = {
       orderable: true,
     },
     {
+      id: "facets",
+      label: "Filter strip",
+      description: "Counts per category, above the widget, that filter it when clicked.",
+      hideable: true,
+      orderable: false,
+    },
+    {
       id: "footer",
       label: "Footer",
       description: "Row count and how long ago the data arrived.",
@@ -378,6 +385,19 @@ const CHROME_MANIFEST: PresentationManifest = {
       id: "border",
       label: "Border",
       description: "Draw the card outline and shadow. Off gives a flat, bare widget.",
+      type: "boolean",
+    },
+    {
+      id: "facetVariant",
+      label: "Filter strip style",
+      description: "Tiles lead with the number; chips stay on one line and take less room.",
+      type: "enum",
+      values: ["tiles", "chips"],
+    },
+    {
+      id: "facetCounts",
+      label: "Filter counts",
+      description: "Show how many rows are in each category. Off leaves the labels alone.",
       type: "boolean",
     },
   ],
@@ -751,7 +771,12 @@ export const manifestFor = (id: ComponentId): PresentationManifest | undefined =
 export const PRESENTATION_DEFAULTS: Readonly<
   Record<BuiltinComponentId | typeof WIDGET_CHROME_ID, Presentation>
 > = {
-  widget: { density: "cozy", slots: {}, tokens: {}, settings: { border: true } },
+  widget: {
+    density: "cozy",
+    slots: {},
+    tokens: {},
+    settings: { border: true, facetVariant: "tiles", facetCounts: true },
+  },
   table: {
     density: "cozy",
     slots: {},

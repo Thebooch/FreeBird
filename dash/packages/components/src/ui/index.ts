@@ -12,6 +12,8 @@ export type { ButtonProps, ButtonTone, ControlSize, IconButtonProps } from "./Bu
 export { Avatar, Badge, StatusPill } from "./Badge.jsx";
 export type { BadgeTone } from "./Badge.jsx";
 
+export { FacetBar } from "./FacetBar.jsx";
+
 export { Checkbox, Field, SearchInput, Select } from "./Field.jsx";
 export type { SelectOption } from "./Field.jsx";
 

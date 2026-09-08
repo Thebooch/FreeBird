@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { componentIdSchema, contractFor } from "./contracts.js";
 import { dashboardParamsSchema } from "./params.js";
+import { facetsSchema } from "./facet.js";
 import { highlightSchema, pipelineSchema } from "./pipeline.js";
 import { presentationSchema } from "./presentation.js";
 import { formatSchema } from "./semantics.js";
@@ -189,6 +190,19 @@ export const widgetSchema = z
    * untouched by it.
    */
   highlights: z.array(highlightSchema).max(8).default([]),
+  /**
+   * Categories the reader can filter this widget down to, with counts.
+   *
+   * Sits beside `highlights` rather than in the pipeline because both are
+   * statements about finished rows rather than steps that produce them — and
+   * like a highlight, a facet names the columns actually rendered, including
+   * any a `rename` created.
+   *
+   * Chrome, not binding: the rows reaching the component are narrowed by what
+   * the reader picked, and a facet that cannot be drawn costs the strip and
+   * nothing else. See `validateFacets`, which only ever warns.
+   */
+  facets: facetsSchema,
   /**
    * Two or more endpoints combined into one dataset.
    *

@@ -1,5 +1,5 @@
 import type { BindingValidation, WidgetSpec } from "@freebirdai/dash-spec";
-import { contractFor, validateBinding } from "@freebirdai/dash-spec";
+import { contractFor, validateBinding, validateFacets } from "@freebirdai/dash-spec";
 import { compileWidget } from "./compile.js";
 import { compilePlan, runPlan } from "./plan.js";
 import { runPipeline } from "./run.js";
@@ -88,7 +88,7 @@ export const executeWidget = (
   const result = runPipeline(compiled.widget, body, ctx);
   const contract = contractFor(spec.component);
   if (!contract) return unknownComponent(spec.component, result);
-  return finish(result, validateBinding(contract, spec.roles, result.columns));
+  return finish(result, validateBinding(contract, spec.roles, result.columns), spec);
 };
 
 /**
@@ -98,12 +98,25 @@ export const executeWidget = (
  * anything assembled twice is something that can be got right once and wrong
  * once.
  */
-const finish = (result: RunResult, binding: BindingValidation): ExecuteResult => ({
+const finish = (
+  result: RunResult,
+  binding: BindingValidation,
+  spec: WidgetSpec,
+): ExecuteResult => ({
   ok: binding.ok,
   rows: result.rows,
   columns: result.columns,
   meta: result.meta,
-  binding,
+  /*
+   * Facet problems ride in as warnings and never as errors, so `ok` is still
+   * decided entirely by the role binding. A facet is chrome above a widget
+   * that renders perfectly well without it — a strip that cannot be drawn has
+   * to cost the strip and nothing else.
+   */
+  binding: {
+    ...binding,
+    warnings: [...binding.warnings, ...validateFacets(spec.facets, result.columns)],
+  },
   errors: [],
   ...(result.highlights ? { highlights: result.highlights } : {}),
 });
@@ -133,5 +146,5 @@ export const executePlan = (
   if (!contract) return unknownComponent(spec.component, result);
   // Roles are checked against the *joined* columns — the only point at which
   // the widget's real shape exists.
-  return finish(result, validateBinding(contract, spec.roles, result.columns));
+  return finish(result, validateBinding(contract, spec.roles, result.columns), spec);
 };

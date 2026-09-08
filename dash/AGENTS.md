@@ -36,4 +36,5 @@ The `LlmAdapter` / `LlmTool` / `LlmStreamChunk` interfaces in `@freebirdai/dash-
 - **`zod-to-json-schema` chokes on refinements, records, and unions.** The tool schema handed to the LLM must be flat; the real zod schema validates *after* mapping.
 - **The Anthropic adapter defaults `maxOutputTokens` to 1024.** Set it explicitly.
 - **Vite proxy keys are plain prefixes.** Use a regex key (`"^/api/"`) or it swallows app routes.
+- **Escapes in a Python-heredoc edit script are read twice.** Writing `.join("\n\n")` from inside a `python - <<'EOF'` block lands a literal newline in the file, not the two characters. `HEAD` carried a broken `server.ts` for exactly this reason — a mangled `join` that made the whole file unparseable, so `apps/server` did not typecheck. Build such strings with `chr(92)` rather than trusting the escape, and check the exit code: a loop ending in `; echo ok` reports success it did not verify.
 - **React controlled inputs ignore direct `.value` writes.** When driving them programmatically in browser verification, use the native value setter plus an `input` event.

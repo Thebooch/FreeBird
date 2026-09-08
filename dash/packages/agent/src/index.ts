@@ -39,6 +39,8 @@ export type {
   SectionDraft,
 } from "./concierge/draft.js";
 export { buildAll, buildFromDraft, buildInterleaved } from "./concierge/build.js";
+export { deriveFacet } from "./concierge/facets.js";
+export type { DeriveFacetInput } from "./concierge/facets.js";
 export {
   applyArrangement,
   feasibleArrangements,

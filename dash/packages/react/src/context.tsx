@@ -65,9 +65,24 @@ export interface DashboardContextValue {
    * deployment did before approvals existed.
    */
   readonly approvals: Readonly<Record<string, ApprovalVerdict>> | undefined;
+  /**
+   * What each widget's filter strip is currently narrowed to, in words.
+   *
+   * Reader state rather than spec, and the only reader state the board keeps
+   * centrally. It earns that because it changes what a widget *says*: a chat
+   * answering over four hundred records while the person asking can see
+   * twelve is confidently wrong in the way this codebase refuses everywhere
+   * else, and nothing outside the widget could otherwise know.
+   *
+   * Empty for every widget with nothing selected, so the common case adds no
+   * entries at all.
+   */
+  readonly facetSummaries: Readonly<Record<string, readonly string[]>>;
   setPreset(preset: RangePreset, custom?: { start: number; end: number }): void;
   setGrain(grain: Grain | undefined): void;
   setFilter(key: string, value: string | number | boolean): void;
+  /** Called by a widget when its own strip changes. Empty removes the entry. */
+  reportFacets(widgetId: string, summary: readonly string[]): void;
   refreshAll(): void;
 }
 
@@ -160,6 +175,35 @@ export const DashboardProvider = ({
     client.invalidate();
   }, [client, freshAnchor]);
 
+  const [facetSummaries, setFacetSummaries] = useState<Readonly<Record<string, readonly string[]>>>(
+    {},
+  );
+
+  const reportFacets = useCallback((widgetId: string, summary: readonly string[]): void => {
+    setFacetSummaries((previous) => {
+      const current = previous[widgetId];
+      /*
+       * Identity-compared before writing, because this is called from an
+       * effect on every render of every widget. Setting state unconditionally
+       * would schedule a re-render of the whole board each time, which each
+       * widget would then answer with another report — a loop that only stops
+       * because React bails out on identical values, which these are not.
+       */
+      const same =
+        current !== undefined &&
+        current.length === summary.length &&
+        current.every((entry, index) => entry === summary[index]);
+      if (same) return previous;
+      if (summary.length === 0) {
+        if (current === undefined) return previous;
+        const next = { ...previous };
+        delete next[widgetId];
+        return next;
+      }
+      return { ...previous, [widgetId]: summary };
+    });
+  }, []);
+
   const value = useMemo<DashboardContextValue>(
     () => ({
       dashboard,
@@ -173,9 +217,11 @@ export const DashboardProvider = ({
       presentation,
       labels,
       approvals,
+      facetSummaries,
       setPreset,
       setGrain,
       setFilter,
+      reportFacets,
       refreshAll,
     }),
     [
@@ -189,6 +235,8 @@ export const DashboardProvider = ({
       presentation,
       labels,
       approvals,
+      facetSummaries,
+      reportFacets,
       setPreset,
       setGrain,
       setFilter,

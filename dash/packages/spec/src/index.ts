@@ -75,6 +75,21 @@ export type {
   TimeFormat,
 } from "./dialect.js";
 
+export {
+  FACET_EMPTY_KEY,
+  FACET_MAX_PER_WIDGET,
+  FACET_MAX_VALUES,
+  facetKey,
+  facetOptionSchema,
+  facetSchema,
+  facetTone,
+  facetToneSchema,
+  facetValueSchema,
+  facetsSchema,
+  validateFacets,
+} from "./facet.js";
+export type { FacetOption, FacetSpec, FacetValue } from "./facet.js";
+
 export { authKeyRefs, fnv1a, idSchema, paramDefSchema, queryValueSchema } from "./primitives.js";
 export type { ParamDef } from "./primitives.js";
 
@@ -202,6 +217,7 @@ export {
   coerceStepSchema,
   deriveStepSchema,
   extractStepSchema,
+  fieldNameSchema,
   filterStepSchema,
   groupKeySchema,
   groupStepSchema,

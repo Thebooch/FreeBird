@@ -96,7 +96,13 @@ import type { ReadOutcome } from "./context/types.js";
 import { workspaceHandles } from "./chat/handles.js";
 import { createPromptRotation, renderDashReply } from "./chat/respond.js";
 import { ScratchFocusStore } from "./context/focus.js";
-import { describeScreen, focusFromScreen, parseView } from "./context/onscreen.js";
+import {
+  describeFilters,
+  describeScreen,
+  focusFromScreen,
+  parseFilters,
+  parseView,
+} from "./context/onscreen.js";
 import {
   LOOK_UP_WIDGET_TOOL,
   lookUpWidget,
@@ -2787,11 +2793,35 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
            * What they are looking at, so the assistant can talk about it. Free
            * — the record is resolved from rows the browser already drew.
            */
-          onScreen: describeScreen({
-            tab: dashboard.title,
-            open: parseView(auth.extra?.["view"]),
-            record: await onScreenFocus(auth, store.listDashboards(), dashboard, conciergeContext()),
-          }),
+          onScreen: [
+            describeScreen({
+              tab: dashboard.title,
+              open: parseView(auth.extra?.["view"]),
+              record: await onScreenFocus(
+                auth,
+                store.listDashboards(),
+                dashboard,
+                conciergeContext(),
+              ),
+            }),
+            /*
+             * And what they have filtered it down to.
+             *
+             * A widget's rows rebuild identically here whatever the reader
+             * picked — a facet never reaches the API — so without this the
+             * assistant answers over every row while the person asking can see
+             * a fraction of them. Empty, and absent from the prompt, whenever
+             * nothing is filtering.
+             */
+            describeFilters(parseFilters(auth.extra?.["filters"]), (widgetId) =>
+              store
+                .listDashboards()
+                .flatMap((board) => board.widgets)
+                .find((widget) => widget.id === widgetId)?.title,
+            ),
+          ]
+            .filter((line) => line.length > 0)
+            .join("\n\n"),
           /*
            * What can be opened in full. Derived from every connected API's own
            * map, so this grows when somebody connects something and needs no
@@ -2800,7 +2830,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           records: [
             readRoster(bindingsFor({ context: conciergeContext(), pagination: paginationOf })),
             queryRoster(bindingsFor({ context: conciergeContext(), pagination: paginationOf })),
-          ].join("' + chr(92) + 'n' + chr(92) + 'n"),
+          ].join("\n\n"),
           board: {
             getDashboard: () => store.getDashboard(dashboard.id),
             getDashboardById: (id) => store.getDashboard(id),
@@ -2838,6 +2868,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             range: headers["x-dash-range"],
             /** What is on screen, when it is finer than the board. */
             view: headers["x-dash-view"],
+            /** Which widgets the reader narrowed with a filter strip. */
+            filters: headers["x-dash-filters"],
           },
         };
       },

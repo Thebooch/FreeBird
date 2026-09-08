@@ -205,6 +205,56 @@ export const focusFromScreen = async (
   };
 };
 
+/**
+ * The filter strips the reader has narrowed, keyed by widget id.
+ *
+ * URI-encoded JSON from the client. Anything unreadable is treated as no
+ * filters at all rather than as an error: a newer client, a truncated header
+ * or a stale tab should cost the conversation this one line of context and
+ * nothing more — the same rule `parseView` follows.
+ */
+export const parseFilters = (header: unknown): Readonly<Record<string, string[]>> => {
+  if (typeof header !== "string" || header.length === 0) return {};
+  try {
+    const parsed: unknown = JSON.parse(decodeURIComponent(header));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: Record<string, string[]> = {};
+    for (const [widgetId, value] of Object.entries(parsed as Record<string, unknown>)) {
+      // Untrusted input keying a plain object: the one name that would walk
+      // the prototype instead of creating a property.
+      if (widgetId === "__proto__" || widgetId === "constructor") continue;
+      if (!Array.isArray(value)) continue;
+      const lines = value.filter((entry): entry is string => typeof entry === "string").slice(0, 4);
+      if (lines.length > 0) out[widgetId] = lines.map((line) => line.slice(0, 120));
+    }
+    return out;
+  } catch {
+    return {};
+  }
+};
+
+/**
+ * What the reader has filtered, as a sentence for the prompt.
+ *
+ * Empty when nothing is, which is almost always — the line only appears when
+ * it would change an answer.
+ */
+export const describeFilters = (
+  filters: Readonly<Record<string, string[]>>,
+  titleOf: (widgetId: string) => string | undefined,
+): string => {
+  const entries = Object.entries(filters);
+  if (entries.length === 0) return "";
+  const parts = entries.map(
+    ([widgetId, lines]) => `"${titleOf(widgetId) ?? widgetId}" (${lines.join("; ")})`,
+  );
+  return (
+    `FILTERED ON SCREEN — ${parts.join(", ")}. These are the reader's own filters, ` +
+    "applied to rows already fetched. Counts and totals they can see are of the filtered " +
+    "rows only, so say which you mean rather than answering over everything."
+  );
+};
+
 /** One line for the prompt, so the assistant can talk about what is on screen. */
 export const describeScreen = (input: {
   readonly tab: string;

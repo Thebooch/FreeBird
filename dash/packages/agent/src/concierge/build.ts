@@ -5,12 +5,14 @@ import {
   fieldLabel,
   humanLabel,
   groupColumn,
+  isEmptyShape,
   parseWidget,
   rolesForShape,
   shapeSteps,
   statusTone,
 } from "@freebirdai/dash-spec";
 import { coercionsFor, widgetId, type RoleBinding } from "../bind.js";
+import { deriveFacet } from "./facets.js";
 import type { FieldInfo } from "../infer.js";
 import type { Ambiguity } from "../propose.js";
 import { flatten, highlightCandidates, pane } from "../suggest.js";
@@ -373,6 +375,30 @@ export const buildFromDraft = (
   const measuredRoles = rolesForShape(shape);
   const boundRoles = Object.keys(measuredRoles).length > 0 ? { ...roles, ...measuredRoles } : roles;
 
+  /*
+   * A filter strip, when the map already says which field carries the states.
+   *
+   * `rename` is what makes it real: a dotted field is not a column until a
+   * derive step produces one, so calling it here both flattens the name and
+   * registers the derive — the same path a role binding takes. Called before
+   * `deriveStep` is assembled below, which is the only ordering that works.
+   *
+   * The field does not have to be one the widget shows. Filtering a list of
+   * work orders by a status that is not among its columns is a perfectly
+   * ordinary thing to want, and the derive costs one extra column nothing
+   * renders.
+   */
+  const facetField = deriveFacet({
+    facetField: context.ops.find((op) => op.id === draft.op)?.facet,
+    fields,
+    contract,
+    aggregated: shape !== undefined && !isEmptyShape(shape),
+  });
+  const facets = facetField ? [{ field: rename(facetField) }] : [];
+  if (facetField) {
+    why.push(`with a filter across the top by ${fieldLabel(facetField, labels)}`);
+  }
+
   const shared = {
     id,
     title,
@@ -380,6 +406,7 @@ export const buildFromDraft = (
     roles: boundRoles,
     format,
     highlights,
+    ...(facets.length > 0 ? { facets } : {}),
     ...(Object.keys(settings).length > 0 ? { presentation: { settings } } : {}),
     ...(drilldown ? { drilldown } : {}),
     ...(context.shapes[draft.op]?.schemaHash

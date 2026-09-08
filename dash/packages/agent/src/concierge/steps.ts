@@ -234,6 +234,15 @@ export interface ConciergeContext {
      * Absent for an endpoint nothing has described.
      */
     readonly params?: readonly ParamDef[] | undefined;
+    /**
+     * The field whose value tells this endpoint's records apart.
+     *
+     * Straight off the map, where it was recorded because it is true of the
+     * API for everybody. Carried here so a widget can be offered a filter
+     * strip without a model call — the question was answered when the API was
+     * mapped, and the answer has not changed since.
+     */
+    readonly facet?: string | undefined;
   }>;
   /** Sampled shape per op id, for whatever has been read. */
   readonly shapes: Readonly<Record<string, InferredShape>>;

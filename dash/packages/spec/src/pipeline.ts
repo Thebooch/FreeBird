@@ -5,7 +5,14 @@ import { coercionSchema } from "./coercion.js";
 import { grainSchema } from "./params.js";
 import { semanticTypeSchema } from "./semantics.js";
 
-const fieldNameSchema = z
+/**
+ * A column name the pipeline can produce.
+ *
+ * Exported because facets name columns too, and a facet whose idea of a legal
+ * name differed from a pipeline step's would accept a field no step could ever
+ * create.
+ */
+export const fieldNameSchema = z
   .string()
   .min(1)
   .regex(/^[a-zA-Z_][a-zA-Z0-9_]*$/, "field names must be [a-zA-Z_][a-zA-Z0-9_]*");

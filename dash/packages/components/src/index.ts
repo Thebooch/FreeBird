@@ -28,6 +28,24 @@ export {
 } from "./widgets/tableModel.js";
 export type { ColumnTotal, SortDirection, SortState } from "./widgets/tableModel.js";
 export {
+  EMPTY_SELECTION,
+  FACET_OTHER_KEY,
+  applyFacets,
+  buildFacets,
+  clearFacet,
+  defaultSelection,
+  describeFacets,
+  renderableFacets,
+  toggleFacet,
+} from "./widgets/facetModel.js";
+export type {
+  BuildFacetsInput,
+  FacetSelection,
+  FacetTile,
+  FacetView,
+  FacetedRows,
+} from "./widgets/facetModel.js";
+export {
   bucketBy,
   byRecency,
   dayKey,

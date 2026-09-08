@@ -604,6 +604,67 @@ ${seriesVars(SERIES_LIGHT)}
 .dash-tabs__tab:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: -2px; }
 .dash-tabs__meta { margin-left: 6px; font-size: var(--dash-text-xs); font-weight: 400; color: var(--dash-muted); }
 
+/* == facets =============================================================
+ * A row of counts that is also the filter. Tiles are toggle buttons, so the
+ * selected look has to survive forced-colours mode: the border and the ring
+ * carry it, not the tint alone.
+ */
+.dash-facets {
+  display: flex; align-items: center; gap: var(--dash-space-3); flex-wrap: wrap;
+  padding-bottom: var(--dash-space-3);
+}
+.dash-facets__group { display: flex; align-items: center; gap: var(--dash-space-1); min-width: 0; flex-wrap: wrap; }
+.dash-facets__label {
+  font-size: var(--dash-text-xs); color: var(--dash-muted); margin-right: 2px; white-space: nowrap;
+}
+.dash-facets__tile {
+  font: inherit; display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  border: 1px solid var(--dash-border); border-radius: var(--dash-radius-sm);
+  background: var(--dash-surface); color: var(--dash-ink-secondary);
+  padding: 5px 9px; white-space: nowrap;
+  transition: border-color var(--dash-dur-base) var(--dash-ease), background var(--dash-dur-base) var(--dash-ease);
+}
+.dash-facets__tile:hover { border-color: var(--dash-border-strong); color: var(--dash-ink); }
+.dash-facets__tile:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 1px; }
+.dash-facets__tile[data-selected="true"] {
+  border-color: var(--dash-accent-line); background: var(--dash-accent-wash); color: var(--dash-ink);
+  /* A second ring rather than a thicker border, so the tile does not resize
+     when it is picked and shove its neighbours along the row. */
+  box-shadow: inset 0 0 0 1px var(--dash-accent-line);
+}
+.dash-facets__icon { font-size: var(--dash-text-xs); flex: none; }
+.dash-facets__name { font-size: var(--dash-text-sm); }
+.dash-facets__count { font-size: var(--dash-text-sm); font-weight: 650; font-variant-numeric: tabular-nums; }
+.dash-facets__clear {
+  font: inherit; font-size: var(--dash-text-xs); cursor: pointer; margin-left: auto;
+  border: none; background: transparent; color: var(--dash-muted); padding: 4px 6px;
+  border-radius: var(--dash-radius-xs);
+}
+.dash-facets__clear:hover { color: var(--dash-ink); }
+.dash-facets__clear:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 1px; }
+
+/* The tile variant stacks the count over the label, which reads as a figure
+   worth looking at rather than as a control with a number stuck to it. */
+.dash-facets[data-variant="tiles"] .dash-facets__tile {
+  flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 11px; min-width: 68px;
+}
+.dash-facets[data-variant="tiles"] .dash-facets__count {
+  font-size: var(--dash-text-lg); font-weight: 600; line-height: 1.15; order: -1;
+}
+.dash-facets[data-variant="tiles"] .dash-facets__name {
+  font-size: var(--dash-text-xs); color: var(--dash-muted);
+}
+.dash-facets[data-variant="tiles"] .dash-facets__tile[data-selected="true"] .dash-facets__name {
+  color: var(--dash-ink-secondary);
+}
+/* The icon would break the two-line stack, so it is a corner mark instead. */
+.dash-facets[data-variant="tiles"] .dash-facets__icon { position: absolute; top: 4px; right: 6px; }
+.dash-facets[data-variant="tiles"] .dash-facets__tile { position: relative; padding-right: 18px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .dash-facets__tile { transition: none; }
+}
+
 .dash-toolbar {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding-bottom: var(--dash-row-gap, var(--dash-space-3));

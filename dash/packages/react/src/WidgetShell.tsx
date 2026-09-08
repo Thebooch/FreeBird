@@ -2,16 +2,31 @@ import {
   Badge,
   EmptyState,
   ErrorState,
+  FacetBar,
+  type FacetSelection,
+  type FacetView,
   Menu,
   type MenuItem,
   Message,
   Skeleton,
+  applyFacets,
+  buildFacets,
+  defaultSelection,
+  describeFacets,
   getComponent,
   skeletonShapeFor,
+  toggleFacet,
 } from "@freebirdai/dash-components";
-import type { Row } from "@freebirdai/dash-runtime";
-import { formatValue, isSlotHidden, orderedSlots, settingBool, slotLabel } from "@freebirdai/dash-spec";
-import { Fragment, type ReactNode, useState } from "react";
+import type { Row, RowHighlight } from "@freebirdai/dash-runtime";
+import {
+  formatValue,
+  isSlotHidden,
+  orderedSlots,
+  settingBool,
+  settingString,
+  slotLabel,
+} from "@freebirdai/dash-spec";
+import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
 import { WidgetDetail } from "./WidgetDetail.jsx";
 import { WidgetErrorBoundary } from "./WidgetErrorBoundary.jsx";
 import { WidgetInspector } from "./WidgetInspector.jsx";
@@ -58,7 +73,17 @@ export const WidgetShell = ({
   const [inspecting, setInspecting] = useState(false);
   /** The row a drill-down was opened from. Null when the sheet is closed. */
   const [openRow, setOpenRow] = useState<Row | null>(null);
-  const { now, locale, timeZone, presentation: sources } = useDashboard();
+  const { now, locale, timeZone, presentation: sources, reportFacets } = useDashboard();
+
+  /*
+   * What the reader has narrowed this widget to.
+   *
+   * Local to the shell and to this session, exactly like the table's sort and
+   * search. It is deliberately absent from the query cache key: a facet
+   * filters rows already fetched, so two selections are two views of one
+   * response rather than two requests.
+   */
+  const [selection, setSelection] = useState<FacetSelection>(() => defaultSelection(widget.facets));
 
   const chrome = chromePresentationFor(sources, widget.presentation);
   const look = presentationFor(sources, widget.component, widget.presentation);
@@ -145,6 +170,52 @@ export const WidgetShell = ({
   };
 
   const visible = orderedSlots(chrome, CHROME_SLOTS).filter((id) => !isSlotHidden(chrome, id));
+
+  /*
+   * Built from the *unfiltered* rows, which is what lets an unselected tile
+   * keep saying how much is behind it. `buildFacets` owns that rule; the
+   * shell's job is only to hand it everything and never to pre-filter.
+   */
+  const views = useMemo<readonly FacetView[]>(
+    () =>
+      data.state === "ok" && !isSlotHidden(chrome, "facets")
+        ? buildFacets({
+            facets: widget.facets,
+            rows: data.rows,
+            columns: data.columns,
+            selection,
+          })
+        : [],
+    [data.state, data.rows, data.columns, widget.facets, selection, chrome],
+  );
+
+  /*
+   * Rows and highlights narrowed together, never separately — they are
+   * index-parallel, and filtering one without the other moves every status
+   * pill onto a different record.
+   */
+  const faceted = useMemo(
+    () => applyFacets(views, data.rows, data.highlights),
+    [views, data.rows, data.highlights],
+  );
+
+  const filtering = views.some((view) => view.selected.length > 0);
+
+  /*
+   * Tell the board what this widget is narrowed to.
+   *
+   * In an effect rather than in the click handler, because the selection that
+   * matters is the one that survived `buildFacets` — a key whose tile no
+   * longer exists is dropped there, and reporting the raw click would tell the
+   * chat about a filter the reader cannot see and the rows do not have.
+   */
+  const summary = useMemo(() => describeFacets(views), [views]);
+  useEffect(() => {
+    reportFacets(widget.id, summary);
+  }, [reportFacets, widget.id, summary]);
+  useEffect(() => () => reportFacets(widget.id, []), [reportFacets, widget.id]);
+
+  // Counted after the filter, so the footer describes what is on screen.
   const showFooter = !isSlotHidden(chrome, "footer") && data.state === "ok";
 
   return (
@@ -199,9 +270,24 @@ export const WidgetShell = ({
          * badges and the actions, so the message has something to belong to
          * and Refresh is still reachable.
          */}
+        {/*
+         * Above the component rather than inside it, so every renderer gets
+         * this without learning what a facet is — the same reason highlights
+         * are read off `data` here and not threaded through each one.
+         */}
+        <FacetBar
+          views={views}
+          variant={settingString(chrome, "facetVariant", "tiles")}
+          showCounts={settingBool(chrome, "facetCounts", true)}
+          onToggle={(view, key) => setSelection((previous) => toggleFacet(previous, view, key))}
+          onClear={() => setSelection({})}
+        />
         <WidgetErrorBoundary widgetTitle={widget.title}>
           <WidgetBody
             data={data}
+            rows={faceted.rows}
+            {...(faceted.highlights ? { highlights: faceted.highlights } : {})}
+            {...(filtering ? { filteredBy: summary, onClearFilter: () => setSelection({}) } : {})}
             hero={hero}
             locale={locale}
             timeZone={timeZone}
@@ -220,7 +306,7 @@ export const WidgetShell = ({
         )}
       </div>
 
-      {showFooter && <WidgetFooter data={data} now={now} />}
+      {showFooter && <WidgetFooter data={data} rows={faceted.rows} now={now} />}
 
       {inspecting && <WidgetInspector data={data} onClose={() => setInspecting(false)} />}
     </div>
@@ -234,12 +320,21 @@ export const WidgetShell = ({
  * unintended, and it is the first thing missing from a chart that renders
  * beautifully over the wrong twelve records.
  */
-const WidgetFooter = ({ data, now }: { data: WidgetData; now: number }): JSX.Element => {
+const WidgetFooter = ({
+  data,
+  rows,
+  now,
+}: {
+  data: WidgetData;
+  /** After the facets, so the count describes what is actually on screen. */
+  rows: readonly Row[];
+  now: number;
+}): JSX.Element => {
   const truncated = data.fetchMeta?.truncated === true;
   return (
     <div className="dash-widget__foot">
       <span className="dash-widget__count">
-        {data.rows.length.toLocaleString()} {data.rows.length === 1 ? "row" : "rows"}
+        {rows.length.toLocaleString()} {rows.length === 1 ? "row" : "rows"}
         {truncated && (
           <span className="dash-widget__more" title="More records exist upstream than were fetched">
             {" "}
@@ -314,6 +409,10 @@ export const describeFailure = (
 
 const WidgetBody = ({
   data,
+  rows,
+  highlights,
+  filteredBy,
+  onClearFilter,
   hero,
   locale,
   timeZone,
@@ -322,6 +421,16 @@ const WidgetBody = ({
   onSelectRow,
 }: {
   data: WidgetData;
+  /**
+   * The rows to draw, after the facets. Passed rather than read off `data`
+   * because `data.rows` is the whole set the strip counts against, and a
+   * component handed those would ignore the filter above it.
+   */
+  rows: readonly Row[];
+  highlights?: readonly (readonly RowHighlight[])[];
+  /** What the reader picked, in words. Absent when nothing is filtering. */
+  filteredBy?: readonly string[];
+  onClearFilter?: () => void;
   hero?: boolean;
   locale: string | undefined;
   timeZone: string;
@@ -383,6 +492,27 @@ const WidgetBody = ({
       );
 
     case "ok": {
+      /*
+       * Filtered to nothing is its own state, and it is not the widget's
+       * empty state.
+       *
+       * The component's own message says something like "no rows in this
+       * range", which here would be actively misleading — the range is fine
+       * and the reader's own filter is what emptied the screen. Saying which
+       * filter, and offering the way out, is the difference between a dead end
+       * and a click.
+       */
+      if (rows.length === 0 && filteredBy && filteredBy.length > 0) {
+        return (
+          <EmptyState
+            glyph="○"
+            title="Nothing matches this filter."
+            body={filteredBy.join(" · ")}
+            {...(onClearFilter ? { action: { label: "Clear filter", onClick: onClearFilter } } : {})}
+          />
+        );
+      }
+
       const registered = getComponent(data.widget.component);
       // An open component id can name something this build does not ship.
       if (!registered) {
@@ -394,7 +524,7 @@ const WidgetBody = ({
       // is one fewer place to forget.
       return (
         <Component
-          rows={data.rows}
+          rows={rows}
           columns={data.columns}
           roles={data.widget.roles}
           format={data.widget.format}
@@ -404,7 +534,7 @@ const WidgetBody = ({
           timeZone={timeZone}
           {...(hero ? { hero } : {})}
           {...(onSelectRow ? { onSelectRow } : {})}
-          {...(data.highlights ? { highlights: data.highlights } : {})}
+          {...(highlights ? { highlights } : {})}
           {...(presentation ? { presentation } : {})}
         />
       );
