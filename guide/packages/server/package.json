@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "FreeBird server: route handlers + Express/Fastify/Next integrations + in-process digest scheduler.",
   "license": "MIT",
   "repository": {

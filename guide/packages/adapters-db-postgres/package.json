@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/adapters-db-postgres",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Postgres DB adapter for FreeBird, built on Kysely.",
   "license": "MIT",
   "repository": {

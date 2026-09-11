@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/react-tailwind",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pre-styled Tailwind preset for @freebirdai/react. Opt-in.",
   "license": "MIT",
   "repository": {

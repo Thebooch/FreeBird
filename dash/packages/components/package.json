@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/dash-components",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "FreeBird Dash components: role-contract-driven React widgets with a validated, colorblind-safe palette and no charting dependency.",
   "license": "MIT",
   "repository": {
