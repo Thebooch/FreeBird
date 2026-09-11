@@ -1,6 +1,7 @@
 import type { MappedField, RelationSpec, ResourceSpec } from "@freebirdai/dash-spec";
 import {
   commonPathPrefix,
+  fnv1a,
   pathParamNames,
   pathSegments,
   resolveSameNoun,
@@ -54,7 +55,7 @@ const mapProposalSchema = z.object({
         foreignField: z.string().describe("Field on the `to` rows that it matches."),
         title: z
           .string()
-          .describe("How to describe this link in a sentence, e.g. \"A lease is for a property.\"")
+          .describe('How to describe this link in a sentence, e.g. "A lease is for a property."')
           .optional(),
         reason: z
           .string()
@@ -170,7 +171,9 @@ export const buildMapPrompt = (input: MapInput, resources: readonly ResourceSpec
           titleNoun(resource.title),
         ]),
       ].filter(Boolean);
-      lines.push(`  ${resource.id} — ${listTitle ?? resource.title}${nouns.length > 0 ? ` (${nouns.join(", ")})` : ""}`);
+      lines.push(
+        `  ${resource.id} — ${listTitle ?? resource.title}${nouns.length > 0 ? ` (${nouns.join(", ")})` : ""}`,
+      );
     }
     lines.push("");
   }
@@ -207,16 +210,13 @@ export const buildMapPrompt = (input: MapInput, resources: readonly ResourceSpec
      * is better than being refused afterwards.
      */
     const rivals = input.resources.filter(
-      (other) =>
-        other.id !== resource.id && nounOf(other, opById) === nounOf(resource, opById),
+      (other) => other.id !== resource.id && nounOf(other, opById) === nounOf(resource, opById),
     );
     if (rivals.length > 0) {
       lines.push(
         `  CAUTION — ${rivals.length + 1} different "${nounOf(resource, opById)}" collections ` +
           "exist in this API and they hold different records. The others are: " +
-          rivals
-            .map((rival) => `${rival.id} (${pathOf(rival, opById) ?? "no path"})`)
-            .join(", ") +
+          rivals.map((rival) => `${rival.id} (${pathOf(rival, opById) ?? "no path"})`).join(", ") +
           ". Only link to this one if the path says these records belong together; if you " +
           "cannot tell, do not propose the link at all.",
       );
@@ -233,7 +233,9 @@ export const buildMapPrompt = (input: MapInput, resources: readonly ResourceSpec
       lines.push(`  endpoint ${op.id}  ${op.path}`);
       lines.push(`    title: ${op.title}`);
       lines.push(
-        op.description ? `    description: ${op.description} [HAS ONE]` : "    description: MISSING",
+        op.description
+          ? `    description: ${op.description} [HAS ONE]`
+          : "    description: MISSING",
       );
       /*
        * Field names, with the non-scalar ones marked.
@@ -268,6 +270,7 @@ export const buildMapPrompt = (input: MapInput, resources: readonly ResourceSpec
 };
 
 export interface MapResult {
+  readonly completedBatches: readonly string[];
   /** op id → the description the model wrote, for ops that had none. */
   readonly descriptions: Readonly<Record<string, string>>;
   /** Additional relations, all marked `inferred`. Keyed by source resource id. */
@@ -295,7 +298,12 @@ export interface MapResult {
 export const mapApi = async (
   llm: LlmAdapter,
   input: MapInput,
-  options: { model?: string | undefined; signal?: AbortSignal | undefined } = {},
+  options: {
+    model?: string | undefined;
+    signal?: AbortSignal | undefined;
+    completedBatches?: readonly string[];
+    onCheckpoint?: (result: MapResult) => void;
+  } = {},
 ): Promise<MapResult> => {
   const opById = new Map(input.ops.map((op) => [op.id, op]));
   /*
@@ -310,9 +318,22 @@ export const mapApi = async (
   const relations: Record<string, RelationSpec[]> = {};
   const errors: string[] = [];
   const skipped: string[] = [];
+  const previous = new Set(options.completedBatches ?? []);
+  const completed = new Set<string>();
+  const contract = JSON.stringify({
+    title: input.apiTitle,
+    ops: input.ops.map(({ description: _description, ...op }) => op),
+    resources: input.resources.map(({ relations: _relations, ...resource }) => resource),
+  });
 
   for (let start = 0; start < input.resources.length; start += BATCH) {
     const batch = input.resources.slice(start, start + BATCH);
+    const batchKey = fnv1a(contract + JSON.stringify(batch.map((resource) => resource.id)));
+    if (previous.has(batchKey)) {
+      completed.add(batchKey);
+      continue;
+    }
+    const errorsBefore = errors.length;
     try {
       const result = await llm.generate({
         ...(options.model ? { model: options.model } : {}),
@@ -355,13 +376,20 @@ export const mapApi = async (
               })
             : [];
 
-        const descriptions = salvage(args.descriptions, mapProposalSchema.shape.descriptions.unwrap().element);
-        const relations = salvage(args.relations, mapProposalSchema.shape.relations.unwrap().element);
+        const descriptions = salvage(
+          args.descriptions,
+          mapProposalSchema.shape.descriptions.unwrap().element,
+        );
+        const relations = salvage(
+          args.relations,
+          mapProposalSchema.shape.relations.unwrap().element,
+        );
         if (descriptions.length > 0 || relations.length > 0) {
           parsed = { success: true, data: { descriptions, relations } };
           const lost =
-            (Array.isArray(args.descriptions) ? args.descriptions.length - descriptions.length : 0) +
-            (Array.isArray(args.relations) ? args.relations.length - relations.length : 0);
+            (Array.isArray(args.descriptions)
+              ? args.descriptions.length - descriptions.length
+              : 0) + (Array.isArray(args.relations) ? args.relations.length - relations.length : 0);
           if (lost > 0) {
             skipped.push(
               `resources ${start + 1}–${start + batch.length}: ${lost} proposal(s) were malformed and dropped; the rest of the batch was kept.`,
@@ -372,7 +400,10 @@ export const mapApi = async (
 
       if (!parsed?.success) {
         const detail = parsed
-          ? parsed.error.issues.slice(0, 3).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")
+          ? parsed.error.issues
+              .slice(0, 3)
+              .map((i) => `${i.path.join(".")}: ${i.message}`)
+              .join("; ")
           : "the model called no tool";
         errors.push(
           `resources ${start + 1}–${start + batch.length}: the model's answer did not parse (${detail})`,
@@ -416,7 +447,8 @@ export const mapApi = async (
          */
         const rivals = input.resources.filter(
           (resource) =>
-            nounOf(resource, opById) === nounOf(target, opById) && isBareCollection(resource, opById),
+            nounOf(resource, opById) === nounOf(target, opById) &&
+            isBareCollection(resource, opById),
         );
         if (isBareCollection(target, opById) && rivals.length > 1) {
           const winner = resolveSameNoun(
@@ -493,10 +525,21 @@ export const mapApi = async (
       errors.push(
         `resources ${start + 1}–${start + batch.length}: ${caught instanceof Error ? caught.message : String(caught)}`,
       );
+    } finally {
+      if (errors.length === errorsBefore) {
+        completed.add(batchKey);
+        options.onCheckpoint?.({
+          descriptions,
+          relations,
+          errors,
+          skipped,
+          completedBatches: [...completed],
+        });
+      }
     }
   }
 
-  return { descriptions, relations, errors, skipped };
+  return { descriptions, relations, errors, skipped, completedBatches: [...completed] };
 };
 
 /**

@@ -67,7 +67,6 @@ export const withRows = (body: unknown, rowsPath: string | undefined, rows: unkn
   return rows;
 };
 
-
 export type NextPage =
   /** No further pages, for whatever reason the strategy gives. */
   | { readonly kind: "none" }
@@ -75,6 +74,20 @@ export type NextPage =
   | { readonly kind: "params"; readonly params: Record<string, string> }
   /** The next page lives in a response header; only HTTP can answer this. */
   | { readonly kind: "link-header" };
+
+/** The declared page size must also be requested on page one. */
+export const firstPageParams = (pagination: PaginationSpec): Record<string, string> => {
+  if (pagination.kind === "offset")
+    return { [pagination.param]: "0", [pagination.limitParam]: String(pagination.pageSize) };
+  if (pagination.kind === "page")
+    return {
+      [pagination.param]: String(pagination.startsAt),
+      ...(pagination.limitParam && pagination.pageSize
+        ? { [pagination.limitParam]: String(pagination.pageSize) }
+        : {}),
+    };
+  return {};
+};
 
 /**
  * What the next page needs, given what the last one returned.
@@ -122,7 +135,8 @@ export const nextPageParams = (input: {
 
     case "page": {
       if (rows === null || rows.length === 0) return { kind: "none" };
-      if (pagination.pageSize && rows.length < pagination.pageSize) return { kind: "none" };
+      if (pagination.limitParam && pagination.pageSize && rows.length < pagination.pageSize)
+        return { kind: "none" };
       const params: Record<string, string> = {
         [pagination.param]: String(pagination.startsAt + pageIndex),
       };
@@ -152,4 +166,3 @@ export const mergePages = (
   }
   return withRows(pages[0], rowsPath, collected);
 };
-

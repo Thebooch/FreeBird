@@ -1,6 +1,11 @@
+import { fingerprintOps } from "@freebirdai/dash-spec";
 import { fakeLlm } from "@freebirdai/dash-agent";
 import type { CapabilityReport, CatalogEntry, ConnectionSpec } from "@freebirdai/dash-spec";
-import { capabilityReportSchema, catalogEntrySchema, connectionSchema } from "@freebirdai/dash-spec";
+import {
+  capabilityReportSchema,
+  catalogEntrySchema,
+  connectionSchema,
+} from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import { buildConciergeContext } from "./context.js";
 import { opensRecords, planDetailSetup, settleDetail } from "./detail.js";
@@ -75,7 +80,7 @@ const map: CatalogEntry = catalogEntrySchema.parse({
 const report: CapabilityReport = capabilityReportSchema.parse({
   connection: "pm",
   generatedAt: new Date("2026-08-01T00:00:00Z").toISOString(),
-  opsFingerprint: "abc",
+  opsFingerprint: fingerprintOps(connection.ops),
   resources: [
     {
       id: "task",
@@ -86,7 +91,13 @@ const report: CapabilityReport = capabilityReportSchema.parse({
       detailParam: "taskId",
       verified: true,
     },
-    { id: "task-note", title: "Task note", idField: "Id", listOp: "list_task_notes", verified: true },
+    {
+      id: "task-note",
+      title: "Task note",
+      idField: "Id",
+      listOp: "list_task_notes",
+      verified: true,
+    },
   ],
   shapes: {
     task: {
@@ -301,7 +312,9 @@ describe("a link field that names an object", () => {
       { name: "Task", kinds: ["number"] },
       { name: "Note", kinds: ["string"] },
     ]);
-    expect(context.children.find((entry) => entry.parentOp === "list_tasks")?.linkField).toBe("Task");
+    expect(context.children.find((entry) => entry.parentOp === "list_tasks")?.linkField).toBe(
+      "Task",
+    );
   });
 });
 

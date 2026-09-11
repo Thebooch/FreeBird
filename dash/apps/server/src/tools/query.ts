@@ -106,7 +106,7 @@ export const queryRecords = async (input: QueryInput): Promise<QueryResult> => {
     };
   }
 
-  const all = deps.rowsOf(outcome.body, deps.rowsPathFor(binding.op));
+  const all = deps.rowsOf(outcome.body, deps.rowsPathFor(binding.op, binding.connection));
   const matchedLocally = text !== "" && !searchable;
   const found = matchedLocally ? all.filter((record) => contains(record, text)) : all;
   const records = found.slice(0, limit);

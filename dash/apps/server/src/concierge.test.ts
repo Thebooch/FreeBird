@@ -1,3 +1,4 @@
+import { fingerprintOps } from "@freebirdai/dash-spec";
 import type { ConciergeDraft } from "@freebirdai/dash-agent";
 import { applyStep, newDraft } from "@freebirdai/dash-agent";
 import {
@@ -8,11 +9,7 @@ import {
   type DashboardSpec,
 } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
-import {
-  conciergeActions,
-  lookUpEndpoint,
-  type ConciergeOps,
-} from "./chat/concierge-actions.js";
+import { conciergeActions, lookUpEndpoint, type ConciergeOps } from "./chat/concierge-actions.js";
 import { buildChatRegistry } from "./chat/registry.js";
 import { buildConciergeContext } from "./concierge/context.js";
 import { MemoryDraftStore, parseDraft } from "./concierge/store.js";
@@ -44,7 +41,7 @@ const connection: ConnectionSpec = connectionSchema.parse({
 const report = capabilityReportSchema.parse({
   connection: "acme",
   generatedAt: new Date("2026-08-01T00:00:00Z").toISOString(),
-  opsFingerprint: "abc123",
+  opsFingerprint: fingerprintOps(connection.ops),
   resources: [
     {
       id: "thing",
@@ -365,9 +362,10 @@ describe("the setup actions", () => {
 
   it("refuses to revise when nothing is being built", async () => {
     const { action } = wire();
-    expect(
-      await action("revise_setup").authorize?.({} as never, {} as never),
-    ).toMatchObject({ ok: false, status: 409 });
+    expect(await action("revise_setup").authorize?.({} as never, {} as never)).toMatchObject({
+      ok: false,
+      status: 409,
+    });
   });
 
   it("will not confirm an assisted draft that cannot be built", async () => {
@@ -533,7 +531,10 @@ describe("what the assistant is told about a setup", () => {
       reports: [report],
       board: { getDashboard: () => board, putDashboard: () => {} },
       concierge: {
-        context: buildConciergeContext({ connections: [many], reports: [report] }),
+        context: buildConciergeContext({
+          connections: [many],
+          reports: [{ ...report, opsFingerprint: fingerprintOps(many.ops) }],
+        }),
         draft: null,
         getDraft: async () => null,
         putDraft: async () => {},
@@ -564,7 +565,12 @@ describe("what the assistant is told about a setup", () => {
 
   it("gives the field list once an endpoint is chosen, described by shape", () => {
     const context = buildConciergeContext({ connections: [connection], reports: [report] });
-    const draft = applyStep(newDraft("d1", "things", "assisted"), "endpoint", ["list_things"], context);
+    const draft = applyStep(
+      newDraft("d1", "things", "assisted"),
+      "endpoint",
+      ["list_things"],
+      context,
+    );
     const text = roster(registryWith(draft));
 
     expect(text).toContain("FIELDS");
@@ -605,7 +611,12 @@ describe("what the assistant is told about a setup", () => {
 
     const dashboard = emptyBoard();
     const context = buildConciergeContext({ connections: [connection], reports: [wide] });
-    const draft = applyStep(newDraft("d1", "things", "assisted"), "endpoint", ["list_things"], context);
+    const draft = applyStep(
+      newDraft("d1", "things", "assisted"),
+      "endpoint",
+      ["list_things"],
+      context,
+    );
     const registry = buildChatRegistry({
       dashboard,
       reports: [wide],

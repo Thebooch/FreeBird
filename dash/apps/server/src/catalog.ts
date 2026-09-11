@@ -1,7 +1,13 @@
 import { mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { CatalogEntry, ConnectionSpec } from "@freebirdai/dash-spec";
-import { catalogEntrySchema, connectionSchema } from "@freebirdai/dash-spec";
+import type { CatalogEntry, ConnectionSpec, AuthSpec } from "@freebirdai/dash-spec";
+import {
+  catalogEntrySchema,
+  connectionSchema,
+  connectionKeyRef,
+  authKeyRefs,
+  fnv1a,
+} from "@freebirdai/dash-spec";
 
 /**
  * Dialects, in two tiers.
@@ -88,29 +94,55 @@ export const connectionFromCatalog = (
   options: { id?: string; keyRef?: string; opIds?: readonly string[] } = {},
 ): ConnectionSpec => {
   const id = options.id ?? entry.id;
-  const keyRef = options.keyRef ?? `${id}-key`;
+  const keyRef = options.keyRef ?? connectionKeyRef(id);
 
   const auth = entry.dialect.auth
     ? entry.dialect.auth.type === "none"
       ? entry.dialect.auth
-      : { ...entry.dialect.auth, keyRef }
+      : entry.dialect.auth.type === "headers"
+        ? {
+            ...entry.dialect.auth,
+            parts: entry.dialect.auth.parts.map((part, index) => ({
+              ...part,
+              keyRef: connectionKeyRef(id, index + 1),
+            })),
+          }
+        : { ...entry.dialect.auth, keyRef }
     : { type: "none" as const };
 
   const chosen = options.opIds
     ? entry.ops.filter((op) => options.opIds!.includes(op.id))
     : entry.ops;
+  const refs = new Map(
+    (entry.dialect.auth ? authKeyRefs(entry.dialect.auth) : []).map((ref, index) => [
+      ref,
+      authKeyRefs(auth)[index]!,
+    ]),
+  );
+  const scopeAuth = (value: AuthSpec): AuthSpec => {
+    const ref = (old: string) =>
+      refs.get(old) ?? `${connectionKeyRef(id).slice(0, 45)}-${fnv1a(old)}`;
+    return value.type === "none"
+      ? value
+      : value.type === "headers"
+        ? { ...value, parts: value.parts.map((part) => ({ ...part, keyRef: ref(part.keyRef) })) }
+        : { ...value, keyRef: ref(value.keyRef) };
+  };
 
   return connectionSchema.parse({
     id,
     title: entry.title,
     kind: "rest",
     authRequired: entry.authRequired,
+    paginationPending: entry.paginationProposal !== undefined,
     resources: entry.resources,
     baseUrl: entry.baseUrl,
     catalog: entry.id,
     auth,
     dialect: { ...entry.dialect, auth },
     ops: chosen.map((op) => ({
+      ...op,
+      ...(op.auth ? { auth: scopeAuth(op.auth) } : {}),
       id: op.id,
       title: op.title,
       path: op.path,
@@ -126,4 +158,44 @@ export const connectionFromCatalog = (
     ...(entry.docsUrl ? { docsUrl: entry.docsUrl } : {}),
     ...(entry.keyHelp ? { keyHelp: entry.keyHelp } : {}),
   });
+};
+
+/** Refresh imported contracts without overwriting a connection's explicit overrides. */
+export const refreshCatalogConnection = (
+  connection: ConnectionSpec,
+  previous: CatalogEntry,
+  fresh: CatalogEntry,
+): ConnectionSpec => {
+  if (connection.catalog !== previous.id) return connection;
+  const before = new Map(
+    connectionFromCatalog(previous, { id: connection.id }).ops.map((op) => [op.id, op]),
+  );
+  const after = new Map(
+    connectionFromCatalog(fresh, { id: connection.id }).ops.map((op) => [op.id, op]),
+  );
+  const ops = connection.ops.map((op) => {
+    const old = before.get(op.id);
+    const next = after.get(op.id);
+    if (!old || !next) return op;
+    const updated: Record<string, unknown> = { ...op };
+    for (const key of [
+      "path",
+      "archetype",
+      "rowsPath",
+      "params",
+      "query",
+      "fields",
+      "description",
+      "pagination",
+      "maxPages",
+      "headers",
+      "auth",
+      "authRequired",
+    ] as const) {
+      if (op[key] === undefined || JSON.stringify(op[key]) === JSON.stringify(old[key]))
+        updated[key] = next[key];
+    }
+    return updated;
+  });
+  return connectionSchema.parse({ ...connection, ops });
 };

@@ -1,3 +1,4 @@
+import { contextForConnection } from "@freebirdai/dash-agent";
 import type { ConciergeContext, ConciergeDraft, DraftPatch } from "@freebirdai/dash-agent";
 import {
   EFFECT_STEPS,
@@ -36,6 +37,14 @@ import { z } from "zod";
  */
 
 export interface ConciergeOps {
+  readonly previewStatus?:
+    | ((
+        widget: import("@freebirdai/dash-spec").WidgetSpec,
+      ) => import("../concierge/preview.js").PreviewStatus)
+    | undefined;
+  readonly checkPreview?: (
+    widgets: readonly import("@freebirdai/dash-spec").WidgetSpec[],
+  ) => string | null;
   readonly context: ConciergeContext;
   /**
    * The draft as this turn began.
@@ -148,12 +157,17 @@ export interface ConciergeOps {
  * nothing here has heard of.
  */
 const proposalFields = {
+  connection: z.string().optional().describe("Connection id from the available connections."),
+  inputs: z
+    .array(z.object({ name: z.string(), value: z.string() }))
+    .optional()
+    .describe("Required endpoint inputs, using the names requested by setup."),
   narrowTo: z
     .string()
     .optional()
     .describe(
-      "The subset the user asked for, in their own words — \"maintenance\", \"overdue\", " +
-        "\"commercial\". Set this WHENEVER they asked for only some of the records rather than " +
+      'The subset the user asked for, in their own words — "maintenance", "overdue", ' +
+        '"commercial". Set this WHENEVER they asked for only some of the records rather than ' +
         "all of them. The values that count as a match are worked out here by reading the " +
         "records: do not try to guess them, and do not leave this out because you cannot see " +
         "what values exist. Leave it out only when they want everything.",
@@ -186,8 +200,8 @@ const proposalFields = {
     .optional()
     .describe(
       "Set true when the user wants several kinds of record shuffled into ONE list, each row " +
-        "badged with which it came from — \"everything in one feed\", \"show them together in " +
-        "one list\". Leave it out to keep them as separate widgets side by side, which is the " +
+        'badged with which it came from — "everything in one feed", "show them together in ' +
+        'one list". Leave it out to keep them as separate widgets side by side, which is the ' +
         "default. Only works for list, feed, cards and timeline: a table's columns cannot be " +
         "aligned across two kinds of record and would be half empty.",
     ),
@@ -195,9 +209,9 @@ const proposalFields = {
     .string()
     .optional()
     .describe(
-      "What the widget counts. \"count:\" counts the records themselves, which is what " +
-        "\"how many\" means. Anything else is an aggregation and a field: \"sum:Amount\", " +
-        "\"avg:Days\". Set this whenever the user asked how many of something there are — do " +
+      'What the widget counts. "count:" counts the records themselves, which is what ' +
+        '"how many" means. Anything else is an aggregation and a field: "sum:Amount", ' +
+        '"avg:Days". Set this whenever the user asked how many of something there are — do ' +
         "not reach for the nearest number instead.",
     ),
   groupBy: z
@@ -205,7 +219,7 @@ const proposalFields = {
     .optional()
     .describe(
       "The field the records are broken up by. A date field is bucketed by the dashboard's " +
-        "own time control, so \"per month\" is this field plus that control rather than a " +
+        'own time control, so "per month" is this field plus that control rather than a ' +
         "separate setting.",
     ),
   extras: z.array(z.string()).optional().describe("Extra field names to show alongside."),
@@ -225,9 +239,7 @@ const proposalFields = {
   join: z
     .string()
     .optional()
-    .describe(
-      "Join id from the JOINS list — a relationship already found between two endpoints.",
-    ),
+    .describe("Join id from the JOINS list — a relationship already found between two endpoints."),
   joinEndpoint: z
     .string()
     .optional()
@@ -306,10 +318,17 @@ const confirmSetupSchema = z.object({
 
 /** The shared state shape, with this action's own dependencies supplied. */
 const stateOf = (draft: ConciergeDraft, ops: ConciergeOps) =>
-  conciergeState({ draft, context: ops.context, board: ops.getDashboard() });
+  conciergeState({
+    draft,
+    context: ops.context,
+    board: ops.getDashboard(),
+    previewStatus: ops.previewStatus,
+  });
 
 /** The flat tool arguments as a patch the pure machine understands. */
 const patchFrom = (args: {
+  connection?: string;
+  inputs?: Array<{ name: string; value: string }>;
   endpoint?: string;
   component?: string;
   measure?: string;
@@ -328,6 +347,10 @@ const patchFrom = (args: {
   interleave?: boolean;
   skip?: string[];
 }) => ({
+  ...(args.connection ? { connection: args.connection } : {}),
+  ...(args.inputs
+    ? { inputs: Object.fromEntries(args.inputs.map(({ name, value }) => [name, value])) }
+    : {}),
   ...(args.endpoint ? { endpoint: args.endpoint } : {}),
   ...(args.component ? { component: args.component } : {}),
   ...(args.measure ? { measure: args.measure } : {}),
@@ -445,8 +468,8 @@ export const lookUpSchema = z.object({
   query: z
     .string()
     .describe(
-      "What to look up — an endpoint name from the roster, or a plain word like \"lease\" " +
-        "or \"vendor\". Matches names, URL paths and descriptions.",
+      'What to look up — an endpoint name from the roster, or a plain word like "lease" ' +
+        'or "vendor". Matches names, URL paths and descriptions.',
     ),
 });
 
@@ -473,72 +496,70 @@ export const LOOK_UP_TOOL = "look_up_endpoint";
  * Reads the stored map and nothing else: no request, no spend, no writes.
  */
 export const lookUpEndpoint = (context: ConciergeContext, args: { query: string }): unknown => {
-      const needle = args.query.trim().toLowerCase();
-      const readable = context.ops.filter(
-        (op) => (context.shapes[op.id]?.fields.length ?? 0) > 0,
-      );
+  const needle = args.query.trim().toLowerCase();
+  const readable = context.ops.filter(
+    (op) => (contextForConnection(context, op.connection).shapes[op.id]?.fields.length ?? 0) > 0,
+  );
 
-      const scored = readable
-        .map((op) => {
-          const haystack = `${op.title} ${op.path ?? ""} ${op.description ?? ""}`.toLowerCase();
-          if (!needle) return { op, score: 0 };
-          // An exact id or title match is what a follow-up question uses.
-          if (op.id.toLowerCase() === needle || op.title.toLowerCase() === needle) {
-            return { op, score: 3 };
-          }
-          if (op.title.toLowerCase().includes(needle)) return { op, score: 2 };
-          return { op, score: haystack.includes(needle) ? 1 : 0 };
-        })
-        .filter((entry) => entry.score > 0)
-        .sort((a, b) => b.score - a.score);
-
-      if (scored.length === 0) {
-        /*
-         * A miss is an answer, and a better one than a guess. The roster is
-         * the whole list, so "nothing matches" genuinely means this dashboard
-         * cannot read it — worth saying rather than searching harder.
-         */
-        return {
-          query: args.query,
-          found: 0,
-          note:
-            `No endpoint here matches "${args.query}". The roster you were given is the complete ` +
-            "list, so this dashboard cannot read that — say so rather than offering to look further.",
-        };
+  const scored = readable
+    .map((op) => {
+      const haystack = `${op.title} ${op.path ?? ""} ${op.description ?? ""}`.toLowerCase();
+      if (!needle) return { op, score: 0 };
+      // An exact id or title match is what a follow-up question uses.
+      if (op.id.toLowerCase() === needle || op.title.toLowerCase() === needle) {
+        return { op, score: 3 };
       }
+      if (op.title.toLowerCase().includes(needle)) return { op, score: 2 };
+      return { op, score: haystack.includes(needle) ? 1 : 0 };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  if (scored.length === 0) {
+    /*
+     * A miss is an answer, and a better one than a guess. The roster is
+     * the whole list, so "nothing matches" genuinely means this dashboard
+     * cannot read it — worth saying rather than searching harder.
+     */
+    return {
+      query: args.query,
+      found: 0,
+      note:
+        `No endpoint here matches "${args.query}". The roster you were given is the complete ` +
+        "list, so this dashboard cannot read that — say so rather than offering to look further.",
+    };
+  }
+
+  return {
+    query: args.query,
+    found: scored.length,
+    ...(scored.length > LOOKUP_LIMIT
+      ? { note: `Showing ${LOOKUP_LIMIT} of ${scored.length}. Ask again more specifically.` }
+      : {}),
+    endpoints: scored.slice(0, LOOKUP_LIMIT).map(({ op }) => {
+      const shape = contextForConnection(context, op.connection).shapes[op.id];
+      const fields = (shape?.fields ?? [])
+        .filter((field) => !field.name.includes("."))
+        .map((field) => field.name);
+      const filters = context.rangeFilterable
+        .filter((entry) => entry.op === op.id)
+        .flatMap((entry) => [entry.start, entry.end ?? null]);
+      const searchable = context.searchable.find((entry) => entry.op === op.id);
 
       return {
-        query: args.query,
-        found: scored.length,
-        ...(scored.length > LOOKUP_LIMIT
-          ? { note: `Showing ${LOOKUP_LIMIT} of ${scored.length}. Ask again more specifically.` }
-          : {}),
-        endpoints: scored.slice(0, LOOKUP_LIMIT).map(({ op }) => {
-          const shape = context.shapes[op.id];
-          const fields = (shape?.fields ?? [])
-            .filter((field) => !field.name.includes("."))
-            .map((field) => field.name);
-          const filters = context.rangeFilterable
-            .filter((entry) => entry.op === op.id)
-            .flatMap((entry) => [entry.start, entry.end ?? null]);
-          const searchable = context.searchable.find((entry) => entry.op === op.id);
-
-          return {
-            id: op.id,
-            name: op.title,
-            /* The path is what separates two endpoints sharing a title. */
-            url: op.path ?? null,
-            connection: op.connection,
-            ...(op.description ? { about: op.description } : {}),
-            fields: fields.slice(0, LOOKUP_FIELDS),
-            ...(fields.length > LOOKUP_FIELDS
-              ? { moreFields: fields.length - LOOKUP_FIELDS }
-              : {}),
-            ...(filters.length > 0 ? { dateFilters: filters } : {}),
-            ...(searchable ? { searchParam: searchable.param } : {}),
-          };
-        }),
+        id: op.id,
+        name: op.title,
+        /* The path is what separates two endpoints sharing a title. */
+        url: op.path ?? null,
+        connection: op.connection,
+        ...(op.description ? { about: op.description } : {}),
+        fields: fields.slice(0, LOOKUP_FIELDS),
+        ...(fields.length > LOOKUP_FIELDS ? { moreFields: fields.length - LOOKUP_FIELDS } : {}),
+        ...(filters.length > 0 ? { dateFilters: filters } : {}),
+        ...(searchable ? { searchParam: searchable.param } : {}),
       };
+    }),
+  };
 };
 
 export const conciergeActions = (ops: ConciergeOps): ComponentDefinition["actions"] => [
@@ -741,9 +762,9 @@ export const conciergeActions = (ops: ConciergeOps): ComponentDefinition["action
       }
 
       const next = args.skip
-        // Scoped: a question about the second widget arrives as `p1:...`, and
-        // the unscoped pair silently applied it to the first.
-        ? skipStepAcross(draft, args.stepId)
+        ? // Scoped: a question about the second widget arrives as `p1:...`, and
+          // the unscoped pair silently applied it to the first.
+          skipStepAcross(draft, args.stepId)
         : applyStepAcross(draft, args.stepId, args.values, ops.context);
       await ops.putDraft(next);
       return stateOf(next, ops);
@@ -879,6 +900,8 @@ export const conciergeActions = (ops: ConciergeOps): ComponentDefinition["action
         taken: new Set(board.widgets.map((widget) => widget.id)),
       });
       const commit = commitSetup({ board, built });
+      const previewFailure = ops.checkPreview?.(built.widgets);
+      if (previewFailure) throw new Error(previewFailure);
       if (!commit.ok || !commit.next) {
         throw new Error(`that setup did not validate: ${commit.error ?? "unknown"}`);
       }
@@ -1018,9 +1041,7 @@ export const conciergeKnowledge = (ops: ConciergeOps): Array<{ text: string }> =
     facts.push({
       text:
         "STILL NEEDED before anything can be drawn: " +
-        state.missing
-          .map((piece) => `${piece.stepId} (${piece.need})`)
-          .join(" · ") +
+        state.missing.map((piece) => `${piece.stepId} (${piece.need})`).join(" · ") +
         ". Work these out from what the user tells you — ask them what they want to see, " +
         "in their own words, and choose the field yourself. Ask as many questions as it " +
         "takes to have a clear picture, and no more than that: if their first sentence " +
@@ -1061,7 +1082,8 @@ const ROSTER_LIMIT = 120;
  */
 const whatExists = (ops: ConciergeOps): string => {
   const readable = ops.context.ops.filter(
-    (op) => (ops.context.shapes[op.id]?.fields.length ?? 0) > 0,
+    (op) =>
+      (contextForConnection(ops.context, op.connection).shapes[op.id]?.fields.length ?? 0) > 0,
   );
 
   const connections = ops.context.connections.map((connection) => {
@@ -1117,7 +1139,8 @@ const whatExists = (ops: ConciergeOps): string => {
  */
 const idleGuidance = (ops: ConciergeOps): string => {
   const buildable = ops.context.ops.filter(
-    (op) => (ops.context.shapes[op.id]?.fields.length ?? 0) > 0,
+    (op) =>
+      (contextForConnection(ops.context, op.connection).shapes[op.id]?.fields.length ?? 0) > 0,
   );
 
   if (buildable.length === 0) {
@@ -1150,8 +1173,8 @@ const idleGuidance = (ops: ConciergeOps): string => {
     "offer the rest; do not recite the whole list. Charts have no record behind a data point,",
     "so this never applies to them.",
     "",
-    "ONLY SOME OF THE RECORDS: when they ask for a subset — \"maintenance tasks\", \"overdue\",",
-    "\"commercial properties\" — pass their word as `narrowTo`. The values that count are found",
+    'ONLY SOME OF THE RECORDS: when they ask for a subset — "maintenance tasks", "overdue",',
+    '"commercial properties" — pass their word as `narrowTo`. The values that count are found',
     "by reading real records here, so you do not need to know them and must not guess. A widget",
     "you build without it shows everything, which is the wrong answer to a narrower question.",
     "",
@@ -1184,9 +1207,7 @@ const materials = (draft: ConciergeDraft, ops: ConciergeOps): string => {
   if (endpoints && !endpoints.settled) {
     parts.push(
       "ENDPOINTS you may set: " +
-        endpoints.step.options
-          .map((option) => `${option.value} ("${option.label}")`)
-          .join(" · "),
+        endpoints.step.options.map((option) => `${option.value} ("${option.label}")`).join(" · "),
     );
   }
 
@@ -1265,10 +1286,14 @@ const HOW_TO_BUILD = [
 ].join("\n");
 
 /** The two answers that do something rather than record something. */
-const effectGuidance = (step: { id: string; question: string; options: readonly { value: string; label: string; description?: string }[] }): string =>
+const effectGuidance = (step: {
+  id: string;
+  question: string;
+  options: readonly { value: string; label: string; description?: string }[];
+}): string =>
   step.id === "connect"
     ? "NOTHING IS CONNECTED — there is no API to build from. Say so and offer to open the " +
-      "connection panel with `answer_step` (stepId: connect, values: [\"open\"]). The key is " +
+      'connection panel with `answer_step` (stepId: connect, values: ["open"]). The key is ' +
       "entered there; never ask for one here and never accept one if it is offered."
     : `THIS ENDPOINT HAS NOT BEEN READ — "${step.question}" ` +
       `Options: ${step.options.map((option) => `${option.value} (${option.label})`).join(" | ")}. ` +

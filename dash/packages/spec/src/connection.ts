@@ -1,7 +1,14 @@
 import { z } from "zod";
-import { ARCHETYPES, archetypeSchema, dialectSchema, formatRangeToken } from "./dialect.js";
+import {
+  ARCHETYPES,
+  archetypeSchema,
+  dialectSchema,
+  formatRangeToken,
+  mappedFieldSchema,
+} from "./dialect.js";
 import {
   authSchema,
+  authKeyRefs,
   idSchema,
   paginationSchema,
   paramDefSchema,
@@ -20,6 +27,9 @@ export type { AuthSpec, PaginationSpec } from "./primitives.js";
  * known API costs one line rather than fifteen.
  */
 export const opDefSchema = z.object({
+  auth: authSchema.optional(),
+  authRequired: z.boolean().optional(),
+  fields: z.array(mappedFieldSchema).max(300).optional(),
   id: idSchema,
   title: z.string().min(1),
   description: z.string().optional(),
@@ -53,6 +63,9 @@ export type OpDef = z.infer<typeof opDefSchema>;
 
 /** A fully-resolved endpoint: what the adapter actually executes. */
 export const opSchema = z.object({
+  auth: authSchema.optional(),
+  authRequired: z.boolean().optional(),
+  fields: z.array(mappedFieldSchema).max(300).optional(),
   id: idSchema,
   title: z.string().min(1),
   description: z.string().optional(),
@@ -72,6 +85,8 @@ export const opSchema = z.object({
 export type OpSpec = z.infer<typeof opSchema>;
 
 export const connectionSchema = z.object({
+  credentialsRevision: z.number().int().min(0).optional(),
+  paginationPending: z.boolean().optional(),
   specVersion: z.literal(1).default(1),
   id: idSchema,
   title: z.string().min(1),
@@ -103,6 +118,22 @@ export const connectionSchema = z.object({
 });
 
 export type ConnectionSpec = z.infer<typeof connectionSchema>;
+/** All credential slots needed by this connection's declared endpoints. */
+export const connectionAuths = (connection: ConnectionSpec) =>
+  connection.ops.length
+    ? connection.ops.map((op) => op.auth ?? connection.auth)
+    : [connection.auth];
+export const connectionKeyRefs = (connection: ConnectionSpec): string[] => [
+  ...new Set(connectionAuths(connection).flatMap(authKeyRefs)),
+];
+export const connectionNeedsAuthSetup = (connection: ConnectionSpec): boolean =>
+  connection.ops.length
+    ? connection.ops.some(
+        (op) =>
+          op.authRequired ??
+          (op.auth === undefined && connection.authRequired && connection.auth.type === "none"),
+      )
+    : connection.authRequired && connection.auth.type === "none";
 
 /**
  * Collapse archetype defaults, the dialect, and the op's own overrides into
@@ -117,6 +148,10 @@ export const resolveOp = (connection: ConnectionSpec, def: OpDef): OpSpec => {
     ...(dialect?.query ?? {}),
     ...def.query,
   };
+  for (const param of def.params) {
+    if (param.in === "query" && param.default !== undefined && query[param.name] === undefined)
+      query[param.name] = param.default;
+  }
 
   // The payoff of declaring a date convention once: the range token is
   // injected here, so nobody hand-writes `{{range.start | unix}}` per endpoint
@@ -133,6 +168,9 @@ export const resolveOp = (connection: ConnectionSpec, def: OpDef): OpSpec => {
   const pagination = def.pagination ?? (archetype.paginates ? dialect?.pagination : undefined);
 
   return opSchema.parse({
+    auth: def.auth,
+    authRequired: def.authRequired,
+    fields: def.fields,
     id: def.id,
     title: def.title,
     ...(def.description ? { description: def.description } : {}),

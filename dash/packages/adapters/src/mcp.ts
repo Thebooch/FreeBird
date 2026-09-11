@@ -1,12 +1,7 @@
 import type { ConnectionSpec, OpSpec } from "@freebirdai/dash-spec";
 import { interpolate } from "@freebirdai/dash-spec";
-import { mergePages, nextPageParams } from "./paginate.js";
-import {
-  AdapterError,
-  type FetchContext,
-  type FetchResult,
-  type SourceAdapter,
-} from "./types.js";
+import { firstPageParams, mergePages, nextPageParams, rowsAt } from "./paginate.js";
+import { AdapterError, type FetchContext, type FetchResult, type SourceAdapter } from "./types.js";
 
 /**
  * The slice of an MCP client this adapter needs.
@@ -109,13 +104,10 @@ export class McpAdapter implements SourceAdapter {
       // Do not cache a failed connection — the server may just be restarting.
       this.clients.delete(connection.id);
       this.toolLists.delete(connection.id);
-      throw new AdapterError(
-        error instanceof Error ? error.message : String(error),
-        {
-          status: 502,
-          userMessage: `Could not connect to the ${connection.title} MCP server.`,
-        },
-      );
+      throw new AdapterError(error instanceof Error ? error.message : String(error), {
+        status: 502,
+        userMessage: `Could not connect to the ${connection.title} MCP server.`,
+      });
     });
     this.clients.set(connection.id, created);
     return created;
@@ -159,7 +151,7 @@ export class McpAdapter implements SourceAdapter {
 
     // The op's path names the tool; query entries are its arguments.
     const toolName = op.path.replace(/^\//, "");
-    const baseArgs: Record<string, unknown> = {};
+    const baseArgs: Record<string, unknown> = firstPageParams(op.pagination);
     for (const [key, value] of Object.entries(op.query)) {
       baseArgs[key] = typeof value === "string" ? interpolate(value, ctx.params) : value;
     }
@@ -167,6 +159,14 @@ export class McpAdapter implements SourceAdapter {
       const resolved = typeof value === "string" ? interpolate(value, ctx.params) : value;
       if (resolved === "") continue;
       baseArgs[key] = resolved;
+    }
+
+    for (const [name, value] of Object.entries(firstPageParams(op.pagination))) {
+      if (String(baseArgs[name]) !== value)
+        throw new AdapterError(
+          `Pagination input ${name} conflicts with this endpoint's pagination settings. Update the endpoint settings before loading it.`,
+          { status: 400 },
+        );
     }
 
     const tools = await this.tools(connection);
@@ -195,8 +195,16 @@ export class McpAdapter implements SourceAdapter {
     let pageIndex = 0;
     let truncated = false;
     let more = true;
+    const seen = new Set<string>();
 
     while (more && pageIndex < op.maxPages) {
+      const request = JSON.stringify(args);
+      if (seen.has(request)) {
+        truncated = true;
+        warnings.push("pagination repeated the same tool arguments; the result may be incomplete");
+        break;
+      }
+      seen.add(request);
       const result = await client.callTool(toolName, args);
       if (result.isError) {
         const text = result.content?.map((part) => part.text ?? "").join(" ") ?? "";
@@ -208,6 +216,13 @@ export class McpAdapter implements SourceAdapter {
 
       pages.push(readToolBody(result, tool, toolName, op, warnings, pageIndex));
       pageIndex++;
+      if (op.pagination.kind !== "none" && rowsAt(pages[pages.length - 1], op.rowsPath) === null) {
+        truncated = true;
+        warnings.push(
+          "the declared row list is missing; pagination stopped with an incomplete result",
+        );
+        break;
+      }
 
       const next =
         op.pagination.kind === "link-header"

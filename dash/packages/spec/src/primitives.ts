@@ -60,6 +60,13 @@ export const authSchema = z.discriminatedUnion("type", [
 
 export type AuthSpec = z.infer<typeof authSchema>;
 
+/** Stable, bounded vault names without collisions between long connection ids. */
+export const connectionKeyRef = (connection: string, part?: number): string => {
+  const base =
+    connection.length > 48 ? `${connection.slice(0, 36)}-${fnv1a(connection)}` : connection;
+  return `${base}-key${part === undefined ? "" : `-${part}`}`;
+};
+
 /**
  * Every secret this auth style needs, in UI order.
  *

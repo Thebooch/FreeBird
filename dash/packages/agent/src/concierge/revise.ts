@@ -1,4 +1,4 @@
-import type { WidgetShape } from "@freebirdai/dash-spec";
+import type { WidgetShape, Coercion, FormatSpec } from "@freebirdai/dash-spec";
 import { shapeProblems } from "@freebirdai/dash-spec";
 import type { ChoiceDraft, ConciergeDraft } from "./draft.js";
 import {
@@ -13,6 +13,7 @@ import {
 } from "./draft.js";
 import {
   allSteps,
+  contextForConnection,
   applyStep,
   fieldPool,
   optionalRoleFor,
@@ -40,6 +41,9 @@ import {
  */
 
 export interface DraftPatch {
+  readonly inputs?: Readonly<Record<string, string>> | undefined;
+  readonly coercions?: Readonly<Record<string, Coercion>> | undefined;
+  readonly format?: Readonly<Record<string, FormatSpec>> | undefined;
   readonly connection?: string | undefined;
   readonly endpoint?: string | undefined;
   readonly join?: string | undefined;
@@ -158,6 +162,9 @@ export interface DraftPatch {
    */
   readonly offerSeries?:
     | {
+        readonly coercions?: DraftPatch["coercions"];
+        readonly format?: DraftPatch["format"];
+        readonly inputs?: DraftPatch["inputs"];
         readonly endpoint: string;
         readonly label: string;
         readonly shape: WidgetShape;
@@ -172,6 +179,9 @@ export interface DraftPatch {
 
   readonly seriesWith?:
     | ReadonlyArray<{
+        readonly coercions?: DraftPatch["coercions"];
+        readonly format?: DraftPatch["format"];
+        readonly inputs?: DraftPatch["inputs"];
         readonly endpoint: string;
         readonly label: string;
         readonly shape: WidgetShape;
@@ -283,6 +293,7 @@ export interface ReviseResult {
 const ORDER = [
   "connection",
   "endpoint",
+  "inputs",
   "join",
   "component",
   "choice",
@@ -308,6 +319,11 @@ const answersFor = (
       return patch.connection ? [{ stepId: "connection", values: [patch.connection] }] : [];
     case "endpoint":
       return patch.endpoint ? [{ stepId: "endpoint", values: [patch.endpoint] }] : [];
+    case "inputs":
+      return Object.entries(patch.inputs ?? {}).map(([name, value]) => ({
+        stepId: `input:${name}`,
+        values: [value],
+      }));
     case "join":
       return patch.join ? [{ stepId: "join", values: [patch.join] }] : [];
     case "component":
@@ -372,13 +388,33 @@ const reviseOne = (
    * Validated against the endpoint the patch is about to set, not the one the
    * draft currently has: a proposal names both at once.
    */
-  if (patch.shape) {
-    const outcome = applyShape(draft, patch.shape, context, patch.endpoint);
-    if (outcome.rejection) rejected.push(outcome.rejection);
-    else draft = outcome.draft;
-  }
-
   for (const key of ORDER) {
+    context = contextForConnection(context, draft.connection);
+    if (key === "join") {
+      const available = new Set(fieldPool(draft, context).map((field) => field.name));
+      for (const name of Object.keys(patch.coercions ?? {})) {
+        if (!available.has(name))
+          rejected.push({
+            stepId: "coercions",
+            value: name,
+            reason: "this field is not available on the chosen endpoint",
+            available: [...available],
+          });
+      }
+      if (patch.coercions)
+        draft = {
+          ...draft,
+          coercions: Object.fromEntries(
+            Object.entries(patch.coercions).filter(([name]) => available.has(name)),
+          ),
+        };
+      if (patch.format) draft = { ...draft, format: { ...patch.format } };
+    }
+    if (key === "join" && patch.shape) {
+      const outcome = applyShape(draft, patch.shape, context, patch.endpoint);
+      if (outcome.rejection) rejected.push(outcome.rejection);
+      else draft = outcome.draft;
+    }
     /*
      * The open join lands here, between the endpoint and everything bound
      * against it — and where it lands is the whole of the fix.
@@ -870,7 +906,10 @@ const applySeries = (
     }
     const shape = context.shapes[side.endpoint];
     if (!shape || shape.fields.length === 0) {
-      refuse(side.endpoint, `"${target.title}" has not been read yet, so nothing is known about it`);
+      refuse(
+        side.endpoint,
+        `"${target.title}" has not been read yet, so nothing is known about it`,
+      );
       continue;
     }
     const problems = shapeProblems(
@@ -910,6 +949,9 @@ const applySeries = (
     }
 
     kept.push({
+      ...(side.coercions ? { coercions: side.coercions } : {}),
+      ...(side.format ? { format: side.format } : {}),
+      ...(side.inputs ? { inputs: side.inputs } : {}),
       op: side.endpoint,
       rowsPath: shape.rowsPath || "$",
       label: side.label,
@@ -939,7 +981,10 @@ const applyOpenJoin = (
   join: NonNullable<DraftPatch["joinWith"]>,
   context: ConciergeContext,
 ): { draft: ConciergeDraft; rejection?: Rejection } => {
-  const refuse = (reason: string, available: readonly string[] = []): {
+  const refuse = (
+    reason: string,
+    available: readonly string[] = [],
+  ): {
     draft: ConciergeDraft;
     rejection: Rejection;
   } => ({ draft, rejection: { stepId: "joinWith", value: join.endpoint, available, reason } });
@@ -957,9 +1002,7 @@ const applyOpenJoin = (
     (field) => !field.name.includes("."),
   );
   if (rightFields.length === 0) {
-    return refuse(
-      `"${join.endpoint}" has not been read, so nothing is known about its fields`,
-    );
+    return refuse(`"${join.endpoint}" has not been read, so nothing is known about its fields`);
   }
 
   const left = fieldPool(draft, context);

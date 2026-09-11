@@ -39,6 +39,13 @@ const fieldNameSchema = z
   .string()
   .min(1)
   .regex(/^[a-zA-Z_][a-zA-Z0-9_]*$/, "field names must be [a-zA-Z_][a-zA-Z0-9_]*");
+const sourceFieldSchema = z
+  .string()
+  .min(1)
+  .regex(
+    /^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*$/,
+    "source fields must be names or dotted paths",
+  );
 
 /**
  * One axis the rows are grouped along.
@@ -48,7 +55,7 @@ const fieldNameSchema = z
  * itself to whatever was chosen the day it was built.
  */
 export const groupByShapeSchema = z.object({
-  field: fieldNameSchema,
+  field: sourceFieldSchema,
   bucket: z.union([grainSchema, z.string().regex(/^\{\{.*\}\}$/)]).optional(),
   /** Name of the produced column. Defaults to the field's own name. */
   as: fieldNameSchema.optional(),
@@ -71,7 +78,7 @@ export const measureShapeSchema = z
     as: fieldNameSchema,
     agg: aggregationSchema,
     /** The column being aggregated. Omitted only for a plain row count. */
-    field: fieldNameSchema.optional(),
+    field: sourceFieldSchema.optional(),
     /** What to call it on screen, when the column name is not the answer. */
     label: z.string().min(1).max(80).optional(),
   })
@@ -246,10 +253,7 @@ export const rolesForShape = (
  * The produced columns are in scope for `sort`, because sorting by the bucket
  * or by the measure is the ordinary case and neither exists on the raw rows.
  */
-export const shapeProblems = (
-  shape: WidgetShape,
-  available: readonly string[],
-): string[] => {
+export const shapeProblems = (shape: WidgetShape, available: readonly string[]): string[] => {
   const known = new Set(available);
   const problems: string[] = [];
 

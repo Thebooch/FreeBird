@@ -1,3 +1,5 @@
+import { widgetSources, type WidgetSpec } from "@freebirdai/dash-spec";
+import { fingerprintOps } from "@freebirdai/dash-spec";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -41,7 +43,7 @@ const connection: ConnectionSpec = connectionSchema.parse({
 const report: CapabilityReport = capabilityReportSchema.parse({
   connection: "api",
   generatedAt: new Date("2026-08-01T00:00:00Z").toISOString(),
-  opsFingerprint: "fp",
+  opsFingerprint: fingerprintOps(connection.ops),
   resources: [
     {
       id: "item",
@@ -82,7 +84,42 @@ const report: CapabilityReport = capabilityReportSchema.parse({
 });
 
 /** A server with no LLM configured — the whole point of these tests. */
-const makeApp = () => buildServer({ store, keys, http: async (url) => ({ status: 200, text: "{}", url, header: () => null }) });
+const makeApp = () =>
+  buildServer({
+    store,
+    keys,
+    http: async (url) => ({
+      status: 200,
+      text: JSON.stringify({
+        data: [{ Id: 1, Name: "One", State: "active", Total: 12345, CreatedAt: "2026-08-01" }],
+      }),
+      url,
+      header: () => null,
+    }),
+  });
+
+const checkPreview = async (app: ReturnType<typeof makeApp>) => {
+  const state = (await app.inject({ method: "GET", url: "/api/concierge/ops" })).json() as {
+    widgets: WidgetSpec[];
+  };
+  for (const widget of state.widgets) {
+    const receipts = [];
+    for (const source of widgetSources(widget)) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/query",
+        payload: { connection: source.connection, op: source.op, params: source.params },
+      });
+      receipts.push({ as: source.as, receipt: response.json().meta.receipt });
+    }
+    const result = await app.inject({
+      method: "POST",
+      url: "/api/concierge/ops/preview",
+      payload: { widget, receipts },
+    });
+    expect(result.json().status).toBe("checked");
+  }
+};
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "dash-concierge-"));
@@ -118,7 +155,12 @@ type Step = {
   multiple: boolean;
   skippable: boolean;
   freeText: boolean;
-  options: Array<{ value: string; label: string; description: string | null; recommended: boolean }>;
+  options: Array<{
+    value: string;
+    label: string;
+    description: string | null;
+    recommended: boolean;
+  }>;
 };
 
 describe("guided setup with no model at all", () => {
@@ -205,6 +247,7 @@ describe("guided setup with no model at all", () => {
     expect(asked).toContain("component");
     expect(asked).toContain("drilldown");
 
+    await checkPreview(app);
     const confirmed = await app.inject({
       method: "POST",
       url: "/api/concierge/ops/confirm",
@@ -425,11 +468,7 @@ describe("guided setup with no model at all", () => {
   });
 
   it("says there is nothing connected rather than going quiet", async () => {
-    const bare = new SpecStore(
-      join(dir, "d2"),
-      join(dir, "c2"),
-      join(dir, "r2"),
-    );
+    const bare = new SpecStore(join(dir, "d2"), join(dir, "c2"), join(dir, "r2"));
     bare.putDashboard(
       dashboardSchema.parse({ id: "ops", title: "Ops", widgets: [], layout: { cells: [] } }),
     );
@@ -473,6 +512,7 @@ describe("guided setup with no model at all", () => {
     expect(state.step).toBeNull();
     expect(state.widget?.component).toBe("bar");
 
+    await checkPreview(app);
     const confirmed = await app.inject({
       method: "POST",
       url: "/api/concierge/ops/confirm",

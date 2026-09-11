@@ -78,7 +78,12 @@ describe("parseOpenApi", () => {
 
   it("reads the rows path out of the declared response schema, through $ref", () => {
     const [op] = parseOpenApi(spec(), SPEC_URL)!.entry.ops;
-    expect(op).toMatchObject({ id: "listcharges", title: "List charges", archetype: "list", rowsPath: "$.data" });
+    expect(op).toMatchObject({
+      id: "listcharges",
+      title: "List charges",
+      archetype: "list",
+      rowsPath: "$.data",
+    });
   });
 
   it("keeps the endpoint's own description, which is all that tells two apart", () => {
@@ -111,7 +116,7 @@ describe("parseOpenApi", () => {
 
   it("infers pagination and the date filter from parameter names", () => {
     const { entry } = parseOpenApi(spec(), SPEC_URL)!;
-    expect(entry.dialect.pagination).toMatchObject({ kind: "cursor", param: "starting_after" });
+    expect(entry.paginationProposal).toMatchObject({ kind: "cursor", param: "starting_after" });
     expect(entry.dialect.timeFilter).toEqual({ param: "created[gte]", format: "unix" });
   });
 
@@ -165,7 +170,9 @@ describe("parseOpenApi", () => {
         "/items": {
           get: {
             summary: "Items",
-            responses: { "200": { content: { "application/json": { schema: { type: "array" } } } } },
+            responses: {
+              "200": { content: { "application/json": { schema: { type: "array" } } } },
+            },
           },
         },
       },
@@ -261,7 +268,7 @@ describe("parseOpenApi", () => {
     it("says so when no scheme is declared at all", () => {
       const result = parseOpenApi(spec({ components: {} }), SPEC_URL)!;
       expect(result.entry.dialect.auth).toEqual({ type: "none" });
-      expect(result.warnings.join()).toMatch(/needs an API key to function/);
+      expect(result.warnings.join()).toMatch(/does not declare a supported authentication setup/);
     });
   });
 
@@ -278,7 +285,9 @@ describe("parseOpenApi", () => {
           get: {
             summary: "Things",
             parameters: [{ name: "page", in: "query", type: "integer" }],
-            responses: { "200": { schema: { type: "object", properties: { rows: { type: "array" } } } } },
+            responses: {
+              "200": { schema: { type: "object", properties: { rows: { type: "array" } } } },
+            },
           },
         },
       },
@@ -288,7 +297,7 @@ describe("parseOpenApi", () => {
       const { entry } = parseOpenApi(swagger, SPEC_URL)!;
       expect(entry.baseUrl).toBe("https://legacy.example.com/api");
       expect(entry.dialect.auth).toMatchObject({ type: "header", header: "Authorization" });
-      expect(entry.dialect.pagination).toMatchObject({ kind: "page", param: "page" });
+      expect(entry.paginationProposal).toMatchObject({ kind: "page", param: "page" });
       expect(entry.ops[0]?.rowsPath).toBe("$.rows");
     });
   });
@@ -347,14 +356,20 @@ describe("parseOpenApi", () => {
     it("seeds a required parameter from its default, so the endpoint works when tested", () => {
       // Without this, the very first validation of a discovered spec 400s.
       const { entry } = withRequired([
-        { name: "status", in: "query", required: true, schema: { type: "string", default: "available" } },
+        {
+          name: "status",
+          in: "query",
+          required: true,
+          schema: { type: "string", default: "available" },
+        },
       ]);
       expect(entry.ops[0]?.query).toEqual({ status: "available" });
     });
 
     it("falls back to an example, then to the first enum value", () => {
       expect(
-        withRequired([{ name: "kind", in: "query", required: true, example: "widget" }]).entry.ops[0]?.query,
+        withRequired([{ name: "kind", in: "query", required: true, example: "widget" }]).entry
+          .ops[0]?.query,
       ).toEqual({ kind: "widget" });
 
       expect(
@@ -381,7 +396,9 @@ describe("parseOpenApi", () => {
 
     it("warns about a required parameter it cannot fill in", () => {
       const { warnings } = withRequired([{ name: "accountId", in: "query", required: true }]);
-      expect(warnings.join()).toMatch(/requires a "accountId" parameter that the spec gives no example for/);
+      expect(warnings.join()).toMatch(
+        /requires a "accountId" parameter that the spec gives no example for/,
+      );
     });
   });
 
@@ -401,7 +418,9 @@ describe("parseOpenApi", () => {
           get: {
             summary: "Loop",
             responses: {
-              "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/Loop" } } } },
+              "200": {
+                content: { "application/json": { schema: { $ref: "#/components/schemas/Loop" } } },
+              },
             },
           },
         },
@@ -446,7 +465,9 @@ describe("a spec that declares no security scheme", () => {
     // Absent securitySchemes is silence, not a statement that it is open.
     expect(parsed?.entry.authRequired).toBe(true);
     expect(parsed?.entry.dialect.auth?.type ?? "none").toBe("none");
-    expect(parsed?.warnings).toContain("This API needs an API key to function.");
+    expect(parsed?.warnings).toContain(
+      "The specification does not declare a supported authentication setup. Confirm how this API authenticates before connecting.",
+    );
   });
 
   it("does not flag a spec that does declare one", () => {
@@ -525,7 +546,12 @@ describe("parameter metadata", () => {
           summary: "All leases",
           parameters: [
             { name: "q", in: "query", schema: { type: "string" }, description: "Free text" },
-            { name: "status", in: "query", required: true, schema: { type: "string", enum: ["active", "terminated"] } },
+            {
+              name: "status",
+              in: "query",
+              required: true,
+              schema: { type: "string", enum: ["active", "terminated"] },
+            },
             { name: "since", in: "query", schema: { type: "string", format: "date" } },
             { name: "limit", in: "query", schema: { type: "integer" } },
           ],
@@ -535,7 +561,9 @@ describe("parameter metadata", () => {
       "/v1/leases/{leaseId}": {
         get: {
           summary: "One lease",
-          parameters: [{ name: "leaseId", in: "path", required: true, schema: { type: "integer" } }],
+          parameters: [
+            { name: "leaseId", in: "path", required: true, schema: { type: "integer" } },
+          ],
           responses: { "200": { content: { "application/json": { schema: { type: "object" } } } } },
         },
       },
@@ -583,21 +611,29 @@ describe("parameter metadata", () => {
             get: {
               summary: "Transactions",
               parameters: [
-                { name: "transactiondatefrom", in: "query", schema: { type: "string", format: "date" } },
-                { name: "transactiondateto", in: "query", schema: { type: "string", format: "date" } },
+                {
+                  name: "transactiondatefrom",
+                  in: "query",
+                  schema: { type: "string", format: "date" },
+                },
+                {
+                  name: "transactiondateto",
+                  in: "query",
+                  schema: { type: "string", format: "date" },
+                },
                 { name: "created_after", in: "query", schema: { type: "string", format: "date" } },
                 { name: "created[lte]", in: "query", schema: { type: "string" } },
               ],
-              responses: { "200": { content: { "application/json": { schema: { type: "array" } } } } },
+              responses: {
+                "200": { content: { "application/json": { schema: { type: "array" } } } },
+              },
             },
           },
         },
       },
       "https://docs.example.com/",
     )!;
-    const byName = Object.fromEntries(
-      ranged.entry.ops[0]!.params.map((p) => [p.name, p.role]),
-    );
+    const byName = Object.fromEntries(ranged.entry.ops[0]!.params.map((p) => [p.name, p.role]));
     expect(byName.transactiondatefrom).toBe("rangeStart");
     expect(byName.transactiondateto).toBe("rangeEnd");
     expect(byName.created_after).toBe("rangeStart");
@@ -681,12 +717,7 @@ describe("deriveResources", () => {
       "/v1/boxes": list("Boxes"),
       "/v1/boxes/{boxId}": detail("A box", "boxId"),
     }).entry;
-    expect(entry.resources.map((r) => r.id).sort()).toEqual([
-      "address",
-      "box",
-      "company",
-      "lease",
-    ]);
+    expect(entry.resources.map((r) => r.id).sort()).toEqual(["address", "box", "company", "lease"]);
   });
 
   it("ignores a detail endpoint with no matching collection", () => {
@@ -806,8 +837,9 @@ describe("choosing between several declared security schemes", () => {
       },
       [{ ApiKeyHeader: [] }],
     );
-    expect(parseOpenApi(doc, "https://api.example.com/openapi.yaml")?.entry.dialect.auth)
-      .toMatchObject({ type: "header", header: "x-token" });
+    expect(
+      parseOpenApi(doc, "https://api.example.com/openapi.yaml")?.entry.dialect.auth,
+    ).toMatchObject({ type: "header", header: "x-token" });
   });
 
   it("falls back to ranking when the document nominates nothing", () => {
@@ -815,11 +847,12 @@ describe("choosing between several declared security schemes", () => {
       ApiKeyHeader: { type: "apiKey", in: "header", name: "x-token" },
       PartnerBearer: { type: "http", scheme: "bearer" },
     });
-    expect(parseOpenApi(doc, "https://api.example.com/openapi.yaml")?.entry.dialect.auth)
-      .toMatchObject({ type: "bearer" });
+    expect(
+      parseOpenApi(doc, "https://api.example.com/openapi.yaml")?.entry.dialect.auth,
+    ).toMatchObject({ type: "bearer" });
   });
 
-  it("still prefers a pasteable key over a nominated OAuth flow", () => {
+  it("does not substitute an unrelated key for a required OAuth flow", () => {
     // The nomination is a bonus, not an override: OAuth needs a registered app
     // and a consent flow, neither of which exists at connection time.
     const doc = withSchemes(
@@ -829,23 +862,25 @@ describe("choosing between several declared security schemes", () => {
       },
       [{ OAuth: [] }],
     );
-    expect(parseOpenApi(doc, "https://api.example.com/openapi.yaml")?.entry.dialect.auth)
-      .toMatchObject({ type: "header", header: "x-token" });
+    expect(
+      parseOpenApi(doc, "https://api.example.com/openapi.yaml")?.entry.dialect.auth,
+    ).toMatchObject({ type: "bearer" });
   });
 });
 
 describe("indexLinksIn", () => {
   it("finds the index a page names in its own body", () => {
-    const page = "> Fetch the complete documentation index at: https://developers.example.com/docs/llms.txt";
-    expect(indexLinksIn(page, "https://developers.example.com/docs/api-reference/overview")).toEqual([
-      "https://developers.example.com/docs/llms.txt",
-    ]);
+    const page =
+      "> Fetch the complete documentation index at: https://developers.example.com/docs/llms.txt";
+    expect(
+      indexLinksIn(page, "https://developers.example.com/docs/api-reference/overview"),
+    ).toEqual(["https://developers.example.com/docs/llms.txt"]);
   });
 
   it("resolves a root-relative mention against the page", () => {
-    expect(indexLinksIn("See /docs/llms.txt for the index.", "https://x.example.com/docs/a/b")).toEqual([
-      "https://x.example.com/docs/llms.txt",
-    ]);
+    expect(
+      indexLinksIn("See /docs/llms.txt for the index.", "https://x.example.com/docs/a/b"),
+    ).toEqual(["https://x.example.com/docs/llms.txt"]);
   });
 
   it("says nothing when the page does not mention one", () => {

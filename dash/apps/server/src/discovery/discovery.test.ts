@@ -65,6 +65,24 @@ const SPEC = JSON.stringify({
 });
 
 describe("the ladder is ordered by determinism", () => {
+  it("does not match unrelated organisations that share a public suffix", async () => {
+    const catalog = catalogWith([
+      {
+        id: "one",
+        title: "One",
+        baseUrl: "https://api.vendor-one.co.uk",
+        dialect: {},
+        ops: [{ id: "items", title: "Items", path: "/items" }],
+        verified: true,
+      },
+    ]);
+    const result = await discover("https://vendor-two.co.uk", {
+      catalog,
+      fetchDocument: documents({}).fetchDocument,
+    });
+    expect(result.source).not.toBe("catalog");
+    expect(result.entry?.id).not.toBe("one");
+  });
   it("stops at a catalog hit without fetching anything", async () => {
     const catalog = catalogWith([
       {
@@ -278,7 +296,11 @@ describe("rung 4: web search", () => {
         name: "test",
         search: async (query: string) => {
           queries.push(query);
-          return results.map((r) => ({ title: r.title ?? r.url, url: r.url, snippet: r.snippet ?? "" }));
+          return results.map((r) => ({
+            title: r.title ?? r.url,
+            url: r.url,
+            snippet: r.snippet ?? "",
+          }));
         },
       },
     };

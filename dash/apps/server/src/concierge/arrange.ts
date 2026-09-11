@@ -7,6 +7,7 @@ import type {
 } from "@freebirdai/dash-agent";
 import {
   applyArrangement,
+  contextForConnection,
   fieldPool,
   partView,
   partsOf,
@@ -14,6 +15,7 @@ import {
   proposeWidget,
   withPart,
 } from "@freebirdai/dash-agent";
+import { proposalPatch } from "./proposal-patch.js";
 import { contractFor } from "@freebirdai/dash-spec";
 
 /**
@@ -139,10 +141,11 @@ export const rearrangeSetup = async (input: RearrangeInput): Promise<RearrangeRe
     parts.map(async (part, index) => {
       const op = part.op;
       if (!op) return null;
-      const shape = arrangement === "merged" ? joinedShape(draft, context, index) : context.shapes[op];
+      const local = contextForConnection(context, part.connection);
+      const shape = arrangement === "merged" ? joinedShape(draft, local, index) : local.shapes[op];
       if (!shape || shape.fields.length === 0) return null;
 
-      const known = context.ops.find((candidate) => candidate.id === op);
+      const known = local.ops.find((candidate) => candidate.id === op);
       const connection = context.connections.find(
         (candidate) => candidate.id === (part.connection ?? known?.connection),
       );
@@ -174,14 +177,15 @@ export const rearrangeSetup = async (input: RearrangeInput): Promise<RearrangeRe
   const component =
     arrangement === "merged"
       ? (proposals[0]?.widget?.component ?? parts[0]?.component)
-      : (proposals.map((entry) => entry?.widget?.component).find(
-          (id): id is string => id !== undefined && INTERLEAVABLE.has(id),
-        ) ?? "list");
+      : (proposals
+          .map((entry) => entry?.widget?.component)
+          .find((id): id is string => id !== undefined && INTERLEAVABLE.has(id)) ?? "list");
 
   parts.forEach((_, index) => {
     const proposal = proposals[index];
+    const patch = proposal ? proposalPatch(proposal) : {};
     const roles = Object.fromEntries(
-      Object.entries(proposal?.widget?.roles ?? {}).map(([role, bound]) => [
+      Object.entries(patch.roles ?? {}).map(([role, bound]) => [
         role,
         Array.isArray(bound) ? bound.map(String) : [String(bound)],
       ]),
@@ -194,6 +198,9 @@ export const rearrangeSetup = async (input: RearrangeInput): Promise<RearrangeRe
     }
     draft = withPart(draft, index, {
       ...partView(draft, index),
+      ...(patch.coercions ? { coercions: { ...patch.coercions } } : {}),
+      ...(patch.format ? { format: { ...patch.format } } : {}),
+      ...(patch.shape ? { shape: patch.shape } : {}),
       ...(component ? { component } : {}),
       roles: Object.fromEntries(
         Object.entries(filled(roles, component ?? "list", draft, context, index)).map(

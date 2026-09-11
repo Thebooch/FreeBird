@@ -21,6 +21,7 @@ export type FieldFormat =
   | "minor_units";
 
 export interface FieldInfo {
+  readonly description?: string;
   /** Dotted name relative to a row, e.g. `user.login`. */
   readonly name: string;
   readonly kinds: readonly JsonKind[];
@@ -32,6 +33,7 @@ export interface FieldInfo {
 }
 
 export interface InferredShape {
+  readonly evidence?: "declared" | "observed";
   /** Best guess at the row array, as a path. */
   readonly rowsPath: string;
   readonly rowCount: number;
@@ -121,7 +123,8 @@ const findRows = (body: unknown): { path: string; rows: unknown[] } => {
   };
 
   visit(body, "$", 0);
-  if (best) return { path: (best as { path: string }).path, rows: (best as { rows: unknown[] }).rows };
+  if (best)
+    return { path: (best as { path: string }).path, rows: (best as { rows: unknown[] }).rows };
   // A single object is one row — a summary endpoint, and a perfectly good source.
   return { path: "$", rows: [body] };
 };
@@ -149,7 +152,10 @@ export const inferShape = (body: unknown, options: { rowsPath?: string } = {}): 
   }
 
   const scanned = rows.slice(0, MAX_ROWS_SCANNED);
-  const collected = new Map<string, { kinds: Set<JsonKind>; values: unknown[]; distinct: Set<string> }>();
+  const collected = new Map<
+    string,
+    { kinds: Set<JsonKind>; values: unknown[]; distinct: Set<string> }
+  >();
 
   const record = (name: string, value: unknown): void => {
     let entry = collected.get(name);

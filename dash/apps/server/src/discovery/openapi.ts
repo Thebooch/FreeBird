@@ -1,6 +1,6 @@
 import type { CatalogEntry, ParamDef } from "@freebirdai/dash-spec";
 import { fieldsFromSchema } from "./schema-fields.js";
-import { catalogEntrySchema, deriveResourceModel, pathParamNames } from "@freebirdai/dash-spec";
+import { catalogEntrySchema, deriveResourceModel, fnv1a } from "@freebirdai/dash-spec";
 import { parse as parseYaml } from "yaml";
 import type { z } from "zod";
 
@@ -105,7 +105,8 @@ const flattenComposition = (doc: Json, node: Json, seen: Set<string>, depth: num
       if (key === "properties") {
         if (isObject(value)) Object.assign(properties, value);
       } else if (key === "required") {
-        if (Array.isArray(value)) required.push(...value.filter((entry) => typeof entry === "string"));
+        if (Array.isArray(value))
+          required.push(...value.filter((entry) => typeof entry === "string"));
       } else if (merged[key] === undefined) {
         merged[key] = value;
       }
@@ -124,7 +125,8 @@ const flattenComposition = (doc: Json, node: Json, seen: Set<string>, depth: num
     if (key === "properties") {
       if (isObject(value)) Object.assign(properties, value);
     } else if (key === "required") {
-      if (Array.isArray(value)) required.push(...value.filter((entry) => typeof entry === "string"));
+      if (Array.isArray(value))
+        required.push(...value.filter((entry) => typeof entry === "string"));
     } else {
       merged[key] = value;
     }
@@ -192,11 +194,14 @@ type DialectPagination = NonNullable<CatalogEntry["dialect"]["pagination"]>;
 type DialectTimeFilter = NonNullable<CatalogEntry["dialect"]["timeFilter"]>;
 
 const authFrom = (doc: Json, keyRef: string): DialectAuth => {
-  const schemes = specVersionOf(doc) === 2
-    ? (isObject(doc.securityDefinitions) ? doc.securityDefinitions : {})
-    : (isObject(doc.components) && isObject(doc.components.securitySchemes)
+  const schemes =
+    specVersionOf(doc) === 2
+      ? isObject(doc.securityDefinitions)
+        ? doc.securityDefinitions
+        : {}
+      : isObject(doc.components) && isObject(doc.components.securitySchemes)
         ? doc.components.securitySchemes
-        : {});
+        : {};
 
   /**
    * Rank the candidates rather than taking the first one declared.
@@ -221,12 +226,49 @@ const authFrom = (doc: Json, keyRef: string): DialectAuth => {
    */
   const declared = new Set<string>();
   const requirements = Array.isArray(doc.security) ? doc.security : [];
+  if (
+    Array.isArray(doc.security) &&
+    (requirements.length === 0 ||
+      requirements.some((entry) => isObject(entry) && Object.keys(entry).length === 0))
+  )
+    return { type: "none" };
+  // Each object is an AND requirement; the array contains alternatives.
+  // Preserve every required header instead of choosing one and losing the rest.
+  for (const requirement of requirements) {
+    if (!isObject(requirement) || Object.keys(requirement).length < 2) continue;
+    const parts: Array<{ header: string; keyRef: string; template?: string }> = [];
+    for (const [index, schemeName] of Object.keys(requirement).entries()) {
+      const scheme = deref(doc, schemes[schemeName]);
+      if (!isObject(scheme)) break;
+      if (
+        str(scheme.type)?.toLowerCase() === "apikey" &&
+        str(scheme.in)?.toLowerCase() === "header" &&
+        str(scheme.name)
+      ) {
+        parts.push({ header: str(scheme.name)!, keyRef: `${keyRef}-${index + 1}` });
+      } else if (str(scheme.type) === "http" && str(scheme.scheme) === "bearer") {
+        parts.push({
+          header: "Authorization",
+          template: "Bearer {{key}}",
+          keyRef: `${keyRef}-${index + 1}`,
+        });
+      }
+    }
+    if (parts.length === Object.keys(requirement).length) return { type: "headers", parts };
+  }
   for (const requirement of requirements) {
     if (isObject(requirement)) for (const name of Object.keys(requirement)) declared.add(name);
   }
   const DECLARED_BONUS = 5;
 
   for (const [name_, raw] of Object.entries(schemes)) {
+    if (
+      requirements.length > 0 &&
+      !requirements.some(
+        (entry) => isObject(entry) && Object.keys(entry).length === 1 && name_ in entry,
+      )
+    )
+      continue;
     const preferred = declared.has(name_) ? DECLARED_BONUS : 0;
     const scheme = deref(doc, raw);
     if (!isObject(scheme)) continue;
@@ -437,11 +479,22 @@ const operationParams = (doc: Json, operation: Json, pathItem: Json): ImportedPa
 const CURSOR_PARAMS = ["cursor", "starting_after", "after", "page_token", "next_cursor", "next"];
 const PAGE_PARAMS = ["page", "page_number", "pagenum"];
 const OFFSET_PARAMS = ["offset", "skip", "start"];
-const LIMIT_PARAMS = ["limit", "per_page", "page_size", "pagesize", "count", "hitsperpage", "max_results"];
+const LIMIT_PARAMS = [
+  "limit",
+  "per_page",
+  "page_size",
+  "pagesize",
+  "count",
+  "hitsperpage",
+  "max_results",
+];
 
 const DATE_PARAMS: ReadonlyArray<{ names: string[]; format: "unix" | "iso" | "date" }> = [
   { names: ["created[gte]", "created_at[gte]", "since_ts", "start_time"], format: "unix" },
-  { names: ["since", "start_date", "from", "created_after", "updated_after", "start"], format: "iso" },
+  {
+    names: ["since", "start_date", "from", "created_after", "updated_after", "start"],
+    format: "iso",
+  },
   { names: ["date_from", "start_day"], format: "date" },
 ];
 
@@ -461,10 +514,14 @@ const dialectFromParams = (
   const warnings: string[] = [];
   const lower = names.map((name) => name.toLowerCase());
 
-  const cursor = pick(lower, CURSOR_PARAMS);
-  const page = pick(lower, PAGE_PARAMS);
-  const offset = pick(lower, OFFSET_PARAMS);
-  const limit = pick(lower, LIMIT_PARAMS);
+  const original = (candidates: readonly string[]) => {
+    const found = pick(lower, candidates);
+    return names.find((name) => name.toLowerCase() === found);
+  };
+  const cursor = original(CURSOR_PARAMS);
+  const page = original(PAGE_PARAMS);
+  const offset = original(OFFSET_PARAMS);
+  const limit = original(LIMIT_PARAMS);
 
   let pagination: DialectPagination;
   if (cursor) {
@@ -477,7 +534,12 @@ const dialectFromParams = (
   } else if (offset && limit) {
     pagination = { kind: "offset", param: offset, limitParam: limit, pageSize: 100 };
   } else if (page) {
-    pagination = { kind: "page", param: page, startsAt: 1, ...(limit ? { limitParam: limit, pageSize: 100 } : {}) };
+    pagination = {
+      kind: "page",
+      param: page,
+      startsAt: 1,
+      ...(limit ? { limitParam: limit, pageSize: 100 } : {}),
+    };
   } else {
     pagination = { kind: "none" };
   }
@@ -515,7 +577,11 @@ const opId = (path: string, operationId: string | undefined): string => {
 };
 
 /** OpenAPI path templating (`{id}`) becomes a Dash filter token. */
-const templatePath = (path: string): string => path.replace(/\{([^}]+)\}/g, (_m, name: string) => `{{param.${String(name).replace(/[^a-zA-Z0-9_]/g, "_")}}}`);
+const templatePath = (path: string): string =>
+  path.replace(
+    /\{([^}]+)\}/g,
+    (_m, name: string) => `{{param.${String(name).replace(/[^a-zA-Z0-9_]/g, "_")}}}`,
+  );
 
 /*
  * There is no op cap.
@@ -566,9 +632,15 @@ export const parseOpenApi = (
   // A spec that declares no scheme has not told us the API is public — most
   // business APIs omit the block and still require credentials. Record that a
   // key is needed without inventing where it goes.
-  const authRequired = auth.type === "none";
+  const explicitlyPublic =
+    Array.isArray(doc.security) &&
+    (doc.security.length === 0 ||
+      doc.security.some((entry) => isObject(entry) && Object.keys(entry).length === 0));
+  const authRequired = auth.type === "none" && !explicitlyPublic;
   if (authRequired) {
-    warnings.push("This API needs an API key to function.");
+    warnings.push(
+      "The specification does not declare a supported authentication setup. Confirm how this API authenticates before connecting.",
+    );
   }
 
   const paths = isObject(doc.paths) ? doc.paths : {};
@@ -630,14 +702,11 @@ export const parseOpenApi = (
      * nothing more and is the only way to know the shape of an endpoint that
      * cannot be called without an id — which is most of them.
      */
-    const fields = fieldsFromSchema(
-      responseSchema,
-      (node) => deref(doc, node),
-      shape.rowsPath,
-    );
+    const fields = fieldsFromSchema(responseSchema, (node) => deref(doc, node), shape.rowsPath);
     let identifier = opId(rawPath, str(operation.operationId));
     let suffix = 2;
-    while (usedIds.has(identifier)) identifier = `${opId(rawPath, str(operation.operationId))}_${suffix++}`;
+    while (usedIds.has(identifier))
+      identifier = `${opId(rawPath, str(operation.operationId))}_${suffix++}`;
     usedIds.add(identifier);
 
     /*
@@ -650,8 +719,28 @@ export const parseOpenApi = (
      * else to go on.
      */
     const detail = plainText(str(operation.description));
+    const override = Array.isArray(operation.security)
+      ? authFrom({ ...doc, security: operation.security }, keyRef)
+      : undefined;
+    const endpointAuth =
+      override && JSON.stringify(override) !== JSON.stringify(auth)
+        ? authFrom(
+            { ...doc, security: operation.security },
+            `op-key-${fnv1a(JSON.stringify(operation.security))}`,
+          )
+        : override;
+    const endpointNeedsSetup =
+      endpointAuth?.type === "none" &&
+      Array.isArray(operation.security) &&
+      operation.security.length > 0 &&
+      !operation.security.some((entry) => isObject(entry) && Object.keys(entry).length === 0);
+    if (endpointNeedsSetup)
+      warnings.push(
+        `"${str(operation.summary) ?? rawPath}" declares authentication that needs manual setup.`,
+      );
 
     ops.push({
+      ...(endpointAuth ? { auth: endpointAuth, authRequired: endpointNeedsSetup } : {}),
       id: identifier,
       title: str(operation.summary) ?? str(operation.operationId) ?? rawPath,
       ...(detail ? { description: detail.slice(0, 400) } : {}),
@@ -668,11 +757,17 @@ export const parseOpenApi = (
   if (ops.length === 0) return null;
   // Say how big it is rather than letting the number be a surprise later.
   if (ops.length > 60) {
-    warnings.push(`This API declares ${ops.length} readable endpoints, and all of them were imported.`);
+    warnings.push(
+      `This API declares ${ops.length} readable endpoints, and all of them were imported.`,
+    );
   }
 
   const inferred = dialectFromParams(collectedParams);
   warnings.push(...inferred.warnings);
+  if (inferred.pagination.kind !== "none")
+    warnings.push(
+      "Pagination is an unconfirmed suggestion. Only one response will be read until an endpoint's pagination contract is configured.",
+    );
 
   const parsed = catalogEntrySchema.safeParse({
     id,
@@ -680,10 +775,11 @@ export const parseOpenApi = (
     baseUrl,
     dialect: {
       auth,
-      pagination: inferred.pagination,
+      pagination: { kind: "none" },
       ...(inferred.timeFilter ? { timeFilter: inferred.timeFilter } : {}),
     },
     ops,
+    ...(inferred.pagination.kind !== "none" ? { paginationProposal: inferred.pagination } : {}),
     resources: deriveResources(ops),
     /*
      * The validation endpoint must be one that can actually be called with no
@@ -794,7 +890,9 @@ export const WELL_KNOWN_SPEC_PATHS = [
 export const indexLinksIn = (text: string, pageUrl: string): string[] => {
   const found = new Set<string>();
   // Absolute, or root-relative — both appear in the wild.
-  for (const match of text.matchAll(/(?:https?:\/\/[^\s"'`<>()[\]]*|\/[^\s"'`<>()[\]]*)llms\.txt/gi)) {
+  for (const match of text.matchAll(
+    /(?:https?:\/\/[^\s"'`<>()[\]]*|\/[^\s"'`<>()[\]]*)llms\.txt/gi,
+  )) {
     try {
       found.add(new URL(match[0], pageUrl).toString());
     } catch {

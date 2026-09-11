@@ -82,8 +82,7 @@ export const ARCHETYPES: Readonly<Record<Archetype, ArchetypeDef>> = {
   list: {
     id: "list",
     title: "List of records",
-    description:
-      "A paginated collection — charges, issues, orders. By far the most common shape.",
+    description: "A paginated collection — charges, issues, orders. By far the most common shape.",
     paginates: true,
     timeFiltered: true,
     collection: true,
@@ -174,15 +173,22 @@ export const catalogEntrySchema = z.object({
   title: z.string().min(1),
   baseUrl: z.string().url(),
   dialect: dialectSchema,
+  /** Unconfirmed import hint. Never executed until explicitly declared. */
+  paginationProposal: paginationSchema.optional(),
   /** Suggested endpoints, so a new connection starts useful rather than empty. */
   ops: z
     .array(
       z.object({
         id: z.string().min(1),
+        auth: authSchema.optional(),
+        authRequired: z.boolean().optional(),
         title: z.string().min(1),
         path: z.string().min(1),
         archetype: archetypeSchema.default("list"),
         rowsPath: z.string().optional(),
+        pagination: paginationSchema.optional(),
+        maxPages: z.number().int().min(1).max(100).optional(),
+        headers: z.record(z.string()).optional(),
         /** Mirrors `opDefSchema.params` — see primitives.ts. */
         params: z.array(paramDefSchema).max(60).default([]),
         query: z.record(z.string(), queryValueSchema).default({}),
@@ -243,6 +249,9 @@ export const catalogEntrySchema = z.object({
   /** When the labelling pass last ran, and against which version of it. */
   labelledAt: z.string().optional(),
   labelVersion: z.number().int().min(1).optional(),
+  labelProgress: z
+    .object({ version: z.number().int(), batches: z.array(z.string()).max(2000) })
+    .optional(),
   /**
    * When the mapping pass last ran, and against which version of it.
    *
@@ -252,6 +261,9 @@ export const catalogEntrySchema = z.object({
    */
   mappedAt: z.string().optional(),
   mapVersion: z.number().int().min(1).optional(),
+  mapProgress: z
+    .object({ version: z.number().int(), batches: z.array(z.string()).max(2000) })
+    .optional(),
   validateOpId: z.string().optional(),
   docsUrl: z.string().url().optional(),
   /**

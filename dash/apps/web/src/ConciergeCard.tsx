@@ -1,4 +1,5 @@
-import { WidgetShell } from "@freebirdai/dash-react";
+import { WidgetShell, useWidgetData } from "@freebirdai/dash-react";
+import type { WidgetSpec } from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useState } from "react";
 import {
   ApiError,
@@ -60,7 +61,6 @@ export interface ConciergeCardProps {
 
 /** How many options a question shows before it needs narrowing. */
 const VISIBLE_OPTIONS = 8;
-
 
 /**
  * How recently a setup must have started to be one somebody is still in.
@@ -130,6 +130,7 @@ const patchFor = (stepId: string, values: string[]): ConciergePatch => {
   if (stepId.startsWith("role:")) {
     return { roles: { [stepId.slice("role:".length)]: values } };
   }
+  if (stepId.startsWith("input:")) return { inputs: { [stepId.slice(6)]: values[0] ?? "" } };
   // Changing what a widget measures rebuilds its whole shape, so these are
   // answers the machine applies rather than fields patched one at a time.
   if (stepId === "measure") return { measure: values[0] ?? "" };
@@ -360,43 +361,43 @@ const Question = ({
        * thing this change exists to stop.
        */}
       {!(step.freeText && !showSuggestions) && (
-      <ul className="dash-setup__options">
-        {visible.map((option) => {
-          const on = chosen.includes(option.value);
-          return (
-            <li key={option.value}>
-              <button
-                type="button"
-                className="dash-setup__option"
-                data-on={on ? "true" : "false"}
-                disabled={busy}
-                aria-pressed={on}
-                onClick={() => {
-                  // A single-choice question answers on click: one tap, not a
-                  // tap and then a second one on a button labelled Continue.
-                  if (step.multiple) {
-                    setChosen((current) =>
-                      current.includes(option.value)
-                        ? current.filter((existing) => existing !== option.value)
-                        : [...current, option.value],
-                    );
-                  } else onAnswer([option.value], false);
-                }}
-              >
-                <span className="dash-setup__option-name">
-                  {option.label}
-                  {option.recommended && (
-                    <span className="dash-setup__suggested"> · suggested</span>
+        <ul className="dash-setup__options">
+          {visible.map((option) => {
+            const on = chosen.includes(option.value);
+            return (
+              <li key={option.value}>
+                <button
+                  type="button"
+                  className="dash-setup__option"
+                  data-on={on ? "true" : "false"}
+                  disabled={busy}
+                  aria-pressed={on}
+                  onClick={() => {
+                    // A single-choice question answers on click: one tap, not a
+                    // tap and then a second one on a button labelled Continue.
+                    if (step.multiple) {
+                      setChosen((current) =>
+                        current.includes(option.value)
+                          ? current.filter((existing) => existing !== option.value)
+                          : [...current, option.value],
+                      );
+                    } else onAnswer([option.value], false);
+                  }}
+                >
+                  <span className="dash-setup__option-name">
+                    {option.label}
+                    {option.recommended && (
+                      <span className="dash-setup__suggested"> · suggested</span>
+                    )}
+                  </span>
+                  {option.description && (
+                    <span className="dash-setup__option-meta">{option.description}</span>
                   )}
-                </span>
-                {option.description && (
-                  <span className="dash-setup__option-meta">{option.description}</span>
-                )}
-              </button>
-            </li>
-          );
-        })}
-      </ul>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
       )}
 
       {hidden > 0 && !step.freeText && (
@@ -497,9 +498,7 @@ const SettingsPanel = ({
         </span>
         <span className="dash-settings__label">Settings</span>
         <span className="dash-settings__summary">
-          {missing.length > 0
-            ? `${missing.length} still needed`
-            : `${controls.length} adjustable`}
+          {missing.length > 0 ? `${missing.length} still needed` : `${controls.length} adjustable`}
         </span>
       </button>
 
@@ -529,7 +528,6 @@ const SettingsPanel = ({
     </section>
   );
 };
-
 
 /**
  * The other ways these widgets could be shown, as pictures.
@@ -681,6 +679,64 @@ const ArrangementChips = ({
   );
 };
 
+const CheckedPreview = ({
+  dashboardId,
+  widget,
+  checked,
+}: {
+  dashboardId: string;
+  widget: WidgetSpec;
+  checked: (key: string, ready: boolean) => void;
+}) => {
+  const data = useWidgetData(widget);
+  const key = JSON.stringify(widget);
+  const receipts = JSON.stringify(data.previewReceipts);
+  const [note, setNote] = useState("Checking the preview…");
+  useEffect(() => {
+    let active = true;
+    checked(key, false);
+    if (data.state !== "ok" && data.state !== "empty") {
+      setNote(
+        data.userMessage ??
+          (data.state === "loading"
+            ? "Loading the preview…"
+            : "Fix the preview errors before adding this widget."),
+      );
+      return () => {
+        active = false;
+      };
+    }
+    void api
+      .checkSetupPreview(dashboardId, widget, JSON.parse(receipts))
+      .then((result) => {
+        if (!active) return;
+        const ready = ["checked", "empty", "partial"].includes(result.status);
+        checked(key, ready);
+        setNote(
+          result.status === "empty"
+            ? "Preview checked: this selection returned no rows."
+            : result.status === "checked"
+              ? "Preview checked."
+              : [...result.errors, ...result.warnings].join(" ") || "Preview needs checking.",
+        );
+      })
+      .catch((error: unknown) => {
+        if (active)
+          setNote(error instanceof Error ? error.message : "The preview could not be checked.");
+      });
+    return () => {
+      active = false;
+    };
+    // Serialized inputs prevent a fresh cache snapshot from retriggering the check.
+  }, [dashboardId, key, receipts, data.state, data.userMessage, checked]);
+  return (
+    <div>
+      <WidgetShell widget={widget} />
+      <p role="status">{note}</p>
+    </div>
+  );
+};
+
 export const ConciergeCard = ({
   dashboardId,
   revision = 0,
@@ -693,6 +749,12 @@ export const ConciergeCard = ({
   const [state, setState] = useState<ConciergeState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [previewChecks, setPreviewChecks] = useState<Record<string, boolean>>({});
+  const checked = useCallback(
+    (key: string, ready: boolean) =>
+      setPreviewChecks((old) => (old[key] === ready ? old : { ...old, [key]: ready })),
+    [],
+  );
   /** Which control is open for editing. Null while the card is just showing. */
   const [editing, setEditing] = useState<string | null>(null);
   /*
@@ -768,8 +830,7 @@ export const ConciergeCard = ({
   useEffect(() => {
     if (!engagedKey) return;
     const fresh =
-      startedHere ||
-      (startedAt !== null && Date.now() - Date.parse(startedAt) < FRESH_MS);
+      startedHere || (startedAt !== null && Date.now() - Date.parse(startedAt) < FRESH_MS);
     if (fresh) {
       remember(engagedKey);
       setEngaged(true);
@@ -832,8 +893,8 @@ export const ConciergeCard = ({
           <span className="dash-setup__badge">Unfinished</span>
         </div>
         <p className="dash-setup__help">
-          You have a widget setup in progress — {what}. Pick it up where you left off, or
-          throw it away.
+          You have a widget setup in progress — {what}. Pick it up where you left off, or throw it
+          away.
         </p>
         <div className="dash-row dash-row--end" style={{ marginTop: 10, gap: 6 }}>
           <button
@@ -921,7 +982,12 @@ export const ConciergeCard = ({
            * while looking at a card that shows one.
            */}
           {(state.widgets.length > 0 ? state.widgets : [state.widget]).map((entry) => (
-            <WidgetShell key={entry.id} widget={entry} />
+            <CheckedPreview
+              key={entry.id}
+              dashboardId={dashboardId}
+              widget={entry}
+              checked={checked}
+            />
           ))}
           {state.group && state.widgets.length > 1 && (
             <p className="dash-setup__frame" data-testid="concierge-frame">
@@ -975,7 +1041,6 @@ export const ConciergeCard = ({
       )}
 
       <div className="dash-setup__body">
-
         {/* One thing at a time: an open control, else a question, else the card. */}
         {openControl ? (
           <Question
@@ -1001,8 +1066,8 @@ export const ConciergeCard = ({
             {!state.ready && state.missing.length > 0 && (
               <p className="dash-setup__help">
                 Not buildable yet — it still needs{" "}
-                {state.missing.map((piece) => piece.stepId).join(", ")}. Say what you want to
-                see, or set it below.
+                {state.missing.map((piece) => piece.stepId).join(", ")}. Say what you want to see,
+                or set it below.
               </p>
             )}
 
@@ -1055,16 +1120,28 @@ export const ConciergeCard = ({
 
         {!openControl && !state.step && (
           <div className="dash-row dash-row--end" style={{ marginTop: 10, gap: 6 }}>
-            <button className="dash-control" disabled={busy} onClick={() => void run(async () => {
-              await api.cancelSetup(dashboardId);
-              onDismissed?.();
-              return { active: false };
-            })}>
+            <button
+              className="dash-control"
+              disabled={busy}
+              onClick={() =>
+                void run(async () => {
+                  await api.cancelSetup(dashboardId);
+                  onDismissed?.();
+                  return { active: false };
+                })
+              }
+            >
               Discard
             </button>
             <button
               className="dash-control"
-              disabled={busy || !state.ready}
+              disabled={
+                busy ||
+                !state.ready ||
+                !(state.widgets?.length ? state.widgets : state.widget ? [state.widget] : []).every(
+                  (widget) => previewChecks[JSON.stringify(widget)] === true,
+                )
+              }
               data-testid="concierge-confirm"
               onClick={() =>
                 void run(async () => {

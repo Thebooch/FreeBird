@@ -1,4 +1,4 @@
-import type { LlmAdapter } from "@freebirdai/dash-agent";
+import type { LlmAdapter, LabelResult } from "@freebirdai/dash-agent";
 import { labelFields, mapApi, pruneAmbiguousRelations } from "@freebirdai/dash-agent";
 import type { CatalogEntry, ResourceSpec } from "@freebirdai/dash-spec";
 import { LABEL_VERSION, MAP_VERSION, pathParamNames } from "@freebirdai/dash-spec";
@@ -28,6 +28,7 @@ import { extractInlineSpec } from "../discovery/inline-spec.js";
  */
 
 export interface MapRouteDeps {
+  readonly onRefreshed?: (previous: CatalogEntry, fresh: CatalogEntry) => void;
   readonly catalog: CatalogStore | undefined;
   /**
    * The model for one action. Null means no AI key is configured.
@@ -44,7 +45,9 @@ export interface MapRouteDeps {
    * The same entry point discovery uses, injected for the same reason: this
    * module has no business deciding what a server may fetch.
    */
-  readonly fetchDocument?: ((url: string) => Promise<{ status: number; text: string; url: string }>) | undefined;
+  readonly fetchDocument?:
+    | ((url: string) => Promise<{ status: number; text: string; url: string }>)
+    | undefined;
 }
 
 /**
@@ -139,13 +142,30 @@ const mergeRelations = (
     const known = new Set(resource.relations.map((relation) => relation.resource));
     return {
       ...resource,
-      relations: [...resource.relations, ...extra.filter((relation) => !known.has(relation.resource))],
+      relations: [
+        ...resource.relations,
+        ...extra.filter((relation) => !known.has(relation.resource)),
+      ],
     };
   });
 
 export const mapRoutes =
   (deps: MapRouteDeps) =>
   async (app: FastifyInstance): Promise<void> => {
+    const labelOptions = (entry: CatalogEntry, force: boolean) => ({
+      existingLabels: entry.labels,
+      completedBatches:
+        !force && entry.labelProgress?.version === LABEL_VERSION ? entry.labelProgress.batches : [],
+      onCheckpoint: (result: LabelResult) => {
+        const current = deps.catalog!.get(entry.id) ?? entry;
+        deps.catalog!.put({
+          ...current,
+          labels: result.labels,
+          labelVersion: undefined,
+          labelProgress: { version: LABEL_VERSION, batches: [...result.completedBatches] },
+        });
+      },
+    });
     /**
      * What mapping this API would involve, costing nothing to ask.
      *
@@ -249,16 +269,22 @@ export const mapRoutes =
         }
 
         const ops = mergeRefreshedOps(entry, parsed.entry);
-        const nested = ops.filter((op) => op.fields?.some((field) => field.name.includes("."))).length;
+        const nested = ops.filter((op) =>
+          op.fields?.some((field) => field.name.includes(".")),
+        ).length;
 
         const saved = deps.catalog.put({
           ...entry,
           ops,
+          ...(JSON.stringify(ops) !== JSON.stringify(entry.ops)
+            ? { mapVersion: undefined, labelVersion: undefined }
+            : {}),
           // Untouched, and that is the whole point of this route existing.
           resources: entry.resources,
           specUrl: fetched.url,
           updatedAt: new Date().toISOString(),
         });
+        deps.onRefreshed?.(entry, saved);
 
         return {
           endpoints: saved.ops.length,
@@ -285,7 +311,6 @@ export const mapRoutes =
         };
       },
     );
-
 
     /**
      * Name the fields, and nothing else.
@@ -319,22 +344,27 @@ export const mapRoutes =
           });
         }
 
-        const named = await labelFields(llm, {
-          apiTitle: entry.title,
-          ops: entry.ops.map((op) => ({
-            id: op.id,
-            title: op.title,
-            ...(op.fields ? { fields: op.fields } : {}),
-          })),
-        });
+        const named = await labelFields(
+          llm,
+          {
+            apiTitle: entry.title,
+            ops: entry.ops.map((op) => ({
+              id: op.id,
+              title: op.title,
+              ...(op.fields ? { fields: op.fields } : {}),
+            })),
+          },
+          labelOptions(entry, request.body?.force === true),
+        );
 
         const saved = deps.catalog.put({
           ...entry,
           // Merged, not replaced: a lost batch must not cost the labels a
           // previous run already established.
-          labels: { ...(entry.labels ?? {}), ...named.labels },
+          labels: named.labels,
           labelledAt: new Date().toISOString(),
-          labelVersion: LABEL_VERSION,
+          labelVersion: named.errors.length === 0 ? LABEL_VERSION : undefined,
+          labelProgress: { version: LABEL_VERSION, batches: [...named.completedBatches] },
           updatedAt: new Date().toISOString(),
         });
 
@@ -372,7 +402,13 @@ export const mapRoutes =
         if (!entry) return reply.status(404).send({ error: "no such catalog entry" });
 
         const state = mapState(entry);
-        if (state.mapped && !state.stale && request.body?.force !== true) {
+        if (
+          state.mapped &&
+          !state.stale &&
+          state.labelled &&
+          !state.labelsStale &&
+          request.body?.force !== true
+        ) {
           return { ...state, ranPass: false, note: "this API is already mapped" };
         }
 
@@ -407,11 +443,44 @@ export const mapRoutes =
           ops,
         });
 
-        const result = await mapApi(llm, {
-          apiTitle: entry.title,
-          resources: pruned.resources,
-          ops,
-        });
+        const result =
+          state.mapped && !state.stale && request.body?.force !== true
+            ? {
+                descriptions: {} as Record<string, string>,
+                relations: {},
+                errors: [],
+                skipped: [],
+                completedBatches: entry.mapProgress?.batches ?? [],
+              }
+            : await mapApi(
+                llm,
+                {
+                  apiTitle: entry.title,
+                  resources: pruned.resources,
+                  ops,
+                },
+                {
+                  completedBatches:
+                    request.body?.force !== true && entry.mapProgress?.version === MAP_VERSION
+                      ? entry.mapProgress.batches
+                      : [],
+                  onCheckpoint: (checkpoint) =>
+                    deps.catalog!.put({
+                      ...entry,
+                      ops: entry.ops.map((op) =>
+                        !op.description && checkpoint.descriptions[op.id]
+                          ? { ...op, description: checkpoint.descriptions[op.id] }
+                          : op,
+                      ),
+                      resources: mergeRelations(pruned.resources, checkpoint.relations),
+                      mapVersion: undefined,
+                      mapProgress: {
+                        version: MAP_VERSION,
+                        batches: [...checkpoint.completedBatches],
+                      },
+                    }),
+                },
+              );
 
         /*
          * The second half of understanding an API: what to call its fields.
@@ -431,7 +500,19 @@ export const mapRoutes =
          * larger number of calls. Falls back to the mapping adapter so the
          * labels still get written on a server that only has the one key.
          */
-        const named = await labelFields(deps.llm("label") ?? llm, { apiTitle: entry.title, ops });
+        const named =
+          state.labelled && !state.labelsStale && request.body?.force !== true
+            ? {
+                labels: entry.labels,
+                errors: [],
+                skipped: [],
+                completedBatches: entry.labelProgress?.batches ?? [],
+              }
+            : await labelFields(
+                deps.llm("label") ?? llm,
+                { apiTitle: entry.title, ops },
+                labelOptions(entry, request.body?.force === true),
+              );
 
         const mapped: CatalogEntry = {
           ...entry,
@@ -446,11 +527,13 @@ export const mapRoutes =
            * Merged over whatever is already there rather than replacing it, so
            * a re-run that loses a batch does not lose labels the last run got.
            */
-          labels: { ...(entry.labels ?? {}), ...named.labels },
+          labels: named.labels,
           mappedAt: new Date().toISOString(),
-          mapVersion: MAP_VERSION,
+          mapVersion: result.errors.length === 0 ? MAP_VERSION : undefined,
+          mapProgress: { version: MAP_VERSION, batches: [...result.completedBatches] },
           labelledAt: new Date().toISOString(),
-          labelVersion: LABEL_VERSION,
+          labelVersion: named.errors.length === 0 ? LABEL_VERSION : undefined,
+          labelProgress: { version: LABEL_VERSION, batches: [...named.completedBatches] },
         };
 
         const saved = deps.catalog.put(mapped);

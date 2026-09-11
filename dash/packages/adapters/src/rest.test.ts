@@ -59,6 +59,69 @@ const connection = (overrides: Record<string, unknown> = {}): ConnectionSpec =>
 const op = (conn: ConnectionSpec): OpSpec => getOp(conn, conn.ops[0]!.id)!;
 
 describe("RestAdapter", () => {
+  it("rejects pagination overrides that would skip records on later pages", async () => {
+    const conn = connection({
+      dialect: {
+        pagination: { kind: "offset", param: "offset", limitParam: "limit", pageSize: 100 },
+      },
+    });
+    const { http, calls } = stub([{ body: { data: [] } }]);
+    await expect(
+      new RestAdapter(http).fetch(conn, op(conn), { limit: 10 }, ctx()),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("requests the declared page size and offset from the first request", async () => {
+    const { http, calls } = stub([
+      { body: { data: Array.from({ length: 100 }, (_, id) => ({ id })) } },
+      { body: { data: [{ id: 100 }] } },
+    ]);
+    const conn = connection({
+      dialect: {
+        pagination: { kind: "offset", param: "Offset", limitParam: "Limit", pageSize: 100 },
+      },
+    });
+    const result = await new RestAdapter(http).fetch(conn, op(conn), {}, ctx());
+    expect(new URL(calls[0]!.url).searchParams.get("Limit")).toBe("100");
+    expect(new URL(calls[0]!.url).searchParams.get("Offset")).toBe("0");
+    expect(new URL(calls[1]!.url).searchParams.get("Offset")).toBe("100");
+    expect(result.meta.pages).toBe(2);
+    expect(result.meta.truncated).toBe(false);
+  });
+
+  it("accepts required query values through overrides and seeds declared defaults", async () => {
+    const conn = connection({
+      ops: [
+        {
+          id: "items",
+          title: "Items",
+          path: "/items",
+          params: [
+            { name: "status", in: "query", required: true },
+            { name: "size", in: "query", default: 10 },
+          ],
+        },
+      ],
+    });
+    const { http, calls } = stub([{ body: [] }]);
+    await new RestAdapter(http).fetch(conn, op(conn), { status: "open" }, ctx());
+    expect(new URL(calls[0]!.url).searchParams.get("status")).toBe("open");
+    expect(new URL(calls[0]!.url).searchParams.get("size")).toBe("10");
+    await expect(new RestAdapter(http).fetch(conn, op(conn), {}, ctx())).rejects.toMatchObject({
+      status: 400,
+    });
+  });
+
+  it("marks a repeated cursor as incomplete", async () => {
+    const conn = connection({
+      dialect: { pagination: { kind: "cursor", param: "after", cursorPath: "$.cursor" } },
+    });
+    const { http } = stub([{ body: { data: [{ id: 1 }], cursor: "same" } }]);
+    const result = await new RestAdapter(http).fetch(conn, op(conn), {}, ctx());
+    expect(result.meta.truncated).toBe(true);
+    expect(result.meta.warnings.join(" ")).toContain("repeated");
+  });
   it("must run server-side", () => {
     expect(new RestAdapter(stub([{ body: {} }]).http).transport).toBe("proxy");
   });
@@ -118,12 +181,18 @@ describe("RestAdapter", () => {
     });
 
     it("sends a custom header, with a template when given", async () => {
-      expect((await run({ type: "header", header: "X-Api-Key", keyRef: "k" })).call.headers["x-api-key"]).toBe(
-        "sk_test_secret",
-      );
       expect(
-        (await run({ type: "header", header: "Authorization", keyRef: "k", template: "Token {{key}}" }))
-          .call.headers.authorization,
+        (await run({ type: "header", header: "X-Api-Key", keyRef: "k" })).call.headers["x-api-key"],
+      ).toBe("sk_test_secret");
+      expect(
+        (
+          await run({
+            type: "header",
+            header: "Authorization",
+            keyRef: "k",
+            template: "Token {{key}}",
+          })
+        ).call.headers.authorization,
       ).toBe("Token sk_test_secret");
     });
 
@@ -186,7 +255,7 @@ describe("RestAdapter", () => {
        */
       const forbidden = await failWith(403);
       expect(forbidden.status).toBe(403);
-      expect(forbidden.userMessage).toMatch(/accepted the key/);
+      expect(forbidden.userMessage).toMatch(/denied access/);
       expect(forbidden.userMessage).not.toMatch(/rejected/);
 
       const rejected = await failWith(401);
@@ -228,10 +297,7 @@ describe("RestAdapter", () => {
     });
 
     it("follows a cursor and merges rows back into the original shape", async () => {
-      const { http, calls } = stub([
-        page([1, 2], { next: "abc" }),
-        page([3, 4], { next: null }),
-      ]);
+      const { http, calls } = stub([page([1, 2], { next: "abc" }), page([3, 4], { next: null })]);
       const conn = connection({
         ops: [
           {
@@ -295,7 +361,10 @@ describe("RestAdapter", () => {
 
     it("follows a Link header", async () => {
       const { http, calls } = stub([
-        { ...page([1]), headers: { link: '<https://api.example.com/v1/items?page=2>; rel="next"' } },
+        {
+          ...page([1]),
+          headers: { link: '<https://api.example.com/v1/items?page=2>; rel="next"' },
+        },
         page([2]),
       ]);
       const conn = connection({
@@ -374,12 +443,17 @@ describe("multi-header auth", () => {
     const { http, calls } = stub([{ body: [] }]);
     const conn = buildium();
 
-    await new RestAdapter(http).fetch(conn, op(conn), {}, {
-      ...ctx(),
-      // Each keyRef resolves to its own distinct secret.
-      resolveSecret: async (ref: string) =>
-        ref === "buildium-id" ? "CLIENT-ID" : "CLIENT-SECRET",
-    });
+    await new RestAdapter(http).fetch(
+      conn,
+      op(conn),
+      {},
+      {
+        ...ctx(),
+        // Each keyRef resolves to its own distinct secret.
+        resolveSecret: async (ref: string) =>
+          ref === "buildium-id" ? "CLIENT-ID" : "CLIENT-SECRET",
+      },
+    );
 
     expect(calls[0]?.headers["x-buildium-client-id"]).toBe("CLIENT-ID");
     expect(calls[0]?.headers["x-buildium-client-secret"]).toBe("CLIENT-SECRET");
@@ -391,10 +465,15 @@ describe("multi-header auth", () => {
 
     // Half-configured auth would otherwise 401 with an opaque provider message.
     await expect(
-      new RestAdapter(http).fetch(conn, op(conn), {}, {
-        ...ctx(),
-        resolveSecret: async (ref: string) => (ref === "buildium-id" ? "CLIENT-ID" : null),
-      }),
+      new RestAdapter(http).fetch(
+        conn,
+        op(conn),
+        {},
+        {
+          ...ctx(),
+          resolveSecret: async (ref: string) => (ref === "buildium-id" ? "CLIENT-ID" : null),
+        },
+      ),
     ).rejects.toThrow(/buildium-secret/);
   });
 });
@@ -440,11 +519,16 @@ describe("an endpoint whose path still needs a value", () => {
       ],
     });
 
-    await new RestAdapter(http).fetch(conn, op(conn), {}, {
-      ...ctx(),
-      // Path parameters are supplied as filters, same as any other param.
-      params: { ...ctx().params, filters: { applicationId: "42" } },
-    });
+    await new RestAdapter(http).fetch(
+      conn,
+      op(conn),
+      {},
+      {
+        ...ctx(),
+        // Path parameters are supplied as filters, same as any other param.
+        params: { ...ctx().params, filters: { applicationId: "42" } },
+      },
+    );
     expect(calls[0]?.url).toContain("/v1/applications/42/transactions");
   });
 });

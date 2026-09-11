@@ -30,6 +30,8 @@ import {
   settle,
   type ConciergeContext,
 } from "./steps.js";
+import { contextForConnection } from "./steps.js";
+import { renameExprFields } from "@freebirdai/dash-expr";
 
 /**
  * The answers, turned into a widget.
@@ -141,6 +143,7 @@ export const buildFromDraft = (
   // The same fill-in the questions use, so a connection that was never asked
   // about because there was only one is still the connection this builds on.
   const draft = settle(input, context);
+  context = contextForConnection(context, draft.connection);
   if (!draft.connection) return fail("no API chosen yet");
   /*
    * What this API calls its fields. The offer's own prose reads to the user,
@@ -148,6 +151,8 @@ export const buildFromDraft = (
    */
   const labels = labelsFor(draft, context);
   if (!draft.op) return fail("no endpoint chosen yet");
+  if (!context.ops.some((op) => op.id === draft.op && op.connection === draft.connection))
+    return fail("the chosen endpoint is no longer available on this API");
   if (!draft.component) return fail("no view chosen yet");
 
   const contract = COMPONENT_CONTRACTS[draft.component as keyof typeof COMPONENT_CONTRACTS];
@@ -156,7 +161,8 @@ export const buildFromDraft = (
   const fields = fieldPool(draft, context);
   if (fields.length === 0) return fail(`nothing has been read from "${draft.op}" yet`);
 
-  const title = draft.title?.trim() || context.ops.find((op) => op.id === draft.op)?.title || "Widget";
+  const title =
+    draft.title?.trim() || context.ops.find((op) => op.id === draft.op)?.title || "Widget";
   const id = widgetId(title, options.taken ?? new Set());
   const bound = withExtras(draft, draft.component);
 
@@ -194,13 +200,15 @@ export const buildFromDraft = (
 
   /* ── what the endpoint itself is asked for ───────────────────────────── */
 
-  const params: Record<string, string> = {};
+  const params: Record<string, string> = { ...draft.inputs };
   if (draft.options.includes("endpointSearch")) {
     const searchable = context.searchable.find((entry) => entry.op === draft.op);
     if (searchable) {
       params[searchable.param] = `{{param.${SEARCH_FILTER_KEY}}}`;
       requiresFilters.push({ key: SEARCH_FILTER_KEY, label: "Search", type: "text" });
-      why.push(`the endpoint accepts "${searchable.param}", so the search narrows it at the source`);
+      why.push(
+        `the endpoint accepts "${searchable.param}", so the search narrows it at the source`,
+      );
     }
   }
   if (draft.options.includes("endpointRange")) {
@@ -222,9 +230,16 @@ export const buildFromDraft = (
 
   /* ── the shape of the rows ───────────────────────────────────────────── */
 
-  const coercions = coercionsFor(roles, fields);
-  const format: Record<string, { semantic: string }> = {};
-  for (const name of Object.keys(coercions)) format[name] = { semantic: "timestamp" };
+  const coercions = {
+    ...coercionsFor(roles, fields),
+    ...Object.fromEntries(
+      Object.entries(draft.coercions).map(([name, coercion]) => [rename(name), coercion]),
+    ),
+  };
+  const format: Record<string, import("@freebirdai/dash-spec").FormatSpec> = {};
+  for (const name of Object.keys(coercionsFor(roles, fields)))
+    format[name] = { semantic: "timestamp" };
+  for (const [name, spec] of Object.entries(draft.format)) format[rename(name)] = spec;
 
   const { specs: highlights, confirm } = highlightsFor(draft, fields);
 
@@ -330,8 +345,7 @@ export const buildFromDraft = (
    * so there is one place deciding what a flattened field is called and no
    * second list to keep in step.
    */
-  const deriveStep =
-    Object.keys(derived).length > 0 ? [{ op: "derive", fields: derived }] : [];
+  const deriveStep = Object.keys(derived).length > 0 ? [{ op: "derive", fields: derived }] : [];
 
   const coerceStep = Object.keys(coercions).length > 0 ? [{ op: "coerce", fields: coercions }] : [];
 
@@ -420,7 +434,12 @@ export const buildFromDraft = (
      * and a widget nobody's model chose the fields for should not claim one.
      */
     ...(draft.model
-      ? { producedBy: { model: draft.model, at: (options.now ?? (() => new Date()))().toISOString() } }
+      ? {
+          producedBy: {
+            model: draft.model,
+            at: (options.now ?? (() => new Date()))().toISOString(),
+          },
+        }
       : {}),
   };
 
@@ -449,6 +468,7 @@ export const buildFromDraft = (
       sideShape: WidgetShape,
       sideParams: Record<string, string>,
       fanOut?: SeriesDraft["fanOut"],
+      conversions: Readonly<Record<string, string>> = {},
     ) => {
       /*
        * Each side flattens its own.
@@ -473,30 +493,46 @@ export const buildFromDraft = (
           measure.field ? { ...measure, field: flat(measure.field) } : measure,
         ),
       };
+      const sideCoercions = Object.fromEntries(
+        Object.entries({
+          ...coercionsFor(
+            { group: sideShape.groupBy.map((key) => key.field) },
+            context.shapes[op]?.fields ?? [],
+          ),
+          ...conversions,
+        }).map(([name, token]) => [flat(name), token]),
+      );
+      if (measured.filter) {
+        const names = Object.fromEntries(
+          (context.shapes[op]?.fields ?? []).map((field) => [field.name, flat(field.name)]),
+        );
+        measured.filter = renameExprFields(measured.filter, names);
+      }
 
       return {
-      as,
-      label,
-      connection: draft.connection,
-      op,
-      params: sideParams,
-      pipeline: [
-        { op: "extract", path: path || "$" },
-        ...(Object.keys(sideDerived).length > 0
-          ? [{ op: "derive", fields: sideDerived }]
-          : []),
-        ...shapeSteps(measured),
-      ],
-      ...(fanOut
-        ? {
-            fanOut: {
-              from: fanOut.from,
-              field: fanOut.field,
-              ...(fanOut.as ? { as: fanOut.as } : {}),
-              maxRows: fanOut.maxRows,
-            },
-          }
-        : {}),
+        as,
+        label,
+        connection: draft.connection,
+        op,
+        params: sideParams,
+        pipeline: [
+          { op: "extract", path: path || "$" },
+          ...(Object.keys(sideDerived).length > 0 ? [{ op: "derive", fields: sideDerived }] : []),
+          ...(Object.keys(sideCoercions).length > 0
+            ? [{ op: "coerce", fields: sideCoercions }]
+            : []),
+          ...shapeSteps(measured),
+        ],
+        ...(fanOut
+          ? {
+              fanOut: {
+                from: fanOut.from,
+                field: fanOut.field,
+                ...(fanOut.as ? { as: fanOut.as } : {}),
+                maxRows: fanOut.maxRows,
+              },
+            }
+          : {}),
       };
     };
 
@@ -524,7 +560,7 @@ export const buildFromDraft = (
       };
     };
 
-    const primaryShape = aligned(shape);
+    const primaryShape = aligned(draft.shape);
     /*
      * The primary side's label is the endpoint's own title, not the widget's.
      *
@@ -556,7 +592,16 @@ export const buildFromDraft = (
     }
 
     const sources = [
-      sideSpec(draft.op, primaryLabel, draft.op, draft.rowsPath, primaryShape, params),
+      sideSpec(
+        draft.op,
+        primaryLabel,
+        draft.op,
+        draft.rowsPath,
+        primaryShape,
+        params,
+        undefined,
+        draft.coercions,
+      ),
       ...[...drivers.entries()].map(([op, as]) => ({
         as,
         connection: draft.connection,
@@ -576,7 +621,7 @@ export const buildFromDraft = (
           side.op,
           side.rowsPath,
           aligned(side.shape),
-          {},
+          { ...side.inputs },
           side.fanOut
             ? {
                 ...side.fanOut,
@@ -584,6 +629,7 @@ export const buildFromDraft = (
                 from: side.fanOut.from === draft.op ? draft.op : drivers.get(side.fanOut.from)!,
               }
             : undefined,
+          side.coercions,
         ),
       ),
     ];
@@ -594,12 +640,21 @@ export const buildFromDraft = (
      * describes all of them.
      */
     const axis = primaryShape.groupBy[0];
+    const measure = draft.shape?.measures[0];
+    const measureFormat = measure
+      ? (draft.format[measure.as] ?? draft.format[measure.field ?? ""])
+      : undefined;
     spec = {
       ...shared,
       sources,
       combine: { op: "union", as: SERIES_LABEL },
       pipeline: axis ? [{ op: "sort", by: [{ field: groupColumn(axis), dir: "asc" }] }] : [],
       roles: rolesForShape(primaryShape, SERIES_LABEL),
+      format: {
+        ...shared.format,
+        ...(measureFormat ? { [SERIES_COUNT]: measureFormat } : {}),
+        ...(axis?.bucket ? { [SERIES_BUCKET]: { semantic: "timestamp" } } : {}),
+      },
     };
 
     why.push(
@@ -661,7 +716,7 @@ export const buildFromDraft = (
       },
       // The rows arrive already extracted by each source, so the widget's own
       // pipeline starts at whatever shaping the joined set needs.
-      pipeline: [...coerceStep, ...narrowStep],
+      pipeline: [...deriveStep, ...coerceStep, ...narrowStep, ...shapeSteps(shape)],
     };
 
     why.push(
@@ -960,9 +1015,7 @@ export const buildInterleaved = (
       pipeline: [
         { op: "extract" as const, path: part.rowsPath || "$" },
         ...(chosen.length > 0 ? [{ op: "select" as const, fields: chosen }] : []),
-        ...(Object.keys(renames).length > 0
-          ? [{ op: "rename" as const, fields: renames }]
-          : []),
+        ...(Object.keys(renames).length > 0 ? [{ op: "rename" as const, fields: renames }] : []),
       ],
     };
   });
@@ -994,7 +1047,12 @@ export const buildInterleaved = (
     roles: Object.fromEntries(shared.map((role) => [role, role])),
     highlights,
     ...(input.model
-      ? { producedBy: { model: input.model, at: (options.now ?? (() => new Date()))().toISOString() } }
+      ? {
+          producedBy: {
+            model: input.model,
+            at: (options.now ?? (() => new Date()))().toISOString(),
+          },
+        }
       : {}),
   });
   if (!widget.ok || !widget.value) return fail(widget.errors.join("; "));

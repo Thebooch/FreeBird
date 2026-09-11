@@ -93,6 +93,7 @@ export type WidgetState = "loading" | "ok" | "empty" | "error" | "invalid" | "un
 export type ApprovalVerdict = "valid" | "digest-changed" | "widened" | "absent";
 
 export interface WidgetData {
+  readonly previewReceipts: readonly { as: string; receipt: string }[];
   readonly widget: WidgetSpec;
   readonly state: WidgetState;
   /** Why the widget is or is not allowed to run. "valid" when ungated. */
@@ -146,10 +147,7 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
    * into `requestParams` below *before* the cache key is built, so two rows
    * naturally get two entries and neither can serve the other's record.
    */
-  const params = useMemo(
-    () => (row ? { ...baseParams, row } : baseParams),
-    [baseParams, row],
-  );
+  const params = useMemo(() => (row ? { ...baseParams, row } : baseParams), [baseParams, row]);
 
   const sources = useMemo(() => widgetSources(widget), [widget]);
 
@@ -202,13 +200,9 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
       });
     }
     // `now` is deliberately excluded: the ticking clock must not re-fetch.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client, direct, params, staleAfterMs, approved]);
 
-  const plan = useMemo(
-    () => (widget.sources.length > 0 ? compilePlan(widget) : null),
-    [widget],
-  );
+  const plan = useMemo(() => (widget.sources.length > 0 ? compilePlan(widget) : null), [widget]);
 
   /**
    * Second wave: one request per row of the driver source, bounded.
@@ -271,10 +265,7 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
     return { requests, truncated, driverRows };
   }, [sources, direct, plan, client, now, params, timeZone]);
 
-  const fannedKeys = useMemo(
-    () => fanned.requests.map((request) => request.key),
-    [fanned],
-  );
+  const fannedKeys = useMemo(() => fanned.requests.map((request) => request.key), [fanned]);
   const fannedStamp = useSyncExternalStore(
     subscribe,
     useCallback(() => stampOf(client, fannedKeys), [client, fannedKeys]),
@@ -293,7 +284,6 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
         maxAgeMs: staleAfterMs,
       });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client, fanned, params, staleAfterMs]);
 
   const allRequests = useMemo(() => [...direct, ...fanned.requests], [direct, fanned]);
@@ -301,7 +291,6 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
   const entries = useMemo(
     () => allRequests.map((request) => ({ request, entry: client.get(request.key) })),
     // Recomputed when any watched entry changes status or fetch time.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [allRequests, client, directStamp, fannedStamp],
   );
 
@@ -352,8 +341,7 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
   }, [entries]);
 
   const anyError = entries.find((item) => item.entry?.status === "error")?.entry;
-  const allLoaded =
-    entries.length > 0 && entries.every((item) => item.entry?.status === "ok");
+  const allLoaded = entries.length > 0 && entries.every((item) => item.entry?.status === "ok");
 
   const executed = useMemo(() => {
     if (!allLoaded) return null;
@@ -365,10 +353,11 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
       : executeWidget(widget, primary.body, { now, params, timeZone });
   }, [allLoaded, widget, bodies, primary, now, params, timeZone]);
 
-
   const lastFetchedAt = entries.reduce(
     (oldest, item) =>
-      item.entry?.fetchedAt ? Math.min(oldest || item.entry.fetchedAt, item.entry.fetchedAt) : oldest,
+      item.entry?.fetchedAt
+        ? Math.min(oldest || item.entry.fetchedAt, item.entry.fetchedAt)
+        : oldest,
     0,
   );
   const stale = lastFetchedAt > 0 && now - lastFetchedAt > staleAfterMs;
@@ -392,6 +381,9 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
 
   return {
     widget,
+    previewReceipts: entries.flatMap(({ request, entry }) =>
+      entry?.meta?.receipt ? [{ as: request.as, receipt: entry.meta.receipt }] : [],
+    ),
     state,
     approval,
     stale,

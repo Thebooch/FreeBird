@@ -96,7 +96,10 @@ const hostOf = (url: string): string | null => {
 };
 
 /** `docs.dog.ceo` and `dog.ceo` are the same organisation; apify.com is not. */
-const rootDomainOf = (host: string): string => host.split(".").slice(-2).join(".");
+// Only strip well-known service prefixes. A public suffix such as co.uk
+// must never make two unrelated vendors appear to be the same organisation.
+const rootDomainOf = (host: string): string =>
+  host.replace(/^(?:(?:www|api|docs|developer|developers)\.)+/, "");
 
 const sameOrganisation = (a: string | null, b: string | null): boolean =>
   a !== null && b !== null && rootDomainOf(a) === rootDomainOf(b);
@@ -119,11 +122,10 @@ const catalogMatch = (catalog: CatalogStore | undefined, input: string): Catalog
 
   const host = hostOf(asUrl(input) ?? "");
   if (host) {
-    const root = host.split(".").slice(-2).join(".");
     const byHost = entries.find((entry) => {
       const entryHost = hostOf(entry.baseUrl);
       if (!entryHost) return false;
-      return entryHost === host || entryHost.endsWith(`.${root}`) || host.endsWith(`.${entryHost}`);
+      return sameOrganisation(entryHost, host);
     });
     if (byHost) return byHost;
   }
@@ -147,8 +149,7 @@ const catalogMatch = (catalog: CatalogStore | undefined, input: string): Catalog
  */
 export const INDEX_READ_GAP_MS = 120;
 
-export const indexReadGap = (pages: number): number =>
-  paceGapMs(pages, pages * INDEX_READ_GAP_MS);
+export const indexReadGap = (pages: number): number => paceGapMs(pages, pages * INDEX_READ_GAP_MS);
 
 /**
  * How long reading a section will really take.
@@ -475,10 +476,7 @@ const attemptUrl = async (
  * *proposal* — the oracle is the validate-and-sample step that follows,
  * because documentation lies and a live 200 does not.
  */
-export const discover = async (
-  input: string,
-  deps: DiscoveryDeps,
-): Promise<DiscoveryResult> => {
+export const discover = async (input: string, deps: DiscoveryDeps): Promise<DiscoveryResult> => {
   const ctx: AttemptContext = { tried: [], warnings: [], blocked: null };
 
   /*
@@ -496,7 +494,9 @@ export const discover = async (
       source: "catalog",
       entry: known,
       note: `${known.title} is already in the catalog${known.verified ? " and has been verified" : ""}.`,
-      warnings: known.verified ? [] : ["This catalog entry has not been proven against a live key yet."],
+      warnings: known.verified
+        ? []
+        : ["This catalog entry has not been proven against a live key yet."],
       tried: [],
     });
   }
@@ -540,9 +540,7 @@ export const discover = async (
         candidates.push(result.url);
       }
     } catch (error) {
-      ctx.warnings.push(
-        `Search failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      ctx.warnings.push(`Search failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     if (candidates.length >= 4) break;
   }

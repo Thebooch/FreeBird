@@ -275,13 +275,7 @@ export interface RelationsResult {
 export interface UnknownResource {
   resource: string;
   title: string;
-  reason:
-    | "empty"
-    | "unsampled"
-    | "needsParent"
-    | "needsInput"
-    | "requestFailed"
-    | "aborted";
+  reason: "empty" | "unsampled" | "needsParent" | "needsInput" | "requestFailed" | "aborted";
   recheckOp?: string;
   needs?: string[];
   detail?: string;
@@ -465,40 +459,7 @@ export interface ConciergeRejection {
 }
 
 /** Any part of the widget, set in one go. */
-export interface ConciergePatch {
-  connection?: string;
-  endpoint?: string;
-  join?: string;
-  component?: string;
-  /** What the widget counts: `count:`, or `<aggregation>:<field>`. */
-  measure?: string;
-  /** The field the rows are broken up by. */
-  groupBy?: string;
-  /** Take a measurement that costs requests, or leave it out. */
-  offer?: "include" | "skip";
-  /** Which of two readings of the request was meant, as an endpoint id. */
-  choice?: string;
-  roles?: Record<string, string[]>;
-  controls?: string[];
-  drilldown?: string;
-  drilldownFields?: string[];
-  extras?: string[];
-  highlights?: string[];
-  title?: string;
-  /** Step ids to mark declined, which is not the same as setting nothing. */
-  skip?: string[];
-  /**
-   * The same patch, aimed at one of the other widgets in the setup.
-   *
-   * Index zero here is the *second* widget: the patch's own fields are the
-   * first. Declared because zod strips what it has not heard of, so a control
-   * for the second widget without this arrives as a patch that changes
-   * nothing and reports success.
-   */
-  parts?: ConciergePatch[];
-  group?: { title: string; display?: "tabs" | "row" | "stack" };
-  interleave?: boolean;
-}
+export type ConciergePatch = import("@freebirdai/dash-agent").DraftPatch;
 
 export interface MapState {
   readonly mapped: boolean;
@@ -523,6 +484,19 @@ export interface MapRunResult extends MapState {
 }
 
 export const api = {
+  checkSetupPreview: (
+    dashboardId: string,
+    widget: WidgetSpec,
+    receipts: readonly { as: string; receipt: string }[],
+  ): Promise<{
+    status: "checked" | "empty" | "partial" | "invalid" | "unchecked";
+    errors: string[];
+    warnings: string[];
+  }> =>
+    request(
+      `/api/concierge/${encodeURIComponent(dashboardId)}/preview`,
+      json({ widget, receipts }),
+    ),
   /* ── guided setup ───────────────────────────────────────────────────── */
 
   concierge: (dashboardId: string): Promise<ConciergeState> =>
@@ -560,10 +534,7 @@ export const api = {
     dashboardId: string,
     arrangement: ArrangementOption["id"],
   ): Promise<ConciergeState & { notes?: string[] }> =>
-    request(
-      `/api/concierge/${encodeURIComponent(dashboardId)}/arrangement`,
-      json({ arrangement }),
-    ),
+    request(`/api/concierge/${encodeURIComponent(dashboardId)}/arrangement`, json({ arrangement })),
 
   /**
    * Record one answer and get the next question.
@@ -579,13 +550,21 @@ export const api = {
     values: string[],
     skip = false,
   ): Promise<ConciergeState & ConciergeEffect> =>
-    request(`/api/concierge/${encodeURIComponent(dashboardId)}/answer`, json({ stepId, values, skip })),
+    request(
+      `/api/concierge/${encodeURIComponent(dashboardId)}/answer`,
+      json({ stepId, values, skip }),
+    ),
 
   confirmSetup: (
     dashboardId: string,
     title?: string,
-  ): Promise<{ added: boolean; widgetId: string; title: string; warnings: string[]; filtersAdded: string[] }> =>
-    request(`/api/concierge/${encodeURIComponent(dashboardId)}/confirm`, json({ title })),
+  ): Promise<{
+    added: boolean;
+    widgetId: string;
+    title: string;
+    warnings: string[];
+    filtersAdded: string[];
+  }> => request(`/api/concierge/${encodeURIComponent(dashboardId)}/confirm`, json({ title })),
 
   cancelSetup: (dashboardId: string): Promise<{ cleared: boolean }> =>
     request(`/api/concierge/${encodeURIComponent(dashboardId)}`, { method: "DELETE" }),
@@ -630,8 +609,7 @@ export const api = {
    * Costs nothing to ask — every count is read off the stored entry — so the
    * wizard can gate on it without spending anything to find out.
    */
-  mapState: (catalogId: string): Promise<MapState> =>
-    request(`/api/catalog/${catalogId}/map`),
+  mapState: (catalogId: string): Promise<MapState> => request(`/api/catalog/${catalogId}/map`),
 
   /**
    * Map the API: describe every endpoint, and infer how its resources relate.
@@ -702,7 +680,9 @@ export const api = {
   removeOp: (id: string, opId: string): Promise<ConnectionSummary> =>
     request(`/api/connections/${id}/ops/${opId}`, { method: "DELETE" }),
 
-  availableOps: (id: string): Promise<Array<{ id: string; title: string; path: string; archetype: string }>> =>
+  availableOps: (
+    id: string,
+  ): Promise<Array<{ id: string; title: string; path: string; archetype: string }>> =>
     request(`/api/connections/${id}/available-ops`),
 
   deleteConnection: (id: string): Promise<{ ok: boolean }> =>
@@ -746,8 +726,7 @@ export const api = {
     verified?: boolean;
     validatedOpId?: string;
     adoptedValidateOpId?: string;
-  }> =>
-    request(`/api/connections/${id}/validate`, json({})),
+  }> => request(`/api/connections/${id}/validate`, json({})),
 
   sample: (id: string, op: string): Promise<SampleResult> =>
     request(`/api/connections/${id}/sample`, json({ op })),
@@ -771,8 +750,7 @@ export const api = {
     request(`/api/connections/${id}/enumeration-plan${deep ? "?deep=true" : ""}`),
 
   /** Free: reads the stored report, or the endpoint graph when there is none. */
-  relations: (id: string): Promise<RelationsResult> =>
-    request(`/api/connections/${id}/relations`),
+  relations: (id: string): Promise<RelationsResult> => request(`/api/connections/${id}/relations`),
 
   /** The approval step: the proposal above, accepted onto the connection. */
   setResources: (id: string, resources: ResourceSpec[]): Promise<ConnectionSummary> =>

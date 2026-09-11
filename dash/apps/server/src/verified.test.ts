@@ -215,7 +215,7 @@ describe("validate flips verified", () => {
     const res = await app.inject({ method: "POST", url: "/api/connections/api/validate" });
 
     // The 403 branch still reports success: the credential is proven.
-    expect(res.json().ok).toBe(true);
+    expect(res.json().ok).toBe(false);
     // But nothing about the envelope was learned.
     expect(catalog.get("demo")?.verified).toBe(false);
   });
@@ -298,6 +298,21 @@ const routedHttp =
   };
 
 describe("validate falls back past a 403", () => {
+  it("does not let an earlier 403 override a later 401", async () => {
+    store.putConnection(multiOpConnection());
+    const app = buildServer({
+      store,
+      keys,
+      catalog,
+      http: routedHttp({
+        "/locked": { status: 403, body: {} },
+        "/open": { status: 401, body: {} },
+      }),
+    });
+    const res = await app.inject({ method: "POST", url: "/api/connections/api/validate" });
+    expect(res.statusCode).toBe(401);
+    expect(res.json().ok).toBe(false);
+  });
   it("moves on and verifies with the endpoint that answers", async () => {
     store.putConnection(multiOpConnection());
     const app = buildServer({
@@ -352,8 +367,8 @@ describe("validate falls back past a 403", () => {
 
     const res = await app.inject({ method: "POST", url: "/api/connections/api/validate" });
     const body = res.json();
-    expect(body.ok).toBe(true);
-    expect(body.verified).toBe(false);
+    expect(body.ok).toBe(false);
+    expect(res.statusCode).toBe(403);
     expect(body.forbidden).toEqual(["locked", "open"]);
     expect(catalog.get("demo")?.verified).toBe(false);
   });

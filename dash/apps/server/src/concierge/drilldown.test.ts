@@ -1,3 +1,4 @@
+import { fingerprintOps } from "@freebirdai/dash-spec";
 import { fakeLlm } from "@freebirdai/dash-agent";
 import type { CapabilityReport, ConnectionSpec } from "@freebirdai/dash-spec";
 import { capabilityReportSchema, connectionSchema } from "@freebirdai/dash-spec";
@@ -31,7 +32,7 @@ const connection: ConnectionSpec = connectionSchema.parse({
 const report: CapabilityReport = capabilityReportSchema.parse({
   connection: "pm",
   generatedAt: new Date("2026-08-01T00:00:00Z").toISOString(),
-  opsFingerprint: "abc",
+  opsFingerprint: fingerprintOps(connection.ops),
   resources: [
     { id: "task", title: "Task", idField: "Id", listOp: "list_tasks", verified: true },
     { id: "category", title: "Category", idField: "Id", listOp: "list_categories", verified: true },
@@ -116,7 +117,7 @@ describe("planNarrowing", () => {
       connections: [
         connectionSchema.parse({ ...connection, ops: [connection.ops[0]!], resources: [] }),
       ],
-      reports: [report],
+      reports: [{ ...report, opsFingerprint: fingerprintOps([connection.ops[0]!]) }],
     });
 
     const fetched: string[] = [];
@@ -134,11 +135,7 @@ describe("planNarrowing", () => {
     expect(fetched).toEqual(["list_tasks"]);
     expect(plan.source).toBe("scan");
     // Commonest first, and Landscaping is absent because nothing carries it.
-    expect(plan.values.map((v) => v.value)).toEqual([
-      "Maintenance",
-      "General Inquiry",
-      "Plumbing",
-    ]);
+    expect(plan.values.map((v) => v.value)).toEqual(["Maintenance", "General Inquiry", "Plumbing"]);
   });
 
   it("spends nothing when the caller has not offered to", async () => {
@@ -177,7 +174,7 @@ describe("planNarrowing", () => {
       connections: [
         connectionSchema.parse({ ...connection, ops: [connection.ops[0]!], resources: [] }),
       ],
-      reports: [report],
+      reports: [{ ...report, opsFingerprint: fingerprintOps([connection.ops[0]!]) }],
     });
 
     const plan = await planNarrowing({
@@ -241,7 +238,10 @@ describe("nested fields the declared schema never mentioned", () => {
     reports: [
       capabilityReportSchema.parse({
         ...report,
-        resources: [{ id: "task", title: "Task", idField: "Id", listOp: "list_tasks", verified: true }],
+        opsFingerprint: fingerprintOps([connection.ops[0]!]),
+        resources: [
+          { id: "task", title: "Task", idField: "Id", listOp: "list_tasks", verified: true },
+        ],
         shapes: {
           task: {
             rowsPath: "$",

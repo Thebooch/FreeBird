@@ -1,4 +1,11 @@
-import type { ChildCollection, ConciergeContext, DrillDownCandidate, InferredShape, JoinCandidate, ReadPlan } from "@freebirdai/dash-agent";
+import type {
+  ChildCollection,
+  ConciergeContext,
+  DrillDownCandidate,
+  InferredShape,
+  JoinCandidate,
+  ReadPlan,
+} from "@freebirdai/dash-agent";
 import type {
   CapabilityReport,
   CatalogEntry,
@@ -6,7 +13,13 @@ import type {
   MappedField,
   PersistedShape,
 } from "@freebirdai/dash-spec";
-import { getOp, isStale, pathParamNames, relationGraph } from "@freebirdai/dash-spec";
+import {
+  getOp,
+  isStale,
+  pathParamNames,
+  relationGraph,
+  requiredInputs,
+} from "@freebirdai/dash-spec";
 import type { ChildLink, RelationGraph } from "@freebirdai/dash-spec";
 import { estimateEnumeration, findFilterParam } from "../capabilities.js";
 
@@ -26,6 +39,7 @@ import { estimateEnumeration, findFilterParam } from "../capabilities.js";
 const FAN_OUT_CAP = 25;
 
 const toInferred = (shape: PersistedShape): InferredShape => ({
+  evidence: "observed",
   rowsPath: shape.rowsPath,
   rowCount: shape.rowCount,
   schemaHash: shape.schemaHash,
@@ -75,14 +89,16 @@ export interface ContextInput {
  * highlight candidates and no cardinality-based suggestion — which is right,
  * because those are claims about values nobody has seen.
  */
-const fromMapped = (fields: readonly MappedField[]): InferredShape => ({
-  rowsPath: "$",
+const fromMapped = (fields: readonly MappedField[], rowsPath: string): InferredShape => ({
+  evidence: "declared",
+  rowsPath,
   rowCount: 0,
   schemaHash: "",
   fields: fields.map((field) => ({
     name: field.name,
     kinds: field.kinds,
     nullable: field.nullable,
+    ...(field.description ? { description: field.description } : {}),
     ...(field.format ? { format: field.format } : {}),
     distinct: 0,
     samples: [],
@@ -99,11 +115,22 @@ const fromMapped = (fields: readonly MappedField[]): InferredShape => ({
  * None of those should decide what somebody is allowed to build.
  */
 const applyDeclared = (
-  declared: ReadonlyMap<string, readonly MappedField[]>,
+  declared: ReadonlyMap<string, { fields: readonly MappedField[]; rowsPath: string }>,
   shapes: Record<string, InferredShape>,
 ): void => {
-  for (const [opId, fields] of declared) {
-    if (!shapes[opId] || shapes[opId]!.fields.length === 0) shapes[opId] = fromMapped(fields);
+  for (const [opId, entry] of declared) {
+    if (!shapes[opId] || shapes[opId]!.fields.length === 0)
+      shapes[opId] = fromMapped(entry.fields, entry.rowsPath);
+    else
+      shapes[opId] = {
+        ...shapes[opId]!,
+        fields: shapes[opId]!.fields.map((field) => {
+          const description = entry.fields.find(
+            (declared) => declared.name === field.name,
+          )?.description;
+          return description ? { ...field, description } : field;
+        }),
+      };
   }
 };
 
@@ -242,15 +269,9 @@ const asJoinCandidates = (
       fetch: { mode: "filtered", param: peer.filterParam },
     }));
 
-export const buildConciergeContext = (input: ContextInput): ConciergeContext => {
+const buildSingleContext = (input: ContextInput): ConciergeContext => {
   const connections: Array<{ id: string; title: string }> = [];
-  const ops: Array<{
-    id: string;
-    title: string;
-    connection: string;
-    path?: string;
-    description?: string;
-  }> = [];
+  const ops: Array<ConciergeContext["ops"][number]> = [];
   const shapes: Record<string, InferredShape> = {};
   const joins: JoinCandidate[] = [];
   const drillDowns: DrillDownCandidate[] = [];
@@ -294,7 +315,7 @@ export const buildConciergeContext = (input: ContextInput): ConciergeContext => 
       if (resource.listOp) resourceOfOp.set(resource.listOp, resource.id);
     }
     /** Declared fields, held until the report has had first refusal. */
-    const declaredShapes = new Map<string, readonly MappedField[]>();
+    const declaredShapes = new Map<string, { fields: readonly MappedField[]; rowsPath: string }>();
 
     /*
      * Only endpoints that need nothing to be called.
@@ -318,8 +339,12 @@ export const buildConciergeContext = (input: ContextInput): ConciergeContext => 
        * a child collection is param'd by definition, so collecting its shape
        * only for standalone endpoints meant no record ever found its children.
        */
-      const declaredFields = mappedOps.get(op.id)?.fields;
-      if (declaredFields && declaredFields.length > 0) declaredShapes.set(op.id, declaredFields);
+      const declaredFields = resolved.fields ?? mappedOps.get(op.id)?.fields;
+      if (declaredFields && declaredFields.length > 0)
+        declaredShapes.set(op.id, {
+          fields: declaredFields,
+          rowsPath: resolved.rowsPath ?? mappedOps.get(op.id)?.rowsPath ?? "$",
+        });
 
       if (pathParamNames(resolved.path).length > 0) continue;
       const described = resolved.description ?? mappedOps.get(op.id)?.description;
@@ -340,6 +365,7 @@ export const buildConciergeContext = (input: ContextInput): ConciergeContext => 
         title: resolved.title,
         connection: connection.id,
         path: resolved.path,
+        requiredInputs: requiredInputs(resolved),
         ...(described ? { description: described } : {}),
         ...(resource ? { resource } : {}),
         ...(params && params.length > 0 ? { params } : {}),
@@ -347,10 +373,10 @@ export const buildConciergeContext = (input: ContextInput): ConciergeContext => 
         // any account's data, which is why it travels with the catalog.
         ...(mappedOps.get(op.id)?.facet ? { facet: mappedOps.get(op.id)!.facet } : {}),
       });
-
     }
 
-    const report = reportFor.get(connection.id);
+    const storedReport = reportFor.get(connection.id);
+    const report = storedReport && !isStale(storedReport, connection) ? storedReport : undefined;
 
     /*
      * What reading this one would cost, computed without touching it.
@@ -365,7 +391,7 @@ export const buildConciergeContext = (input: ContextInput): ConciergeContext => 
       requests: estimate.estimatedRequests,
       estimatedMs: estimate.estimatedMs,
       alreadyRead: report !== undefined && !isStale(report, connection),
-      stale: report !== undefined && isStale(report, connection),
+      stale: storedReport !== undefined && isStale(storedReport, connection),
       // No `hasKey` supplied means the caller is not in a position to know, so
       // the read stays on offer — refusing on a guess would be worse.
       needsKey: input.hasKey ? !input.hasKey(connection) : false,
@@ -465,10 +491,10 @@ export const buildConciergeContext = (input: ContextInput): ConciergeContext => 
     const graph = graphFor(map, shapes);
     joins.push(...asJoinCandidates(graph, shapes));
     children.push(
-        ...(graph?.children ?? []).map((link) =>
-          asChildCollection(link, mappedOps.get(link.op)?.path),
-        ),
-      );
+      ...(graph?.children ?? []).map((link) =>
+        asChildCollection(link, mappedOps.get(link.op)?.path),
+      ),
+    );
 
     /*
      * The report's offers win. It saw the id field rather than reading it off
@@ -476,9 +502,7 @@ export const buildConciergeContext = (input: ContextInput): ConciergeContext => 
      * account. The map fills in every collection it never reached.
      */
     const seen = new Set(drillDowns.map((offer) => offer.listOp));
-    drillDowns.push(
-      ...recordsFromMap(graph, mappedOps).filter((offer) => !seen.has(offer.listOp)),
-    );
+    drillDowns.push(...recordsFromMap(graph, mappedOps).filter((offer) => !seen.has(offer.listOp)));
   }
 
   return {
@@ -492,5 +516,46 @@ export const buildConciergeContext = (input: ContextInput): ConciergeContext => 
     rangeFilterable,
     readPlans,
     labels,
+  };
+};
+
+export const buildConciergeContext = (input: ContextInput): ConciergeContext => {
+  const contexts = input.connections.map((connection) =>
+    buildSingleContext({ ...input, connections: [connection] }),
+  );
+  const byConnection = Object.fromEntries(
+    contexts.map((context) => [context.connections[0]!.id, context]),
+  );
+  const merged = buildSingleContext({ ...input, connections: [] });
+  const ops = contexts.flatMap((context) => context.ops);
+  const unique = (id: string) =>
+    contexts.filter(
+      (context) => context.shapes[id] !== undefined || context.ops.some((op) => op.id === id),
+    ).length === 1;
+  return {
+    ...merged,
+    byConnection,
+    connections: contexts.flatMap((context) => context.connections),
+    ops,
+    shapes: Object.fromEntries(
+      contexts.flatMap((context) => Object.entries(context.shapes)).filter(([id]) => unique(id)),
+    ),
+    joins: contexts
+      .flatMap((context) => context.joins)
+      .filter((join) => unique(join.fromOp) && unique(join.toOp)),
+    drillDowns: contexts
+      .flatMap((context) => context.drillDowns)
+      .filter((entry) => unique(entry.listOp) && unique(entry.detailOp)),
+    children: contexts
+      .flatMap((context) => context.children)
+      .filter((entry) => unique(entry.parentOp) && unique(entry.op)),
+    searchable: contexts
+      .flatMap((context) => context.searchable)
+      .filter((entry) => unique(entry.op)),
+    rangeFilterable: contexts
+      .flatMap((context) => context.rangeFilterable)
+      .filter((entry) => unique(entry.op)),
+    readPlans: contexts.flatMap((context) => context.readPlans),
+    labels: Object.assign({}, ...contexts.map((context) => context.labels)),
   };
 };

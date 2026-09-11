@@ -60,6 +60,13 @@ export class QueryCache {
   readonly accounting: RequestAccounting;
   private readonly now: () => number;
   private readonly inFlight = new Map<string, Promise<FetchResult>>();
+  private generation = 0;
+
+  invalidate(): void {
+    this.generation++;
+    this.store.clear();
+    this.inFlight.clear();
+  }
 
   constructor(options: QueryCacheOptions = {}) {
     this.store = options.store ?? new MemoryCacheStore();
@@ -89,6 +96,7 @@ export class QueryCache {
     }) => Promise<FetchResult>;
   }): Promise<QueryOutcome> {
     const { key, connection, maxAgeMs, fetcher } = input;
+    const generation = this.generation;
     const now = this.now();
     const cached = this.store.get(key);
     const age = cached ? now - cached.storedAt : Number.POSITIVE_INFINITY;
@@ -111,9 +119,15 @@ export class QueryCache {
     const cooling = this.cooldown.check(connection, now);
     if (cooling) {
       const reason = `${cooling.reason} Waiting ${waitPhrase(cooling.until, now)} before trying again.`;
-      if (cached) {
+      if (cached && generation === this.generation) {
         this.accounting.stale(connection);
-        return { body: cached.body, meta: cached.meta, outcome: "stale", staleReason: reason, ageMs: age };
+        return {
+          body: cached.body,
+          meta: cached.meta,
+          outcome: "stale",
+          staleReason: reason,
+          ageMs: age,
+        };
       }
       throw new AdapterError(`cooling down for ${connection}`, {
         status: cooling.status,
@@ -151,13 +165,19 @@ export class QueryCache {
        * Nothing came back. If we hold anything at all, that is better than an
        * empty tile — provided it says why it is old.
        */
-      if (cached) {
+      if (cached && generation === this.generation) {
         this.accounting.stale(connection);
         const reason =
           error instanceof AdapterError
             ? error.userMessage
             : "That request did not come back, so this is the last copy we have.";
-        return { body: cached.body, meta: cached.meta, outcome: "stale", staleReason: reason, ageMs: age };
+        return {
+          body: cached.body,
+          meta: cached.meta,
+          outcome: "stale",
+          staleReason: reason,
+          ageMs: age,
+        };
       }
       throw error;
     }
@@ -179,6 +199,7 @@ export class QueryCache {
   ): Promise<FetchResult> {
     const pending = this.inFlight.get(key);
     if (pending) return pending;
+    const generation = this.generation;
 
     const run = (async () => {
       const previous = this.store.get(key);
@@ -192,6 +213,11 @@ export class QueryCache {
 
       try {
         const result = await fetcher(validators);
+        if (generation !== this.generation)
+          throw new AdapterError(
+            "The connection changed while data was loading. Refresh the preview.",
+            { status: 409 },
+          );
 
         /*
          * Nothing changed. The body we already hold becomes current again for
@@ -233,7 +259,7 @@ export class QueryCache {
         }
         throw error;
       } finally {
-        this.inFlight.delete(key);
+        if (generation === this.generation) this.inFlight.delete(key);
       }
     })();
 

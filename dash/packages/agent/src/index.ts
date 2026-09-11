@@ -57,6 +57,7 @@ export {
   applyStepAcross,
   describeField,
   emptyContext,
+  contextForConnection,
   extraFieldOptions,
   extrasRole,
   fieldPool,
@@ -144,3 +145,5 @@ export { highlightCandidates, nounFromTitle, suggestWidgets } from "./suggest.js
 export type { AuthoredWidget, SuggestInput } from "./suggest.js";
 export { SYSTEM_PROMPT, buildUserPrompt, proposalSchema, proposeWidgetTool } from "./tool.js";
 export type { Proposal } from "./tool.js";
+
+export { draftPatchSchema } from "./concierge/patch.js";

@@ -29,7 +29,16 @@ const COUNT_COLUMN = "count";
  * from the same answer.
  */
 
-const AGGREGATIONS = new Set(["sum", "avg", "count", "countDistinct", "min", "max", "first", "last"]);
+const AGGREGATIONS = new Set([
+  "sum",
+  "avg",
+  "count",
+  "countDistinct",
+  "min",
+  "max",
+  "first",
+  "last",
+]);
 
 const safeCoercion = (value: string): Coercion | null => {
   const parsed = coercionSchema.safeParse(value);
@@ -116,7 +125,9 @@ export const mapProposal = (input: {
     return {
       widget: null,
       measurement: null,
-      errors: [`"${proposal.component}" is not a component (expected one of ${COMPONENT_IDS.join(", ")})`],
+      errors: [
+        `"${proposal.component}" is not a component (expected one of ${COMPONENT_IDS.join(", ")})`,
+      ],
       ambiguities: proposal.ambiguities ?? [],
     };
   }
@@ -131,9 +142,8 @@ export const mapProposal = (input: {
   for (const entry of proposal.coercions ?? []) {
     const field = usable(shape, entry.field);
     const coercion = safeCoercion(entry.coercion);
-    if (field && coercion && !field.includes(".")) coercions[field] = coercion;
+    if (field && coercion) coercions[field] = coercion;
   }
-  if (Object.keys(coercions).length > 0) pipeline.push({ op: "coerce", fields: coercions });
 
   // ── flatten any dotted field the roles need ─────────────────────────────
   const roleSources = [
@@ -152,6 +162,7 @@ export const mapProposal = (input: {
     proposal.compareField,
     proposal.targetField,
     ...(proposal.columns ?? []),
+    ...Object.keys(coercions),
   ].filter((name): name is string => Boolean(usable(shape, name)));
 
   const derived: Record<string, string> = {};
@@ -159,6 +170,16 @@ export const mapProposal = (input: {
     if (needsDerive(name)) derived[flatName(name)] = name;
   }
   if (Object.keys(derived).length > 0) pipeline.push({ op: "derive", fields: derived });
+  if (Object.keys(coercions).length > 0)
+    pipeline.push({
+      op: "coerce",
+      fields: Object.fromEntries(
+        Object.entries(coercions).map(([name, token]) => [
+          needsDerive(name) ? flatName(name) : name,
+          token,
+        ]),
+      ),
+    });
 
   const resolve = (name: string | undefined): string | undefined => {
     const found = usable(shape, name);

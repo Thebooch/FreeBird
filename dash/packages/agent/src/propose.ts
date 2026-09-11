@@ -5,9 +5,17 @@ import { executeWidget } from "@freebirdai/dash-runtime";
 import { type InferredShape, inferShape } from "./infer.js";
 import type { LlmAdapter } from "./llm.js";
 import { mapProposal } from "./map.js";
-import { type Proposal, SYSTEM_PROMPT, buildUserPrompt, proposalSchema, proposeWidgetTool } from "./tool.js";
+import {
+  type Proposal,
+  SYSTEM_PROMPT,
+  buildUserPrompt,
+  proposalSchema,
+  proposeWidgetTool,
+} from "./tool.js";
 
 export interface Ambiguity {
+  readonly kind?: string | undefined;
+  readonly endpoint?: string | undefined;
   readonly field: string;
   readonly question: string;
   readonly options: readonly string[];
@@ -67,6 +75,7 @@ export interface ProposeInput {
   readonly connectionTitle: string;
   readonly op: string;
   readonly opTitle: string;
+  readonly opDescription?: string | undefined;
   readonly widgetId?: string;
   readonly intent?: string;
   readonly model?: string;
@@ -93,6 +102,7 @@ const callModel = async (
         shape,
         connectionTitle: input.connectionTitle,
         opTitle: input.opTitle,
+        opDescription: input.opDescription,
         intent: input.intent,
       }),
     },
@@ -103,7 +113,9 @@ const callModel = async (
       role: "user" as const,
       content: `That proposal did not validate:\n${repairErrors
         .map((error) => `- ${error}`)
-        .join("\n")}\n\nCall propose_widget again, fixing exactly these problems. Use only field names from the schema above.`,
+        .join(
+          "\n",
+        )}\n\nCall propose_widget again, fixing exactly these problems. Use only field names from the schema above.`,
     });
   }
 
@@ -130,7 +142,9 @@ const callModel = async (
   if (!parsed.success) {
     return {
       proposal: null,
-      error: parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; "),
+      error: parsed.error.issues
+        .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+        .join("; "),
     };
   }
   return { proposal: parsed.data, error: null };
@@ -188,7 +202,8 @@ export const proposeWidget = async (input: ProposeInput): Promise<ProposalResult
   if (!attempt.proposal) {
     repaired = true;
     attempt = await callModel(input, shape, [attempt.error ?? "unknown error"]);
-    if (!attempt.proposal) return empty([attempt.error ?? "the model could not produce a proposal"], true);
+    if (!attempt.proposal)
+      return empty([attempt.error ?? "the model could not produce a proposal"], true);
   }
 
   let mapped = mapProposal({
@@ -259,10 +274,7 @@ export const proposeWidget = async (input: ProposeInput): Promise<ProposalResult
     },
     shape,
     ambiguities: mapped.ambiguities,
-    errors: [
-      ...executed.errors,
-      ...(executed.binding?.errors ?? []).map((issue) => issue.message),
-    ],
+    errors: [...executed.errors, ...(executed.binding?.errors ?? []).map((issue) => issue.message)],
     repaired,
   };
 };

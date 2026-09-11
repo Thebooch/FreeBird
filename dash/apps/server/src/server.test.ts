@@ -27,7 +27,8 @@ const restConnection = connectionSchema.parse({
   validateOpId: "items",
 });
 
-const stubHttp = (body: unknown = { data: [{ id: 1 }] }, status = 200): HttpFetch =>
+const stubHttp =
+  (body: unknown = { data: [{ id: 1 }] }, status = 200): HttpFetch =>
   async (url) => ({
     status,
     text: JSON.stringify(body),
@@ -102,7 +103,10 @@ describe("vault", () => {
 
   it("persists across instances", () => {
     keys.set("k", "secret");
-    const reopened = new KeyStore(new LocalAesVault(Buffer.alloc(32, 7)), join(dir, ".dash", "vault.json"));
+    const reopened = new KeyStore(
+      new LocalAesVault(Buffer.alloc(32, 7)),
+      join(dir, ".dash", "vault.json"),
+    );
     expect(reopened.get("k")).toBe("secret");
   });
 });
@@ -190,14 +194,20 @@ describe("SSRF guard", () => {
   });
 
   it("pins a connection to its own host", () => {
-    expect(() => assertAllowedHost(new URL("https://api.example.com/x"), "api.example.com")).not.toThrow();
-    expect(() => assertAllowedHost(new URL("https://eu.api.example.com/x"), "api.example.com")).not.toThrow();
+    expect(() =>
+      assertAllowedHost(new URL("https://api.example.com/x"), "api.example.com"),
+    ).not.toThrow();
+    expect(() =>
+      assertAllowedHost(new URL("https://eu.api.example.com/x"), "api.example.com"),
+    ).not.toThrow();
     // The core of the second gate: even a valid public URL is refused when it
     // is not this connection's host.
     expect(() => assertAllowedHost(new URL("https://evil.com/x"), "api.example.com")).toThrow(
       /may only reach api.example.com/,
     );
-    expect(() => assertAllowedHost(new URL("https://notapi.example.com.evil.com/"), "api.example.com")).toThrow();
+    expect(() =>
+      assertAllowedHost(new URL("https://notapi.example.com.evil.com/"), "api.example.com"),
+    ).toThrow();
   });
 });
 
@@ -328,7 +338,7 @@ describe("connection routes", () => {
     expect(response.json().error).toMatch(/rejected the key/);
   });
 
-  it("treats a forbidden endpoint as proof the key works", async () => {
+  it("reports a forbidden endpoint without claiming the key was accepted", async () => {
     /*
      * The bug this fixes: the endpoint chosen for validation belonged to a
      * product module the account was not licensed for, so it answered 403 and
@@ -341,13 +351,13 @@ describe("connection routes", () => {
     await app.inject({ method: "PUT", url: "/api/connections/api/key", payload: { key: "fine" } });
 
     const response = await app.inject({ method: "POST", url: "/api/connections/api/validate" });
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode).toBe(403);
     const body = response.json();
-    expect(body.ok).toBe(true);
+    expect(body.ok).toBe(false);
     // Which endpoints were refused is useful, and is a note rather than a
     // failure. Plural since validation walks a candidate list.
     expect(body.forbidden).toEqual(["items"]);
-    expect(body.message).toMatch(/key works/);
+    expect(body.error).toMatch(/denied access/);
   });
 });
 
@@ -420,18 +430,32 @@ describe("query route", () => {
     await app.inject({ method: "PUT", url: "/api/connections/api", payload: restConnection });
 
     expect(
-      (await app.inject({ method: "POST", url: "/api/query", payload: { connection: "ghost", op: "items" } }))
-        .statusCode,
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/query",
+          payload: { connection: "ghost", op: "items" },
+        })
+      ).statusCode,
     ).toBe(404);
     expect(
-      (await app.inject({ method: "POST", url: "/api/query", payload: { connection: "api", op: "ghost" } }))
-        .statusCode,
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/query",
+          payload: { connection: "api", op: "ghost" },
+        })
+      ).statusCode,
     ).toBe(404);
   });
 
   it("rejects a malformed query body", async () => {
     const app = makeApp();
-    const response = await app.inject({ method: "POST", url: "/api/query", payload: { op: "items" } });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/query",
+      payload: { op: "items" },
+    });
     expect(response.statusCode).toBe(400);
   });
 });
@@ -517,7 +541,10 @@ describe("endpoints on an existing connection", () => {
       payload: { catalogId: "demo", id: "mine", opIds: ["items"] },
     });
 
-    const available = await app.inject({ method: "GET", url: "/api/connections/mine/available-ops" });
+    const available = await app.inject({
+      method: "GET",
+      url: "/api/connections/mine/available-ops",
+    });
     expect(available.json().map((op: { id: string }) => op.id)).toEqual(["totals"]);
 
     await app.inject({
@@ -525,12 +552,16 @@ describe("endpoints on an existing connection", () => {
       url: "/api/connections/mine/ops",
       payload: { id: "totals", title: "Totals", path: "/totals", archetype: "summary" },
     });
-    expect((await app.inject({ method: "GET", url: "/api/connections/mine/available-ops" })).json()).toEqual([]);
+    expect(
+      (await app.inject({ method: "GET", url: "/api/connections/mine/available-ops" })).json(),
+    ).toEqual([]);
   });
 
   it("returns nothing available for a hand-made connection", async () => {
     const app = await setup();
-    expect((await app.inject({ method: "GET", url: "/api/connections/api/available-ops" })).json()).toEqual([]);
+    expect(
+      (await app.inject({ method: "GET", url: "/api/connections/api/available-ops" })).json(),
+    ).toEqual([]);
   });
 });
 
@@ -761,9 +792,9 @@ describe("capabilities", () => {
     // Several rules now fire on one resource, so a single collection yields a
     // list, a breakdown of its status column, and so on.
     expect(suggestions.length).toBeGreaterThan(1);
-    expect(suggestions.map((entry: { widget: { component: string } }) => entry.widget.component)).toContain(
-      "table",
-    );
+    expect(
+      suggestions.map((entry: { widget: { component: string } }) => entry.widget.component),
+    ).toContain("table");
 
     // "listed" is not in the status vocabulary, so it is offered and asked
     // about rather than suppressed or silently coloured.
@@ -850,7 +881,9 @@ describe("catalog", () => {
     expect(created.statusCode).toBe(200);
     expect(created.json()).toMatchObject({ id: "mine", needsKey: true, hasKey: false });
     // And it is immediately usable, no restart.
-    expect((await app.inject({ method: "GET", url: "/api/connections/mine" })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/connections/mine" })).statusCode).toBe(
+      200,
+    );
   });
 
   it("never overwrites an existing connection when the same API is added twice", async () => {
@@ -861,7 +894,11 @@ describe("catalog", () => {
       url: "/api/connections/from-catalog",
       payload: { catalogId: "demo" },
     });
-    await app.inject({ method: "PUT", url: "/api/connections/demo/key", payload: { key: "first" } });
+    await app.inject({
+      method: "PUT",
+      url: "/api/connections/demo/key",
+      payload: { key: "first" },
+    });
 
     const second = await app.inject({
       method: "POST",
@@ -939,7 +976,11 @@ describe("dashboard routes", () => {
 
   it("round-trips a dashboard through disk", async () => {
     const app = makeApp();
-    const saved = await app.inject({ method: "PUT", url: "/api/dashboards/d1", payload: dashboard });
+    const saved = await app.inject({
+      method: "PUT",
+      url: "/api/dashboards/d1",
+      payload: dashboard,
+    });
     expect(saved.statusCode).toBe(200);
 
     const loaded = await app.inject({ method: "GET", url: "/api/dashboards/d1" });
@@ -1018,9 +1059,9 @@ describe("parts routes", () => {
       url: "/api/parts/component/bar",
       payload: { form: "data", data: { note: "mine" } },
     });
-    expect((await app.inject({ method: "GET", url: "/api/parts/component/bar" })).json().layer).toBe(
-      "user",
-    );
+    expect(
+      (await app.inject({ method: "GET", url: "/api/parts/component/bar" })).json().layer,
+    ).toBe("user");
 
     const reverted = await app.inject({ method: "DELETE", url: "/api/parts/component/bar" });
     expect(reverted.json().layer).toBe("builtin");
@@ -1133,8 +1174,12 @@ describe("parts routes", () => {
 
   it("404s an unknown part and 400s an unknown kind", async () => {
     const app = withParts();
-    expect((await app.inject({ method: "GET", url: "/api/parts/theme/ghost" })).statusCode).toBe(404);
-    expect((await app.inject({ method: "GET", url: "/api/parts/nonsense/x" })).statusCode).toBe(400);
+    expect((await app.inject({ method: "GET", url: "/api/parts/theme/ghost" })).statusCode).toBe(
+      404,
+    );
+    expect((await app.inject({ method: "GET", url: "/api/parts/nonsense/x" })).statusCode).toBe(
+      400,
+    );
   });
 
   it("says so plainly when the server has no registry", async () => {

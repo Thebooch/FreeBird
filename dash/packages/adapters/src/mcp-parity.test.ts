@@ -58,6 +58,24 @@ const fakeClient = (
 // ---------------------------------------------------------------------------
 
 describe("MCP pagination", () => {
+  it("requests the declared first page and reports a missing row envelope as incomplete", async () => {
+    const spec = connection({
+      dialect: {
+        pagination: { kind: "page", param: "page", startsAt: 1, limitParam: "limit", pageSize: 50 },
+      },
+    });
+    const { client, calls } = fakeClient([{ wrong: [] }]);
+    const result = await new McpAdapter(async () => client).fetch(
+      spec,
+      op(spec),
+      {},
+      { params, now: 0 },
+    );
+    expect(calls).toEqual([{ page: "1", limit: "50" }]);
+    expect(result.meta.truncated).toBe(true);
+    expect(result.meta.warnings.join(" ")).toContain("row list");
+  });
+
   const paginated = () =>
     connection({
       dialect: { pagination: { kind: "cursor", cursorPath: "$.next", param: "cursor" } },
@@ -190,13 +208,9 @@ describe("MCP fetch metadata", () => {
         },
       ],
     });
-    const { client } = fakeClient(
-      [
-        { data: [{ id: 1 }], next: "c1" },
-        { data: [{ id: 2 }] },
-      ],
-      { typed: false },
-    );
+    const { client } = fakeClient([{ data: [{ id: 1 }], next: "c1" }, { data: [{ id: 2 }] }], {
+      typed: false,
+    });
     const adapter = new McpAdapter(async () => client);
     const result = await adapter.fetch(spec, op(spec), {}, { params, now: 0 });
     const brittle = result.meta.warnings.filter((w) => w.includes("output schema"));
@@ -207,9 +221,7 @@ describe("MCP fetch metadata", () => {
     const spec = connection();
     const { client } = fakeClient([{}], { prose: true });
     const adapter = new McpAdapter(async () => client);
-    await expect(adapter.fetch(spec, op(spec), {}, { params, now: 0 })).rejects.toThrow(
-      /prose/,
-    );
+    await expect(adapter.fetch(spec, op(spec), {}, { params, now: 0 })).rejects.toThrow(/prose/);
   });
 });
 

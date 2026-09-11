@@ -199,6 +199,8 @@ export interface ReadPlan {
 }
 
 export interface ConciergeContext {
+  /** Endpoint ids are local to a connection. Never merge their evidence. */
+  readonly byConnection?: Readonly<Record<string, ConciergeContext>>;
   readonly connections: ReadonlyArray<{ readonly id: string; readonly title: string }>;
   readonly ops: ReadonlyArray<{
     readonly id: string;
@@ -234,6 +236,7 @@ export interface ConciergeContext {
      * Absent for an endpoint nothing has described.
      */
     readonly params?: readonly ParamDef[] | undefined;
+    readonly requiredInputs?: readonly string[] | undefined;
     /**
      * The field whose value tells this endpoint's records apart.
      *
@@ -328,6 +331,18 @@ export const emptyContext: ConciergeContext = {
   readPlans: [],
 };
 
+export const contextForConnection = (
+  context: ConciergeContext,
+  connection?: string,
+): ConciergeContext => {
+  if (!connection || !context.byConnection) return context;
+  return {
+    ...(context.byConnection[connection] ?? emptyContext),
+    connections: context.connections,
+    byConnection: context.byConnection,
+  };
+};
+
 /* ── the field pool ────────────────────────────────────────────────────── */
 
 /**
@@ -367,6 +382,7 @@ export const fieldPool = (
   draft: ConciergeDraft,
   context: ConciergeContext,
 ): readonly FieldInfo[] => {
+  context = contextForConnection(context, draft.connection);
   const left = flat(context.shapes[draft.op ?? ""]);
   if (!draft.join) return left;
 
@@ -529,9 +545,7 @@ export const withJoinedColumns = (
   const prefix = `${draft.join.op}_`;
   const joined = fieldPool(draft, context).filter(
     (field) =>
-      field.name.startsWith(prefix) &&
-      !already.has(field.name) &&
-      !looksLikeIdentifier(field.name),
+      field.name.startsWith(prefix) && !already.has(field.name) && !looksLikeIdentifier(field.name),
   );
 
   /*
@@ -668,7 +682,10 @@ export const extraFieldOptions = (
     if (used.has(field.name)) continue;
 
     if (field.format === "minor_units") {
-      offers.push({ ...fieldOption(field, false, labels), description: "a number worth totalling" });
+      offers.push({
+        ...fieldOption(field, false, labels),
+        description: "a number worth totalling",
+      });
       continue;
     }
     if (
@@ -676,7 +693,10 @@ export const extraFieldOptions = (
       field.format === "unix_seconds" ||
       field.format === "unix_millis"
     ) {
-      offers.push({ ...fieldOption(field, false, labels), description: "a date this record carries" });
+      offers.push({
+        ...fieldOption(field, false, labels),
+        description: "a date this record carries",
+      });
       continue;
     }
     // A field pointing at another resource is also the opening for a join.
@@ -911,6 +931,7 @@ export const settle = (draft: ConciergeDraft, context: ConciergeContext): Concie
   if (!settled.connection && context.connections.length === 1) {
     settled = { ...settled, connection: context.connections[0]!.id };
   }
+  context = contextForConnection(context, settled.connection);
 
   /*
    * Where the rows live, taken from the endpoint rather than left at `$`.
@@ -1000,6 +1021,8 @@ export interface StepEntry {
 
 /** What the draft holds for a step, flattened for a chip label. */
 export const valueOf = (draft: ConciergeDraft, stepId: string): readonly string[] => {
+  if (stepId.startsWith("input:"))
+    return draft.inputs[stepId.slice(6)] !== undefined ? [draft.inputs[stepId.slice(6)]!] : [];
   if (isRoleStep(stepId)) {
     const bound = draft.roles[roleOfStep(stepId)];
     if (bound === undefined) return [];
@@ -1058,6 +1081,7 @@ export const valueOf = (draft: ConciergeDraft, stepId: string): readonly string[
  */
 export const allSteps = (input: ConciergeDraft, context: ConciergeContext): StepEntry[] => {
   const draft = settle(input, context);
+  context = contextForConnection(context, draft.connection);
   const entries: StepEntry[] = [];
   /* What this API calls its fields, so every option reads as the widget will. */
   const names = labelsFor(draft, context);
@@ -1117,7 +1141,20 @@ export const allSteps = (input: ConciergeDraft, context: ConciergeContext): Step
 
   // ── which endpoint ─────────────────────────────────────────────────────
   const ops = context.ops.filter((op) => op.connection === draft.connection);
-  if (ops.length === 0) return entries;
+  if (ops.length === 0) {
+    add(
+      {
+        id: "endpoint",
+        question: "Add a readable endpoint to this API before building a widget.",
+        options: [],
+        multiple: false,
+        skippable: false,
+      },
+      false,
+      true,
+    );
+    return entries;
+  }
 
   /*
    * Read endpoints first, and one of them suggested.
@@ -1145,7 +1182,9 @@ export const allSteps = (input: ConciergeDraft, context: ConciergeContext): Step
             value: op.id,
             label: op.title,
             description: shape
-              ? `${shape.rowCount} row(s) sampled · ${shape.fields.length} fields`
+              ? shape.evidence === "declared"
+                ? `Declared schema · ${shape.fields.length} fields · data not checked`
+                : `${shape.rowCount} row(s) sampled · ${shape.fields.length} fields`
               : "not read yet — nothing can be built from it until it is",
             ...(op.id === read[0]?.id ? { recommended: true } : {}),
           };
@@ -1153,7 +1192,7 @@ export const allSteps = (input: ConciergeDraft, context: ConciergeContext): Step
         multiple: false,
         skippable: false,
       },
-      Boolean(draft.op),
+      ops.some((op) => op.id === draft.op),
       true,
     )
   ) {
@@ -1165,6 +1204,36 @@ export const allSteps = (input: ConciergeDraft, context: ConciergeContext): Step
    * it — but the answer is a priced offer, not a dead end. This used to end the
    * conversation on the one screen where the user had done nothing wrong.
    */
+  const endpoint = ops.find((op) => op.id === draft.op);
+  for (const name of endpoint?.requiredInputs ?? []) {
+    const param = endpoint?.params?.find((param) => param.name === name);
+    const value = draft.inputs[name];
+    const valid =
+      value !== undefined &&
+      value !== "" &&
+      (!param?.enum || param.enum.some((option) => String(option) === value)) &&
+      (param?.type !== "number" || Number.isFinite(Number(value))) &&
+      (param?.type !== "boolean" || value === "true" || value === "false");
+    if (
+      add(
+        {
+          id: `input:${name}`,
+          question: `What ${param?.label ?? name} should this endpoint use?`,
+          help: param?.description,
+          multiple: false,
+          skippable: false,
+          freeText: !param?.enum,
+          options: (param?.enum ?? []).map((option) => ({
+            value: String(option),
+            label: String(option),
+          })),
+        },
+        valid,
+        true,
+      )
+    )
+      return entries;
+  }
   if (flat(context.shapes[draft.op ?? ""]).length === 0) {
     const offer = readStep(draft, context, ops);
     if (offer) add(offer, false, true);
@@ -1264,8 +1333,7 @@ export const allSteps = (input: ConciergeDraft, context: ConciergeContext): Step
            * survives only for a component that ships without one.
            */
           question:
-            role.prompt ??
-            `Which field should be the ${humanLabel(role.role).toLowerCase()}?`,
+            role.prompt ?? `Which field should be the ${humanLabel(role.role).toLowerCase()}?`,
           help: role.description,
           options: candidates.map((field) =>
             fieldOption(field, field.name === preferred?.name, names),
@@ -1323,8 +1391,7 @@ export const allSteps = (input: ConciergeDraft, context: ConciergeContext): Step
          * under.
          */
         question: "Anything to switch on for this widget?",
-        help:
-          "Searching, following the board's date range, and display options like striped rows.",
+        help: "Searching, following the board's date range, and display options like striped rows.",
         options: controls,
         multiple: true,
         skippable: true,
@@ -1353,10 +1420,13 @@ export const allSteps = (input: ConciergeDraft, context: ConciergeContext): Step
         question: "Which of these did you mean?",
         help: "These would answer different questions, so it is worth being sure.",
         options: draft.choice.options.map((option) => ({
-          value: option.op,
+          value: option.value ?? option.op,
           label: option.label,
           description: option.whatItIs,
-          ...(option.op === applied ? { recommended: true } : {}),
+          ...(option.op === applied &&
+          (!option.connection || option.connection === draft.connection)
+            ? { recommended: true }
+            : {}),
         })),
         multiple: false,
         skippable: false,
@@ -1380,12 +1450,12 @@ export const allSteps = (input: ConciergeDraft, context: ConciergeContext): Step
       {
         id: "measure",
         question: "What is this counting?",
-        help: "Counting the records answers \"how many\". Any other measure needs a number to work on.",
+        help: 'Counting the records answers "how many". Any other measure needs a number to work on.',
         options: [
           {
             value: MEASURE_COUNT,
             label: "Number of records",
-            description: "Counts the rows themselves, which is what \"how many\" means.",
+            description: 'Counts the rows themselves, which is what "how many" means.',
             recommended: true,
           },
           ...numeric.slice(0, 12).flatMap((field) => [
@@ -1689,6 +1759,9 @@ export const applyStep = (
   context: ConciergeContext,
 ): ConciergeDraft => {
   const draft = settle(input, context);
+  context = contextForConnection(context, draft.connection);
+  if (stepId.startsWith("input:"))
+    return { ...draft, inputs: { ...draft.inputs, [stepId.slice(6)]: values[0] ?? "" } };
 
   /*
    * The two effect steps never mark themselves answered.
@@ -1796,14 +1869,12 @@ export const applyStep = (
     if (!Number.isInteger(index) || !draft.series[index]) return recorded;
     // Keeping it is the recommended answer, so only a different one removes.
     const kept = values[0] === draft.series[index]!.op;
-    return kept
-      ? recorded
-      : { ...recorded, series: draft.series.filter((_, at) => at !== index) };
+    return kept ? recorded : { ...recorded, series: draft.series.filter((_, at) => at !== index) };
   }
 
   if (stepId === "choice") {
     const choice = draft.choice;
-    const chosen = choice?.options.find((option) => option.op === values[0]);
+    const chosen = choice?.options.find((option) => (option.value ?? option.op) === values[0]);
     if (!choice || !chosen) return recorded;
 
     /*
@@ -1813,7 +1884,11 @@ export const applyStep = (
      * through a different door.
      */
     if (choice.role === "primary") {
-      const moved = applyAnswer({ ...recorded, choice: undefined }, "endpoint", [chosen.op]);
+      const connected =
+        chosen.connection && chosen.connection !== recorded.connection
+          ? applyAnswer(recorded, "connection", [chosen.connection])
+          : recorded;
+      const moved = applyAnswer({ ...connected, choice: undefined }, "endpoint", [chosen.op]);
       return { ...moved, answered: [...new Set([...moved.answered, "choice"])] };
     }
 
@@ -1925,10 +2000,7 @@ export const remainingSteps = (draft: ConciergeDraft, context: ConciergeContext)
  * card and every test above this line is untouched by any of it.
  */
 
-export const allStepsAcross = (
-  draft: ConciergeDraft,
-  context: ConciergeContext,
-): StepEntry[] =>
+export const allStepsAcross = (draft: ConciergeDraft, context: ConciergeContext): StepEntry[] =>
   partsOf(draft).flatMap((_, index) =>
     allSteps(partView(draft, index), context).map((entry) => ({
       ...entry,
@@ -1944,10 +2016,7 @@ export const allStepsAcross = (
  * Interleaving them would ask which endpoint the second widget uses before
  * anybody has said what the first one shows.
  */
-export const nextStepAcross = (
-  draft: ConciergeDraft,
-  context: ConciergeContext,
-): Step | null => {
+export const nextStepAcross = (draft: ConciergeDraft, context: ConciergeContext): Step | null => {
   const parts = partsOf(draft);
   for (let index = 0; index < parts.length; index += 1) {
     const step = nextStep(partView(draft, index), context);
@@ -2008,20 +2077,14 @@ export const readinessAcross = (
   return { ready: missing.length === 0, missing };
 };
 
-export const remainingStepsAcross = (
-  draft: ConciergeDraft,
-  context: ConciergeContext,
-): number =>
+export const remainingStepsAcross = (draft: ConciergeDraft, context: ConciergeContext): number =>
   partsOf(draft).reduce(
     (total, _, index) => total + remainingSteps(partView(draft, index), context),
     0,
   );
 
 /** `settle` for every part, folded back together. */
-export const settleAcross = (
-  draft: ConciergeDraft,
-  context: ConciergeContext,
-): ConciergeDraft =>
+export const settleAcross = (draft: ConciergeDraft, context: ConciergeContext): ConciergeDraft =>
   partsOf(draft).reduce<ConciergeDraft>(
     (carried, _, index) => withPart(carried, index, settle(partView(carried, index), context)),
     draft,

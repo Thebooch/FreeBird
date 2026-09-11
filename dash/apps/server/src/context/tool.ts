@@ -104,7 +104,7 @@ export interface AnswerDeps {
   readonly read: OpReader;
   readonly isCached: (key: string) => boolean;
   readonly rowsOf: (body: unknown, rowsPath: string) => Record<string, unknown>[];
-  readonly rowsPathFor: (op: string) => string;
+  readonly rowsPathFor: (op: string, connection?: string) => string;
   readonly budget?: Budget;
   /** Records per chunk on a deep read. Defaults to the shipped size. */
   readonly chunkSize?: number;
@@ -379,7 +379,11 @@ export const answerFromData = async (
        */
       if (chosen.kind === "record") {
         const ids = subject.flatMap((record) =>
-          identityValue(record, chosen.binding.idField ?? focus.idField ?? "", chosen.binding.idField),
+          identityValue(
+            record,
+            chosen.binding.idField ?? focus.idField ?? "",
+            chosen.binding.idField,
+          ),
         );
         const opened = await readRecords({ binding: chosen.binding, ids, deps: toolDeps });
 
@@ -469,7 +473,7 @@ export const answerFromData = async (
         read: deps.read,
         resolved: deps.resolved,
         rowsOf: deps.rowsOf,
-        rowsPath: deps.rowsPathFor(chosen.child.op),
+        rowsPath: deps.rowsPathFor(chosen.child.op, focus.connection),
         limit,
       });
 
@@ -498,7 +502,6 @@ export const answerFromData = async (
     }
   }
 
-
   const readCandidate = async (candidate: Candidate): Promise<Evidence | null> => {
     /*
      * Cached sources are read cache-only, so a source the ranker chose BECAUSE
@@ -525,7 +528,7 @@ export const answerFromData = async (
       resolved: deps.resolved,
       read: deps.read,
       cacheOnly,
-      rowsPath: deps.rowsPathFor(candidate.op),
+      rowsPath: deps.rowsPathFor(candidate.op, candidate.connection),
       rowsOf: deps.rowsOf,
       limit,
     });
@@ -582,6 +585,7 @@ export const answerFromData = async (
         rowsOf: deps.rowsOf,
         rowsPath: deps.rowsPathFor(
           chosen.kind === "collection" ? chosen.child.op : from.candidate.op,
+          from.candidate.connection,
         ),
         limit,
       });

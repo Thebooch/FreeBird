@@ -1,3 +1,4 @@
+import { proposalPatch } from "./proposal-patch.js";
 import type {
   ConciergeContext,
   DraftPatch,
@@ -7,13 +8,7 @@ import type {
 } from "@freebirdai/dash-agent";
 import { pickEndpoints, proposeWidget } from "@freebirdai/dash-agent";
 import type { WidgetShape } from "@freebirdai/dash-spec";
-import {
-  inferIdField,
-  isEmptyShape,
-  pathSegments,
-  rolesForShape,
-  singularNoun,
-} from "@freebirdai/dash-spec";
+import { inferIdField, pathSegments, singularNoun } from "@freebirdai/dash-spec";
 
 /**
  * Turning a sentence into a proposed widget, with the model called twice.
@@ -73,26 +68,6 @@ export interface ProposedSetup {
 
 const EMPTY: ProposedSetup = { patch: {}, reason: "", notes: [], ambiguities: [] };
 
-/**
- * The field a set of rows is best counted over time by.
- *
- * Prefers a declared date format over a name that merely sounds like one, and
- * takes the earliest such field, which is overwhelmingly the created-at. A
- * comparison needs one on both sides or it is not a comparison over time, and
- * saying so beats picking a field that happens to parse.
- */
-const timeFieldOf = (shape: InferredShape): string | undefined => {
-  const flat = shape.fields.filter((field) => !field.name.includes("."));
-  const dated = flat.find(
-    (field) =>
-      field.format === "iso8601" ||
-      field.format === "unix_seconds" ||
-      field.format === "unix_millis",
-  );
-  if (dated) return dated.name;
-  return flat.find((field) => /date|created|added|received|submitted|at$/i.test(field.name))?.name;
-};
-
 /** `UnitId` and the like, normalised for comparison. */
 const key = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]/g, "");
 
@@ -129,7 +104,7 @@ const pairFields = (
   return { leftField: leftField.name, rightField: rightField.name };
 };
 
-export const proposeSetup = async (input: ProposeSetupInput): Promise<ProposedSetup> => {
+const proposeSingle = async (input: ProposeSetupInput): Promise<ProposedSetup> => {
   const { context } = input;
 
   /*
@@ -188,7 +163,12 @@ export const proposeSetup = async (input: ProposeSetupInput): Promise<ProposedSe
       context.drillDowns.find((offer) => offer.listOp === child.parentOp)?.idField ??
       inferIdField(
         parentShape?.fields.map((field) => ({ name: field.name, kinds: field.kinds })),
-        [singularNoun(pathSegments(context.ops.find((op) => op.id === child.parentOp)?.path ?? "").pop() ?? "")],
+        [
+          singularNoun(
+            pathSegments(context.ops.find((op) => op.id === child.parentOp)?.path ?? "").pop() ??
+              "",
+          ),
+        ],
       );
     if (!identity) continue;
 
@@ -216,15 +196,24 @@ export const proposeSetup = async (input: ProposeSetupInput): Promise<ProposedSe
 
   if (candidates.length === 0) return EMPTY;
 
-  const picked = await pickEndpoints(
+  let picked = await pickEndpoints(
     input.llm,
     { intent: input.intent, candidates },
-    { ...(input.model ? { model: input.model } : {}), ...(input.signal ? { signal: input.signal } : {}) },
+    {
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.signal ? { signal: input.signal } : {}),
+    },
   );
   if (!picked.primary) return { ...EMPTY, notes: picked.error ? [picked.error] : [] };
+  if (picked.alternatives.some((entry) => entry.role === "secondary"))
+    picked = { ...picked, relationship: "alongside" };
+  const primaryOwner = context.ops.find((op) => op.id === picked.primary)?.connection;
+  const secondaryOwner = context.ops.find((op) => op.id === picked.secondary)?.connection;
+  if (primaryOwner && secondaryOwner && primaryOwner !== secondaryOwner)
+    picked = { ...picked, relationship: "alongside" };
 
   const op = context.ops.find((candidate) => candidate.id === picked.primary);
-  const shape = context.shapes[picked.primary];
+  const shape = context.shapes[picked.primary!];
   if (!op || !shape) return { ...EMPTY, reason: picked.reason };
 
   const connection = context.connections.find((candidate) => candidate.id === op.connection);
@@ -236,12 +225,17 @@ export const proposeSetup = async (input: ProposeSetupInput): Promise<ProposedSe
     connectionTitle: connection?.title ?? op.connection,
     op: op.id,
     opTitle: op.title,
+    opDescription: op.description,
     intent: input.intent,
     ...(input.model ? { model: input.model } : {}),
     ...(input.signal ? { signal: input.signal } : {}),
   });
 
   const notes: string[] = [];
+  const ambiguities = proposal.ambiguities.map((entry) => ({
+    ...entry,
+    field: `${op.title}: ${entry.field}`,
+  }));
   const patch: {
     connection: string;
     endpoint: string;
@@ -252,17 +246,24 @@ export const proposeSetup = async (input: ProposeSetupInput): Promise<ProposedSe
     title?: string;
     joinWith?: { endpoint: string; leftField: string; rightField: string };
     seriesWith?: Array<{
+      coercions?: DraftPatch["coercions"];
+      format?: DraftPatch["format"];
+      inputs?: DraftPatch["inputs"];
       endpoint: string;
       label: string;
       shape: WidgetShape;
     }>;
     offerSeries?: {
+      coercions?: DraftPatch["coercions"];
+      format?: DraftPatch["format"];
+      inputs?: DraftPatch["inputs"];
       endpoint: string;
       label: string;
       shape: WidgetShape;
       fanOut: { from: string; field: string; as?: string; maxRows?: number };
     };
     parts?: Array<{
+      choiceBetween?: DraftPatch["choiceBetween"];
       connection: string;
       endpoint: string;
       component?: string;
@@ -289,68 +290,7 @@ export const proposeSetup = async (input: ProposeSetupInput): Promise<ProposedSe
   } = { connection: op.connection, endpoint: op.id };
 
   if (proposal.widget) {
-    patch.component = proposal.widget.component;
-    /*
-     * The roles the measurement decides are consequences, not answers.
-     *
-     * A measured widget's value role names a column the group step produces,
-     * and the question that would have set it only ever offers the endpoint's
-     * own fields — so sending it would be rejected for naming something that
-     * is not on the raw rows. The build derives those roles from the shape;
-     * these are the rest.
-     */
-    const decided = rolesForShape(proposal.measurement ?? undefined);
-
-    /*
-     * Role bindings, back in the API's own vocabulary.
-     *
-     * `mapProposal` binds to the *flattened* column a derive step produces —
-     * `Property_Address_AddressLine1` — because that is what its widget will
-     * really carry. The draft is not a widget: its questions offer the field
-     * names the endpoint has, and the builder does its own flattening. So a
-     * proposal naming the flat form arrived as an answer nobody had offered
-     * and was rejected, silently, for every nested field.
-     *
-     * That was the whole of "it only ever suggests top-level fields" from the
-     * proposal side: the model was picking the street address and the answer
-     * was being thrown away one layer later.
-     */
-    const sourceOf: Record<string, string> = {};
-    for (const step of proposal.widget.pipeline) {
-      if (step.op !== "derive") continue;
-      for (const [flat, from] of Object.entries(step.fields)) sourceOf[flat] = from;
-    }
-    const unflatten = (name: string): string => sourceOf[name] ?? name;
-
-    const roles = Object.fromEntries(
-      Object.entries(proposal.widget.roles ?? {})
-        .filter(([role]) => decided[role] === undefined)
-        .map(([role, bound]) => [
-          role,
-          Array.isArray(bound) ? bound.map((name) => unflatten(String(name))) : [unflatten(String(bound))],
-        ]),
-    );
-    if (Object.keys(roles).length > 0) patch.roles = roles;
-    /*
-     * What the widget measures, carried rather than discarded.
-     *
-     * Only the component, the roles and the title used to survive this
-     * function, so a proposal that had correctly worked out "count these rows,
-     * bucket them by the created date, and only the active ones" arrived at
-     * the draft as an endpoint and a chart type. The word "active" vanished
-     * here; so did every aggregation.
-     */
-    if (proposal.measurement && !isEmptyShape(proposal.measurement)) {
-      // Same translation, same reason: the draft speaks the endpoint's names.
-      patch.shape = {
-        ...proposal.measurement,
-        groupBy: proposal.measurement.groupBy.map((key) => ({ ...key, field: unflatten(key.field) })),
-        measures: proposal.measurement.measures.map((measure) =>
-          measure.field ? { ...measure, field: unflatten(measure.field) } : measure,
-        ),
-      };
-    }
-    if (proposal.widget.title) patch.title = proposal.widget.title;
+    Object.assign(patch, proposalPatch(proposal));
   } else {
     /*
      * The endpoint survives a failed binding, and should.
@@ -412,6 +352,7 @@ export const proposeSetup = async (input: ProposeSetupInput): Promise<ProposedSe
         connectionTitle: otherConnection?.title ?? other.connection,
         op: other.id,
         opTitle: other.title,
+        opDescription: other.description,
         intent: input.intent,
         ...(input.model ? { model: input.model } : {}),
         ...(input.signal ? { signal: input.signal } : {}),
@@ -419,26 +360,15 @@ export const proposeSetup = async (input: ProposeSetupInput): Promise<ProposedSe
 
       if (second.widget) {
         patch.parts = [
-          {
-            connection: other.connection,
-            endpoint: other.id,
-            component: second.widget.component,
-            ...(second.widget.title ? { title: second.widget.title } : {}),
-            ...(Object.keys(second.widget.roles ?? {}).length > 0
-              ? {
-                  roles: Object.fromEntries(
-                    Object.entries(second.widget.roles ?? {}).map(([role, bound]) => [
-                      role,
-                      Array.isArray(bound) ? bound.map(String) : [String(bound)],
-                    ]),
-                  ),
-                }
-              : {}),
-            ...(second.measurement && !isEmptyShape(second.measurement)
-              ? { shape: second.measurement }
-              : {}),
-          },
+          { ...proposalPatch(second), connection: other.connection, endpoint: other.id },
         ];
+        ambiguities.push(
+          ...second.ambiguities.map((entry) => ({
+            ...entry,
+            field: `${other.title}: ${entry.field}`,
+          })),
+        );
+
         /*
          * Named from the two widgets' own titles, which the model wrote for a
          * person to read. Building it from the endpoint titles instead would
@@ -469,71 +399,86 @@ export const proposeSetup = async (input: ProposeSetupInput): Promise<ProposedSe
       context.ops.find((candidate) => candidate.id === picked.secondary) ??
       (nested ? { id: nested.child.op, title: nested.child.title } : undefined);
     const rightShape = context.shapes[picked.secondary];
-    const leftTime = timeFieldOf(shape);
-    const rightTime = rightShape ? timeFieldOf(rightShape) : undefined;
-
-    if (other && leftTime && rightTime) {
-      /*
-       * Each side counted over its own date field, as a shape.
-       *
-       * The general form, so the two sides are no longer required to be
-       * counted-over-time by the schema — that is simply what this particular
-       * derivation produces, and either side can be re-measured afterwards
-       * through the ordinary revise path.
-       */
-      const counted = (field: string): WidgetShape => ({
-        groupBy: [{ field, bucket: "{{range.grain}}" }],
-        measures: [{ as: "count", agg: "count" }],
-        sort: [],
+    if (other && rightShape) {
+      const second = await proposeWidget({
+        llm: input.llm,
+        shape: rightShape,
+        connection: op.connection,
+        connectionTitle: connection?.title ?? op.connection,
+        op: other.id,
+        opTitle: other.title,
+        intent: input.intent,
+        ...(input.model ? { model: input.model } : {}),
+        ...(input.signal ? { signal: input.signal } : {}),
       });
-
-      /*
-       * The narrowing survives, even though the measurement does not.
-       *
-       * The binding call only ever saw one endpoint, so its *measure* is stale
-       * on this path and gets replaced — but a filter it worked out is about
-       * the rows of that same endpoint and is still exactly right. Discarding
-       * the whole proposal took the word "active" out of "active listings vs
-       * applications" and nothing said so.
-       */
-      const narrowing = proposal.measurement?.filter;
-      patch.shape = {
-        ...counted(leftTime),
-        ...(narrowing ? { filter: narrowing } : {}),
-      };
-      if (nested) {
-        /*
-         * Worked out, priced, and not taken. The assistant can decide this is
-         * the right answer; it cannot decide the answer is worth one request
-         * per record against somebody's account. The card asks, and nothing is
-         * fetched until it is answered.
-         */
-        patch.offerSeries = {
-          endpoint: picked.secondary,
-          label: other.title,
-          shape: counted(rightTime),
-          fanOut: {
-            from: nested.child.parentOp,
-            field: nested.field,
-            ...(nested.child.param ? { as: nested.child.param } : {}),
-          },
-        };
-      } else {
-        patch.seriesWith = [
-          { endpoint: picked.secondary, label: other.title, shape: counted(rightTime) },
-        ];
-      }
-      // A comparison is a measurement on each side whatever the binding call
-      // proposed; its single-endpoint answer cannot describe two series.
-      patch.component = "timeseries";
-      delete patch.roles;
-    } else {
-      notes.push(
-        `${op.title} and ${other?.title ?? picked.secondary} cannot be compared over time — ` +
-          `${!leftTime ? op.title : (other?.title ?? "the second endpoint")} has no date field to ` +
-          "count by, so this is built from the first alone.",
+      const secondPatch = proposalPatch(second);
+      ambiguities.push(
+        ...second.ambiguities.map((entry) => ({
+          ...entry,
+          field: other.title + ": " + entry.field,
+        })),
       );
-    }
+      const left = patch.shape;
+      const right = secondPatch.shape;
+      const firstFormat = proposal.widget?.format[left?.measures[0]?.as ?? ""];
+      const secondFormat = second.widget?.format[right?.measures[0]?.as ?? ""];
+      const knownUnit =
+        left?.measures[0]?.agg === "count" ||
+        (firstFormat &&
+          (firstFormat.unit ||
+            (firstFormat.semantic === "currency" && firstFormat.currency) ||
+            ["percent", "bytes", "duration"].includes(firstFormat.semantic)));
+      const compatible =
+        knownUnit &&
+        left &&
+        right &&
+        left.groupBy.length === 1 &&
+        right.groupBy.length === 1 &&
+        left.measures.length === 1 &&
+        right.measures.length === 1 &&
+        left.groupBy[0]?.bucket === right.groupBy[0]?.bucket &&
+        left.measures[0]?.agg === right.measures[0]?.agg &&
+        JSON.stringify(firstFormat) === JSON.stringify(secondFormat);
+      if (compatible) {
+        if (nested)
+          patch.offerSeries = {
+            coercions: secondPatch.coercions,
+            format: secondPatch.format,
+            inputs: secondPatch.inputs,
+            endpoint: picked.secondary,
+            label: other.title,
+            shape: right,
+            fanOut: {
+              from: nested.child.parentOp,
+              field: nested.field,
+              ...(nested.child.param ? { as: nested.child.param } : {}),
+            },
+          };
+        else
+          patch.seriesWith = [
+            {
+              endpoint: picked.secondary,
+              label: other.title,
+              shape: right,
+              coercions: secondPatch.coercions,
+              format: secondPatch.format,
+              inputs: secondPatch.inputs,
+            },
+          ];
+        delete patch.roles;
+      } else if (second.widget && !nested) {
+        patch.parts = [{ ...secondPatch, connection: op.connection, endpoint: other.id }];
+        patch.group = { title: (op.title + " and " + other.title).slice(0, 120), display: "row" };
+        notes.push(
+          "These measurements keep their own units and transformations in separate views. A shared axis has not been established.",
+        );
+      } else {
+        notes.push(
+          ...second.errors,
+          "The second measurement needs a compatible grouping and unit before it can be combined.",
+        );
+      }
+    } else notes.push("The second endpoint has no field evidence to plan a comparison.");
   } else if (picked.secondary) {
     const relation = context.joins.find(
       (join) =>
@@ -623,66 +568,24 @@ export const proposeSetup = async (input: ProposeSetupInput): Promise<ProposedSe
    * mean this instead" rather than as a decision somebody has to make before
    * anything works — the widget on screen is what happens if nobody answers.
    */
-  const alternatives = picked.alternatives.filter(
-    (entry) => entry.role === "primary" || Boolean(patch.seriesWith ?? patch.offerSeries),
-  );
-
-  if (alternatives.length > 0) {
-    const role = alternatives[0]!.role;
-    /** One option, prepared the same way the applied one was. */
-    const asOption = (
-      id: string,
-      whatItIs: string,
-    ): NonNullable<typeof patch.choiceBetween>["options"][number] | null => {
-      const nested = expandable.get(id);
-      const known =
-        context.ops.find((candidate) => candidate.id === id) ??
-        (nested ? { id: nested.child.op, title: nested.child.title } : undefined);
-      const optionShape = context.shapes[id];
-      if (!known || !optionShape) return null;
-
-      if (role === "primary") {
-        return { op: id, label: known.title, whatItIs };
-      }
-
-      const when = timeFieldOf(optionShape);
-      if (!when) return null;
-      return {
-        op: id,
-        label: known.title,
-        whatItIs,
-        series: {
-          op: id,
-          rowsPath: optionShape.rowsPath || "$",
-          label: known.title,
-          shape: {
-            groupBy: [{ field: when, bucket: "{{range.grain}}" }],
-            measures: [{ as: "count", agg: "count" as const }],
-            sort: [],
-          },
-          ...(nested
-            ? {
-                fanOut: {
-                  from: nested.child.parentOp,
-                  field: nested.field,
-                  ...(nested.child.param ? { as: nested.child.param } : {}),
-                  maxRows: 25,
-                },
-              }
-            : {}),
-        },
-      };
-    };
-
-    const appliedId =
-      role === "primary" ? op.id : (patch.seriesWith?.[0]?.endpoint ?? patch.offerSeries?.endpoint);
+  for (const role of ["primary", "secondary"] as const) {
+    const alternatives = picked.alternatives.filter((entry) => entry.role === role);
+    if (!alternatives.length) continue;
+    const appliedId = role === "primary" ? op.id : patch.parts?.[0]?.endpoint;
+    if (!appliedId) continue;
     const options = [
-      ...(appliedId ? [asOption(appliedId, "What this is built from now.")] : []),
-      ...alternatives.filter((entry) => entry.role === role).map((entry) => asOption(entry.id, entry.whatItIs)),
-    ].filter((option): option is NonNullable<typeof option> => option !== null);
-
-    // Two is the minimum for there to be anything to choose between.
-    if (options.length > 1) patch.choiceBetween = { role, options: options.slice(0, 3) };
+      { id: appliedId, whatItIs: "What this is built from now." },
+      ...alternatives,
+    ].flatMap((entry) => {
+      const known = context.ops.find((candidate) => candidate.id === entry.id);
+      return known && context.shapes[entry.id]
+        ? [{ op: entry.id, label: known.title, whatItIs: entry.whatItIs }]
+        : [];
+    });
+    if (options.length < 2) continue;
+    const choice = { role: "primary" as const, options: options.slice(0, 3) };
+    if (role === "primary") patch.choiceBetween = choice;
+    else if (patch.parts?.[0]) patch.parts[0].choiceBetween = choice;
   }
 
   /*
@@ -709,7 +612,115 @@ export const proposeSetup = async (input: ProposeSetupInput): Promise<ProposedSe
      * is being built. Passed on, it had the assistant announce "available
      * listings have not been included yet" above a widget that included them.
      */
-    ambiguities:
-      patch.seriesWith || patch.offerSeries || patch.parts ? [] : proposal.ambiguities,
+    ambiguities: ambiguities.filter(
+      (entry) =>
+        entry.kind !== "missing_endpoint" ||
+        !entry.endpoint ||
+        ![
+          patch.endpoint,
+          ...(patch.parts ?? []).map((part) => part.endpoint),
+          ...(patch.seriesWith ?? []).map((side) => side.endpoint),
+        ].includes(entry.endpoint),
+    ),
   };
+};
+
+/** Qualify endpoint identity during planning, then restore local ids at the draft boundary. */
+export const proposeSetup = async (input: ProposeSetupInput): Promise<ProposedSetup> => {
+  const { context } = input;
+  if (!context.byConnection || context.connections.length < 2) return proposeSingle(input);
+  const references = new Map<string, { connection: string; op: string }>();
+  const qualified: ConciergeContext[] = Object.entries(context.byConnection).map(
+    ([connection, local], index) => {
+      const ids = new Map<string, string>();
+      const ref = (op: string) => {
+        const id = ids.get(op) ?? `c${index}-op${ids.size}`;
+        ids.set(op, id);
+        references.set(id, { connection, op });
+        return id;
+      };
+      return {
+        ...local,
+        ops: local.ops.map((op) => ({ ...op, id: ref(op.id) })),
+        shapes: Object.fromEntries(
+          Object.entries(local.shapes).map(([op, shape]) => [ref(op), shape]),
+        ),
+        joins: local.joins.map((join) => ({
+          ...join,
+          fromOp: ref(join.fromOp),
+          toOp: ref(join.toOp),
+        })),
+        children: local.children.map((child) => ({
+          ...child,
+          op: ref(child.op),
+          parentOp: ref(child.parentOp),
+        })),
+        drillDowns: local.drillDowns.map((detail) => ({
+          ...detail,
+          listOp: ref(detail.listOp),
+          detailOp: ref(detail.detailOp),
+        })),
+      };
+    },
+  );
+  const combined: ConciergeContext = {
+    ...context,
+    ops: qualified.flatMap((local) => local.ops),
+    shapes: Object.assign({}, ...qualified.map((local) => local.shapes)),
+    joins: qualified.flatMap((local) => local.joins),
+    children: qualified.flatMap((local) => local.children),
+    drillDowns: qualified.flatMap((local) => local.drillDowns),
+  };
+  const result = await proposeSingle({ ...input, context: combined });
+  const localId = (id: string) => references.get(id)?.op ?? id;
+  const restore = (patch: DraftPatch): DraftPatch => ({
+    ...patch,
+    ...(patch.endpoint
+      ? {
+          endpoint: localId(patch.endpoint),
+          connection: references.get(patch.endpoint)?.connection ?? patch.connection,
+        }
+      : {}),
+    ...(patch.joinWith
+      ? { joinWith: { ...patch.joinWith, endpoint: localId(patch.joinWith.endpoint) } }
+      : {}),
+    ...(patch.seriesWith
+      ? {
+          seriesWith: patch.seriesWith.map((side) => ({
+            ...side,
+            endpoint: localId(side.endpoint),
+            ...(side.fanOut ? { fanOut: { ...side.fanOut, from: localId(side.fanOut.from) } } : {}),
+          })),
+        }
+      : {}),
+    ...(patch.offerSeries
+      ? {
+          offerSeries: {
+            ...patch.offerSeries,
+            endpoint: localId(patch.offerSeries.endpoint),
+            fanOut: { ...patch.offerSeries.fanOut, from: localId(patch.offerSeries.fanOut.from) },
+          },
+        }
+      : {}),
+    ...(patch.parts ? { parts: patch.parts.map(restore) } : {}),
+    ...(patch.choiceBetween
+      ? {
+          choiceBetween: {
+            ...patch.choiceBetween,
+            options: patch.choiceBetween.options.map((option, index) => ({
+              ...option,
+              value: `option-${index}`,
+              op: localId(option.op),
+              connection: references.get(option.op)?.connection,
+              label:
+                `${option.label} (${context.connections.find((entry) => entry.id === references.get(option.op)?.connection)?.title ?? "API"})`.slice(
+                  0,
+                  120,
+                ),
+            })),
+          },
+        }
+      : {}),
+  });
+  return { ...result, patch: restore(result.patch) };
 };

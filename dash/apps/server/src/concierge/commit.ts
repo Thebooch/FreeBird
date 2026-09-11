@@ -22,7 +22,12 @@ export interface CommitResult {
   readonly filtersAdded: readonly string[];
 }
 
-const failed = (error: string): CommitResult => ({ ok: false, error, widgets: [], filtersAdded: [] });
+const failed = (error: string): CommitResult => ({
+  ok: false,
+  error,
+  widgets: [],
+  filtersAdded: [],
+});
 
 /** The first row nothing already occupies. */
 const firstFreeRow = (board: DashboardSpec): number =>
@@ -35,7 +40,7 @@ export const commitSetup = (input: {
   readonly groupId?: string;
 }): CommitResult => {
   const { board, built } = input;
-  if (built.widgets.length === 0) {
+  if (built.widgets.length === 0 || built.errors.length > 0) {
     return failed(built.errors.join("; ") || "it did not validate");
   }
 
@@ -84,7 +89,15 @@ export const commitSetup = (input: {
       ...cells,
       ...widgets.map((widget, index) =>
         index === 0
-          ? { widgetId: widget.id, x: 0, y: top, w: size.w, h: size.h, locked: true, group: groupId }
+          ? {
+              widgetId: widget.id,
+              x: 0,
+              y: top,
+              w: size.w,
+              h: size.h,
+              locked: true,
+              group: groupId,
+            }
           : {
               /*
                * Parked. Never drawn from — only the anchor's rectangle is —

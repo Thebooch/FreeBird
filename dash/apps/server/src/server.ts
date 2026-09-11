@@ -1,6 +1,11 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AdapterRegistry, AdapterError, RestAdapter, type HttpFetch } from "@freebirdai/dash-adapters";
+import {
+  AdapterRegistry,
+  AdapterError,
+  RestAdapter,
+  type HttpFetch,
+} from "@freebirdai/dash-adapters";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
 import type {
   Arrangement,
@@ -8,7 +13,12 @@ import type {
   ConciergeDraft,
   InferredShape,
 } from "@freebirdai/dash-agent";
-import { inferShape, mapReviewProposal, reviewSuggestions, suggestWidgets } from "@freebirdai/dash-agent";
+import {
+  inferShape,
+  mapReviewProposal,
+  reviewSuggestions,
+  suggestWidgets,
+} from "@freebirdai/dash-agent";
 import type {
   ConnectionSpec,
   DashboardSpec,
@@ -16,7 +26,23 @@ import type {
   ResolvedParams,
   TimeRange,
 } from "@freebirdai/dash-spec";
-import { authKeyRefs, catalogEntrySchema, connectionSchema, dashboardSchema, defaultGrainFor, findNarrowing, getOp, isStale, opDefSchema, pathParamNames, queryKey, resolveRange, resourceSchema, statusTone } from "@freebirdai/dash-spec";
+import {
+  connectionKeyRefs,
+  connectionNeedsAuthSetup,
+  catalogEntrySchema,
+  connectionSchema,
+  dashboardSchema,
+  defaultGrainFor,
+  findNarrowing,
+  getOp,
+  isStale,
+  opDefSchema,
+  pathParamNames,
+  queryKey,
+  resolveRange,
+  resourceSchema,
+  statusTone,
+} from "@freebirdai/dash-spec";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
 import { createFreeBirdPlugin } from "@freebirdai/server/fastify";
@@ -34,11 +60,7 @@ import {
 } from "./capabilities.js";
 import type { ChatDb } from "./chat/db.js";
 import { resolveChatLlm } from "./chat/llm-bridge.js";
-import {
-  LOOK_UP_TOOL,
-  lookUpEndpoint,
-  lookUpSchema,
-} from "./chat/concierge-actions.js";
+import { LOOK_UP_TOOL, lookUpEndpoint, lookUpSchema } from "./chat/concierge-actions.js";
 import { buildChatRegistry } from "./chat/registry.js";
 import { buildConciergeContext } from "./concierge/context.js";
 import { rearrangeSetup } from "./concierge/arrange.js";
@@ -48,7 +70,7 @@ import { planNarrowing } from "./concierge/drilldown.js";
 import { proposeSetup } from "./concierge/propose.js";
 import { NarrowingStore } from "./narrowings.js";
 import { MemoryDraftStore, ScratchDraftStore, type DraftStore } from "./concierge/store.js";
-import { CatalogStore, connectionFromCatalog } from "./catalog.js";
+import { CatalogStore, connectionFromCatalog, refreshCatalogConnection } from "./catalog.js";
 import { discover, readIndex } from "./discovery/index.js";
 import type { SearchProvider } from "./discovery/search.js";
 import {
@@ -79,6 +101,10 @@ import { BlockedUrlError, fetchPublicDocument, guardedFetch } from "./safe-fetch
 import type { PartRegistry } from "@freebirdai/dash-parts";
 import { partsRoutes } from "./routes/parts.js";
 import { conciergeRoutes } from "./routes/concierge.js";
+import { SetupPreviews } from "./concierge/preview.js";
+import { contextForConnection } from "@freebirdai/dash-agent";
+import { migrateCredentialRefs } from "./credential-migration.js";
+import { fingerprintConnection } from "@freebirdai/dash-spec";
 import { mapRoutes } from "./routes/map.js";
 import type { Settings, SettingsStore } from "./settings.js";
 import { QueryCache, clampMaxAge } from "./cache/queryCache.js";
@@ -103,20 +129,11 @@ import {
   parseFilters,
   parseView,
 } from "./context/onscreen.js";
-import {
-  LOOK_UP_WIDGET_TOOL,
-  lookUpWidget,
-  lookUpWidgetSchema,
-} from "./chat/lookUpWidget.js";
+import { LOOK_UP_WIDGET_TOOL, lookUpWidget, lookUpWidgetSchema } from "./chat/lookUpWidget.js";
 import type { CacheStore } from "./cache/store.js";
 import { waitPhrase } from "./cache/cooldown.js";
 import { SpecStore } from "./store.js";
-import {
-  GrantStore,
-  approveWidget,
-  dashboardApprovals,
-  widgetGrantSubject,
-} from "./grants.js";
+import { GrantStore, approveWidget, dashboardApprovals, widgetGrantSubject } from "./grants.js";
 import { KeyStore } from "./vault.js";
 
 export interface BuildServerOptions {
@@ -194,7 +211,7 @@ export const CHAT_SYSTEM_PROMPT = [
   "    id `add_widget` expects. These are for browsing: offer them when somebody",
   "    asks what they could look at. When they describe something specific, build",
   "    it instead — see BUILDING A WIDGET below. A ready-made offer is a card",
-  "    saying \"apply this?\"; building gives them the widget itself to adjust.",
+  '    saying "apply this?"; building gives them the widget itself to adjust.',
   "",
   "Never say you cannot see the dashboard: if a widget is not in the first list,",
   "it is genuinely not there — say so, and offer the closest thing from the second.",
@@ -312,9 +329,7 @@ export const nodeHttp: HttpFetch = async (url, init, allowedHost) => {
 };
 
 const rangeSchema = z.object({
-  preset: z
-    .enum(["1h", "24h", "7d", "30d", "90d", "12mo", "ytd", "custom"])
-    .default("30d"),
+  preset: z.enum(["1h", "24h", "7d", "30d", "90d", "12mo", "ytd", "custom"]).default("30d"),
   grain: z.enum(["1h", "1d", "1w", "1mo", "1y"]).optional(),
   start: z.number().optional(),
   end: z.number().optional(),
@@ -339,6 +354,7 @@ const querySchema = z.object({
 
 export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   const { store, keys } = options;
+  migrateCredentialRefs(store, keys);
   const app = Fastify({ logger: options.logger ?? false, bodyLimit: 1_000_000 });
 
   /*
@@ -374,6 +390,17 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * `options.cache` is how a hosted deployment supplies something shared.
    */
   const queries = new QueryCache(options.cache ? { store: options.cache } : {});
+  const previews = new SetupPreviews(queries.store, (id) => store.getConnection(id));
+  const queryVersions = new Map(
+    store.listConnections().map((connection) => [connection.id, fingerprintConnection(connection)]),
+  );
+  const refreshQueryIdentity = (connection: ConnectionSpec) => {
+    const current = fingerprintConnection(connection);
+    if (queryVersions.get(connection.id) !== current) {
+      queries.invalidate();
+      queryVersions.set(connection.id, current);
+    }
+  };
 
   // Normalise the static and resolved forms to one shape at the edge, so no
   // route has to care which kind it was given.
@@ -412,7 +439,14 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * Deliberately in memory and short-lived. It is an observation about a
    * moment, not a fact worth persisting, and `refresh` forces a fresh look.
    */
-  const enumerated = new Map<string, { at: number; value: Awaited<ReturnType<typeof analyseConnection>>; shapes: Record<string, InferredShape> }>();
+  const enumerated = new Map<
+    string,
+    {
+      at: number;
+      value: Awaited<ReturnType<typeof analyseConnection>>;
+      shapes: Record<string, InferredShape>;
+    }
+  >();
   const ENUMERATION_TTL = 5 * 60_000;
 
   /**
@@ -492,7 +526,15 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     budget: AnalyseOptions = {},
   ) => {
     const cached = enumerated.get(connection.id);
-    if (!refresh && cached && Date.now() - cached.at < ENUMERATION_TTL) return cached;
+    const currentReport = store.getReport(connection.id);
+    if (
+      !refresh &&
+      cached &&
+      currentReport &&
+      !isStale(currentReport, connection) &&
+      Date.now() - cached.at < ENUMERATION_TTL
+    )
+      return cached;
 
     if (!refresh) {
       const stored = store.getReport(connection.id);
@@ -660,8 +702,6 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   // builder.
   void app.register(partsRoutes(options.parts));
 
-
-
   /*
    * Half-finished widget setups, one per board.
    *
@@ -706,8 +746,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * exists somewhere, we just have not been told where it goes.
    */
   const connectionHasKey = (connection: ConnectionSpec): boolean => {
-    const refs = authKeyRefs(connection.auth);
-    return refs.length === 0 ? !connection.authRequired : refs.every((ref) => keys.has(ref));
+    const refs = connectionKeyRefs(connection);
+    return !connectionNeedsAuthSetup(connection) && refs.every((ref) => keys.has(ref));
   };
 
   /*
@@ -730,7 +770,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     }
     registry.addConnection(connection);
     try {
-      const { value } = await enumerate(connection, false);
+      const { value } = await enumerate(connection, true);
       return value.resources.length > 0
         ? { ok: true }
         : { ok: false, note: "the read completed but found nothing readable" };
@@ -812,6 +852,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
 
   void app.register(
     conciergeRoutes({
+      previews,
       drafts,
       context: conciergeContext,
       planDetail: planDetailFor,
@@ -837,10 +878,10 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   // is worthless.
   const publicConnection = (connection: ReturnType<SpecStore["getConnection"]>) => {
     if (!connection) return null;
-    const refs = authKeyRefs(connection.auth);
+    const refs = connectionKeyRefs(connection);
     // `authRequired` with no auth style chosen yet is not "ready" — the key
     // exists somewhere, we just have not been told where it goes.
-    const hasKey = refs.length === 0 ? !connection.authRequired : refs.every((ref) => keys.has(ref));
+    const hasKey = !connectionNeedsAuthSetup(connection) && refs.every((ref) => keys.has(ref));
     /*
      * What this API's fields are called, resolved rather than copied.
      *
@@ -881,6 +922,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         return reply.status(400).send({ error: "invalid connection", detail: parsed.error.issues });
       }
       store.putConnection(parsed.data);
+      queries.invalidate();
       ensureBoardFor(parsed.data);
       registry.addConnection(parsed.data);
       return publicConnection(parsed.data);
@@ -892,10 +934,10 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     async (request, reply) => {
       const connection = store.getConnection(request.params.id);
       if (!connection) return reply.status(404).send({ error: "no such connection" });
-      if (connection.auth.type === "none") {
+      if (connectionKeyRefs(connection).length === 0) {
         return reply.status(400).send({ error: "this connection does not use a key" });
       }
-      const refs = authKeyRefs(connection.auth);
+      const refs = connectionKeyRefs(connection);
 
       // Multi-part auth sends { keys: { <keyRef>: value } }; the single-secret
       // styles keep the original { key } shape so nothing existing breaks.
@@ -927,6 +969,11 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       for (const [ref, value] of Object.entries(supplied)) {
         if (refs.includes(ref)) keys.set(ref, value);
       }
+      store.putConnection({
+        ...connection,
+        credentialsRevision: (connection.credentialsRevision ?? 0) + 1,
+      });
+      queries.invalidate();
       // Echo only the fact that it worked. Never the key, not even truncated.
       return { ok: true, hasKey: true };
     },
@@ -935,7 +982,12 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   app.delete<{ Params: { id: string } }>("/api/connections/:id/key", async (request, reply) => {
     const connection = store.getConnection(request.params.id);
     if (!connection) return reply.status(404).send({ error: "no such connection" });
-    for (const ref of authKeyRefs(connection.auth)) keys.delete(ref);
+    for (const ref of connectionKeyRefs(connection)) keys.delete(ref);
+    store.putConnection({
+      ...connection,
+      credentialsRevision: (connection.credentialsRevision ?? 0) + 1,
+    });
+    queries.invalidate();
     return { ok: true, hasKey: false };
   });
 
@@ -981,11 +1033,16 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
 
     for (const opId of candidates) {
       try {
-        const result = await registry.fetch(connection.id, opId, {}, {
-          params,
-          now: Date.now(),
-          resolveSecret: async (keyRef) => keys.get(keyRef),
-        });
+        const result = await registry.fetch(
+          connection.id,
+          opId,
+          {},
+          {
+            params,
+            now: Date.now(),
+            resolveSecret: async (keyRef) => keys.get(keyRef),
+          },
+        );
 
         const summary = Array.isArray(result.body)
           ? `${result.body.length} item(s)`
@@ -1064,19 +1121,6 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
      * still proven, so this stays a pass — the same reading as before, now
      * reached only after the alternatives are exhausted.
      */
-    if (forbidden.length > 0 && refused.length === 0) {
-      return {
-        ok: true,
-        forbidden,
-        verified: false,
-        message:
-          `The key works — ${connection.title} accepted it. It would not allow access to ` +
-          `${forbidden.map((id) => `"${id}"`).join(", ")}, which usually means those endpoints ` +
-          `need a scope this key does not have, or belong to modules this account does not use. ` +
-          `Other endpoints are unaffected, but the dialect could not be proven against live data.`,
-      };
-    }
-
     if (lastError?.status === 401) {
       /*
        * The adapter's own wording, not a phrase invented here: a missing key
@@ -1146,6 +1190,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
      * lives in `@freebirdai/dash-spec` precisely so there is no second implementation to
      * drift — two that disagreed would serve one widget the rows of another.
      */
+    refreshQueryIdentity(spec);
     const key = queryKey(connection, op, overrides, resolved);
 
     try {
@@ -1166,6 +1211,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         body: outcome.body,
         meta: {
           ...outcome.meta,
+          receipt: previews.record(key, spec, op, resolved, overrides),
           cache: outcome.outcome,
           ageMs: Number.isFinite(outcome.ageMs) ? outcome.ageMs : 0,
           ...(outcome.staleReason ? { staleReason: outcome.staleReason } : {}),
@@ -1190,10 +1236,10 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   // JSON the moment the wizard finishes.
   const withKeyFlag = (connection: ReturnType<SpecStore["getConnection"]>) => {
     if (!connection) return null;
-    const refs = authKeyRefs(connection.auth);
+    const refs = connectionKeyRefs(connection);
     // `authRequired` with no auth style chosen yet is not "ready" — the key
     // exists somewhere, we just have not been told where it goes.
-    const hasKey = refs.length === 0 ? !connection.authRequired : refs.every((ref) => keys.has(ref));
+    const hasKey = !connectionNeedsAuthSetup(connection) && refs.every((ref) => keys.has(ref));
     return { ...connection, hasKey };
   };
 
@@ -1219,6 +1265,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         validateOpId: connection.validateOpId ?? parsed.data.id,
       });
       store.putConnection(next);
+      queries.invalidate();
       ensureBoardFor(next);
       registry.addConnection(next);
       return withKeyFlag(next);
@@ -1243,6 +1290,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           : ops[0]?.id,
       });
       store.putConnection(next);
+      queries.invalidate();
       ensureBoardFor(next);
       registry.addConnection(next);
       return withKeyFlag(next);
@@ -1268,7 +1316,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     const connection = store.getConnection(request.params.id);
     // Take the secret with it — an orphaned credential in the vault is a
     // liability nobody remembers is there.
-    if (connection) for (const ref of authKeyRefs(connection.auth)) keys.delete(ref);
+    if (connection) for (const ref of connectionKeyRefs(connection)) keys.delete(ref);
     store.deleteConnection(request.params.id);
     // The report describes an API this instance can no longer reach, and
     // leaving it behind would let a same-named connection inherit a stale one.
@@ -1521,33 +1569,30 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * The whole resource array comes back, not just the relations, because
    * editing writes through `PUT /resources` which takes the graph entire.
    */
-  app.get<{ Params: { id: string } }>(
-    "/api/connections/:id/relations",
-    async (request, reply) => {
-      const connection = store.getConnection(request.params.id);
-      if (!connection) return reply.status(404).send({ error: "no such connection" });
+  app.get<{ Params: { id: string } }>("/api/connections/:id/relations", async (request, reply) => {
+    const connection = store.getConnection(request.params.id);
+    if (!connection) return reply.status(404).send({ error: "no such connection" });
 
-      const report = store.getReport(connection.id);
-      const current = report !== null && !isStale(report, connection);
-      const resources = current
-        ? withVerifiedParams(fromReport(report).value.resources, connection.ops)
-        : analyseStructure(connection).resources;
+    const report = store.getReport(connection.id);
+    const current = report !== null && !isStale(report, connection);
+    const resources = current
+      ? withVerifiedParams(fromReport(report).value.resources, connection.ops)
+      : analyseStructure(connection).resources;
 
-      return {
-        connection: connection.id,
-        resources,
-        /** Column names per resource, so a link field is picked rather than typed. */
-        fieldsByResource: Object.fromEntries(
-          Object.entries(report?.shapes ?? {}).map(([id, shape]) => [
-            id,
-            shape.fields.map((field) => field.name),
-          ]),
-        ),
-        source: current ? "report" : report ? "stale" : "endpoints",
-        lastRead: report?.generatedAt ?? null,
-      };
-    },
-  );
+    return {
+      connection: connection.id,
+      resources,
+      /** Column names per resource, so a link field is picked rather than typed. */
+      fieldsByResource: Object.fromEntries(
+        Object.entries(report?.shapes ?? {}).map(([id, shape]) => [
+          id,
+          shape.fields.map((field) => field.name),
+        ]),
+      ),
+      source: current ? "report" : report ? "stale" : "endpoints",
+      lastRead: report?.generatedAt ?? null,
+    };
+  });
 
   /** Accept a capabilities proposal. This is the approval step. */
   app.put<{ Params: { id: string }; Body: unknown }>(
@@ -1565,6 +1610,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
 
       const next = { ...connection, resources: parsed.data.resources };
       store.putConnection(next);
+      queries.invalidate();
       ensureBoardFor(next);
       registry.addConnection(next);
       return publicConnection(next);
@@ -1583,16 +1629,23 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       if (!op) return reply.status(404).send({ error: "no such operation" });
       registry.addConnection(connection);
 
-      const result = await registry.fetch(connection.id, op.id, {}, {
-        params: { range: resolveRange({ preset: "30d", now: Date.now() }), filters: {} },
-        now: Date.now(),
-        resolveSecret: async (keyRef) => keys.get(keyRef),
-      });
+      const result = await registry.fetch(
+        connection.id,
+        op.id,
+        {},
+        {
+          params: { range: resolveRange({ preset: "30d", now: Date.now() }), filters: {} },
+          now: Date.now(),
+          resolveSecret: async (keyRef) => keys.get(keyRef),
+        },
+      );
 
       const shape = inferShape(result.body, op.rowsPath ? { rowsPath: op.rowsPath } : {});
       const rows = Array.isArray(result.body)
         ? result.body
-        : (shape.rowsPath === "$" ? [result.body] : []);
+        : shape.rowsPath === "$"
+          ? [result.body]
+          : [];
 
       return {
         rowsPath: shape.rowsPath,
@@ -1735,7 +1788,9 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     if ("provider" in body.data) {
       const wanted = body.data.provider;
       if (wanted !== null && !isProvider(wanted)) {
-        return reply.status(400).send({ error: `"${wanted}" is not a provider this server knows.` });
+        return reply
+          .status(400)
+          .send({ error: `"${wanted}" is not a provider this server knows.` });
       }
       /*
        * A provider with no key is refused rather than stored. Unlike a model
@@ -1793,6 +1848,14 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    */
   void app.register(
     mapRoutes({
+      onRefreshed: (previous, fresh) => {
+        for (const connection of store.listConnections()) {
+          if (connection.catalog !== previous.id) continue;
+          store.putConnection(refreshCatalogConnection(connection, previous, fresh));
+          enumerated.delete(connection.id);
+        }
+        queries.invalidate();
+      },
       catalog,
       llm: (task) => resolveLlm(task),
       // The same SSRF-guarded, allowlist-free entry point discovery uses. A
@@ -1810,23 +1873,20 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   });
 
   /** Store a locally-derived dialect in the overlay, above the repo seed. */
-  app.put<{ Params: { id: string }; Body: unknown }>(
-    "/api/catalog/:id",
-    async (request, reply) => {
-      if (!catalog) return reply.status(501).send({ error: "no catalog configured" });
-      const parsed = catalogEntrySchema.safeParse({
-        ...(request.body as Record<string, unknown>),
-        id: request.params.id,
+  app.put<{ Params: { id: string }; Body: unknown }>("/api/catalog/:id", async (request, reply) => {
+    if (!catalog) return reply.status(501).send({ error: "no catalog configured" });
+    const parsed = catalogEntrySchema.safeParse({
+      ...(request.body as Record<string, unknown>),
+      id: request.params.id,
+    });
+    if (!parsed.success) {
+      return reply.status(400).send({
+        error: "invalid catalog entry",
+        detail: parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`),
       });
-      if (!parsed.success) {
-        return reply.status(400).send({
-          error: "invalid catalog entry",
-          detail: parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`),
-        });
-      }
-      return catalog.put(parsed.data);
-    },
-  );
+    }
+    return catalog.put(parsed.data);
+  });
 
   /**
    * Create a connection from a catalog entry — the fast path that turns
@@ -1867,8 +1927,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     ensureBoardFor(connection);
     registry.addConnection(connection);
 
-    const refs = authKeyRefs(connection.auth);
-    const ready = refs.length === 0 ? !connection.authRequired : refs.every((ref) => keys.has(ref));
+    const refs = connectionKeyRefs(connection);
+    const ready = !connectionNeedsAuthSetup(connection) && refs.every((ref) => keys.has(ref));
     return {
       ...connection,
       hasKey: ready,
@@ -2120,10 +2180,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
      * is talking about. The client sends what it resolved; the board's own
      * default stands in when it did not.
      */
-    const resolvedFor = (
-      dashboard: DashboardSpec,
-      header: unknown,
-    ): ResolvedParams => {
+    const resolvedFor = (dashboard: DashboardSpec, header: unknown): ResolvedParams => {
       const parts = typeof header === "string" ? header.split(":") : [];
       const start = Number(parts[1]);
       const end = Number(parts[2]);
@@ -2169,13 +2226,10 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       const resolvedOp = getOp(spec, input.op);
       if (!resolvedOp) return null;
 
-      const { overrides, inputs } = splitOpInputs(
-        resolvedOp,
-        input.params,
-        input.resolved.filters,
-      );
+      const { overrides, inputs } = splitOpInputs(resolvedOp, input.params, input.resolved.filters);
       const scoped: ResolvedParams = { ...input.resolved, filters: inputs };
       const key = queryKey(input.connection, input.op, overrides, scoped);
+      refreshQueryIdentity(spec);
 
       if (input.cacheOnly) {
         const cached = queries.store.get(key);
@@ -2223,9 +2277,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         return {
           ok: false as const,
           reason:
-            error instanceof AdapterError
-              ? error.userMessage
-              : `"${input.op}" could not be read.`,
+            error instanceof AdapterError ? error.userMessage : `"${input.op}" could not be read.`,
         };
       }
     };
@@ -2263,9 +2315,10 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           typeof body === "object" && body !== null && !Array.isArray(body)
             ? [body as Record<string, unknown>]
             : Array.isArray(body)
-              ? (body.filter(
-                  (row) => typeof row === "object" && row !== null,
-                ) as Record<string, unknown>[])
+              ? (body.filter((row) => typeof row === "object" && row !== null) as Record<
+                  string,
+                  unknown
+                >[])
               : [],
       });
     };
@@ -2414,7 +2467,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           read: readForChat,
           resolved: resolvedFor(dashboard, ctx.auth.extra?.["range"]),
           rowsOf: rowsForOp,
-          rowsPathFor: (op) => context.shapes[op]?.rowsPath ?? "$",
+          rowsPathFor: (op, connection) =>
+            contextForConnection(context, connection).shapes[op]?.rowsPath ?? "$",
         });
 
         if (name === WRITE_TOOL_NAME) {
@@ -2587,7 +2641,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             // `CacheStore.get` answers a miss with `undefined`, not null.
             isCached: (key) => queries.store.get(key) !== undefined,
             rowsOf: rowsForOp,
-            rowsPathFor: (op) => context.shapes[op]?.rowsPath ?? "$",
+            rowsPathFor: (op, connection) =>
+              contextForConnection(context, connection).shapes[op]?.rowsPath ?? "$",
           });
           answered.set(memoKey, { at: Date.now(), value: outcome });
           return outcome;
@@ -2676,6 +2731,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             putDashboard: (spec) => store.putDashboard(spec),
             onChanged: () => invalidateRegistry(dashboard.id),
             readConnection,
+            checkPreview: (widgets) => previews.failure(widgets),
+            previewStatus: (widget) => previews.status(widget).status,
             /*
              * What opening one record shows. Reads nothing upstream — every
              * field and every related collection is already known from the
@@ -2705,8 +2762,12 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             ...(options.llm
               ? {
                   narrow: async ({ op, phrase }: { op: string; phrase: string }) => {
-                    const context = conciergeContext();
-                    const owner = context.ops.find((entry) => entry.id === op)?.connection;
+                    const context = contextForConnection(
+                      conciergeContext(),
+                      (await drafts.get(dashboard.id))?.connection,
+                    );
+                    const matches = context.ops.filter((entry) => entry.id === op);
+                    const owner = matches.length === 1 ? matches[0]?.connection : undefined;
                     const saved = owner
                       ? findNarrowing(narrowings.list(owner), { op, phrase })
                       : null;
@@ -2735,14 +2796,19 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
                       fetchRows: async (opId) => {
                         const target = getOp(connection, opId);
                         if (!target) throw new Error(`no endpoint named "${opId}"`);
-                        const result = await registry.fetch(connection.id, opId, {}, {
-                          params: {
-                            range: resolveRange({ preset: "30d", now: Date.now() }),
-                            filters: {},
+                        const result = await registry.fetch(
+                          connection.id,
+                          opId,
+                          {},
+                          {
+                            params: {
+                              range: resolveRange({ preset: "30d", now: Date.now() }),
+                              filters: {},
+                            },
+                            now: Date.now(),
+                            resolveSecret: async (keyRef) => keys.get(keyRef),
                           },
-                          now: Date.now(),
-                          resolveSecret: async (keyRef) => keys.get(keyRef),
-                        });
+                        );
                         return result.body;
                       },
                     });
@@ -2813,11 +2879,13 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
              * a fraction of them. Empty, and absent from the prompt, whenever
              * nothing is filtering.
              */
-            describeFilters(parseFilters(auth.extra?.["filters"]), (widgetId) =>
-              store
-                .listDashboards()
-                .flatMap((board) => board.widgets)
-                .find((widget) => widget.id === widgetId)?.title,
+            describeFilters(
+              parseFilters(auth.extra?.["filters"]),
+              (widgetId) =>
+                store
+                  .listDashboards()
+                  .flatMap((board) => board.widgets)
+                  .find((widget) => widget.id === widgetId)?.title,
             ),
           ]
             .filter((line) => line.length > 0)
@@ -2853,8 +2921,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
        * to change rather than a query somewhere deep in the adapter.
        */
       getAuthContext: (request: unknown) => {
-        const headers =
-          (request as { headers?: Record<string, unknown> })?.headers ?? {};
+        const headers = (request as { headers?: Record<string, unknown> })?.headers ?? {};
         return {
           userId: LOCAL_USER_ID,
           extra: {

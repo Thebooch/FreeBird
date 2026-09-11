@@ -134,7 +134,7 @@ export const readRecords = async (input: ReadRecordsInput): Promise<ReadRecordsR
     };
   }
 
-  const rowsPath = deps.rowsPathFor(binding.op);
+  const rowsPath = deps.rowsPathFor(binding.op, binding.connection);
   const records: Record<string, unknown>[] = [];
   const missed: string[] = [];
   let requests = 0;

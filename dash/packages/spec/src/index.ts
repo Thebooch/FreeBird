@@ -6,6 +6,7 @@ export { isAggregation, parseAggregation } from "./aggregation.js";
 export type { ParsedAggregation } from "./aggregation.js";
 
 export { COERCION_DESCRIPTIONS, applyCoercion, coercionSchema } from "./coercion.js";
+export { connectionKeyRef } from "./primitives.js";
 export type { Coercion } from "./coercion.js";
 
 export {
@@ -38,19 +39,16 @@ export {
   connectionSchema,
   effectiveAuth,
   getOp,
+  connectionAuths,
+  connectionKeyRefs,
+  connectionNeedsAuthSetup,
   getOpDef,
   opDefSchema,
   opSchema,
   paginationSchema,
   resolveOp,
 } from "./connection.js";
-export type {
-  AuthSpec,
-  ConnectionSpec,
-  OpDef,
-  OpSpec,
-  PaginationSpec,
-} from "./connection.js";
+export type { AuthSpec, ConnectionSpec, OpDef, OpSpec, PaginationSpec } from "./connection.js";
 
 export {
   ARCHETYPES,
@@ -100,6 +98,7 @@ export {
   drillDownSchema,
   enumerationOutcomeSchema,
   fingerprintOps,
+  fingerprintConnection,
   isStale,
   joinSchema,
   parseCapabilityReport,

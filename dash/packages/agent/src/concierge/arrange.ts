@@ -3,7 +3,7 @@ import { fieldsForRole } from "../bind.js";
 import type { InferredShape } from "../infer.js";
 import type { ConciergeDraft } from "./draft.js";
 import { isRoleStep, partView, partsOf, withPart } from "./draft.js";
-import { fieldPool, type ConciergeContext } from "./steps.js";
+import { contextForConnection, fieldPool, type ConciergeContext } from "./steps.js";
 import { contractFor } from "@freebirdai/dash-spec";
 
 /**
@@ -103,9 +103,7 @@ export const pairEndpoints = (
   leftOp: string,
   rightOp: string,
 ): JoinPairing | null => {
-  const declared = context.joins.find(
-    (join) => join.fromOp === leftOp && join.toOp === rightOp,
-  );
+  const declared = context.joins.find((join) => join.fromOp === leftOp && join.toOp === rightOp);
   if (declared) {
     return {
       leftField: declared.leftField,
@@ -211,8 +209,12 @@ export const feasibleArrangements = (
    */
   const primary = parts[0]?.op;
   const second = parts[1]?.op;
-  if (parts.length === 2 && primary && second) {
-    const pairing = pairEndpoints(context, primary, second);
+  if (parts.length === 2 && primary && second && parts[0]?.connection === parts[1]?.connection) {
+    const pairing = pairEndpoints(
+      contextForConnection(context, parts[0]?.connection),
+      primary,
+      second,
+    );
     if (pairing) {
       options.push({
         id: "merged",
@@ -261,7 +263,8 @@ export const applyArrangement = (
         ...draft,
         interleave: false,
         group: {
-          title: draft.group?.title ?? parts.map((part) => part.title ?? part.op ?? "").join(" and "),
+          title:
+            draft.group?.title ?? parts.map((part) => part.title ?? part.op ?? "").join(" and "),
           display: arrangement,
         },
       },
@@ -304,10 +307,20 @@ export const applyArrangement = (
   const primary = parts[0]?.op;
   const second = parts[1]?.op;
   if (!primary || !second) return { draft, error: "both widgets need an endpoint first" };
+  if (parts[0]?.connection !== parts[1]?.connection)
+    return {
+      draft,
+      error:
+        "These APIs can be shown side by side; merging their records needs an explicit cross-source join.",
+    };
+  context = contextForConnection(context, parts[0]?.connection);
 
   const pairing = pairEndpoints(context, primary, second);
   if (!pairing) {
-    return { draft, error: `nothing on ${primary} carries ${second}'s identity, so they cannot be merged` };
+    return {
+      draft,
+      error: `nothing on ${primary} carries ${second}'s identity, so they cannot be merged`,
+    };
   }
 
   const merged: ConciergeDraft = {
@@ -328,9 +341,7 @@ export const applyArrangement = (
        * follows, and the same clearing.
        */
       roles: {},
-      answered: partView(draft, 0).answered.filter(
-        (id) => !isRoleStep(id) && id !== "component",
-      ),
+      answered: partView(draft, 0).answered.filter((id) => !isRoleStep(id) && id !== "component"),
     }),
     interleave: false,
     group: undefined,

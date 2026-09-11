@@ -118,14 +118,20 @@ export const capabilityReportSchema = z.object({
    * longer exists in the shape we recorded — see {@link isStale}.
    */
   opsFingerprint: z.string().min(1).max(64),
+  connectionFingerprint: z.string().max(64).optional(),
 
   resources: z.array(resourceSchema).max(400).default([]),
   drillDowns: z.array(drillDownSchema).max(400).default([]),
   joins: z.array(joinSchema).max(400).default([]),
   unknowns: z.array(unknownResourceSchema).max(400).default([]),
-  searchable: z.array(z.object({ op: idSchema, param: z.string().max(120) })).max(400).default([]),
+  searchable: z
+    .array(z.object({ op: idSchema, param: z.string().max(120) }))
+    .max(400)
+    .default([]),
   rangeFilterable: z
-    .array(z.object({ op: idSchema, start: z.string().max(120), end: z.string().max(120).optional() }))
+    .array(
+      z.object({ op: idSchema, start: z.string().max(120), end: z.string().max(120).optional() }),
+    )
     .max(400)
     .default([]),
 
@@ -160,14 +166,13 @@ export const parseCapabilityReport = (
 /**
  * Fingerprint the endpoint set a report was built from.
  *
- * Id and path only. A title change is cosmetic and must not invalidate a report
- * that cost forty requests; a path change means we are looking at a different
- * endpoint and the recorded shape may be wrong.
+ * Include execution settings and field declarations. Cosmetic titles and
+ * descriptions do not invalidate a report that cost real requests.
  */
 export const fingerprintOps = (ops: readonly OpDef[]): string =>
   fnv1a(
     [...ops]
-      .map((op) => `${op.id}:${op.path}`)
+      .map(({ title: _title, description: _description, ...op }) => JSON.stringify(op))
       .sort()
       .join("\n"),
   );
@@ -180,7 +185,22 @@ export const fingerprintOps = (ops: readonly OpDef[]): string =>
  * without being asked is the whole thing the consent step exists to prevent.
  */
 export const isStale = (report: CapabilityReport, connection: ConnectionSpec): boolean =>
-  report.opsFingerprint !== fingerprintOps(connection.ops);
+  report.opsFingerprint !== fingerprintOps(connection.ops) ||
+  (report.connectionFingerprint !== undefined &&
+    report.connectionFingerprint !== fingerprintConnection(connection));
+
+/** Execution identity only; titles and timestamps do not change returned data. */
+export const fingerprintConnection = (connection: ConnectionSpec): string =>
+  fnv1a(
+    JSON.stringify({
+      kind: connection.kind,
+      baseUrl: connection.baseUrl,
+      auth: connection.auth,
+      dialect: connection.dialect,
+      ops: fingerprintOps(connection.ops),
+      credentialsRevision: connection.credentialsRevision,
+    }),
+  );
 
 /* ── drift ────────────────────────────────────────────────────────────── */
 

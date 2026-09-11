@@ -8,6 +8,7 @@ import {
   remainingStepsAcross,
 } from "@freebirdai/dash-agent";
 import type { DashboardSpec, WidgetSpec } from "@freebirdai/dash-spec";
+import type { PreviewStatus } from "./preview.js";
 
 /**
  * What a setup looks like right now, as one shape.
@@ -43,6 +44,7 @@ const renderControl = (entry: StepEntry) => ({
 });
 
 export interface StateInput {
+  readonly previewStatus?: ((widget: WidgetSpec) => PreviewStatus) | undefined;
   readonly draft: ConciergeDraft | null;
   readonly context: ConciergeContext;
   readonly board: DashboardSpec | null;
@@ -69,7 +71,7 @@ const nextAction = (
 ): string => {
   if (ready) {
     return (
-      "This is buildable and the user can see a live preview of it. Say briefly what you " +
+      "This is configured and build-valid. Its data preview still needs checking before confirmation. Say briefly what you " +
       "made, in one sentence. Do not call confirm_setup until they say they want it."
     );
   }
@@ -77,7 +79,7 @@ const nextAction = (
   const piece = missing[0];
   if (!piece) return "Nothing more is needed.";
 
-  if (piece.stepId === "read" || piece.stepId === "connect") {
+  if (piece.stepId === "read" || piece.stepId === "connect" || piece.stepId.startsWith("input:")) {
     return "Handle this with answer_step — it is not something revise_setup can set.";
   }
 
@@ -124,6 +126,17 @@ export const conciergeState = (input: StateInput) => {
    */
   const widgets: readonly WidgetSpec[] = built?.widgets ?? [];
   const widget: WidgetSpec | null = widgets[0] ?? null;
+  const previews = widgets.map((entry) => input.previewStatus?.(entry) ?? "unchecked");
+  const previewStatus: PreviewStatus =
+    previews.length === 0 || previews.includes("unchecked")
+      ? "unchecked"
+      : previews.includes("invalid")
+        ? "invalid"
+        : previews.includes("partial")
+          ? "partial"
+          : previews.every((status) => status === "empty")
+            ? "empty"
+            : "checked";
 
   return {
     active: true as const,
@@ -140,11 +153,18 @@ export const conciergeState = (input: StateInput) => {
      */
     startedAt: draft.startedAt ?? null,
     /** True once nothing is left that blocks a widget. */
-    ready: state.ready,
+    configured: state.ready,
+    buildValid: widget !== null && built?.errors.length === 0,
+    previewStatus,
+    ready: state.ready && widget !== null && built?.errors.length === 0,
     /** What still blocks one, so the assistant knows what to ask about. */
     missing: state.missing,
     /** The next call to make, named in the result so a turn does not end early. */
-    nextAction: nextAction(draft, context, state.ready, state.missing),
+    nextAction: built?.errors.length
+      ? `The widget could not be built: ${built.errors.join("; ")}. Correct the draft before confirming.`
+      : state.ready && ["checked", "empty", "partial"].includes(previewStatus)
+        ? `The preview is ${previewStatus}. Describe any empty or partial result, and confirm only when the user asks to add it.`
+        : nextAction(draft, context, state.ready, state.missing),
     /** The next question. Null in assisted mode once nothing blocks a widget. */
     step: step ? renderStep(step) : null,
     /** Every decision, for the controls on the approval card. */
@@ -172,18 +192,19 @@ export const conciergeState = (input: StateInput) => {
      * endpoints, so the model never adds to this list, only picks from it.
      */
     arrangements: feasibleArrangements(draft, context),
-    summary: built && built.authored.length > 0
-      ? {
-          widgetId: built.authored[0]?.id ?? "",
-          title: widget?.title ?? "",
-          component: widget?.component ?? "",
-          headline: built.authored.map((entry) => entry.headline).join(" "),
-          why: built.authored.flatMap((entry) => entry.why),
-          /* Every widget is its own request, so the price is the sum. */
-          requests: built.authored.reduce((total, entry) => total + entry.cost.requests, 0),
-          onOpen: built.authored.reduce((total, entry) => total + entry.cost.onOpen, 0),
-        }
-      : null,
+    summary:
+      built && built.authored.length > 0
+        ? {
+            widgetId: built.authored[0]?.id ?? "",
+            title: widget?.title ?? "",
+            component: widget?.component ?? "",
+            headline: built.authored.map((entry) => entry.headline).join(" "),
+            why: built.authored.flatMap((entry) => entry.why),
+            /* Every widget is its own request, so the price is the sum. */
+            requests: built.authored.reduce((total, entry) => total + entry.cost.requests, 0),
+            onOpen: built.authored.reduce((total, entry) => total + entry.cost.onOpen, 0),
+          }
+        : null,
     /*
      * Shown before the confirm, never after. A join that can repeat a row
      * turns a total into a number that is wrong and looks right, and reading

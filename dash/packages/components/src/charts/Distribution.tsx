@@ -32,10 +32,10 @@ export const Distribution = (props: WidgetRenderProps): JSX.Element => {
       value: typeof row[countColumn] === "number" ? (row[countColumn] as number) : 0,
     }));
     // formatBucket is derived from props and stable enough for this memo.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.rows, bucketColumn, countColumn]);
 
-  if (!bucketColumn || !countColumn) return <Message>This widget has no bucket and count binding.</Message>;
+  if (!bucketColumn || !countColumn)
+    return <Message>This widget has no bucket and count binding.</Message>;
   if (bars.length === 0) return <Message>No distribution to show in this range.</Message>;
 
   const width = size.width || 480;
@@ -57,7 +57,12 @@ export const Distribution = (props: WidgetRenderProps): JSX.Element => {
 
   return (
     <div className="dash-chart" ref={ref}>
-      <svg width={width} height={height} role="img" aria-label={`${props.title}: ${bars.length} buckets`}>
+      <svg
+        width={width}
+        height={height}
+        role="img"
+        aria-label={`${props.title}: ${bars.length} buckets`}
+      >
         {ticks.map((tick) => (
           <g key={tick}>
             <line
@@ -67,7 +72,13 @@ export const Distribution = (props: WidgetRenderProps): JSX.Element => {
               y1={y(tick)}
               y2={y(tick)}
             />
-            <text className="dash-tick" x={margin.left - 8} y={y(tick)} textAnchor="end" dominantBaseline="middle">
+            <text
+              className="dash-tick"
+              x={margin.left - 8}
+              y={y(tick)}
+              textAnchor="end"
+              dominantBaseline="middle"
+            >
               {formatAxis(tick)}
             </text>
           </g>
@@ -77,8 +88,18 @@ export const Distribution = (props: WidgetRenderProps): JSX.Element => {
           const barHeight = Math.max(0, margin.top + plotHeight - y(bar.value));
           const left = band.center(index) - thickness / 2;
           return (
-            <g key={`${bar.label}-${index}`} onPointerEnter={() => setHover(index)} onPointerLeave={() => setHover(null)}>
-              <rect x={left} y={margin.top} width={thickness} height={plotHeight} fill="transparent" />
+            <g
+              key={`${bar.label}-${index}`}
+              onPointerEnter={() => setHover(index)}
+              onPointerLeave={() => setHover(null)}
+            >
+              <rect
+                x={left}
+                y={margin.top}
+                width={thickness}
+                height={plotHeight}
+                fill="transparent"
+              />
               <path
                 d={barPath(left, y(bar.value), thickness, barHeight, 4, "top")}
                 fill={seriesVar(0)}
@@ -113,7 +134,9 @@ export const Distribution = (props: WidgetRenderProps): JSX.Element => {
           x={band.center(hover)}
           y={y(bars[hover]!.value) - 6}
           head={bars[hover]!.label}
-          rows={[{ key: "count", label: countColumn, value: formatCount(bars[hover]!.value), slot: 0 }]}
+          rows={[
+            { key: "count", label: countColumn, value: formatCount(bars[hover]!.value), slot: 0 },
+          ]}
         />
       )}
     </div>

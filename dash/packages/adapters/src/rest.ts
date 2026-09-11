@@ -1,5 +1,6 @@
 import {
   mergePages,
+  firstPageParams,
   nextPageParams,
   readPath,
   rowsAt,
@@ -7,13 +8,14 @@ import {
   withRows,
 } from "./paginate.js";
 import type { ConnectionSpec, OpSpec, PaginationSpec } from "@freebirdai/dash-spec";
-import { allowedHost, authKeyRefs, interpolate, missingInputs } from "@freebirdai/dash-spec";
 import {
-  AdapterError,
-  type FetchContext,
-  type FetchResult,
-  type SourceAdapter,
-} from "./types.js";
+  allowedHost,
+  authKeyRefs,
+  interpolate,
+  missingInputs,
+  pathParamNames,
+} from "@freebirdai/dash-spec";
+import { AdapterError, type FetchContext, type FetchResult, type SourceAdapter } from "./types.js";
 
 export interface HttpResponse {
   readonly status: number;
@@ -82,8 +84,22 @@ export class RestAdapter implements SourceAdapter {
       throw new AdapterError(`connection "${connection.id}" has no base URL`, { status: 400 });
     }
 
+    const auth = op.auth ?? connection.auth;
+    if (
+      op.authRequired ||
+      (op.auth === undefined && connection.authRequired && auth.type === "none")
+    ) {
+      throw new AdapterError(
+        "This endpoint needs its authentication configured before it can be read.",
+        { status: 400 },
+      );
+    }
     const started = ctx.now;
     const warnings: string[] = [];
+    if (connection.paginationPending && op.pagination.kind === "none")
+      warnings.push(
+        "Pagination has not been confirmed for this API; this response may contain only the first page.",
+      );
     const host = allowedHost(connection);
 
     const headers: Record<string, string> = {};
@@ -95,7 +111,7 @@ export class RestAdapter implements SourceAdapter {
     // that gets reported back.
     let redactQueryParam: string | null = null;
     const secrets = new Map<string, string>();
-    for (const keyRef of authKeyRefs(connection.auth)) {
+    for (const keyRef of authKeyRefs(auth)) {
       const value = (await ctx.resolveSecret?.(keyRef)) ?? null;
       if (!value) {
         throw new AdapterError(`no key stored for "${keyRef}"`, {
@@ -106,9 +122,9 @@ export class RestAdapter implements SourceAdapter {
       secrets.set(keyRef, value);
     }
     // The single-secret styles all read the same slot.
-    const secret = connection.auth.type === "none" ? null : (secrets.get(authKeyRefs(connection.auth)[0]!) ?? null);
+    const secret = auth.type === "none" ? null : (secrets.get(authKeyRefs(auth)[0]!) ?? null);
 
-    const query = new URLSearchParams();
+    const query = new URLSearchParams(firstPageParams(op.pagination));
     for (const [name, value] of Object.entries(op.query)) {
       query.set(name, interpolate(String(value), ctx.params));
     }
@@ -119,30 +135,38 @@ export class RestAdapter implements SourceAdapter {
       else query.set(name, resolved);
     }
 
+    for (const [name, value] of Object.entries(firstPageParams(op.pagination))) {
+      if (query.get(name) !== value)
+        throw new AdapterError(
+          `Pagination input ${name} conflicts with this endpoint's pagination settings. Update the endpoint settings before loading it.`,
+          { status: 400 },
+        );
+    }
+
     if (secret) {
-      switch (connection.auth.type) {
+      switch (auth.type) {
         case "bearer":
           headers.authorization = `Bearer ${secret}`;
           break;
         case "header":
-          headers[connection.auth.header.toLowerCase()] = connection.auth.template
-            ? connection.auth.template.replace("{{key}}", secret)
+          headers[auth.header.toLowerCase()] = auth.template
+            ? auth.template.replace("{{key}}", secret)
             : secret;
           break;
         case "query":
-          query.set(connection.auth.param, secret);
-          redactQueryParam = connection.auth.param;
+          query.set(auth.param, secret);
+          redactQueryParam = auth.param;
           break;
         case "basic":
-          headers.authorization = `Basic ${base64(`${connection.auth.username}:${secret}`)}`;
+          headers.authorization = `Basic ${base64(`${auth.username}:${secret}`)}`;
           break;
       }
     }
 
     // Multi-header auth is its own loop: each part carries its own secret, so
     // there is no single `secret` for the switch above to use.
-    if (connection.auth.type === "headers") {
-      for (const part of connection.auth.parts) {
+    if (auth.type === "headers") {
+      for (const part of auth.parts) {
         const value = secrets.get(part.keyRef)!;
         headers[part.header.toLowerCase()] = part.template
           ? part.template.replace("{{key}}", value)
@@ -156,14 +180,29 @@ export class RestAdapter implements SourceAdapter {
      * parameters *and* the path template — see its comment for why the path
      * case is the dangerous one.
      */
-    const unresolved = missingInputs(op, ctx.params.filters);
+    const supplied = { ...Object.fromEntries(query), ...ctx.params.filters };
+    // Query values are validated where they are sent; path values come only
+    // from path inputs, so a query parameter cannot satisfy a missing path id.
+    for (const param of op.params) {
+      if (param.in === "query") supplied[param.name] = query.get(param.name) ?? "";
+    }
+    const unresolved = missingInputs(op, supplied);
+    for (const name of pathParamNames(op.path)) {
+      if (
+        (ctx.params.filters[name] === undefined || ctx.params.filters[name] === "") &&
+        !unresolved.includes(name)
+      )
+        unresolved.push(name);
+    }
 
     if (unresolved.length > 0) {
       throw new AdapterError(`unresolved path parameters: ${unresolved.join(", ")}`, {
         status: 400,
         userMessage: `"${op.title}" needs a value for ${unresolved
           .map((name) => `"${name}"`)
-          .join(" and ")} before it can be called. Pick an endpoint that takes no parameters, or supply one.`,
+          .join(
+            " and ",
+          )} before it can be called. Pick an endpoint that takes no parameters, or supply one.`,
       });
     }
 
@@ -183,6 +222,7 @@ export class RestAdapter implements SourceAdapter {
 
     while (nextUrl && pageIndex < op.maxPages) {
       if (seen.has(nextUrl)) {
+        truncated = true;
         warnings.push("pagination repeated a page and was stopped");
         break;
       }
@@ -244,16 +284,8 @@ export class RestAdapter implements SourceAdapter {
         });
       }
       /*
-       * 401 and 403 are opposite answers, and saying the same thing about both
-       * is how a working key gets reported as a broken one.
-       *
-       * A 401 means the credential was not accepted. A 403 means it *was* —
-       * you cannot be forbidden without first being identified — and this
-       * particular resource is off limits. Plenty of APIs scope a key per
-       * module, so one endpoint refusing says nothing about the next.
-       *
-       * Telling somebody their key is wrong when it is provably right sends
-       * them off to reissue credentials that were never the problem.
+       * Keep authentication rejection distinct from denied access. Providers
+       * use 403 for several reasons; it cannot prove the key was accepted.
        */
       if (response.status === 401) {
         throw new AdapterError("auth rejected (401)", {
@@ -264,7 +296,7 @@ export class RestAdapter implements SourceAdapter {
       if (response.status === 403) {
         throw new AdapterError("auth forbidden (403)", {
           status: 403,
-          userMessage: `${connection.title} accepted the key but will not allow access to this endpoint. It is likely missing a scope, or belongs to a module this account does not have.`,
+          userMessage: `${connection.title} denied access to this endpoint. Check the credential and its permissions; this response alone does not prove the key was accepted.`,
         });
       }
       if (response.status >= 400) {
@@ -277,6 +309,13 @@ export class RestAdapter implements SourceAdapter {
       const body = parseJson(response.text, response.url);
       pages.push(body);
       pageIndex++;
+      if (op.pagination.kind !== "none" && rowsAt(body, op.rowsPath) === null) {
+        truncated = true;
+        warnings.push(
+          "The declared row list was not found; pagination completeness could not be checked.",
+        );
+        break;
+      }
 
       nextUrl = nextPageUrl({
         pagination: op.pagination,
@@ -298,10 +337,7 @@ export class RestAdapter implements SourceAdapter {
       }
     }
 
-    const merged =
-      pages.length === 1
-        ? pages[0]
-        : mergePages(pages, op.rowsPath, warnings);
+    const merged = pages.length === 1 ? pages[0] : mergePages(pages, op.rowsPath, warnings);
 
     /*
      * Offered back only for a single-page result. Quoting a page-one validator

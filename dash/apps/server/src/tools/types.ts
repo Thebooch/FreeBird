@@ -149,7 +149,7 @@ export interface ToolDeps {
   readonly read: OpReader;
   readonly resolved: ResolvedParams;
   readonly rowsOf: (body: unknown, rowsPath: string) => Record<string, unknown>[];
-  readonly rowsPathFor: (op: string) => string;
+  readonly rowsPathFor: (op: string, connection?: string) => string;
 }
 
 /**

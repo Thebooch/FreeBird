@@ -16,9 +16,9 @@ import type { CatalogEntry, ConnectionSpec, OpSpec } from "@freebirdai/dash-spec
  * only thing that settles it is asking the real API and finding rows where the
  * dialect claimed they would be.
  *
- * Note what is deliberately *not* enough. A 403 is treated as a passing
- * validation elsewhere — correctly, because it proves the credential works —
- * but it says nothing about the envelope, so it must never verify a dialect.
+ * A 403 proves neither credential validity nor a usable response, so it cannot
+ * verify a dialect. This check establishes response shape, not pagination or
+ * date-filter semantics.
  * Neither may an empty result: `rowsPath` resolving to `[]` is indistinguishable
  * from resolving to nothing at all, and under-claiming is the only safe
  * direction for a flag whose whole job is to say "this has been proven".
@@ -119,7 +119,8 @@ export const validationCandidates = (
 
   // The declared one first, always: it is the operator's own choice and may
   // well work. This only ever adds fallbacks behind it.
-  add(connection.validateOpId);
+  if (connection.ops.some((def) => def.id === connection.validateOpId && callable(def)))
+    add(connection.validateOpId);
 
   // Then collections, which are what a dialect's rowsPath and pagination
   // actually describe — a single-object endpoint proves much less.

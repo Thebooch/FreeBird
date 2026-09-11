@@ -1,5 +1,5 @@
 import type { CatalogEntry, WidgetSpec } from "@freebirdai/dash-spec";
-import { parseWidget } from "@freebirdai/dash-spec";
+import { parseWidget, connectionAuths, connectionNeedsAuthSetup } from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useState } from "react";
 import {
   ApiError,
@@ -33,7 +33,9 @@ const STEPS: ReadonlyArray<{ id: View; label: string }> = [
 ];
 
 const StepRail = ({ current }: { current: View }): JSX.Element => {
-  const index = STEPS.findIndex((step) => step.id === current || (current === "manual" && step.id === "choose"));
+  const index = STEPS.findIndex(
+    (step) => step.id === current || (current === "manual" && step.id === "choose"),
+  );
   return (
     <div className="dash-steps-rail">
       {STEPS.map((step, i) => (
@@ -330,7 +332,8 @@ export const ConnectionManager = ({
    * spec may declare auth the catalog never described.
    */
   /** True when the description required a key but never said where it goes. */
-  const authUndeclared = Boolean(draft?.authRequired) && draft?.auth.type === "none";
+  const authUndeclared =
+    Boolean(draft && connectionNeedsAuthSetup(draft)) && draft?.auth.type === "none";
 
   /** The auth the user just described, ready to be written to the connection. */
   const describedAuth = (): Record<string, unknown> => {
@@ -406,17 +409,32 @@ export const ConnectionManager = ({
       return [{ keyRef: `${id}-key`, nameValue: null, valueLabel: "API key" }];
     }
 
-    const auth = draft?.auth;
-    if (!auth || auth.type === "none") return [];
-    if (auth.type === "headers") {
-      return auth.parts.map((part) => ({
-        keyRef: part.keyRef,
-        nameValue: null,
-        valueLabel: part.label ?? part.header,
-        hint: `Sent as the ${part.header} header.`,
-      }));
-    }
-    return [{ keyRef: auth.keyRef, nameValue: null, valueLabel: "API key" }];
+    if (!draft) return [];
+    const rows = connectionAuths(draft).flatMap((auth) =>
+      auth.type === "none"
+        ? []
+        : auth.type === "headers"
+          ? auth.parts.map((part) => ({
+              keyRef: part.keyRef,
+              nameValue: null,
+              valueLabel: part.label ?? part.header,
+              hint: `Sent as the ${part.header} header.`,
+            }))
+          : [
+              {
+                keyRef: auth.keyRef,
+                nameValue: null,
+                valueLabel:
+                  auth.type === "header"
+                    ? auth.header
+                    : auth.type === "query"
+                      ? auth.param
+                      : "API key",
+                hint: `Used for ${auth.type} authentication.`,
+              },
+            ],
+    );
+    return [...new Map(rows.map((row) => [row.keyRef, row])).values()];
   })();
 
   const submitKey = (): Promise<void> =>
@@ -458,9 +476,7 @@ export const ConnectionManager = ({
        */
       // Plural: validation walks a candidate list, so several endpoints can
       // have been refused before one answered.
-      const forbidden = new Set(
-        ("forbidden" in result ? result.forbidden : undefined) ?? [],
-      );
+      const forbidden = new Set(("forbidden" in result ? result.forbidden : undefined) ?? []);
       // The one validation actually proved is the best thing to sample.
       const proven = "validatedOpId" in result ? result.validatedOpId : undefined;
       const usable = draft.ops.filter(
@@ -814,7 +830,11 @@ export const ConnectionManager = ({
           text: `${result.rowCount} record(s) at ${result.rowsPath}, ${result.fields.length} field(s).`,
         });
       } catch (caught) {
-        setOpTest({ opId, ok: false, text: caught instanceof Error ? caught.message : String(caught) });
+        setOpTest({
+          opId,
+          ok: false,
+          text: caught instanceof Error ? caught.message : String(caught),
+        });
       }
     });
 
@@ -936,7 +956,8 @@ export const ConnectionManager = ({
                           <div className="dash-conn-list__text">
                             <div className="dash-conn-list__title">{join.title}</div>
                             <div className="dash-conn-list__meta">
-                              <code>{join.foreignField}</code> matches <code>{join.targetField}</code>
+                              <code>{join.foreignField}</code> matches{" "}
+                              <code>{join.targetField}</code>
                               {" — "}
                               {join.needsFanOut
                                 ? "one request per row (capped), because the endpoint cannot filter by it"
@@ -950,7 +971,8 @@ export const ConnectionManager = ({
                   </>
                 )}
 
-                {(capabilities.searchable.length > 0 || capabilities.rangeFilterable.length > 0) && (
+                {(capabilities.searchable.length > 0 ||
+                  capabilities.rangeFilterable.length > 0) && (
                   <p className="dash-hint" data-testid="capability-inputs">
                     {capabilities.searchable.length} endpoint(s) can be searched;{" "}
                     {capabilities.rangeFilterable.length} can be filtered by a date range.
@@ -989,14 +1011,14 @@ export const ConnectionManager = ({
             </div>
 
             {/*
-              * How records link, and the chance to correct it.
-              *
-              * Two very different things end up in this list and the
-              * difference matters: a `path` link is the API's own statement —
-              * the parent is in the URL — while a `filter` link was inferred
-              * from a field name and then checked against real rows. Only the
-              * second is a judgement, so only the second is editable here.
-              */}
+             * How records link, and the chance to correct it.
+             *
+             * Two very different things end up in this list and the
+             * difference matters: a `path` link is the API's own statement —
+             * the parent is in the URL — while a `filter` link was inferred
+             * from a field name and then checked against real rows. Only the
+             * second is a judgement, so only the second is editable here.
+             */}
             <h4>How records relate</h4>
             {!relations || relations.resources.every((r) => r.relations.length === 0) ? (
               <p className="dash-hint" data-testid="relations-empty">
@@ -1109,7 +1131,11 @@ export const ConnectionManager = ({
                       {opTest?.opId === op.id && (
                         <>
                           {" — "}
-                          <span style={{ color: opTest.ok ? "var(--dash-good)" : "var(--dash-critical)" }}>
+                          <span
+                            style={{
+                              color: opTest.ok ? "var(--dash-good)" : "var(--dash-critical)",
+                            }}
+                          >
                             {opTest.text}
                           </span>
                         </>
@@ -1215,7 +1241,10 @@ export const ConnectionManager = ({
                 disabled={busy || newOp.title.trim() === "" || newOp.path.trim() === ""}
                 onClick={() =>
                   void addOp({
-                    id: newOp.title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""),
+                    id: newOp.title
+                      .toLowerCase()
+                      .replace(/[^a-z0-9]+/g, "_")
+                      .replace(/^_+|_+$/g, ""),
                     title: newOp.title,
                     path: newOp.path.startsWith("/") ? newOp.path : `/${newOp.path}`,
                     archetype: newOp.archetype,
@@ -1247,10 +1276,15 @@ export const ConnectionManager = ({
                   <span className="dash-card__badges">
                     {/* A dialect written from docs is a hypothesis until proven. */}
                     <span className="dash-pill">
-                      <span className="dash-pill__icon" style={{ color: option.verified ? "var(--dash-good)" : "var(--dash-muted)" }}>
+                      <span
+                        className="dash-pill__icon"
+                        style={{
+                          color: option.verified ? "var(--dash-good)" : "var(--dash-muted)",
+                        }}
+                      >
                         {option.verified ? "●" : "○"}
                       </span>
-                      {option.verified ? "verified" : "unverified"}
+                      {option.verified ? "response checked" : "response unchecked"}
                     </span>
                     {option.dialect.auth && option.dialect.auth.type !== "none" && (
                       <span className="dash-pill">needs a key</span>
@@ -1279,8 +1313,8 @@ export const ConnectionManager = ({
               </button>
             </div>
             <p className="dash-hint">
-              An OpenAPI spec is read exactly. Documentation is read by AI and is a starting
-              point — you will test it against the real API in the next step either way.
+              An OpenAPI spec is read exactly. Documentation is read by AI and is a starting point —
+              you will test it against the real API in the next step either way.
             </p>
 
             {discovery && (
@@ -1295,10 +1329,16 @@ export const ConnectionManager = ({
                       <strong>{discovery.entry.title}</strong> — {discovery.entry.baseUrl}
                       <br />
                       {discovery.entry.ops.length} endpoint(s) ·{" "}
-                      {discovery.entry.dialect.auth?.type === "none" || !discovery.entry.dialect.auth
-                        ? "no key"
+                      {discovery.entry.dialect.auth?.type === "none" ||
+                      !discovery.entry.dialect.auth
+                        ? discovery.entry.authRequired
+                          ? "authentication needs setup"
+                          : "no key"
                         : `${discovery.entry.dialect.auth.type} key`}{" "}
-                      · {discovery.entry.dialect.pagination?.kind ?? "none"} pagination
+                      ·{" "}
+                      {discovery.entry.paginationProposal
+                        ? "pagination needs confirmation"
+                        : `${discovery.entry.dialect.pagination?.kind ?? "none"} pagination`}
                     </div>
                     <div className="dash-row" style={{ marginTop: 8 }}>
                       <button
@@ -1319,22 +1359,23 @@ export const ConnectionManager = ({
                     ))}
                   </ul>
                 )}
-
                 {/*
-                  * Offered only when the result is thin.
-                  *
-                  * Some sites document every endpoint on its own page and
-                  * publish no whole-API spec — the material is all there, just
-                  * scattered. A site that already handed us a real spec must
-                  * never trigger this, or one click becomes hundreds of
-                  * pointless requests to their documentation host.
-                  */}
+                 * Offered only when the result is thin.
+                 *
+                 * Some sites document every endpoint on its own page and
+                 * publish no whole-API spec — the material is all there, just
+                 * scattered. A site that already handed us a real spec must
+                 * never trigger this, or one click becomes hundreds of
+                 * pointless requests to their documentation host.
+                 */}
                 {discovery.index && (!discovery.entry || discovery.entry.ops.length <= 4) && (
                   <div style={{ marginTop: 10 }} data-testid="discovery-index-offer">
                     <p className="dash-hint">
                       This site documents <strong>{discovery.index.pages} page(s)</strong> under{" "}
                       <code>{discovery.index.section}</code>. Reading them all takes about{" "}
-                      <strong>{Math.max(1, Math.round(discovery.index.estimatedMs / 1000))} seconds</strong>{" "}
+                      <strong>
+                        {Math.max(1, Math.round(discovery.index.estimatedMs / 1000))} seconds
+                      </strong>{" "}
                       and makes one request per page to their documentation site. Link a narrower
                       section to read less.
                     </p>
@@ -1371,7 +1412,11 @@ export const ConnectionManager = ({
               <button className="dash-control" onClick={() => setView("list")}>
                 Back
               </button>
-              <button className="dash-control" data-testid="choose-manual" onClick={() => setView("manual")}>
+              <button
+                className="dash-control"
+                data-testid="choose-manual"
+                onClick={() => setView("manual")}
+              >
                 Describe it by hand →
               </button>
             </div>
@@ -1601,8 +1646,8 @@ export const ConnectionManager = ({
               </fieldset>
             ))}
             <span className="dash-hint">
-              Stored encrypted on your own server. {keyRows.length > 1 ? "They are" : "It is"}{" "}
-              never written into a dashboard file and never sent back to this page.
+              Stored encrypted on your own server. {keyRows.length > 1 ? "They are" : "It is"} never
+              written into a dashboard file and never sent back to this page.
             </span>
             <div className="dash-row dash-row--end">
               <button className="dash-control" onClick={() => setView("choose")}>
@@ -1676,7 +1721,10 @@ export const ConnectionManager = ({
             )}
 
             <div className="dash-row dash-row--end" style={{ marginTop: 12 }}>
-              <button className="dash-control" onClick={() => setView(draft?.hasKey ? "key" : "choose")}>
+              <button
+                className="dash-control"
+                onClick={() => setView(draft?.hasKey ? "key" : "choose")}
+              >
                 Back
               </button>
               <button
@@ -1753,20 +1801,19 @@ export const ConnectionManager = ({
             <StepRail current={view} />
 
             {/*
-              * The integration gate.
-              *
-              * "Does this integration exist?" is a question about the API, not
-              * about this account — so it is asked before the read, answered
-              * once, and the answer is shareable. An unmapped API still works;
-              * what it lacks is the descriptions that let the assistant tell
-              * two hundred endpoints apart, which is why the offer explains
-              * what mapping buys rather than just asking for a yes.
-              */}
+             * The integration gate.
+             *
+             * "Does this integration exist?" is a question about the API, not
+             * about this account — so it is asked before the read, answered
+             * once, and the answer is shareable. An unmapped API still works;
+             * what it lacks is the descriptions that let the assistant tell
+             * two hundred endpoints apart, which is why the offer explains
+             * what mapping buys rather than just asking for a yes.
+             */}
             {mapInfo && !mapInfo.mapped && !mapRun && (
               <div className="dash-callout" data-testid="map-gate">
                 <p>
-                  <strong>This integration does not exist yet.</strong> Would you like to create
-                  it?
+                  <strong>This integration does not exist yet.</strong> Would you like to create it?
                 </p>
                 <p className="dash-hint">
                   {draft?.title ?? "This API"} has {mapInfo.endpoints} endpoints, and{" "}
@@ -1809,9 +1856,9 @@ export const ConnectionManager = ({
                   : ""}
                 .
                 {/*
-                  * Batches fail independently, so a partial map is a real
-                  * outcome and has to say so rather than looking complete.
-                  */}
+                 * Batches fail independently, so a partial map is a real
+                 * outcome and has to say so rather than looking complete.
+                 */}
                 {mapRun.errors.length > 0 && (
                   <>
                     {" "}
@@ -1834,8 +1881,8 @@ export const ConnectionManager = ({
             {readResult ? (
               <>
                 <div className="dash-callout dash-callout--good" data-testid="read-done">
-                  Read {readResult.resources.length} resource(s) using{" "}
-                  {readResult.requestsSpent} request(s).
+                  Read {readResult.resources.length} resource(s) using {readResult.requestsSpent}{" "}
+                  request(s).
                   {readResult.outcome === "rateLimited" &&
                     ` Stopped early — ${draft?.title ?? "the API"} began rate limiting${
                       readResult.retryAfter ? `; try again in ${readResult.retryAfter}s` : ""
@@ -1856,8 +1903,8 @@ export const ConnectionManager = ({
             ) : readProgress !== null ? (
               <>
                 <p className="dash-page__description">
-                  Reading {draft?.title ?? "the API"} — deliberately slowly, so we never look
-                  like a burst of traffic.
+                  Reading {draft?.title ?? "the API"} — deliberately slowly, so we never look like a
+                  burst of traffic.
                 </p>
                 <div
                   className="dash-progress"
@@ -1875,8 +1922,8 @@ export const ConnectionManager = ({
               </>
             ) : plan?.alreadyRead ? (
               <div className="dash-callout" data-testid="read-cached">
-                Already read{plan.lastRead ? ` on ${new Date(plan.lastRead).toLocaleString()}` : ""}.
-                Nothing to spend — reading again is only useful if the API has changed.
+                Already read{plan.lastRead ? ` on ${new Date(plan.lastRead).toLocaleString()}` : ""}
+                . Nothing to spend — reading again is only useful if the API has changed.
               </div>
             ) : plan && plan.estimatedRequests === 0 ? (
               /*
@@ -1944,11 +1991,19 @@ export const ConnectionManager = ({
   };
 
   return (
-    <div className="dash-inspector-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
+    <div
+      className="dash-inspector-backdrop"
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+    >
       <div className="dash-inspector" role="dialog" aria-modal="true" aria-label="Connections">
         <div className="dash-inspector__head">
           <h3 className="dash-inspector__title">Connections</h3>
-          <button className="dash-iconbtn" style={{ marginLeft: "auto" }} onClick={onClose} aria-label="Close">
+          <button
+            className="dash-iconbtn"
+            style={{ marginLeft: "auto" }}
+            onClick={onClose}
+            aria-label="Close"
+          >
             ✕
           </button>
         </div>

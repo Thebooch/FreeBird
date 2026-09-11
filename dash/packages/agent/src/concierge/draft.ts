@@ -1,4 +1,4 @@
-import { widgetShapeSchema } from "@freebirdai/dash-spec";
+import { widgetShapeSchema, coercionSchema, formatSchema } from "@freebirdai/dash-spec";
 import { z } from "zod";
 
 /**
@@ -96,6 +96,9 @@ export type CompareDraft = z.infer<typeof compareDraftSchema>;
  * every one of them.
  */
 export const seriesDraftSchema = z.object({
+  coercions: z.record(coercionSchema).optional(),
+  format: z.record(formatSchema).optional(),
+  inputs: z.record(z.string()).optional(),
   op: z.string().min(1),
   rowsPath: z.string().default("$"),
   /** What to call this side where a person reads it. Never an op id. */
@@ -159,6 +162,8 @@ export const choiceDraftSchema = z.object({
     .array(
       z.object({
         op: z.string().min(1),
+        connection: z.string().min(1).optional(),
+        value: z.string().min(1).optional(),
         /** The endpoint's own title, for the option's heading. */
         label: z.string().min(1).max(120),
         /**
@@ -189,7 +194,10 @@ export type ChoiceDraft = z.infer<typeof choiceDraftSchema>;
 export const narrowDraftSchema = z.object({
   field: fieldName,
   /** Strings and numbers stay as they are — `"3"` matches nothing when the row holds `3`. */
-  values: z.array(z.union([z.string().max(200), z.number()])).min(1).max(60),
+  values: z
+    .array(z.union([z.string().max(200), z.number()]))
+    .min(1)
+    .max(60),
   /** The user's phrase, carried so a confirmation can be saved under it. */
   phrase: z.string().max(120).optional(),
   /** The query parameter that applies it upstream, where the endpoint has one. */
@@ -310,6 +318,9 @@ export const MAX_PARTS = 4;
  * nothing about what the properties still need.
  */
 export const draftPartSchema = z.object({
+  inputs: z.record(z.string().max(500)).default({}),
+  coercions: z.record(coercionSchema).default({}),
+  format: z.record(formatSchema).default({}),
   connection: z.string().min(1).optional(),
   op: z.string().min(1).optional(),
   rowsPath: z.string().default("$"),
@@ -333,6 +344,9 @@ export const draftPartSchema = z.object({
 export type DraftPart = z.infer<typeof draftPartSchema>;
 
 export const conciergeDraftSchema = z.object({
+  inputs: z.record(z.string().max(500)).default({}),
+  coercions: z.record(coercionSchema).default({}),
+  format: z.record(formatSchema).default({}),
   id: z.string().min(1),
   /**
    * Who is driving.
@@ -653,6 +667,13 @@ export const applyAnswer = (
             // endpoint's fields could fill it.
             component: undefined,
             roles: {},
+            inputs: {},
+            coercions: {},
+            format: {},
+            shape: undefined,
+            series: [],
+            offer: undefined,
+            choice: undefined,
             join: undefined,
             compare: undefined,
             narrow: undefined,

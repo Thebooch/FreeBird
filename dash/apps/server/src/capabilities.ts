@@ -12,6 +12,7 @@ import {
   deriveResourceGraph,
   deriveResourceModel,
   fingerprintOps,
+  fingerprintConnection,
   pathParamNames,
   pathSegments,
   requiredInputs,
@@ -161,7 +162,8 @@ export const estimateEnumeration = (
     // Gaps sit *between* requests, so there is one fewer of them than there
     // are calls — the progress bar is animated against this figure and would
     // lag a whole gap behind if it counted one too many.
-    estimatedMs: Math.max(0, estimatedRequests - 1) * paceGapMs(estimatedRequests, options.targetMs),
+    estimatedMs:
+      Math.max(0, estimatedRequests - 1) * paceGapMs(estimatedRequests, options.targetMs),
     willSampleChildren: children > 0,
   };
 };
@@ -184,7 +186,10 @@ export const deriveResourcesFromOps = (ops: readonly OpDef[]): ResourceSpec[] =>
  * says `Id` — so it can only come from a real response. Preference order is
  * exact `id`, then `<resource>Id`, then any single trailing-`id` field.
  */
-export const pickIdField = (fields: readonly FieldInfo[], resourceId: string): string | undefined => {
+export const pickIdField = (
+  fields: readonly FieldInfo[],
+  resourceId: string,
+): string | undefined => {
   const flat = fields.filter((field) => !field.name.includes("."));
   const named = (predicate: (name: string) => boolean): string | undefined =>
     flat.find((field) => predicate(field.name.toLowerCase()))?.name;
@@ -313,9 +318,7 @@ export const findForeignKeys = (
      * and neither is "all vendors". Counting them made an unambiguous link
      * look contested and dropped it.
      */
-    const rivals = targets.filter(
-      (candidate) => nounOf(candidate) === noun && isBare(candidate),
-    );
+    const rivals = targets.filter((candidate) => nounOf(candidate) === noun && isBare(candidate));
     if (rivals.length > 1) {
       const winner = resolveSameNoun(rivals, options.sourcePath, options.mountDepth ?? 0);
       if (!winner) {
@@ -499,8 +502,7 @@ export const paceGapMs = (planned: number, targetMs = PACE_TARGET_MS): number =>
  * on the first threw away every readable endpoint behind it, and reported a
  * working credential as a rejected one.
  */
-const isTerminal = (status: number | undefined): boolean =>
-  status === 429 || status === 401;
+const isTerminal = (status: number | undefined): boolean => status === 429 || status === 401;
 
 /** Authenticated, but this endpoint is not permitted for that key. */
 const isForbidden = (status: number | undefined): boolean => status === 403;
@@ -913,6 +915,7 @@ export const toReport = (
     connection: connection.id,
     generatedAt: new Date().toISOString(),
     opsFingerprint: fingerprintOps(connection.ops),
+    connectionFingerprint: fingerprintConnection(connection),
     resources: capabilities.resources,
     drillDowns: capabilities.drillDowns,
     joins: capabilities.joins,
@@ -925,7 +928,7 @@ export const toReport = (
     // override for a caller that knows better.
     outcome: meta.outcome ?? capabilities.outcome,
     requestsSpent: meta.requestsSpent ?? capabilities.requestsSpent,
-    ...(meta.retryAfter ?? capabilities.retryAfter
+    ...((meta.retryAfter ?? capabilities.retryAfter)
       ? { retryAfter: meta.retryAfter ?? capabilities.retryAfter }
       : {}),
   });
@@ -1018,10 +1021,7 @@ export const analyseStructure = (connection: ConnectionSpec): StructuralCapabili
  * long, but a non-scalar would arrive as the literal `{…}` and is refused
  * rather than sent as a path segment.
  */
-const exampleValue = (
-  fields: readonly FieldInfo[],
-  name: string,
-): string | number | undefined => {
+const exampleValue = (fields: readonly FieldInfo[], name: string): string | number | undefined => {
   const value = fields.find((field) => field.name === name)?.samples?.[0];
   if (typeof value === "number") return value;
   if (typeof value === "string" && value !== "" && !value.startsWith("{") && !value.startsWith("["))

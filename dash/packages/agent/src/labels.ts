@@ -1,5 +1,5 @@
 import type { MappedField } from "@freebirdai/dash-spec";
-import { humanLabel } from "@freebirdai/dash-spec";
+import { humanLabel, fnv1a } from "@freebirdai/dash-spec";
 import { z } from "zod";
 import type { LlmAdapter, LlmTool } from "./llm.js";
 
@@ -47,9 +47,7 @@ const labelProposalSchema = z.object({
         name: z.string().describe("Field name, copied exactly as given."),
         label: z
           .string()
-          .describe(
-            "What to call it on screen. Sentence case, as few words as carry the meaning.",
-          ),
+          .describe("What to call it on screen. Sentence case, as few words as carry the meaning."),
       }),
     )
     .optional(),
@@ -153,30 +151,29 @@ export const collectFieldNames = (input: LabelInput): FieldCandidate[] => {
     }
   }
 
-  return [...found.entries()]
-    .map(
-      ([name, entry]): FieldCandidate => ({
-        name,
-        kinds: [...entry.kinds],
-        ...(entry.format ? { format: entry.format } : {}),
-        ...(entry.description ? { description: entry.description } : {}),
-        seenOn: entry.seenOn,
-        count: entry.count,
-      }),
-    )
-    /*
-     * Commonest first. Batches fail independently, so if one call is going to
-     * be lost it should be the one holding names that appear on a single
-     * endpoint rather than the one holding the identity and name fields every
-     * record in the API carries.
-     */
-    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  return (
+    [...found.entries()]
+      .map(
+        ([name, entry]): FieldCandidate => ({
+          name,
+          kinds: [...entry.kinds],
+          ...(entry.format ? { format: entry.format } : {}),
+          ...(entry.description ? { description: entry.description } : {}),
+          seenOn: entry.seenOn,
+          count: entry.count,
+        }),
+      )
+      /*
+       * Commonest first. Batches fail independently, so if one call is going to
+       * be lost it should be the one holding names that appear on a single
+       * endpoint rather than the one holding the identity and name fields every
+       * record in the API carries.
+       */
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+  );
 };
 
-export const buildLabelPrompt = (
-  input: LabelInput,
-  batch: readonly FieldCandidate[],
-): string => {
+export const buildLabelPrompt = (input: LabelInput, batch: readonly FieldCandidate[]): string => {
   const lines: string[] = [`API: ${input.apiTitle}`, "", "FIELDS:"];
   for (const field of batch) {
     const shape = field.kinds.includes("array")
@@ -194,6 +191,7 @@ export const buildLabelPrompt = (
 };
 
 export interface LabelResult {
+  readonly completedBatches: readonly string[];
   /** field name → label. Only names the pass improved on appear. */
   readonly labels: Readonly<Record<string, string>>;
   /** Batches that failed outright, so a partial pass can say what it missed. */
@@ -284,15 +282,29 @@ export const dropCollisions = (
 export const labelFields = async (
   llm: LlmAdapter,
   input: LabelInput,
-  options: { model?: string | undefined; signal?: AbortSignal | undefined } = {},
+  options: {
+    model?: string | undefined;
+    signal?: AbortSignal | undefined;
+    completedBatches?: readonly string[];
+    existingLabels?: Readonly<Record<string, string>>;
+    onCheckpoint?: (result: LabelResult) => void;
+  } = {},
 ): Promise<LabelResult> => {
   const candidates = collectFieldNames(input);
-  const labels: Record<string, string> = {};
+  const labels: Record<string, string> = { ...options.existingLabels };
   const errors: string[] = [];
   const skipped: string[] = [];
+  const previous = new Set(options.completedBatches ?? []);
+  const completed = new Set<string>();
 
   for (let start = 0; start < candidates.length; start += BATCH) {
     const batch = candidates.slice(start, start + BATCH);
+    const batchKey = fnv1a(JSON.stringify({ title: input.apiTitle, batch }));
+    if (previous.has(batchKey)) {
+      completed.add(batchKey);
+      continue;
+    }
+    const errorsBefore = errors.length;
     const offered = new Set(batch.map((field) => field.name));
     const where = `fields ${start + 1}–${start + batch.length}`;
 
@@ -356,9 +368,24 @@ export const labelFields = async (
       }
     } catch (cause) {
       errors.push(`${where}: ${cause instanceof Error ? cause.message : String(cause)}`);
+    } finally {
+      if (errors.length === errorsBefore) {
+        completed.add(batchKey);
+        options.onCheckpoint?.({
+          labels: dropCollisions(labels, input).labels,
+          errors,
+          skipped,
+          completedBatches: [...completed],
+        });
+      }
     }
   }
 
   const settled = dropCollisions(labels, input);
-  return { labels: settled.labels, errors, skipped: [...skipped, ...settled.dropped] };
+  return {
+    labels: settled.labels,
+    errors,
+    skipped: [...skipped, ...settled.dropped],
+    completedBatches: [...completed],
+  };
 };

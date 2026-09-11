@@ -90,8 +90,12 @@ export const readBindings = (input: BindingsInput): ToolBinding[] => {
   const offers = context.drillDowns
     .map((offer) => ({ offer, list: opById.get(offer.listOp) }))
     .filter(
-      (entry): entry is { offer: (typeof context.drillDowns)[number]; list: NonNullable<typeof entry.list> } =>
-        entry.list !== undefined,
+      (
+        entry,
+      ): entry is {
+        offer: (typeof context.drillDowns)[number];
+        list: NonNullable<typeof entry.list>;
+      } => entry.list !== undefined,
     )
     .filter((entry) => !input.connection || entry.list.connection === input.connection);
 
@@ -218,23 +222,30 @@ export const queryBindings = (input: BindingsInput): ToolBinding[] => {
 };
 
 /** All bindings, for every verb this server can currently perform. */
-export const bindingsFor = (input: BindingsInput): ToolBinding[] => [
-  ...readBindings(input),
-  ...queryBindings(input),
-];
+export const bindingsFor = (input: BindingsInput): ToolBinding[] => {
+  if (!input.context.byConnection) return [...readBindings(input), ...queryBindings(input)];
+  const bindings = Object.entries(input.context.byConnection)
+    .filter(([id]) => !input.connection || input.connection === id)
+    .flatMap(([, context]) => [
+      ...readBindings({ ...input, context }),
+      ...queryBindings({ ...input, context }),
+    ]);
+  const names = handles(
+    bindings.map((binding) => ({ connection: binding.connection, resource: binding.resource })),
+  );
+  return bindings.map((binding) => ({
+    ...binding,
+    id: names.get(`${binding.connection}|${binding.resource}`) ?? binding.id,
+  }));
+};
 
 /** The binding that opens a record from this collection, when one exists. */
-export const expansionFor = (
-  bindings: readonly ToolBinding[],
-  op: string,
-): ToolBinding | null =>
+export const expansionFor = (bindings: readonly ToolBinding[], op: string): ToolBinding | null =>
   bindings.find((binding) => binding.verb === "read" && binding.listOp === op) ?? null;
 
 /** The binding a handle names, resolved against the list and never approximated. */
-export const bindingFor = (
-  bindings: readonly ToolBinding[],
-  id: string,
-): ToolBinding | null => bindings.find((binding) => binding.id === id) ?? null;
+export const bindingFor = (bindings: readonly ToolBinding[], id: string): ToolBinding | null =>
+  bindings.find((binding) => binding.id === id) ?? null;
 
 /**
  * Which fields on a record point at other records that can be opened.
@@ -261,7 +272,8 @@ export const referencesFrom = (
   for (const join of context.joins) {
     if (join.fromOp !== op) continue;
     const to = bindings.find(
-      (binding) => binding.verb === "read" && (binding.op === join.toOp || binding.listOp === join.toOp),
+      (binding) =>
+        binding.verb === "read" && (binding.op === join.toOp || binding.listOp === join.toOp),
     );
     if (!to) continue;
     const key = `${to.id}|${join.leftField}`;
@@ -288,7 +300,8 @@ export const referencesFrom = (
   for (const child of context.children) {
     if (child.parentOp !== op || !child.parentIdField) continue;
     const to = bindings.find(
-      (binding) => binding.verb === "read" && (binding.op === child.op || binding.listOp === child.op),
+      (binding) =>
+        binding.verb === "read" && (binding.op === child.op || binding.listOp === child.op),
     );
     if (!to) continue;
     const key = `${to.id}|${child.parentIdField}`;

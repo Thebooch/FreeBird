@@ -1,3 +1,4 @@
+import { fingerprintOps } from "@freebirdai/dash-spec";
 import { fakeLlm } from "@freebirdai/dash-agent";
 import type { CapabilityReport, ConnectionSpec } from "@freebirdai/dash-spec";
 import { capabilityReportSchema, connectionSchema } from "@freebirdai/dash-spec";
@@ -31,7 +32,7 @@ const connection: ConnectionSpec = connectionSchema.parse({
 const report: CapabilityReport = capabilityReportSchema.parse({
   connection: "acme",
   generatedAt: new Date("2026-08-01T00:00:00Z").toISOString(),
-  opsFingerprint: "abc123",
+  opsFingerprint: fingerprintOps(connection.ops),
   resources: [
     { id: "thing", title: "Thing", idField: "Id", listOp: "list_things", verified: true },
     { id: "owner", title: "Owner", idField: "OwnerId", listOp: "list_owners", verified: true },
@@ -255,37 +256,18 @@ describe("a comparison rather than a join", () => {
     reason: "counting both over time",
   };
 
-  it("builds two series instead of forcing a join that has nothing to match", async () => {
-    /*
-     * The reported failure. Asked for listings per month against applications
-     * per month, call A picked both endpoints correctly and the join path had
-     * nothing to match them on — so the widget silently became a chart of
-     * listings alone, with rent on the value axis.
-     */
-    const llm = fakeLlm([{ args: compare }, { args: binding }]);
-    const result = await proposeSetup({ llm, intent: "things vs owners per month", context });
-
-    // Each side as a shape of its own, over its own date field — the general
-    // form, so neither the count nor the time axis is baked into the schema.
-    expect(result.patch.shape).toEqual({
-      groupBy: [{ field: "OpenedAt", bucket: "{{range.grain}}" }],
-      measures: [{ as: "count", agg: "count" }],
-      sort: [],
-    });
-    expect(result.patch.seriesWith).toEqual([
-      {
-        endpoint: "list_owners",
-        label: "List owners",
-        shape: {
-          groupBy: [{ field: "JoinedAt", bucket: "{{range.grain}}" }],
-          measures: [{ as: "count", agg: "count" }],
-          sort: [],
-        },
-      },
+  it("preserves independently planned measurements instead of inventing time counts", async () => {
+    const llm = fakeLlm([
+      { args: compare },
+      { args: binding },
+      { args: { component: "stat", title: "Owners", rowsPath: "$.data", aggregation: "count" } },
     ]);
-    expect(result.patch.joinWith).toBeUndefined();
-    // A comparison measures each side whatever the binding call proposed.
-    expect(result.patch.component).toBe("timeseries");
+    const result = await proposeSetup({ llm, intent: "things vs owners", context });
+    expect(result.patch.shape?.groupBy[0]?.field).toBe("Status");
+    expect(result.patch.parts).toHaveLength(1);
+    expect(result.patch.seriesWith).toBeUndefined();
+    expect(result.patch.component).toBe("metricRow");
+    expect(llm.calls).toHaveLength(3);
   });
 
   it("says so plainly when one side has no date to count by", async () => {
@@ -310,7 +292,7 @@ describe("a comparison rather than a join", () => {
     const result = await proposeSetup({ llm, intent: "things vs owners", context: undated });
 
     expect(result.patch.compareWith).toBeUndefined();
-    expect(result.notes.join(" ")).toContain("no date field");
+    expect(result.notes.join(" ")).toContain("compatible grouping and unit");
   });
 
   /*
@@ -376,6 +358,8 @@ describe("a comparison rather than a join", () => {
           ambiguities: [
             {
               field: "OwnerId",
+              kind: "missing_endpoint",
+              endpoint: "list_owners",
               question: "This response has no owner data. Is there another endpoint?",
               options: ["yes", "no"],
             },
@@ -423,10 +407,7 @@ describe("a comparison rather than a join", () => {
   });
 
   it("still joins when the second endpoint is enriching the first", async () => {
-    const llm = fakeLlm([
-      { args: { ...compare, relationship: "enrich" } },
-      { args: binding },
-    ]);
+    const llm = fakeLlm([{ args: { ...compare, relationship: "enrich" } }, { args: binding }]);
     const result = await proposeSetup({ llm, intent: "things with owner names", context });
 
     expect(result.patch.joinWith).toBeDefined();

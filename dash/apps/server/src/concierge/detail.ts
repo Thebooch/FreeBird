@@ -5,7 +5,13 @@ import type {
   LlmAdapter,
   SectionDraft,
 } from "@freebirdai/dash-agent";
-import { planDetail, type ChildOption, type DetailGroup, type DetailHeader } from "@freebirdai/dash-agent";
+import {
+  contextForConnection,
+  planDetail,
+  type ChildOption,
+  type DetailGroup,
+  type DetailHeader,
+} from "@freebirdai/dash-agent";
 import { COMPONENT_CONTRACTS } from "@freebirdai/dash-spec";
 
 /**
@@ -30,9 +36,11 @@ export const opensRecords = (component: string): boolean =>
 
 /** Whether it can carry related collections beside the record. */
 const takesChildren = (component: string): boolean =>
-  COMPONENT_CONTRACTS[component as keyof typeof COMPONENT_CONTRACTS]?.detail?.childSections ?? false;
+  COMPONENT_CONTRACTS[component as keyof typeof COMPONENT_CONTRACTS]?.detail?.childSections ??
+  false;
 
 export interface DetailSetupInput {
+  readonly connection?: string | undefined;
   readonly llm: LlmAdapter;
   readonly context: ConciergeContext;
   /** The endpoint the widget lists. Children hang off this. */
@@ -94,6 +102,7 @@ const columnsFor = (fields: readonly { name: string }[]): string[] => {
  * offering to configure one would promise a view that cannot exist.
  */
 export const planDetailSetup = async (input: DetailSetupInput): Promise<DetailSetup> => {
+  input = { ...input, context: contextForConnection(input.context, input.connection) };
   if (!opensRecords(input.component)) return NOTHING;
 
   const shape = input.context.shapes[input.detailOp];
@@ -213,6 +222,7 @@ export const settleDetail = async (
   if (!plan || !draft.drilldown || !draft.component || !draft.op) return { draft, detail: null };
 
   const detail = await plan({
+    connection: draft.connection,
     listOp: draft.op,
     detailOp: draft.drilldown.op,
     component: draft.component,
@@ -226,9 +236,7 @@ export const settleDetail = async (
       drilldown: {
         ...draft.drilldown,
         fields: [...detail.fields],
-        ...(detail.header
-          ? { header: { ...detail.header, facts: [...detail.header.facts] } }
-          : {}),
+        ...(detail.header ? { header: { ...detail.header, facts: [...detail.header.facts] } } : {}),
         groups: detail.groups.map((group) => ({ title: group.title, fields: [...group.fields] })),
         sections: detail.sections.map((section) => ({ ...section, columns: [...section.columns] })),
       },
@@ -244,6 +252,7 @@ export const settleDetail = async (
 
 /** What `settleDetail` needs from a planner, named so both callers can type it. */
 export interface DetailPlanRequest {
+  readonly connection?: string | undefined;
   readonly listOp: string;
   readonly detailOp: string;
   readonly component: string;
