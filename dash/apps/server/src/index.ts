@@ -9,12 +9,15 @@ import { loadEnvFile } from "./env.js";
 import { defaultModelId, llmForModel, modelForTask } from "./llm.js";
 import { TASKS, isTask, providerFor } from "./models.js";
 import { buildPartRegistry } from "./parts.js";
-import { buildServer } from "./server.js";
+import { buildServer, nodeHttp, nodeGraphqlHttp } from "./server.js";
 import { NarrowingStore } from "./narrowings.js";
 import { SettingsStore } from "./settings.js";
 import { SpecStore } from "./store.js";
 import { GrantStore } from "./grants.js";
 import { KeyStore, LocalAesVault } from "./vault.js";
+import { openIntegrationDb } from "./integrations/db.js";
+import { importCatalog } from "./integrations/import.js";
+import { integrationSessions } from "./integrations/bridge.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -138,7 +141,22 @@ try {
   );
 }
 
+const integrationDb = await openIntegrationDb({ dataDir: join(stateDir, "integration-db") });
+const integrationImport = await importCatalog(integrationDb.repository, "local", catalog.list(), store.listConnections());
+for (const error of integrationImport.errors) console.error(`Integration import ${error.id}: ${error.message}`);
+const integrationSession = integrationSessions({
+  repository: integrationDb.repository, store, keys,
+  http: nodeHttp,
+  graphqlHttp: nodeGraphqlHttp,
+});
+
 const app = buildServer({
+  integrations: {
+    repository: integrationDb.repository,
+    // This entrypoint listens on loopback. Managed hosts must supply authenticated scopes.
+    scope: async () => ({ tenant: "local", authorizationRevision: "local", connections: store.listConnections().map(connection => connection.id) }),
+    session: integrationSession,
+  },
   store,
   keys,
   catalog,
@@ -151,6 +169,7 @@ const app = buildServer({
   chat,
   logger: true,
 });
+app.addHook("onClose", async () => { await integrationDb.close(); });
 const port = Number(process.env.PORT ?? 4600);
 
 app

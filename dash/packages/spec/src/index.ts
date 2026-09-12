@@ -296,3 +296,14 @@ export type { NamedSource } from "./dashboard.js";
 export type { BuiltinComponentId } from "./contracts.js";
 export { findNarrowing, narrowingFileSchema, narrowingSchema } from "./narrowing.js";
 export type { Narrowing, NarrowingFile } from "./narrowing.js";
+export { graphqlReadSchema } from "./graphql.js";
+export type { GraphqlRead } from "./graphql.js";
+export {
+  identityValueSchema, entityRefSchema, completenessSchema, capabilityEvidenceSchema,
+  traversalPlanSchema, integrationRelationshipSchema, integrationEntitySchema,
+  integrationDefinitionSchema, connectionBindingSchema, relationshipsForEntity,
+} from "./integration.js";
+export type {
+  EntityRef, Completeness, CapabilityEvidence, TraversalPlan, IntegrationRelationship,
+  IntegrationEntity, IntegrationDefinition, ConnectionBinding,
+} from "./integration.js";

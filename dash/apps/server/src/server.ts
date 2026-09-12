@@ -4,6 +4,8 @@ import {
   AdapterRegistry,
   AdapterError,
   RestAdapter,
+  GraphqlAdapter,
+  type GraphqlHttpFetch,
   type HttpFetch,
 } from "@freebirdai/dash-adapters";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
@@ -97,7 +99,7 @@ import {
   providerFor,
 } from "./models.js";
 import { RATES_AS_OF } from "./pricing.js";
-import { BlockedUrlError, fetchPublicDocument, guardedFetch } from "./safe-fetch.js";
+import { BlockedUrlError, fetchPublicDocument, guardedFetch, guardedGraphqlFetch } from "./safe-fetch.js";
 import type { PartRegistry } from "@freebirdai/dash-parts";
 import { partsRoutes } from "./routes/parts.js";
 import { conciergeRoutes } from "./routes/concierge.js";
@@ -135,8 +137,11 @@ import { waitPhrase } from "./cache/cooldown.js";
 import { SpecStore } from "./store.js";
 import { GrantStore, approveWidget, dashboardApprovals, widgetGrantSubject } from "./grants.js";
 import { KeyStore } from "./vault.js";
+import { integrationRoutes, type IntegrationRoutesOptions } from "./integrations/routes.js";
 
 export interface BuildServerOptions {
+  readonly graphqlHttp?: GraphqlHttpFetch;
+  readonly integrations?: IntegrationRoutesOptions;
   readonly store: SpecStore;
   readonly keys: KeyStore;
   readonly catalog?: CatalogStore;
@@ -328,6 +333,11 @@ export const nodeHttp: HttpFetch = async (url, init, allowedHost) => {
   };
 };
 
+export const nodeGraphqlHttp: GraphqlHttpFetch = async (url, init, allowedHost) => {
+  const result = await guardedGraphqlFetch(url, init, allowedHost);
+  return { status: result.status, text: result.text, url: result.url, header: name => result.headers.get(name) };
+};
+
 const rangeSchema = z.object({
   preset: z.enum(["1h", "24h", "7d", "30d", "90d", "12mo", "ytd", "custom"]).default("30d"),
   grain: z.enum(["1h", "1d", "1w", "1mo", "1y"]).optional(),
@@ -356,6 +366,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   const { store, keys } = options;
   migrateCredentialRefs(store, keys);
   const app = Fastify({ logger: options.logger ?? false, bodyLimit: 1_000_000 });
+  if (options.integrations) integrationRoutes(app, options.integrations);
 
   /*
    * Every request gets a spend ceiling.
@@ -375,7 +386,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     enterTurnBudget(turnCeilingUsd());
   });
 
-  const registry = new AdapterRegistry().register(new RestAdapter(options.http ?? nodeHttp));
+  const registry = new AdapterRegistry().register(new RestAdapter(options.http ?? nodeHttp))
+    .register(new GraphqlAdapter(options.graphqlHttp ?? nodeGraphqlHttp));
 
   /**
    * Everything a widget reads goes through here.

@@ -330,7 +330,7 @@ const WidgetFooter = ({
   rows: readonly Row[];
   now: number;
 }): JSX.Element => {
-  const truncated = data.fetchMeta?.truncated === true;
+  const truncated = data.fetchMeta?.truncated === true || data.fetchMeta?.completeness?.status === "partial";
   return (
     <div className="dash-widget__foot">
       <span className="dash-widget__count">

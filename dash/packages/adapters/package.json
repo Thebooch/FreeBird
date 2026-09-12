@@ -31,7 +31,8 @@
   },
   "dependencies": {
     "@freebirdai/dash-expr": "workspace:*",
-    "@freebirdai/dash-spec": "workspace:*"
+    "@freebirdai/dash-spec": "workspace:*",
+    "graphql": "^16.14.2"
   },
   "peerDependencies": {
     "zod": "^3.23.0"

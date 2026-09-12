@@ -1,4 +1,4 @@
-import type { FetchMeta } from "@freebirdai/dash-adapters";
+import { combineFetchMeta, type FetchMeta } from "@freebirdai/dash-adapters";
 import type { BindingValidation, ColumnMeta, FieldLabels, WidgetSpec } from "@freebirdai/dash-spec";
 import { interpolateValue, parseDuration, widgetSources } from "@freebirdai/dash-spec";
 import type { Row, RowHighlight, RunMeta } from "@freebirdai/dash-runtime";
@@ -402,7 +402,7 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
     columns: labelled,
     ...(executed?.highlights ? { highlights: executed.highlights } : {}),
     runMeta: executed?.meta ?? null,
-    fetchMeta: primary?.meta ?? null,
+    fetchMeta: combineFetchMeta(entries.map(item => item.entry?.meta), fanned.truncated),
     raw: widget.sources.length > 0 ? bodies : primary?.body,
     binding: executed?.binding ?? null,
     errors: [

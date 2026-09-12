@@ -121,7 +121,7 @@ export class SetupPreviews {
             errors.push(`The preview used different inputs for ${source.op}. Refresh it.`);
         }
         params ??= value.params;
-        partial ||= value.entry.meta.truncated || value.entry.meta.warnings.length > 0;
+        partial ||= value.entry.meta.truncated || value.entry.meta.completeness?.status === "partial" || value.entry.meta.warnings.length > 0;
         warnings.push(...value.entry.meta.warnings);
         const existing = bodies[source.as];
         bodies[source.as] =

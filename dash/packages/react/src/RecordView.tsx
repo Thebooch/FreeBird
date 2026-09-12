@@ -145,7 +145,7 @@ const PaneRenderer = ({
    * difference between "no units" and "we did not look far enough", which are
    * not the same answer and lead to different next steps.
    */
-  const partial = data.fetchMeta?.truncated === true;
+  const partial = data.fetchMeta?.truncated === true || data.fetchMeta?.completeness?.status === "partial";
   const narrowed = spec.pipeline.some((step) => step.op === "filter");
 
   if (data.state === "loading") return <Skeleton shape="list" count={3} />;

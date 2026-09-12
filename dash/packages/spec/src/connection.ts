@@ -16,6 +16,7 @@ import {
   queryValueSchema,
 } from "./primitives.js";
 import { resourceSchema } from "./resource.js";
+import { graphqlReadSchema } from "./graphql.js";
 
 export { authSchema, paginationSchema } from "./primitives.js";
 export type { AuthSpec, PaginationSpec } from "./primitives.js";
@@ -27,6 +28,7 @@ export type { AuthSpec, PaginationSpec } from "./primitives.js";
  * known API costs one line rather than fifteen.
  */
 export const opDefSchema = z.object({
+  graphql: graphqlReadSchema.optional(),
   auth: authSchema.optional(),
   authRequired: z.boolean().optional(),
   fields: z.array(mappedFieldSchema).max(300).optional(),
@@ -63,6 +65,7 @@ export type OpDef = z.infer<typeof opDefSchema>;
 
 /** A fully-resolved endpoint: what the adapter actually executes. */
 export const opSchema = z.object({
+  graphql: graphqlReadSchema.optional(),
   auth: authSchema.optional(),
   authRequired: z.boolean().optional(),
   fields: z.array(mappedFieldSchema).max(300).optional(),
@@ -90,7 +93,8 @@ export const connectionSchema = z.object({
   specVersion: z.literal(1).default(1),
   id: idSchema,
   title: z.string().min(1),
-  kind: z.enum(["rest", "mcp", "inline"]),
+  kind: z.enum(["rest", "graphql", "mcp", "inline"]),
+  graphqlSchema: z.string().min(1).max(2000000).optional(),
   /** REST base URL or MCP server URL. Absent for `inline`. */
   baseUrl: z.string().url().optional(),
   auth: authSchema.default({ type: "none" }),
@@ -168,6 +172,7 @@ export const resolveOp = (connection: ConnectionSpec, def: OpDef): OpSpec => {
   const pagination = def.pagination ?? (archetype.paginates ? dialect?.pagination : undefined);
 
   return opSchema.parse({
+    graphql: def.graphql,
     auth: def.auth,
     authRequired: def.authRequired,
     fields: def.fields,

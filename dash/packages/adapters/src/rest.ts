@@ -10,12 +10,13 @@ import {
 import type { ConnectionSpec, OpSpec, PaginationSpec } from "@freebirdai/dash-spec";
 import {
   allowedHost,
-  authKeyRefs,
   interpolate,
   missingInputs,
   pathParamNames,
 } from "@freebirdai/dash-spec";
 import { AdapterError, type FetchContext, type FetchResult, type SourceAdapter } from "./types.js";
+import { applyRequestAuth } from "./auth.js";
+import { queryCompleteness } from "./completeness.js";
 
 export interface HttpResponse {
   readonly status: number;
@@ -34,14 +35,6 @@ export type HttpFetch = (
   init: { headers: Record<string, string>; signal?: AbortSignal },
   allowedHost: string | null,
 ) => Promise<HttpResponse>;
-
-const base64 = (input: string): string => {
-  if (typeof btoa === "function") return btoa(input);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const B = (globalThis as any).Buffer;
-  if (B) return B.from(input, "utf8").toString("base64");
-  throw new AdapterError("no base64 implementation available");
-};
 
 const parseJson = (text: string, url: string): unknown => {
   const trimmed = text.trim();
@@ -107,23 +100,6 @@ export class RestAdapter implements SourceAdapter {
       headers[name] = interpolate(value, ctx.params);
     }
 
-    // Resolve secrets as late as possible and keep them out of everything
-    // that gets reported back.
-    let redactQueryParam: string | null = null;
-    const secrets = new Map<string, string>();
-    for (const keyRef of authKeyRefs(auth)) {
-      const value = (await ctx.resolveSecret?.(keyRef)) ?? null;
-      if (!value) {
-        throw new AdapterError(`no key stored for "${keyRef}"`, {
-          status: 401,
-          userMessage: `${connection.title} needs an API key before it can load anything.`,
-        });
-      }
-      secrets.set(keyRef, value);
-    }
-    // The single-secret styles all read the same slot.
-    const secret = auth.type === "none" ? null : (secrets.get(authKeyRefs(auth)[0]!) ?? null);
-
     const query = new URLSearchParams(firstPageParams(op.pagination));
     for (const [name, value] of Object.entries(op.query)) {
       query.set(name, interpolate(String(value), ctx.params));
@@ -143,36 +119,7 @@ export class RestAdapter implements SourceAdapter {
         );
     }
 
-    if (secret) {
-      switch (auth.type) {
-        case "bearer":
-          headers.authorization = `Bearer ${secret}`;
-          break;
-        case "header":
-          headers[auth.header.toLowerCase()] = auth.template
-            ? auth.template.replace("{{key}}", secret)
-            : secret;
-          break;
-        case "query":
-          query.set(auth.param, secret);
-          redactQueryParam = auth.param;
-          break;
-        case "basic":
-          headers.authorization = `Basic ${base64(`${auth.username}:${secret}`)}`;
-          break;
-      }
-    }
-
-    // Multi-header auth is its own loop: each part carries its own secret, so
-    // there is no single `secret` for the switch above to use.
-    if (auth.type === "headers") {
-      for (const part of auth.parts) {
-        const value = secrets.get(part.keyRef)!;
-        headers[part.header.toLowerCase()] = part.template
-          ? part.template.replace("{{key}}", value)
-          : value;
-      }
-    }
+    const redactQueryParam = await applyRequestAuth(auth, connection.title, ctx, headers, query);
 
     /*
      * What this endpoint needs before it can be called, asked of the spec
@@ -357,6 +304,7 @@ export class RestAdapter implements SourceAdapter {
       ...(validators ? { validators } : {}),
       meta: {
         url: redact(lastUrl, redactQueryParam),
+        completeness: queryCompleteness({ pagination: op.pagination, lastBody: pages[pages.length - 1], rowsPath: op.rowsPath, truncated, paginationPending: connection.paginationPending, warnings }),
         status: lastStatus,
         fetchedAt: started,
         durationMs: Date.now() - started,

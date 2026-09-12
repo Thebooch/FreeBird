@@ -1,5 +1,6 @@
 import type { ConnectionSpec, OpSpec } from "@freebirdai/dash-spec";
 import { interpolate } from "@freebirdai/dash-spec";
+import { queryCompleteness } from "./completeness.js";
 import { firstPageParams, mergePages, nextPageParams, rowsAt } from "./paginate.js";
 import { AdapterError, type FetchContext, type FetchResult, type SourceAdapter } from "./types.js";
 
@@ -253,6 +254,7 @@ export class McpAdapter implements SourceAdapter {
       body: pages.length === 1 ? pages[0] : mergePages(pages, op.rowsPath, warnings),
       meta: {
         url: `mcp://${connection.id}/${toolName}`,
+        completeness: queryCompleteness({ pagination: op.pagination, lastBody: pages[pages.length - 1], rowsPath: op.rowsPath, truncated, paginationPending: connection.paginationPending || op.pagination.kind === "link-header", warnings }),
         status: 200,
         fetchedAt: started,
         durationMs: Date.now() - started,

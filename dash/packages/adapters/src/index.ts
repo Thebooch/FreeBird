@@ -6,6 +6,9 @@ export { ProxyAdapter } from "./proxy.js";
 export { AdapterRegistry } from "./registry.js";
 export { RestAdapter } from "./rest.js";
 export type { HttpFetch, HttpResponse } from "./rest.js";
+export { GraphqlAdapter, validateGraphqlRead } from "./graphql.js";
+export { queryCompleteness, combineFetchMeta } from "./completeness.js";
+export type { GraphqlHttpFetch } from "./graphql.js";
 export { AdapterError, emptyMeta } from "./types.js";
 export type {
   FetchContext,

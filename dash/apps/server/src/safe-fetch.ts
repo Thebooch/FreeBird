@@ -160,6 +160,13 @@ export const guardedFetch = async (
   allowedHost: string | null,
 ): Promise<GuardedFetchResult> => fetchGuarded(rawUrl, init, (url) => assertAllowedHost(url, allowedHost));
 
+/** Only the GraphQL adapter calls this, after schema validation and query-only checks. */
+export const guardedGraphqlFetch = async (
+  rawUrl: string,
+  init: { headers: Record<string, string>; body: string; signal?: AbortSignal },
+  allowedHost: string | null,
+): Promise<GuardedFetchResult> => fetchGuarded(rawUrl, { ...init, method: "POST" }, (url) => assertAllowedHost(url, allowedHost));
+
 /**
  * Fetch a document for *discovery* — an OpenAPI spec or a docs page the user
  * just typed in.
@@ -177,7 +184,7 @@ export const fetchPublicDocument = async (
 
 const fetchGuarded = async (
   rawUrl: string,
-  init: { headers?: Record<string, string>; signal?: AbortSignal },
+  init: { headers?: Record<string, string>; signal?: AbortSignal; method?: "POST"; body?: string },
   checkHost: (url: URL) => void,
   maxBytes: number = MAX_BODY_BYTES,
 ): Promise<GuardedFetchResult> => {
@@ -191,7 +198,8 @@ const fetchGuarded = async (
   try {
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
       const response = await fetch(current.toString(), {
-        method: "GET",
+        method: init.method ?? "GET",
+        ...(init.body !== undefined ? { body: init.body } : {}),
         redirect: "manual",
         signal: controller.signal,
         headers: {
@@ -202,6 +210,7 @@ const fetchGuarded = async (
       });
 
       if (response.status >= 300 && response.status < 400) {
+        if (init.method === "POST") throw new BlockedUrlError("GraphQL endpoints must use their final URL; query redirects are not followed.");
         const location = response.headers.get("location");
         if (!location) throw new BlockedUrlError(`redirect without a location (${response.status})`);
         if (hop === MAX_REDIRECTS) throw new BlockedUrlError("too many redirects");

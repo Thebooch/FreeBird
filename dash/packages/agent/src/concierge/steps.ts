@@ -404,6 +404,7 @@ const answered = (draft: ConciergeDraft, id: string): boolean => draft.answered.
  */
 export const describeField = (field: FieldInfo): string => {
   const parts: string[] = [];
+  if (field.description?.trim()) parts.push(field.description.trim());
 
   if (
     field.format === "iso8601" ||

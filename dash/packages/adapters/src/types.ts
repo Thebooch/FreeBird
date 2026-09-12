@@ -1,4 +1,4 @@
-import type { ConnectionSpec, OpSpec, ResolvedParams } from "@freebirdai/dash-spec";
+import type { Completeness, ConnectionSpec, OpSpec, ResolvedParams } from "@freebirdai/dash-spec";
 
 /**
  * Where an adapter is allowed to run.
@@ -12,6 +12,7 @@ import type { ConnectionSpec, OpSpec, ResolvedParams } from "@freebirdai/dash-sp
 export type Transport = "direct" | "proxy";
 
 export interface FetchMeta {
+  readonly completeness?: Completeness;
   /** Opaque server evidence for checking a draft against this response. */
   readonly receipt?: string;
   /** The URL actually requested, with secrets already redacted. */
