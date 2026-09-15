@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { entitySchema } from "./entity.js";
 import { authSchema, paginationSchema, paramDefSchema, queryValueSchema } from "./primitives.js";
 import { resourceSchema } from "./resource.js";
 
@@ -135,6 +136,23 @@ export const mappedFieldSchema = z.object({
   /** Whatever the spec said this field is, when it said anything. */
   description: z.string().max(300).optional(),
   /**
+   * The closed set of values the spec says this field can hold.
+   *
+   * A fact about the API, so it travels with the map: "Status is one of New,
+   * InProgress, Completed" is true for everybody who connects it, and knowing
+   * it before a single row is read is what lets a filter strip offer a value
+   * an account happens to have none of. Which values an account *uses* is a
+   * different question and belongs to that install, never here.
+   *
+   * Capped, because past a couple of dozen it is an identifier rather than a
+   * category and listing it teaches nothing.
+   *
+   * Optional rather than defaulted: this is stored once per field per
+   * endpoint — 1,508 of them on a real API — and an always-present empty array
+   * is bytes spent to say nothing.
+   */
+  values: z.array(z.string().max(120)).max(50).optional(),
+  /**
    * What to call this field on screen, for this endpoint specifically.
    *
    * Nothing writes it yet. The label somebody reads normally comes from the
@@ -151,16 +169,6 @@ export type MappedField = z.infer<typeof mappedFieldSchema>;
 
 /** Bumped when the mapping pass changes shape enough to need re-running. */
 export const MAP_VERSION = 1;
-
-/**
- * Bumped when the labelling pass changes shape enough to need re-running.
- *
- * Deliberately separate from `MAP_VERSION`. The two passes cost different
- * money and answer different questions, and folding labels into the map
- * version would mark every existing map stale — inviting a re-run of the
- * expensive relation pass to obtain something it does not produce.
- */
-export const LABEL_VERSION = 1;
 
 /** A dialect plus the metadata needed to publish it in a catalog. */
 export const catalogEntrySchema = z.object({
@@ -211,47 +219,52 @@ export const catalogEntrySchema = z.object({
          * empty means it described one with no fields.
          */
         fields: z.array(mappedFieldSchema).max(300).optional(),
-        /**
-         * The field whose value tells this endpoint's records apart.
-         *
-         * Shareable, and deliberately only half of what a drill-down learns.
-         * That a task's kind lives on `Category.Name` is true of the API for
-         * everybody, so it is worth mapping once. *Which* categories exist —
-         * "Maintenance", "Turnover", "General Inquiry" — is not: those words
-         * were chosen by whoever set one account up, and belong to that
-         * install. So the field travels with the map and the values never do.
-         */
-        facet: z.string().max(160).optional(),
       }),
     )
     .default([]),
   /** Derived relationships between those ops. */
   resources: z.array(resourceSchema).max(200).default([]),
   /**
-   * What each field is called in plain language, for the whole API.
+   * The record types this API exposes, described for the people using them.
    *
-   * Keyed by field name exactly as the response carries it, dotted names
-   * included — `CurrentNumberOfOccupants` → "Occupants", `Category.Name` →
-   * "Category". One entry per distinct name rather than one per endpoint,
-   * because a name means the same thing wherever it appears on one API: a
-   * large API has thousands of field *entries* and only around a thousand
-   * distinct *names*, and labelling the names is the difference between a
-   * handful of model calls and a hundred.
+   * The layer that makes an integration worth sharing. `resources` is the
+   * structure read out of the URLs — which endpoint lists a thing and which
+   * returns one — and says nothing about what the thing *is*. An entity says
+   * that: what it is called, which field identifies it, how to say its name,
+   * what each field means, which of its fields point at other records, and
+   * what a list and a page of them should look like.
    *
-   * Shareable for the same reason the relations are — it says nothing about
-   * any account's data, only about the API — so it travels with the map and a
-   * new user inherits readable column headers before they have read a row.
-   *
-   * Absent or missing an entry is fine everywhere: `humanLabel` is the
-   * fallback, and it is what the whole product used before this existed.
+   * Every part of it is a fact about the API rather than about an account, so
+   * it travels with this entry exactly as the relations and the labels do —
+   * and the second person to connect this API starts where the first finished.
    */
-  labels: z.record(z.string(), z.string().max(60)).default({}),
-  /** When the labelling pass last ran, and against which version of it. */
-  labelledAt: z.string().optional(),
-  labelVersion: z.number().int().min(1).optional(),
-  labelProgress: z
+  entities: z.array(entitySchema).max(300).default([]),
+  /** When the entity pass last ran, and against which version of it. */
+  entitiesAt: z.string().optional(),
+  entityVersion: z.number().int().min(1).optional(),
+  entityProgress: z
     .object({ version: z.number().int(), batches: z.array(z.string()).max(2000) })
     .optional(),
+  /**
+   * Which batches of the view pass have already run.
+   *
+   * No version beside it, unlike the map and the entity passes. Those two
+   * produce the artifact everything else is built on, so a change to either
+   * has to be able to mark existing work stale. A view is the topmost layer
+   * and every slot in it falls back to a working default, so a better pass is
+   * worth re-running when somebody wants it and never worth nagging about.
+   */
+  viewProgress: z.object({ batches: z.array(z.string()).max(2000) }).optional(),
+  /**
+   * When the descriptions were last checked against a live account.
+   *
+   * Distinct from `verified` above, which is about the dialect: that says rows
+   * came back where the dialect claimed they would, this says a real response
+   * carried the field a record type calls its identity and that its links
+   * resolved. The per-entity flags hold what was actually settled; this only
+   * says when somebody last spent the quota to ask.
+   */
+  entitiesVerifiedAt: z.string().optional(),
   /**
    * When the mapping pass last ran, and against which version of it.
    *

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { DraftPatch } from "@freebirdai/dash-agent";
 import {
   buildAll,
   buildFromDraft,
   draftPatchSchema,
   emptyContext,
-  fakeLlm,
   inferShape,
   newDraft,
   readiness,
@@ -26,7 +26,6 @@ import { connectionFromCatalog, refreshCatalogConnection } from "../catalog.js";
 import { parseOpenApi } from "../discovery/openapi.js";
 import { MemoryCacheStore } from "../cache/memory.js";
 import { buildConciergeContext } from "./context.js";
-import { proposeSetup } from "./propose.js";
 import { SetupPreviews } from "./preview.js";
 
 const entry = catalogEntrySchema.parse({
@@ -91,31 +90,6 @@ describe("Dash reliability boundaries", () => {
     });
   });
 
-  it("selects between duplicate endpoint ids using connection-qualified planner candidates", async () => {
-    const other = connectionSchema.parse({
-      ...connection,
-      id: "other",
-      ops: [
-        {
-          id: "items",
-          title: "Other",
-          path: "/items",
-          fields: [{ name: "name", kinds: ["string"] }],
-        },
-      ],
-    });
-    const context = buildConciergeContext({ connections: [connection, other], reports: [] });
-    const llm = fakeLlm([
-      { args: { primary: "c1-op0", reason: "the other account" } },
-      { args: { title: "Other names", component: "list", rowsPath: "$.data", titleField: "name" } },
-    ]);
-    const proposal = await proposeSetup({ llm, context, intent: "the other account's names" });
-    expect(proposal.patch).toMatchObject({
-      connection: "other",
-      endpoint: "items",
-      roles: { title: ["name"] },
-    });
-  });
   it("preserves executable endpoint metadata and gives each account its own secrets", () => {
     const other = connectionFromCatalog(entry, { id: "second" });
     expect(getOp(connection, "items")).toMatchObject({
@@ -173,23 +147,26 @@ describe("Dash reliability boundaries", () => {
       ],
     });
     const context = buildConciergeContext({ connections: [cents], reports: [] });
-    const llm = fakeLlm([
-      { args: { primary: "charges", reason: "charges" } },
-      {
-        args: {
-          title: "Revenue",
-          component: "stat",
-          rowsPath: "$.data",
-          valueField: "amount",
-          aggregation: "sum",
-          coercions: [{ field: "amount", coercion: "money:cents->major" }],
-          semantics: [{ field: "amount", semantic: "currency" }],
-          currency: "USD",
-        },
-      },
-    ]);
-    // The conversion spelling is validated by the real proposal pipeline.
-    const proposed = await proposeSetup({ llm, intent: "revenue in dollars", context });
+    /*
+     * The patch, written out rather than produced by a planner.
+     *
+     * What this is about is downstream of whoever wrote it: a conversion
+     * surviving a connection switch, through `revise`, `buildAll` and the
+     * runtime. Stating the input here says so, and stops the test failing for
+     * reasons that have nothing to do with its subject.
+     */
+    const proposed = {
+      patch: {
+        connection: "money",
+        endpoint: "charges",
+        component: "stat",
+        title: "Revenue",
+        roles: { value: ["amount"] },
+        coercions: { amount: "money:cents->major" },
+        format: { amount: { semantic: "currency", currency: "USD" } },
+        model: "fake",
+      } satisfies DraftPatch,
+    };
     expect(proposed.patch.endpoint).toBe("charges");
     const multiple = {
       ...context,

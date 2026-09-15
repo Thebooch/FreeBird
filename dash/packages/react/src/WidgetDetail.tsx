@@ -4,6 +4,7 @@ import type { WidgetSpec } from "@freebirdai/dash-spec";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { RecordView } from "./RecordView.jsx";
 import { type DetailPane, type TrailEntry, detailPanes, popTrail, truncateTrail } from "./detail.js";
+import type { OpenReference } from "./entityDetail.js";
 
 /**
  * The record behind a row, in a drawer.
@@ -23,12 +24,21 @@ export const WidgetDetail = ({
   row,
   onClose,
   onOpenPage,
+  onOpenReference,
 }: {
   parent: WidgetSpec;
   row: Row;
   onClose: () => void;
   /** Absent when the host has no page to open — an embed, say. */
   onOpenPage?: (widgetId: string, row: Row) => void;
+  /**
+   * Open the record a cell names.
+   *
+   * Forwarded for the same reason the grid forwards it: a vendor's name that
+   * is a link on the table behind this sheet and plain text inside it would be
+   * the only inert one on screen, and nothing tells the reader which is which.
+   */
+  onOpenReference?: OpenReference;
 }): JSX.Element | null => {
   const closeRef = useRef<HTMLButtonElement>(null);
 
@@ -149,6 +159,7 @@ export const WidgetDetail = ({
             row={current.row as Row}
             wide={false}
             onOpenChild={open}
+            {...(onOpenReference ? { onOpenReference } : {})}
           />
         </div>
       </aside>

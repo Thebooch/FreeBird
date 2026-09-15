@@ -1,5 +1,12 @@
 import type { AdapterRegistry } from "@freebirdai/dash-adapters";
-import type { DashboardSpec, FieldLabels, Grain, RangePreset, ResolvedParams } from "@freebirdai/dash-spec";
+import type {
+  DashboardSpec,
+  EntityLinkView,
+  FieldLabels,
+  Grain,
+  RangePreset,
+  ResolvedParams,
+} from "@freebirdai/dash-spec";
 import { resolveRange } from "@freebirdai/dash-spec";
 import {
   type ReactNode,
@@ -57,6 +64,18 @@ export interface DashboardContextValue {
    */
   readonly labels: Readonly<Record<string, FieldLabels>> | undefined;
   /**
+   * Which of each connection's fields point at other records, keyed by
+   * connection id.
+   *
+   * Host-supplied for the same reason the labels are, and deliberately the
+   * *links* rather than the record types themselves: a browser needs to know
+   * that a column holds a vendor's id and which endpoint returns one, not the
+   * twelve hundred field descriptions that make the shared artifact worth
+   * having. Absent means no column is marked, which is what every renderer did
+   * before this existed.
+   */
+  readonly entityLinks: Readonly<Record<string, readonly EntityLinkView[]>> | undefined;
+  /**
    * Whether each widget is still covered by the approval it was given, keyed
    * by widget id, from `GET /api/dashboards/:id`.
    *
@@ -97,6 +116,8 @@ export interface DashboardProviderProps {
   readonly presentation?: PresentationSources;
   /** connection id → its field lexicon, from `GET /api/connections`. */
   readonly labels?: Readonly<Record<string, FieldLabels>>;
+  /** connection id → its record links, from `GET /api/connections`. */
+  readonly entityLinks?: Readonly<Record<string, readonly EntityLinkView[]>>;
   /** widget id → approval verdict, from `GET /api/dashboards/:id`. */
   readonly approvals?: Readonly<Record<string, ApprovalVerdict>>;
   readonly children: ReactNode;
@@ -112,6 +133,7 @@ export const DashboardProvider = ({
   locale,
   presentation,
   labels,
+  entityLinks,
   approvals,
   children,
 }: DashboardProviderProps): JSX.Element => {
@@ -216,6 +238,7 @@ export const DashboardProvider = ({
       timeZone: dashboard.params.timeZone,
       presentation,
       labels,
+      entityLinks,
       approvals,
       facetSummaries,
       setPreset,
@@ -234,6 +257,7 @@ export const DashboardProvider = ({
       locale,
       presentation,
       labels,
+      entityLinks,
       approvals,
       facetSummaries,
       reportFacets,

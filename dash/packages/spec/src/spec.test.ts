@@ -753,3 +753,39 @@ describe("withoutWidget", () => {
     expect(withoutWidget(board, "ghost").widgets).toHaveLength(3);
   });
 });
+
+/**
+ * A list of columns, one of them missing.
+ *
+ * "Errors mean the widget cannot render" is the contract, and a role that
+ * takes several columns and loses one can still render — it is a shorter list.
+ * Treating it as an error blanked the whole view and printed "this view no
+ * longer matches its data", blaming the reader's data for what is almost
+ * always a defect upstream. A real one: an importer misread a by-id response
+ * and put two fields on a record type that had forty, and the record page
+ * refused to draw the thirty-eight it did have.
+ */
+describe("a multi-valued role that is partly bound", () => {
+  const present: ColumnMeta[] = [
+    { name: "Title", valueType: "text" },
+    { name: "Status", valueType: "categorical" },
+  ];
+
+  it("renders what it has, and says what it lost", () => {
+    const result = validateBinding(COMPONENT_CONTRACTS.table, { columns: ["Title", "Gone", "Status"] }, present);
+    expect(result.ok).toBe(true);
+    expect(result.warnings.map((issue) => issue.message).join(" ")).toContain("Gone");
+    expect(result.errors).toEqual([]);
+  });
+
+  it("still fails when nothing it names exists", () => {
+    // Now there is genuinely nothing to show, which is a different answer.
+    const result = validateBinding(COMPONENT_CONTRACTS.table, { columns: ["Gone", "AlsoGone"] }, present);
+    expect(result.ok).toBe(false);
+  });
+
+  it("leaves a single-column role strict, where one missing name is the whole role", () => {
+    const result = validateBinding(COMPONENT_CONTRACTS.bar, { category: "Gone", value: "Title" }, present);
+    expect(result.ok).toBe(false);
+  });
+});

@@ -670,6 +670,128 @@ describe("building the answers into a widget", () => {
     expect(buildFromDraft(newDraft("d"), context).errors[0]).toContain("no endpoint");
   });
 
+  /*
+   * ── the reader's own filter ───────────────────────────────────────────
+   *
+   * "Tasks with a filter by category" asks for records with a strip above
+   * them, and there was no way to say it: the only thing the machine could do
+   * with a field was group by it, which answers "how many per category" with
+   * a chart. These cover the vocabulary that fixes it.
+   */
+
+  const withTable = (context: ConciergeContext) => {
+    let draft = applyStep(newDraft("d"), "endpoint", ["list"], context);
+    draft = applyStep(draft, "component", ["table"], context);
+    return applyStep(draft, "role:columns", ["name", "status"], context);
+  };
+
+  it("offers a filter over a category, and never over an id or an amount", () => {
+    const context = contextFor({ list: FLAT });
+    const step = allSteps(withTable(context), context).find(
+      (entry) => entry.step.id === "filters",
+    )?.step;
+    const offered = step?.options.map((option) => option.value) ?? [];
+
+    expect(offered).toContain("status");
+    // Four ids across four rows is a closed set by arithmetic and an
+    // identifier by meaning. One tile per row is not a filter.
+    expect(offered).not.toContain("id");
+    // An amount is a range, and so is a date.
+    expect(offered).not.toContain("amount");
+    expect(offered).not.toContain("createdAt");
+  });
+
+  it("builds the strip that was asked for, and takes it off when declined", () => {
+    const context = contextFor({ list: FLAT });
+    const applied = applyStep(withTable(context), "filters", ["status"], context);
+
+    const built = buildFromDraft(applied, context);
+    expect(built.errors).toEqual([]);
+    expect(built.widget?.facets.map((facet) => facet.field)).toEqual(["status"]);
+    // The rows stay rows: a filter strip is chrome, not a grouping.
+    expect(built.widget?.pipeline.some((step) => step.op === "group")).toBe(false);
+
+    /*
+     * Declining removes it rather than recording that nobody was asked. A
+     * control that reads as removed over a widget still narrowing its rows is
+     * the silent wrongness this machine refuses everywhere else.
+     */
+    const declined = skipStep(applied, "filters");
+    expect(buildFromDraft(declined, context).widget?.facets).toEqual([]);
+  });
+
+  it("applies a filter through revise, and refuses one the rows do not carry", () => {
+    const context = contextFor({ list: FLAT });
+    const draft = withTable(context);
+
+    const good = revise(draft, { filters: ["status"] }, context);
+    expect(good.rejected).toEqual([]);
+    expect(good.draft.filters).toEqual(["status"]);
+
+    const bad = revise(draft, { filters: ["Invented"] }, context);
+    expect(bad.rejected[0]?.stepId).toBe("filters");
+    expect(bad.rejected[0]?.available).toContain("status");
+    expect(bad.draft.filters).toEqual([]);
+  });
+
+  it("leaves the API's own plumbing out of a record nobody arranged", () => {
+    /*
+     * The default used to be "show everything the endpoint returns", which on
+     * a real API means the ids of other records and links back to itself. A
+     * record opening on `VendorId: 41` beside a `Href` is the wall of noise
+     * this filters — while keeping the record's own `Id`, which is the one
+     * identifier a reader uses.
+     */
+    const NOISY = {
+      data: [
+        {
+          Id: 5,
+          Name: "Alpha",
+          Status: "open",
+          VendorId: 41,
+          Href: "https://api.example.com/things/5",
+          Vendor: { Id: 41, Href: "https://api.example.com/vendors/41" },
+        },
+      ],
+    };
+    const context = contextFor(
+      { list: NOISY, byId: NOISY.data[0]! },
+      {
+        drillDowns: [
+          {
+            resource: "thing",
+            title: "Thing",
+            listOp: "list",
+            detailOp: "byId",
+            idField: "Id",
+            detailParam: "thingId",
+          },
+        ],
+      },
+    );
+
+    let draft = applyStep(newDraft("d"), "endpoint", ["list"], context);
+    draft = applyStep(draft, "component", ["table"], context);
+    draft = applyStep(draft, "role:columns", ["Name"], context);
+    draft = applyStep(draft, "drilldown", ["byId"], context);
+    draft = skipStep(draft, "drilldownFields");
+
+    const fields = buildFromDraft(draft, context).widget?.drilldown?.roles.fields ?? [];
+    expect(fields).toContain("Id");
+    expect(fields).toContain("Name");
+    expect(fields).toContain("Status");
+    for (const dropped of ["VendorId", "Href", "Vendor_Id", "Vendor_Href"]) {
+      expect(fields, dropped).not.toContain(dropped);
+    }
+  });
+
+  it("offers no filter over a chart, where there are no records to narrow", () => {
+    const context = contextFor({ list: FLAT });
+    let draft = applyStep(newDraft("d"), "endpoint", ["list"], context);
+    draft = applyStep(draft, "component", ["bar"], context);
+    expect(allSteps(draft, context).some((entry) => entry.step.id === "filters")).toBe(false);
+  });
+
   it("gives a colliding title its own id", () => {
     const context = contextFor({ list: FLAT });
     const { draft } = runToCompletion(context);
@@ -2121,9 +2243,9 @@ describe("nested fields, offered and bound", () => {
  *
  * Every join test above applies the join in one `revise` and the roles in the
  * next, and they all passed while the feature was broken — because a proposal
- * does not arrive in two calls. `proposeSetup` returns ONE patch carrying the
- * endpoint, the component, the roles and the join, and in that shape the order
- * inside `revise` decided the outcome:
+ * does not arrive in two calls. A patch carries the endpoint, the component,
+ * the roles and the join at once, and in that shape the order inside `revise`
+ * decided the outcome:
  *
  *   1. roles were validated against a pool the join had not been added to yet,
  *      so any joined column was refused for naming a field that did not exist;
@@ -2137,7 +2259,7 @@ describe("nested fields, offered and bound", () => {
 describe("a join and its columns in one patch", () => {
   const context = () => contextFor({ list: FLAT, owners: OWNERS }, { joins: [] });
 
-  /** Exactly the shape `proposeSetup` produces: everything at once. */
+  /** Exactly the shape a proposal arrives in: everything at once. */
   const proposed = (ctx: ConciergeContext) =>
     revise(
       newDraft("d", "properties and their owners", "assisted"),

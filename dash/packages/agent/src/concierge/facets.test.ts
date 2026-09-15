@@ -1,7 +1,7 @@
-import { COMPONENT_CONTRACTS, FACET_MAX_VALUES } from "@freebirdai/dash-spec";
+import { COMPONENT_CONTRACTS, FACET_MAX_PER_WIDGET, FACET_MAX_VALUES } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import type { FieldInfo } from "../infer.js";
-import { deriveFacet } from "./facets.js";
+import { facetFields } from "./facets.js";
 
 const field = (input: Partial<FieldInfo> & { name: string }): FieldInfo => ({
   kinds: ["string"],
@@ -11,99 +11,97 @@ const field = (input: Partial<FieldInfo> & { name: string }): FieldInfo => ({
   ...input,
 });
 
-const derive = (input: {
-  facetField?: string | undefined;
-  fields?: readonly FieldInfo[];
-  component?: keyof typeof COMPONENT_CONTRACTS;
-  aggregated?: boolean;
-}): string | null =>
-  deriveFacet({
-    facetField: input.facetField,
-    fields: input.fields ?? [field({ name: "Status" })],
-    contract: COMPONENT_CONTRACTS[input.component ?? "table"],
-    aggregated: input.aggregated ?? false,
+describe("facetFields", () => {
+  const choose = (input: {
+    requested?: readonly string[];
+    fields?: readonly FieldInfo[];
+    component?: keyof typeof COMPONENT_CONTRACTS;
+    aggregated?: boolean;
+  }): readonly string[] =>
+    facetFields({
+      requested: input.requested ?? [],
+      fields: input.fields ?? [field({ name: "Status" })],
+      contract: COMPONENT_CONTRACTS[input.component ?? "table"],
+      aggregated: input.aggregated ?? false,
+    });
+
+  it("takes the fields that were asked for, in the order asked", () => {
+    expect(
+      choose({
+        requested: ["Priority", "Status"],
+        fields: [field({ name: "Status" }), field({ name: "Priority" })],
+      }),
+    ).toEqual(["Priority", "Status"]);
   });
 
-describe("deriveFacet", () => {
-  it("takes the field the map already recorded", () => {
-    // The whole economy of this: the answer was bought when the API was
-    // mapped, so offering a strip costs no model call at all.
-    expect(derive({ facetField: "Status" })).toBe("Status");
+  it("gives none when nobody asked", () => {
+    /*
+     * There used to be a second source here — a field recorded per endpoint by
+     * the mapping pass — which was populated on none of a real API's endpoints
+     * and so only ever meant this. What a widget filters by is now decided
+     * from the record type and arrives already asked for.
+     */
+    expect(choose({})).toEqual([]);
   });
 
-  it("declines when the map recorded none", () => {
-    expect(derive({ facetField: undefined })).toBeNull();
+  it("drops a requested field the rows do not carry", () => {
+    expect(choose({ requested: ["Nope"] })).toEqual([]);
   });
 
-  it("declines over an aggregate", () => {
-    // After a group step there are no records left, only buckets — the same
-    // reason charts ignore highlights.
-    expect(derive({ facetField: "Status", aggregated: true })).toBeNull();
+  it("caps what one widget wears and de-duplicates", () => {
+    const many = ["Status", "Priority", "Kind", "Stage"].map((name) => field({ name }));
+    expect(choose({ requested: ["Status", "Status"], fields: many })).toEqual(["Status"]);
+    expect(
+      choose({ requested: ["Status", "Priority", "Kind", "Stage"], fields: many }),
+    ).toHaveLength(FACET_MAX_PER_WIDGET);
   });
 
-  it("declines for a component whose marks are not records", () => {
-    expect(derive({ facetField: "Status", component: "bar" })).toBeNull();
-    expect(derive({ facetField: "Status", component: "timeseries" })).toBeNull();
+  it("takes a requested field on an API nobody has read yet", () => {
+    /*
+     * The case this whole split exists for. An endpoint described only by its
+     * specification reports `distinct: 0` — not "few", not "many" — and
+     * refusing on that would refuse every filter on every unread API, which is
+     * most of them.
+     */
+    expect(choose({ requested: ["Status"], fields: [field({ name: "Status", distinct: 0 })] })).toEqual([
+      "Status",
+    ]);
   });
 
-  it("offers one for every collection component that shows records", () => {
-    for (const component of ["table", "cards", "list", "board", "feed"] as const) {
-      expect(derive({ facetField: "Status", component })).toBe("Status");
+  it("refuses an unmeasured number, which could be an id or an amount", () => {
+    expect(
+      choose({ requested: ["Code"], fields: [field({ name: "Code", kinds: ["number"], distinct: 0 })] }),
+    ).toEqual([]);
+  });
+
+  it("refuses an identifier or a link by name, even nested", () => {
+    for (const name of ["TaskId", "Href", "Property.Href", "Property.Id"]) {
+      expect(choose({ requested: [name], fields: [field({ name, distinct: 0 })] })).toEqual([]);
     }
   });
 
-  it("declines a field the endpoint was never seen to return", () => {
-    expect(derive({ facetField: "Status", fields: [field({ name: "Other" })] })).toBeNull();
-  });
-
-  it("declines an object or array field", () => {
-    // These stringify to "[object Object]", which makes one tile standing in
-    // for everything.
-    for (const kind of ["object", "array"] as const) {
-      expect(
-        derive({ facetField: "Status", fields: [field({ name: "Status", kinds: [kind] })] }),
-      ).toBeNull();
-    }
-  });
-
-  it("declines a date wearing a string kind", () => {
+  it("keeps the readable half of a nested reference", () => {
     expect(
-      derive({
-        facetField: "Created",
-        fields: [field({ name: "Created", format: "iso8601" })],
+      choose({ requested: ["Category.Name"], fields: [field({ name: "Category.Name", distinct: 0 })] }),
+    ).toEqual(["Category.Name"]);
+  });
+
+  it("keeps a requested field with more values than tile well", () => {
+    /*
+     * Deliberately not refused here. `validateFacets` drops the strip at render
+     * time and says why, which is recoverable; refusing at build time would
+     * silently ignore what somebody asked for.
+     */
+    expect(
+      choose({
+        requested: ["Status"],
+        fields: [field({ name: "Status", distinct: FACET_MAX_VALUES + 5 })],
       }),
-    ).toBeNull();
+    ).toEqual(["Status"]);
   });
 
-  it("declines a single-valued field", () => {
-    // A strip with one tile offers a filter that removes nothing, which reads
-    // as broken rather than as complete.
-    expect(
-      derive({ facetField: "Status", fields: [field({ name: "Status", distinct: 1 })] }),
-    ).toBeNull();
-  });
-
-  it("declines a field with too many values to tile", () => {
-    expect(
-      derive({
-        facetField: "Status",
-        fields: [field({ name: "Status", distinct: FACET_MAX_VALUES + 1 })],
-      }),
-    ).toBeNull();
-    expect(
-      derive({
-        facetField: "Status",
-        fields: [field({ name: "Status", distinct: FACET_MAX_VALUES })],
-      }),
-    ).toBe("Status");
-  });
-
-  it("allows a nullable categorical, which is an ordinary empty bucket", () => {
-    expect(
-      derive({
-        facetField: "Status",
-        fields: [field({ name: "Status", kinds: ["string", "null"], nullable: true })],
-      }),
-    ).toBe("Status");
+  it("gives no strip to a chart or an aggregate, however it was asked for", () => {
+    expect(choose({ requested: ["Status"], aggregated: true })).toEqual([]);
+    expect(choose({ requested: ["Status"], component: "bar" })).toEqual([]);
   });
 });

@@ -1,7 +1,17 @@
-import type { LlmAdapter, LabelResult } from "@freebirdai/dash-agent";
-import { labelFields, mapApi, pruneAmbiguousRelations } from "@freebirdai/dash-agent";
-import type { CatalogEntry, ResourceSpec } from "@freebirdai/dash-spec";
-import { LABEL_VERSION, MAP_VERSION, pathParamNames } from "@freebirdai/dash-spec";
+import type {
+  EntityResult,
+  LlmAdapter,
+  ReferenceResult,
+} from "@freebirdai/dash-agent";
+import {
+  classifyReferences,
+  chooseViews,
+  describeEntities,
+  mapApi,
+  pruneAmbiguousRelations,
+} from "@freebirdai/dash-agent";
+import type { CatalogEntry, EntitySpec, ResourceSpec } from "@freebirdai/dash-spec";
+import { ENTITY_VERSION, MAP_VERSION, pathParamNames } from "@freebirdai/dash-spec";
 import type { FastifyInstance } from "fastify";
 import type { CatalogStore } from "../catalog.js";
 import { looksLikeOpenApi, parseOpenApi, parseSpecDocument } from "../discovery/openapi.js";
@@ -33,12 +43,13 @@ export interface MapRouteDeps {
   /**
    * The model for one action. Null means no AI key is configured.
    *
-   * Takes the action's name because the two passes here are not alike: finding
-   * how an API's resources relate is reasoning over hundreds of endpoints, and
-   * naming its fields is a vocabulary exercise a cheap model does well. They
-   * were one call resolving to one model; the argument is what separates them.
+   * Takes the action's name because the passes here are not alike: finding how
+   * an API's resources relate is reasoning over hundreds of endpoints, naming
+   * its fields is a vocabulary exercise a cheap model does well, and describing
+   * what its records *are* is the hardest reading of the three. They were one
+   * call resolving to one model; the argument is what separates them.
    */
-  readonly llm: (task: "map" | "label") => LlmAdapter | null;
+  readonly llm: (task: "map" | "entity") => LlmAdapter | null;
   /**
    * SSRF-guarded fetch for re-reading a spec. Absent disables the refresh.
    *
@@ -73,10 +84,6 @@ export interface MapRouteDeps {
  *   not un-name it.
  * - resources and their relations → kept entirely. Nothing in a spec re-read
  *   is evidence against them.
- * - the label lexicon → kept, for the same reason as descriptions. It is keyed
- *   by field name rather than by endpoint, so a re-read that renames nothing
- *   invalidates none of it; a genuinely new field simply has no entry yet and
- *   falls back to its mechanical label.
  *
  * An endpoint the fresh spec no longer has is dropped: it cannot be called, so
  * keeping its description would be keeping a description of nothing. Relations
@@ -95,7 +102,69 @@ export const mergeRefreshedOps = (
     return {
       ...op,
       ...(previous.description ? { description: previous.description } : {}),
-      ...(previous.facet ? { facet: previous.facet } : {}),
+    };
+  });
+};
+
+/**
+ * A re-description, with what was *earned* kept.
+ *
+ * Describing an API again is cheap to ask for and expensive to get wrong: a
+ * re-run that overwrote everything would throw away the one thing a model
+ * cannot produce — evidence. Verification comes from real rows on a real
+ * account, and nothing in a second reading of the same specification is
+ * evidence against it.
+ *
+ * But it is evidence about a *particular* claim, so it survives only while
+ * that claim is unchanged:
+ *
+ * - An entity's `verified` and its `identity.observed` mean "a real response
+ *   carried this field". If the re-run picked a different identity field, the
+ *   old sighting says nothing about the new one and is dropped.
+ * - A reference's `verified` means "a real id resolved against that record
+ *   type's own endpoint". If the re-run points the field somewhere else, or
+ *   changes how the id is held, the old resolution proves nothing about the
+ *   new link.
+ *
+ * Everything a model writes — names, descriptions, labels, grouping — is taken
+ * fresh. A re-run is asked for precisely because the newer reading is wanted,
+ * and keeping the old prose would make the pass unable to improve anything.
+ *
+ * A record type the fresh description no longer has is dropped: it describes
+ * nothing, and carrying its verification forward would be carrying proof about
+ * something that is gone.
+ */
+export const mergeDescribedEntities = (
+  existing: readonly EntitySpec[],
+  fresh: readonly EntitySpec[],
+): EntitySpec[] => {
+  const before = new Map(existing.map((entity) => [entity.id, entity]));
+
+  return fresh.map((entity) => {
+    const previous = before.get(entity.id);
+    if (!previous) return entity;
+
+    const identity = entity.identity;
+    const sameIdentity =
+      previous.identity !== undefined &&
+      identity !== undefined &&
+      previous.identity.field === identity.field;
+
+    const was = new Map(previous.fields.map((field) => [field.path, field]));
+
+    return {
+      ...entity,
+      ...(sameIdentity && previous.identity?.observed && identity
+        ? { identity: { ...identity, observed: true } }
+        : {}),
+      verified: sameIdentity ? previous.verified : false,
+      fields: entity.fields.map((field) => {
+        const reference = field.reference;
+        const older = was.get(field.path)?.reference;
+        if (!reference || !older?.verified) return field;
+        const sameLink = older.entity === reference.entity && older.holds === reference.holds;
+        return sameLink ? { ...field, reference: { ...reference, verified: true } } : field;
+      }),
     };
   });
 };
@@ -116,9 +185,6 @@ export const mapState = (
   endpoints: number;
   described: number;
   withFields: number;
-  labelled: boolean;
-  labelsStale: boolean;
-  labels: number;
 } => ({
   mapped: entry.mapVersion !== undefined,
   // A pass that has changed shape since is worth running again.
@@ -126,10 +192,227 @@ export const mapState = (
   endpoints: entry.ops.length,
   described: entry.ops.filter((op) => op.description).length,
   withFields: entry.ops.filter((op) => (op.fields?.length ?? 0) > 0).length,
-  labelled: entry.labelVersion !== undefined,
-  labelsStale: entry.labelVersion !== undefined && entry.labelVersion < LABEL_VERSION,
-  labels: Object.keys(entry.labels ?? {}).length,
 });
+
+/**
+ * Whether this API's records have been described, and how well.
+ *
+ * Tracked separately from the map and the labels, on the same reasoning that
+ * separates those two: three passes that cost different money and answer
+ * different questions must not be able to mark each other stale. A pass that
+ * changes shape here should not invite a re-run of the relation map, which
+ * does not produce any of this.
+ *
+ * The counts are the honest version of "is this integration ready?" — how many
+ * record types are described, how many can say what identifies one, how many
+ * can say a record's *name*, and how many fields point at another record.
+ * Those four are exactly what everything downstream needs, so a low number
+ * here is a specific, fixable thing rather than a vague sense that the
+ * integration is thin.
+ */
+export const entityState = (
+  entry: CatalogEntry,
+): {
+  described: boolean;
+  stale: boolean;
+  entities: number;
+  withIdentity: number;
+  withName: number;
+  references: number;
+  fieldsDescribed: number;
+  /** Record types a live account has confirmed the identity of. */
+  verified: number;
+  /** Links a real id actually resolved through. */
+  referencesVerified: number;
+} => {
+  const entities = entry.entities ?? [];
+  return {
+    /*
+     * Whether there are record types, not whether a version stamp is set.
+     *
+     * The stamp means "the current pass finished cleanly", which is a
+     * different question and not the one anybody looking at this screen is
+     * asking. Read off the stamp, an API with 108 described record types whose
+     * last run was partial — or whose stamp a re-read cleared — was reported
+     * as "nothing here has been described yet", which is simply untrue and
+     * offers to spend money redoing work that is already done.
+     */
+    described: entities.length > 0,
+    /*
+     * Worth running again: either the pass has moved on since, or it never
+     * finished. Both are "there is more to get", which is what a reader can
+     * act on; which of the two it is belongs in the run's own report.
+     */
+    stale:
+      entities.length > 0 &&
+      (entry.entityVersion === undefined || entry.entityVersion < ENTITY_VERSION),
+    entities: entities.length,
+    withIdentity: entities.filter((entity) => entity.identity).length,
+    withName: entities.filter((entity) => entity.display).length,
+    references: entities.reduce(
+      (total, entity) => total + entity.fields.filter((field) => field.reference).length,
+      0,
+    ),
+    fieldsDescribed: entities.reduce(
+      (total, entity) => total + entity.fields.filter((field) => field.description).length,
+      0,
+    ),
+    /*
+     * What a real account has settled, as opposed to what a model believes.
+     * Reported separately from the counts above because the difference is the
+     * whole question somebody is asking before they share this: a description
+     * can be confidently wrong in ways no amount of re-reading would reveal.
+     */
+    verified: entities.filter((entity) => entity.verified).length,
+    referencesVerified: entities.reduce(
+      (total, entity) =>
+        total + entity.fields.filter((field) => field.reference?.verified).length,
+      0,
+    ),
+  };
+};
+
+/**
+ * Carry the values a refreshed spec declares onto the record types.
+ *
+ * Deterministic, free, and deliberately not left to the describing pass. That
+ * a field is one of "Active", "Ended" is a fact the specification states
+ * outright — nobody should pay a model to read it back, and nobody should have
+ * to re-describe a whole API to pick it up when the vendor adds a status.
+ *
+ * Only ever the declared set. What an *account* has is a different question
+ * and belongs to that install, never to a shared artifact.
+ *
+ * Matched by field path against the endpoints a record type reads from, which
+ * is the same join `fieldsOfResource` makes. A field the fresh spec no longer
+ * constrains has its values dropped rather than kept: a stale closed set is
+ * worse than none, because a strip built from one folds everything it missed
+ * into "Other".
+ */
+export const withDeclaredValues = (
+  entities: readonly EntitySpec[],
+  resources: readonly ResourceSpec[],
+  ops: readonly CatalogEntry["ops"][number][],
+): EntitySpec[] => {
+  const opById = new Map(ops.map((op) => [op.id, op]));
+  const resourceById = new Map(resources.map((resource) => [resource.id, resource]));
+
+  return entities.map((entity) => {
+    const resource = resourceById.get(entity.resource);
+    const declared = new Map<string, readonly string[]>();
+    for (const id of [resource?.listOp, resource?.detailOp]) {
+      for (const field of (id ? opById.get(id)?.fields : undefined) ?? []) {
+        if (field.values && field.values.length > 0 && !declared.has(field.name)) {
+          declared.set(field.name, field.values);
+        }
+      }
+    }
+    /*
+     * What the endpoints actually declare, so a field they no longer do can be
+     * dropped. This is evidence, not ignorance: an endpoint with no declared
+     * fields tells us nothing and is skipped, exactly as a link against an
+     * unknown row list is allowed through rather than refused.
+     *
+     * The case that forced it: an importer misread a by-id response and put
+     * `Number` and `Type` on a record type that has forty fields. Re-reading
+     * the spec fixed the endpoint, and without this the record type kept the
+     * two bogus fields until somebody paid to describe the whole API again.
+     */
+    const known = new Set<string>();
+    let sawAny = false;
+    for (const id of [resource?.listOp, resource?.detailOp]) {
+      const fields = (id ? opById.get(id)?.fields : undefined) ?? [];
+      if (fields.length === 0) continue;
+      sawAny = true;
+      for (const field of fields) known.add(field.name);
+    }
+
+    /*
+     * Never a field the record type points at.
+     *
+     * `identity`, `display` and `views` are all validated against the field
+     * list, so pruning one they name makes the record type unparseable — and
+     * the write that was meant to *fix* an entry would fail it instead. A
+     * referenced field that is genuinely wrong is rarer, survives here, and is
+     * now drawn around rather than blanking the page.
+     */
+    const referenced = new Set<string>(
+      [
+        entity.identity?.field,
+        ...(entity.display?.title ?? []),
+        entity.display?.subtitle,
+        entity.display?.status,
+        entity.display?.image,
+        ...entity.views.columns,
+        ...entity.views.facets,
+        entity.views.sort?.field,
+        entity.views.timeField,
+        ...entity.views.record.facts,
+        ...entity.views.record.groups.flatMap((group) => group.fields),
+      ].filter((path): path is string => typeof path === "string"),
+    );
+
+    const prunable = (path: string): boolean => !known.has(path) && !referenced.has(path);
+    const stale = sawAny ? entity.fields.filter((field) => prunable(field.path)) : [];
+    if (
+      stale.length === 0 &&
+      declared.size === 0 &&
+      entity.fields.every((field) => field.values.length === 0)
+    ) {
+      return entity;
+    }
+
+    return {
+      ...entity,
+      fields: entity.fields
+        .filter((field) => !sawAny || !prunable(field.path))
+        .map((field) => {
+        const values = declared.get(field.path) ?? [];
+        // Cleared rather than deleted: the schema defaults this to an empty
+        // array, so "no declared set" and "the key is absent" are the same
+        // thing once parsed.
+        if (values.length === 0) {
+          return field.values.length === 0 ? field : { ...field, values: [] };
+        }
+        return { ...field, values: [...values] };
+      }),
+    };
+  });
+};
+
+/**
+ * Has the schema moved in a way the descriptions were a claim about?
+ *
+ * Not a deep compare of the whole endpoint list, which is what this was. A
+ * re-read that picks up nothing but a **declared set of values** changes the
+ * JSON and changes nothing anybody described: the fields are the same fields
+ * and their prose is still true. Comparing everything meant the free half of a
+ * refresh marked the expensive half stale and invited somebody to re-describe
+ * a hundred record types to learn that a status has a fourth value.
+ *
+ * What does count is a field appearing, disappearing or changing what it
+ * holds — then a description really is a claim about something else.
+ */
+const schemaMoved = (
+  before: readonly CatalogEntry["ops"][number][],
+  after: readonly CatalogEntry["ops"][number][],
+): boolean => {
+  const shape = (ops: readonly CatalogEntry["ops"][number][]) =>
+    JSON.stringify(
+      ops.map((op) => ({
+        id: op.id,
+        path: op.path,
+        params: op.params,
+        fields: (op.fields ?? []).map((field) => ({
+          name: field.name,
+          kinds: field.kinds,
+          format: field.format,
+          nullable: field.nullable,
+        })),
+      })),
+    );
+  return shape(before) !== shape(after);
+};
 
 /** Relations merged in, without letting a guess shadow something declared. */
 const mergeRelations = (
@@ -152,20 +435,6 @@ const mergeRelations = (
 export const mapRoutes =
   (deps: MapRouteDeps) =>
   async (app: FastifyInstance): Promise<void> => {
-    const labelOptions = (entry: CatalogEntry, force: boolean) => ({
-      existingLabels: entry.labels,
-      completedBatches:
-        !force && entry.labelProgress?.version === LABEL_VERSION ? entry.labelProgress.batches : [],
-      onCheckpoint: (result: LabelResult) => {
-        const current = deps.catalog!.get(entry.id) ?? entry;
-        deps.catalog!.put({
-          ...current,
-          labels: result.labels,
-          labelVersion: undefined,
-          labelProgress: { version: LABEL_VERSION, batches: [...result.completedBatches] },
-        });
-      },
-    });
     /**
      * What mapping this API would involve, costing nothing to ask.
      *
@@ -180,6 +449,14 @@ export const mapRoutes =
       const state = mapState(entry);
       return {
         ...state,
+        /*
+         * The record types, reported beside the map because they are the half
+         * a person actually sees: a mapped API with nothing described still
+         * shows raw field names and ids.
+         */
+        records: entityState(entry),
+        entitiesAt: entry.entitiesAt ?? null,
+        entitiesVerifiedAt: entry.entitiesVerifiedAt ?? null,
         mappedAt: entry.mappedAt ?? null,
         /*
          * The endpoints the pass would have to *call*, as opposed to read.
@@ -192,6 +469,7 @@ export const mapRoutes =
           (op) => (op.fields?.length ?? 0) === 0 && pathParamNames(op.path).length === 0,
         ).length,
         canRun: deps.llm("map") !== null,
+        canRunRecords: deps.llm("entity") !== null,
       };
     });
 
@@ -276,11 +554,27 @@ export const mapRoutes =
         const saved = deps.catalog.put({
           ...entry,
           ops,
-          ...(JSON.stringify(ops) !== JSON.stringify(entry.ops)
-            ? { mapVersion: undefined, labelVersion: undefined }
+          ...(schemaMoved(entry.ops, ops)
+            ? {
+                mapVersion: undefined,
+                /*
+                 * The record types describe these fields, so a schema that has
+                 * moved underneath them makes their descriptions a claim about
+                 * something else. The descriptions themselves are kept — they
+                 * cost money and most will still be right — and the version is
+                 * cleared so the pass is offered again.
+                 */
+                entityVersion: undefined,
+              }
             : {}),
           // Untouched, and that is the whole point of this route existing.
           resources: entry.resources,
+          /*
+           * Except for the one thing a re-read genuinely settles about them: a
+           * closed set of values is stated by the specification, so picking up
+           * a status the vendor has added costs nothing and needs no pass.
+           */
+          entities: withDeclaredValues(entry.entities ?? [], entry.resources, ops),
           specUrl: fetched.url,
           updatedAt: new Date().toISOString(),
         });
@@ -313,75 +607,259 @@ export const mapRoutes =
     );
 
     /**
-     * Name the fields, and nothing else.
+     * Describe what this API's records are, and which of them point at each
+     * other.
      *
-     * Split out from the map because the two passes improve on their own
-     * schedules and cost different amounts. Re-running this on an API whose
-     * relations are already correct is a few calls; re-running the whole map
-     * to get it would be paying again for an answer nobody disputes.
+     * The pass everything a person sees rests on. A mapped API still shows raw
+     * field names and bare ids: the map knows which endpoint lists a thing and
+     * which returns one, and nothing about what the thing *is*. This answers
+     * that — what these records are called, which field identifies one, how to
+     * say its name, what each field means — and then which fields hold another
+     * record's identity, which is what turns a number into a link.
      *
-     * Also the route to reach for when an entry was mapped before labelling
-     * existed — which is every entry mapped before today.
+     * Two calls' worth of passes rather than one, deliberately. Describing a
+     * record type is reading its fields; deciding that `VendorId` names a
+     * vendor is a closed question asked once per candidate field. Running them
+     * together is what makes the second one's question answerable at all — it
+     * needs the first one's record types as the set to choose from.
+     *
+     * Costs model tokens and **zero requests against anybody's API**, like the
+     * other two passes here. It needs no key and no connection, which is
+     * precisely what makes the result worth sharing.
      */
     app.post<{ Params: { id: string }; Body: { force?: boolean } }>(
-      "/api/catalog/:id/labels",
+      "/api/catalog/:id/entities",
       async (request, reply) => {
         if (!deps.catalog) return reply.status(501).send({ error: "no catalog configured" });
 
         const entry = deps.catalog.get(request.params.id);
         if (!entry) return reply.status(404).send({ error: "no such catalog entry" });
 
-        const state = mapState(entry);
-        if (state.labelled && !state.labelsStale && request.body?.force !== true) {
-          return { ...state, ranPass: false, note: "the fields on this API are already named" };
+        const force = request.body?.force === true;
+        const state = entityState(entry);
+        if (state.described && !state.stale && !force) {
+          return {
+            ...state,
+            ranPass: false,
+            note: "the records on this API are already described",
+          };
         }
 
-        const llm = deps.llm("label");
+        const llm = deps.llm("entity");
         if (!llm) {
           return reply.status(400).send({
             error:
-              "Naming an API's fields needs an AI key. Set ANTHROPIC_API_KEY or OPENAI_API_KEY on the server.",
+              "Describing an API's records needs an AI key. Set ANTHROPIC_API_KEY or OPENAI_API_KEY on the server.",
           });
         }
 
-        const named = await labelFields(
+        if (entry.resources.length === 0) {
+          return {
+            ...state,
+            ranPass: false,
+            note: "this API has no resources to describe — map it first",
+          };
+        }
+
+        const ops = entry.ops.map((op) => ({
+          id: op.id,
+          title: op.title,
+          path: op.path,
+          ...(op.description ? { description: op.description } : {}),
+          ...(op.fields ? { fields: op.fields } : {}),
+        }));
+
+        /*
+         * One progress list for both passes.
+         *
+         * Safe because a batch key is a content hash: each pass recognises
+         * only its own and ignores the other's, so a resumed run picks up
+         * wherever it stopped without either pass having to know the other
+         * exists.
+         */
+        const batches =
+          !force && entry.entityProgress?.version === ENTITY_VERSION
+            ? entry.entityProgress.batches
+            : [];
+
+        const checkpoint = (entities: readonly CatalogEntry["entities"][number][], done: readonly string[]): void => {
+          const current = deps.catalog!.get(entry.id) ?? entry;
+          deps.catalog!.put({
+            ...current,
+            entities: [...entities],
+            // Cleared while a pass is mid-flight: a half-described API must
+            // not read as finished if the next batch never lands.
+            entityVersion: undefined,
+            entityProgress: { version: ENTITY_VERSION, batches: [...done] },
+          });
+        };
+
+        const described = await describeEntities(
           llm,
+          { apiTitle: entry.title, resources: entry.resources, ops },
           {
-            apiTitle: entry.title,
-            ops: entry.ops.map((op) => ({
-              id: op.id,
-              title: op.title,
-              ...(op.fields ? { fields: op.fields } : {}),
-            })),
+            completedBatches: batches,
+            existing: entry.entities,
+            onCheckpoint: (result: EntityResult) =>
+              checkpoint(result.entities, result.completedBatches),
           },
-          labelOptions(entry, request.body?.force === true),
         );
 
+        /*
+         * Where each record type's rows live, so two collections sharing a
+         * noun can be told apart by their section of the API. The same
+         * evidence `resolveSameNoun` reads, handed to the model as the only
+         * thing that distinguishes them.
+         */
+        const pathOf = (id: string): string | undefined => {
+          const listOp = entry.resources.find((resource) => resource.id === id)?.listOp;
+          return listOp ? ops.find((op) => op.id === listOp)?.path : undefined;
+        };
+
+        const linked =
+          described.entities.length > 0
+            ? await classifyReferences(
+                llm,
+                { apiTitle: entry.title, entities: described.entities, pathOf },
+                {
+                  completedBatches: batches,
+                  onCheckpoint: (result: ReferenceResult) =>
+                    checkpoint(result.entities, [
+                      ...described.completedBatches,
+                      ...result.completedBatches,
+                    ]),
+                },
+              )
+            : {
+                entities: described.entities,
+                errors: [] as readonly string[],
+                skipped: [] as readonly string[],
+                completedBatches: [] as readonly string[],
+                considered: 0,
+                linked: 0,
+              };
+
+        const errors = [...described.errors, ...linked.errors];
         const saved = deps.catalog.put({
           ...entry,
-          // Merged, not replaced: a lost batch must not cost the labels a
-          // previous run already established.
-          labels: named.labels,
-          labelledAt: new Date().toISOString(),
-          labelVersion: named.errors.length === 0 ? LABEL_VERSION : undefined,
-          labelProgress: { version: LABEL_VERSION, batches: [...named.completedBatches] },
+          /*
+           * Merged rather than replaced: a re-description must not throw away
+           * evidence gathered from a live account, which is the one thing a
+           * model cannot produce.
+           */
+          entities: mergeDescribedEntities(entry.entities ?? [], linked.entities),
+          entitiesAt: new Date().toISOString(),
+          // Only a clean run marks the pass done; a partial one stays
+          // resumable and says what it is missing.
+          entityVersion: errors.length === 0 ? ENTITY_VERSION : undefined,
+          entityProgress: {
+            version: ENTITY_VERSION,
+            batches: [...described.completedBatches, ...linked.completedBatches],
+          },
           updatedAt: new Date().toISOString(),
         });
 
         return {
-          ...mapState(saved),
+          ...entityState(saved),
           ranPass: true,
-          labelsWritten: Object.keys(named.labels).length,
+          entitiesAt: saved.entitiesAt ?? null,
           /*
-           * Which fields the pass left alone. Not a failure — a field whose
-           * name already reads well needs no entry, and the mechanical label
-           * is what shows for it.
+           * How many fields were *asked* about against how many became links.
+           * The difference is the honest part: a candidate the model refused
+           * is a field that looks like a reference and is not one, and that
+           * number being large is information rather than a fault.
            */
-          unlabelled:
-            new Set(entry.ops.flatMap((op) => (op.fields ?? []).map((field) => field.name))).size -
-            Object.keys(saved.labels ?? {}).length,
-          errors: named.errors,
-          skipped: named.skipped,
+          considered: linked.considered,
+          linked: linked.linked,
+          errors,
+          /*
+           * Readings the passes declined. Not errors — they worked and refused
+           * to guess — but a record type left unnamed or a link left unmade
+           * needs a reason attached or it reads as the pass not noticing.
+           */
+          skipped: [...described.skipped, ...linked.skipped],
+        };
+      },
+    );
+
+    /**
+     * Choose how each record type is listed and shown.
+     *
+     * The third and smallest pass, and the only optional one. Everything it
+     * fills already has a defensible answer without it — columns from the
+     * primary fields, the sort and the strips from the record type's kind, the
+     * numbers above a record from counting the collections hanging off it — so
+     * an API nobody has run this on works. What it buys is the cases those
+     * rules are blunt on: which six of forty fields matter, a category field
+     * whose name no rule recognises, and which amount is worth totalling.
+     *
+     * Costs model tokens and **zero requests against anybody's account**, like
+     * the other two here: it reads record types that already exist.
+     */
+    app.post<{ Params: { id: string }; Body: { force?: boolean } }>(
+      "/api/catalog/:id/views",
+      async (request, reply) => {
+        if (!deps.catalog) return reply.status(501).send({ error: "no catalog is configured" });
+        const entry = deps.catalog.get(request.params.id);
+        if (!entry) return reply.status(404).send({ error: "no such catalog entry" });
+
+        const entities = entry.entities ?? [];
+        if (entities.length === 0) {
+          return reply.status(409).send({
+            error: "This API's records have not been described yet, so there is nothing to lay out.",
+          });
+        }
+
+        const llm = deps.llm("entity");
+        if (!llm) {
+          return reply.status(400).send({
+            error: "Choosing views needs an AI key. Set ANTHROPIC_API_KEY or OPENAI_API_KEY.",
+          });
+        }
+
+        const force = request.body?.force === true;
+        const batches = !force && entry.viewProgress ? entry.viewProgress.batches : [];
+
+        const chosen = await chooseViews(
+          llm,
+          {
+            apiTitle: entry.title,
+            entities,
+            resources: entry.resources,
+            ops: entry.ops.map((op) => ({ id: op.id, path: op.path, params: op.params })),
+          },
+          {
+            completedBatches: batches,
+            onCheckpoint: (result) => {
+              const current = deps.catalog!.get(entry.id) ?? entry;
+              deps.catalog!.put({
+                ...current,
+                entities: [...result.entities],
+                viewProgress: { batches: [...result.completedBatches] },
+              });
+            },
+          },
+        );
+
+        const saved = deps.catalog.put({
+          ...(deps.catalog.get(entry.id) ?? entry),
+          entities: [...chosen.entities],
+          viewProgress: { batches: [...chosen.completedBatches] },
+          updatedAt: new Date().toISOString(),
+        });
+
+        return {
+          ...entityState(saved),
+          ranPass: true,
+          considered: chosen.considered,
+          chosen: chosen.chosen,
+          errors: chosen.errors,
+          /*
+           * Answers refused. Not errors — the pass worked and declined to
+           * record a field that does not exist — but a record type left with
+           * its defaults needs a reason or it reads as the pass not noticing.
+           */
+          skipped: chosen.skipped,
         };
       },
     );
@@ -402,13 +880,7 @@ export const mapRoutes =
         if (!entry) return reply.status(404).send({ error: "no such catalog entry" });
 
         const state = mapState(entry);
-        if (
-          state.mapped &&
-          !state.stale &&
-          state.labelled &&
-          !state.labelsStale &&
-          request.body?.force !== true
-        ) {
+        if (state.mapped && !state.stale && request.body?.force !== true) {
           return { ...state, ranPass: false, note: "this API is already mapped" };
         }
 
@@ -482,38 +954,6 @@ export const mapRoutes =
                 },
               );
 
-        /*
-         * The second half of understanding an API: what to call its fields.
-         *
-         * Run here rather than as its own route-by-default because it answers
-         * the same question the relations do — what does this API mean — and
-         * because somebody who has just agreed to pay for one pass should not
-         * have to be asked twice to get readable column headers. It has its
-         * own route as well, for re-running it alone once the pass improves.
-         *
-         * Keyed by distinct field name, so it costs a handful of calls on an
-         * API with hundreds of endpoints rather than one call per endpoint.
-         */
-        /*
-         * On the cheap model deliberately, even inside the expensive pass —
-         * naming a field is reading, not deciding, and this is by far the
-         * larger number of calls. Falls back to the mapping adapter so the
-         * labels still get written on a server that only has the one key.
-         */
-        const named =
-          state.labelled && !state.labelsStale && request.body?.force !== true
-            ? {
-                labels: entry.labels,
-                errors: [],
-                skipped: [],
-                completedBatches: entry.labelProgress?.batches ?? [],
-              }
-            : await labelFields(
-                deps.llm("label") ?? llm,
-                { apiTitle: entry.title, ops },
-                labelOptions(entry, request.body?.force === true),
-              );
-
         const mapped: CatalogEntry = {
           ...entry,
           ops: entry.ops.map((op) => {
@@ -523,17 +963,9 @@ export const mapRoutes =
             return written && !op.description ? { ...op, description: written } : op;
           }),
           resources: mergeRelations(pruned.resources, result.relations),
-          /*
-           * Merged over whatever is already there rather than replacing it, so
-           * a re-run that loses a batch does not lose labels the last run got.
-           */
-          labels: named.labels,
           mappedAt: new Date().toISOString(),
           mapVersion: result.errors.length === 0 ? MAP_VERSION : undefined,
           mapProgress: { version: MAP_VERSION, batches: [...result.completedBatches] },
-          labelledAt: new Date().toISOString(),
-          labelVersion: named.errors.length === 0 ? LABEL_VERSION : undefined,
-          labelProgress: { version: LABEL_VERSION, batches: [...named.completedBatches] },
         };
 
         const saved = deps.catalog.put(mapped);
@@ -544,7 +976,6 @@ export const mapRoutes =
           ranPass: true,
           mappedAt: saved.mappedAt ?? null,
           descriptionsWritten: Object.keys(result.descriptions).length,
-          labelsWritten: Object.keys(named.labels).length,
           relationsFound: Object.values(result.relations).reduce(
             (total, list) => total + list.length,
             0,
@@ -553,13 +984,13 @@ export const mapRoutes =
            * Batches fail independently, so a partial map is a real outcome and
            * has to say what it is missing rather than looking complete.
            */
-          errors: [...result.errors, ...named.errors],
+          errors: [...result.errors],
           /*
            * Links the pass declined to record. Not errors — the pass worked
            * and refused to guess — but a missing relation needs a reason
            * attached or it reads as the mapper simply not noticing.
            */
-          skipped: [...result.skipped, ...named.skipped],
+          skipped: [...result.skipped],
           /*
            * Links a previous pass had recorded and this one retracted. Worth
            * reporting separately: something the map used to claim is no longer

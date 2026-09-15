@@ -4,6 +4,7 @@ import {
   type RecordEntry,
   highlightsFor,
   recordEntries,
+  referenceText,
   roleColumn,
   roleColumns,
   titleFor,
@@ -46,6 +47,42 @@ export const Record = (props: WidgetRenderProps): JSX.Element => {
   const sections = groupEntries(entries, props.groups);
   const columns = Math.max(1, Math.min(3, Math.round(settingNumber(look, "columns", 1))));
 
+  /**
+   * What a field's value reads as.
+   *
+   * A record is where a bare id is least forgivable: a work order opening on
+   * `VendorId 4711` beside forty of its neighbours is the wall of numbers this
+   * whole layer exists to replace. The precedence — the name on the row, then
+   * one that was fetched, then the kind of record — is `referenceText`'s, the
+   * same function the table cell calls.
+   */
+  const valueOf = (entry: RecordEntry): JSX.Element | string => {
+    if (!entry.reference) return entry.formatted;
+
+    const resolved = referenceText({
+      row: props.rows[0] ?? {},
+      column: entry.name,
+      reference: entry.reference,
+      ...(props.referenceNames ? { names: props.referenceNames } : {}),
+      formatted: entry.formatted,
+    });
+    const target = resolved.target;
+    if (!resolved.canOpen || !target || !props.onOpenReference) return resolved.text;
+
+    return (
+      <button
+        type="button"
+        className="dash-ref"
+        onClick={(event) => {
+          event.stopPropagation();
+          props.onOpenReference?.(target);
+        }}
+      >
+        {resolved.text}
+      </button>
+    );
+  };
+
   const pair = (entry: RecordEntry): JSX.Element => (
     <div
       key={entry.name}
@@ -56,10 +93,21 @@ export const Record = (props: WidgetRenderProps): JSX.Element => {
        * header follows. It used to repeat the label, which told a reader
        * nothing and told somebody debugging a binding less.
        */}
-      <dt title={entry.name}>{entry.label}</dt>
+      <dt title={entry.name}>
+        {entry.label}
+        {/*
+         * What the field means, under its name.
+         *
+         * Inline rather than in a tooltip: a description nobody can discover
+         * is a description nobody reads, and a record page is exactly where
+         * somebody is reading one thing carefully. It stays out of tables,
+         * which have no room for it.
+         */}
+        {entry.description && <span className="dash-record__hint">{entry.description}</span>}
+      </dt>
       {/* The tooltip keeps the whole value: the pair shows a summary. */}
       <dd title={titleFor(entry.value)}>
-        {entry.formatted}
+        {valueOf(entry)}
         {hits
           .filter((hit) => hit.field === entry.name)
           .map((hit) => (

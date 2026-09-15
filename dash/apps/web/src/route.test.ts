@@ -50,6 +50,67 @@ describe("parseRoute", () => {
   });
 });
 
+describe("parseRoute, for a record addressed by what it is", () => {
+  it("reads a record type and an id", () => {
+    expect(parseRoute("#/r/buildium/vendor/350113")).toEqual({
+      kind: "entity",
+      connectionId: "buildium",
+      entityId: "vendor",
+      recordId: "350113",
+    });
+  });
+
+  it("reads which widget's row opened it, when one did", () => {
+    // A widget may change its own copy of the layout; a reference link carries
+    // no `from` and always opens the plain shared page.
+    expect(parseRoute("#/r/buildium/vendor/350113/from/ops/tasks")).toEqual({
+      kind: "entity",
+      connectionId: "buildium",
+      entityId: "vendor",
+      recordId: "350113",
+      from: { dashboardId: "ops", widgetId: "tasks" },
+    });
+  });
+
+  it("ignores a half-written origin rather than inventing one", () => {
+    expect(parseRoute("#/r/buildium/vendor/350113/from/ops")).toEqual({
+      kind: "entity",
+      connectionId: "buildium",
+      entityId: "vendor",
+      recordId: "350113",
+    });
+  });
+
+  it("falls back to the board for a record URL with holes in it", () => {
+    expect(parseRoute("#/r")).toEqual(BOARD_ROUTE);
+    expect(parseRoute("#/r/buildium")).toEqual(BOARD_ROUTE);
+    expect(parseRoute("#/r/buildium/vendor")).toEqual(BOARD_ROUTE);
+  });
+});
+
+describe("routeToHash, for a record addressed by what it is", () => {
+  it("round-trips a record addressed by what it is", () => {
+    const route = {
+      kind: "entity",
+      connectionId: "buildium",
+      entityId: "association-tenant",
+      recordId: "A&B/C",
+    } as const;
+    expect(parseRoute(routeToHash(route))).toEqual(route);
+  });
+
+  it("round-trips one opened from a widget's row", () => {
+    const route = {
+      kind: "entity",
+      connectionId: "buildium",
+      entityId: "vendor",
+      recordId: "350113",
+      from: { dashboardId: "my board", widgetId: "w/1" },
+    } as const;
+    expect(parseRoute(routeToHash(route))).toEqual(route);
+  });
+});
+
 describe("routeToHash", () => {
   it("round-trips a record", () => {
     const route = {

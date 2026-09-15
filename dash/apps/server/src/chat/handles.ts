@@ -87,9 +87,8 @@ export const resolveHandle = (
   if (exact) return exact;
   /*
    * A model that answers with the bare widget id where the workspace needed a
-   * qualified one has named the right thing at the wrong level — the same
-   * situation `pickEndpoints` handles by resolving a group that holds exactly
-   * one endpoint. Resolve it when it is unambiguous, refuse when it is not.
+   * qualified one has named the right thing at the wrong level. Resolve it
+   * when it is unambiguous, refuse when it is not.
    */
   const byWidgetId = handles.filter((entry) => entry.widgetId === wanted);
   return byWidgetId.length === 1 ? byWidgetId[0]! : null;

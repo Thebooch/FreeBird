@@ -4,6 +4,7 @@ import type {
   Presentation,
   PresentationManifest,
   ResourceSpec,
+  SemanticType,
   WidgetSpec,
 } from "@freebirdai/dash-spec";
 
@@ -217,51 +218,6 @@ export interface JoinOffer {
   needsFanOut: boolean;
 }
 
-export interface AuthoredWidget {
-  id: string;
-  source: "model" | "rule" | "chat";
-  widget: unknown;
-  headline: string;
-  why: string[];
-  confirm: Array<{ field: string; question: string; options: string[] }>;
-  confidence: "declared" | "inferred";
-  cost: { requests: number; onOpen: number };
-  score: number;
-}
-
-export interface SuggestionsResult {
-  /** Written by rule. Same input, same list, every time. */
-  suggestions: AuthoredWidget[];
-  /** A model's second opinion, kept separate so the two can be compared. */
-  reviewed: AuthoredWidget[];
-  /** Which model reviewed, or null when none was available. */
-  reviewModel: string | null;
-  reviewError: string | null;
-  notes: string[];
-  /** How the read ended — the difference between "empty" and "refused". */
-  outcome: "complete" | "budget" | "rateLimited" | "authRejected";
-  retryAfter?: string;
-  /** Endpoints understood structurally. */
-  resourceCount: number;
-  /** Endpoints that actually returned rows. Zero with a high resourceCount
-   *  means the shape is known but the API would not answer. */
-  sampledCount: number;
-  /**
-   * Pairings this pass checked against real rows, confirmed and rejected both.
-   *
-   * The rejections are the useful half: without them a link the model found
-   * but could not stand behind is indistinguishable from one it never saw, and
-   * the engine reads as having missed something obvious.
-   */
-  relationships: Array<{
-    parent: string;
-    child: string;
-    linkField: string;
-    ok: boolean;
-    reason?: string;
-  }>;
-}
-
 /** The relationship graph as it currently stands, read at no request cost. */
 export interface RelationsResult {
   connection: string;
@@ -472,6 +428,56 @@ export interface MapState {
   readonly wouldSample: number;
   /** False when there is no model configured to run the pass. */
   readonly canRun: boolean;
+  /** False when no model is configured for the describing pass. */
+  readonly canRunRecords?: boolean;
+  /** The record types built on those endpoints — the half a person sees. */
+  readonly records?: RecordsState;
+  /** When a live account last checked the descriptions. */
+  readonly entitiesVerifiedAt?: string | null;
+}
+
+/**
+ * How far the record types have got, in the four numbers that matter.
+ *
+ * Deliberately not one "ready" flag: a record type with no identity cannot
+ * open a page, one with no name shows a number where a name belongs, and an
+ * API with no references between its records is a set of unrelated lists. A
+ * low number here is a specific, fixable thing rather than a verdict.
+ */
+export interface RecordsState {
+  readonly described: boolean;
+  readonly stale: boolean;
+  readonly entities: number;
+  readonly withIdentity: number;
+  readonly withName: number;
+  readonly references: number;
+  readonly fieldsDescribed: number;
+  /** Record types a live account has confirmed. Never a model's opinion. */
+  readonly verified: number;
+  readonly referencesVerified: number;
+}
+
+/** What the describing pass did, and what it declined to do. */
+export interface DescribeRunResult extends RecordsState {
+  readonly ranPass: boolean;
+  readonly note?: string;
+  /** Fields offered as possible links, against how many became one. */
+  readonly considered?: number;
+  readonly linked?: number;
+  readonly errors?: readonly string[];
+  /** Readings the pass refused. Not errors — it worked and declined to guess. */
+  readonly skipped?: readonly string[];
+}
+
+/** What checking the descriptions against a live account settled. */
+export interface RecordCheckResult {
+  readonly checked: number;
+  readonly identitiesConfirmed: number;
+  readonly referencesResolved: number;
+  /** What it actually cost, in requests against the user's own API. */
+  readonly requests: number;
+  readonly stopped: "budget" | "refused" | "rejected" | null;
+  readonly notes: readonly string[];
 }
 
 export interface MapRunResult extends MapState {
@@ -481,6 +487,95 @@ export interface MapRunResult extends MapState {
   readonly relationsFound: number;
   /** Batches fail independently, so a partial map says what it is missing. */
   readonly errors: readonly string[];
+}
+
+/** One record type, as the builder lists it. */
+export interface RecordTypeSummary {
+  readonly entity: string;
+  readonly name: { readonly one: string; readonly many: string };
+  readonly kind: string;
+  readonly description?: string;
+  /** Whether somebody would start a widget from these, or only reach them. */
+  readonly starting: boolean;
+  /** False when nothing here lists them, which makes them unbuildable. */
+  readonly listable: boolean;
+}
+
+/** One field of a record type, described for the person choosing it. */
+export interface RecordTypeField {
+  readonly path: string;
+  readonly label: string;
+  readonly description?: string;
+  readonly group?: string;
+  readonly visibility: "primary" | "detail";
+  /** What kind of value this holds, where the describing pass could tell. */
+  readonly semantic?: SemanticType;
+}
+
+/** A field on a record type that points at another record. */
+export interface RecordTypeReference {
+  readonly field: string;
+  readonly label: string;
+  readonly target: string;
+  readonly targetName: string;
+}
+
+/** What one record type contains, for building from. */
+export interface RecordTypePage {
+  readonly entity: string;
+  readonly name: { readonly one: string; readonly many: string };
+  readonly description?: string;
+  readonly fields: readonly RecordTypeField[];
+  /** What can be followed from here, for reading a field through a link. */
+  readonly references: readonly RecordTypeReference[];
+  /** The filter strips this record type gets before anybody chooses. */
+  readonly filters: readonly string[];
+  /** How a list of these is ordered before anybody chooses. */
+  readonly sort?: { readonly field: string; readonly dir: "asc" | "desc" };
+}
+
+/** A brief assembled by hand, as the compiler takes it. */
+export interface HandBrief {
+  readonly entity: string;
+  readonly intent: "records" | "measure";
+  readonly title?: string;
+  readonly columns?: readonly string[];
+  /**
+   * Fields to offer as filter strips.
+   *
+   * Absent means "choose for me"; an empty list means none. The builder always
+   * states it, so unticking the last strip actually removes it.
+   */
+  readonly filters?: readonly { readonly field: string }[];
+  /** How to order the list. Absent takes the record type's own default. */
+  readonly sort?: { readonly field: string; readonly dir?: "asc" | "desc" };
+  /** Columns read through a reference — a task's vendor's phone number. */
+  readonly linked?: readonly {
+    readonly through: string;
+    readonly field: string;
+    readonly label?: string;
+  }[];
+}
+
+/** A widget built from a request, with what it could not honour said plainly. */
+export interface BriefResult {
+  readonly widget: WidgetSpec | null;
+  /** The model's own sentence about what it built, for the reader. */
+  readonly reason: string;
+  /** Where the answer differs from what was asked, in a reader's words. */
+  readonly notes: readonly string[];
+  readonly errors: readonly string[];
+  /**
+   * A different reading of the same words, already built.
+   *
+   * Offered instead of asked about, and absent on almost every request —
+   * an alternative on everything is a question on everything.
+   */
+  readonly alternative?: {
+    readonly label: string;
+    readonly widget: WidgetSpec;
+    readonly notes: readonly string[];
+  };
 }
 
 export const api = {
@@ -622,6 +717,48 @@ export const api = {
   mapApi: (catalogId: string, force = false): Promise<MapRunResult> =>
     request(`/api/catalog/${catalogId}/map`, json({ force })),
 
+  /**
+   * Check the descriptions against the real account.
+   *
+   * The only thing in the record layer that spends the user's API quota, which
+   * is why it is never called on their behalf: a description can be
+   * confidently wrong in ways no amount of re-reading would reveal, and the
+   * two claims that matter — this field identifies a record, this field points
+   * at that record type — can only be settled by asking.
+   */
+  /**
+   * Change how a record type's page is laid out, for everybody who opens one.
+   *
+   * The record type's own answer rather than one widget's: every route into a
+   * record — a link from another record, a shared URL, any widget's row —
+   * arrives at the same page, so this improves all of them at once.
+   */
+  putRecordLayout: (
+    connectionId: string,
+    entity: string,
+    layout: { facts: readonly string[]; groups: readonly { title: string; fields: readonly string[] }[] },
+  ): Promise<{ facts: readonly string[]; groups: readonly { title: string; fields: readonly string[] }[] }> =>
+    request(`/api/connections/${connectionId}/entities/${entity}/layout`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(layout),
+    }),
+
+  /**
+   * Describe what this API's records are: their names, fields and links.
+   *
+   * The pass everything entity-first rests on, and the one thing that had no
+   * way to be started — it existed as a route and nothing ever called it, so
+   * in practice an API was connected, mapped, and left with no record types at
+   * all. Costs model tokens and **no requests against anybody's account**,
+   * which is what makes the result worth sharing.
+   */
+  describeRecords: (catalogId: string, force = false): Promise<DescribeRunResult> =>
+    request(`/api/catalog/${catalogId}/entities`, json({ force })),
+
+  checkRecords: (connectionId: string, budget?: number): Promise<RecordCheckResult> =>
+    request(`/api/connections/${connectionId}/verify`, json(budget ? { budget } : {})),
+
   presentation: (): Promise<PresentationResult> => request("/api/presentation"),
 
   /**
@@ -732,14 +869,43 @@ export const api = {
     request(`/api/connections/${id}/sample`, json({ op })),
 
   /**
-   * What is worth building here, phrased as sentences.
+   * A request in the user's own words, answered as a widget.
    *
-   * Deterministic — no model involved — and it returns real widget specs, so
-   * an offer can be previewed and saved through the same path a model's
-   * proposal takes.
+   * One model call names the records and says what the widget is *for*;
+   * everything else — the endpoint, the columns, the sort, the filter strips —
+   * is worked out from the record type itself. Returns the widget rather than
+   * storing it, so nothing changes until somebody adds it.
    */
-  suggestions: (id: string, refresh = false): Promise<SuggestionsResult> =>
-    request(`/api/connections/${id}/suggestions`, json({ refresh })),
+  brief: (id: string, intent: string, dashboardId?: string): Promise<BriefResult> =>
+    request(
+      `/api/connections/${id}/brief`,
+      json({ intent, ...(dashboardId ? { dashboardId } : {}) }),
+    ),
+
+  /** The record types this connection has, for choosing between. */
+  recordTypes: (id: string): Promise<RecordTypeSummary[]> =>
+    request(`/api/connections/${id}/entities`),
+
+  /** What one record type contains: its fields, as a person reads them. */
+  recordType: (id: string, entity: string): Promise<RecordTypePage> =>
+    request(`/api/connections/${id}/entities/${encodeURIComponent(entity)}`),
+
+  /**
+   * A brief assembled by hand, compiled.
+   *
+   * The same compiler the described path uses, so a widget built by picking
+   * fields and one built by describing it cannot disagree. No model, and no
+   * request against the API.
+   */
+  compileBrief: (
+    id: string,
+    brief: HandBrief,
+    dashboardId?: string,
+  ): Promise<Omit<BriefResult, "reason">> =>
+    request(
+      `/api/connections/${id}/compile`,
+      json({ brief, ...(dashboardId ? { dashboardId } : {}) }),
+    ),
 
   /** A POST because it samples the API for real. Changes nothing. */
   capabilities: (id: string, refresh = false, deep = false): Promise<Capabilities> =>

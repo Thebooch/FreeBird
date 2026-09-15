@@ -118,6 +118,31 @@ const kindsAndFormat = (
  * whole document, and so the importer's own `$ref` handling — with its cycle
  * guard and depth limit — remains the single implementation.
  */
+/**
+ * The values a spec says this field is limited to.
+ *
+ * Read here rather than rediscovered from rows, because it is the one place
+ * the answer is *complete*: a sample shows the values an account happens to
+ * have, and a filter strip built from those silently omits the status nobody
+ * is currently in. Numbers and booleans are stringified — a strip compares
+ * bucket names, never values.
+ *
+ * `enum` is the common spelling; a single-valued `const` is the same statement
+ * with one member, and OpenAPI 3.1 prefers it.
+ */
+const declaredValues = (schema: Record<string, unknown>): string[] => {
+  const raw = Array.isArray(schema.enum)
+    ? schema.enum
+    : schema.const !== undefined
+      ? [schema.const]
+      : [];
+  const values = raw
+    .filter((value) => value !== null && typeof value !== "object")
+    .map((value) => String(value))
+    .filter((value) => value !== "" && value.length <= 120);
+  return [...new Set(values)].slice(0, 50);
+};
+
 export const fieldsFromSchema = (
   schema: unknown,
   resolve: (node: unknown) => unknown,
@@ -176,6 +201,7 @@ export const fieldsFromSchema = (
         // which is the same thing a null is for a widget binding.
         nullable: nullable || !required.has(name),
         ...(description ? { description: description.slice(0, 300) } : {}),
+        ...(declaredValues(child).length > 0 ? { values: declaredValues(child) } : {}),
       });
 
       /*

@@ -745,6 +745,17 @@ ${seriesVars(SERIES_LIGHT)}
 }
 .dash-table__partial { color: var(--dash-serious); }
 
+/* A value that names another record rather than being one. Only ever a button
+   when the host can route to that record, so the underline never promises an
+   interaction that will not happen. */
+.dash-ref {
+  font: inherit; color: var(--dash-accent); text-align: inherit;
+  border: none; background: none; padding: 0; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.dash-ref:hover { color: var(--dash-accent-strong); }
+.dash-ref:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 2px; }
+
 /* == metric row ========================================================
  * Tiles laid out by available width rather than by a fixed count: the same
  * widget has to read at 6 columns and at 12 without a breakpoint per size.
@@ -1421,6 +1432,19 @@ ${seriesVars(SERIES_LIGHT)}
   font-weight: var(--dash-weight-medium);
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* What the field means, under its name. Dimmer and lighter than the label, so
+   a record with a sentence on every row still scans as a list of labels and
+   values rather than as prose. It wraps, where the label above it clips. */
+.dash-record__hint {
+  display: block;
+  margin-top: 2px;
+  color: var(--dash-axis);
+  font-size: var(--dash-text-2xs);
+  font-weight: var(--dash-weight-normal);
+  line-height: var(--dash-leading-tight);
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .dash-record__pair dd {
   margin: 0;

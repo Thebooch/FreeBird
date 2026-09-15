@@ -10,6 +10,40 @@ import {
 } from "@freebirdai/dash-spec";
 
 /**
+ * Where an integration is kept — and the seam the hosted version arrives
+ * through.
+ *
+ * An "integration" is everything known about one API: its dialect, its
+ * endpoints and their fields, the relations between them, the field labels,
+ * and the record types built on top. All of it is a fact about the *API*
+ * rather than about an account, which is what makes it shareable — one person
+ * maps an API and everybody who connects it afterwards inherits the work.
+ *
+ * Declared as an interface because the file store below is the first of two.
+ * Mapping an API costs real model spend, so the managed build serves a
+ * verified integration from its own database and the open-source build reads
+ * the same shape off disk; neither the routes nor the passes should be able to
+ * tell which one they are talking to. Keeping that boundary honest now is what
+ * stops the DB arriving as a rewrite later.
+ *
+ * Deliberately small, and deliberately not a repository pattern: four methods
+ * is what the whole product actually asks of it.
+ */
+export interface IntegrationStore {
+  list(): CatalogEntry[];
+  get(id: string): CatalogEntry | null;
+  /** Writes the local tier. A hosted implementation writes the tenant's copy. */
+  put(entry: CatalogEntry): CatalogEntry;
+  /**
+   * Drop the local copy, falling back to whatever is shipped.
+   *
+   * Not a delete: the point is that a local correction can be abandoned
+   * without losing the integration it was correcting.
+   */
+  deleteOverlay(id: string): void;
+}
+
+/**
  * Dialects, in two tiers.
  *
  * The repo directory is the seed: hand-written and community-contributable by
@@ -19,7 +53,7 @@ import {
  * without waiting for an upstream release, and a good local dialect is exactly
  * what gets contributed back.
  */
-export class CatalogStore {
+export class CatalogStore implements IntegrationStore {
   constructor(
     private readonly seedDir: string,
     private readonly overlayDir: string,

@@ -1,6 +1,7 @@
 import type { RelationSpec, ResourceSpec } from "./resource.js";
 import { nounFromPathParam, singularNoun } from "./resource.js";
 import { pathParamNames } from "./primitives.js";
+import { normaliseName } from "./semantics.js";
 
 /**
  * The relationship graph, resolved once, for everybody who needs to traverse it.
@@ -163,7 +164,7 @@ export interface RelationGraph {
 }
 
 /** Match the same way the runtime does, so ids compare regardless of case. */
-const normalise = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]/g, "");
+const normalise = normaliseName;
 
 /**
  * The field on a row that holds its own identity.
@@ -216,7 +217,7 @@ export const inferIdField = (
  * normalises to the same thing, so a link that had to reach through an object
  * to find its id still finds the parameter.
  */
-const declaredFilterParam = (op: GraphOp | undefined, field: string): string | undefined => {
+export const declaredFilterParam = (op: GraphOp | undefined, field: string): string | undefined => {
   const wanted = normalise(field);
   return op?.params?.find((param) => {
     if (param.in !== "query") return false;

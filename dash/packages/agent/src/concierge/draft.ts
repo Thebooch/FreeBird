@@ -1,4 +1,9 @@
-import { widgetShapeSchema, coercionSchema, formatSchema } from "@freebirdai/dash-spec";
+import {
+  FACET_MAX_PER_WIDGET,
+  widgetShapeSchema,
+  coercionSchema,
+  formatSchema,
+} from "@freebirdai/dash-spec";
 import { z } from "zod";
 
 /**
@@ -335,6 +340,7 @@ export const draftPartSchema = z.object({
   options: z.array(z.string().max(64)).max(20).default([]),
   drilldown: drilldownDraftSchema.optional(),
   extras: z.array(fieldName).max(40).default([]),
+  filters: z.array(fieldName).max(FACET_MAX_PER_WIDGET).default([]),
   highlights: z.array(fieldName).max(8).default([]),
   title: z.string().max(120).optional(),
   answered: z.array(z.string().max(64)).max(60).default([]),
@@ -391,6 +397,19 @@ export const conciergeDraftSchema = z.object({
    */
   model: z.string().min(1).max(120).optional(),
   connection: z.string().min(1).optional(),
+  /**
+   * The record type this widget is about, where it was decided from one.
+   *
+   * Carried through to the finished widget, and it is what lets a row open the
+   * *shared* page for that record type. Without it every widget had to be
+   * given a private record view, planned by its own model call on confirm and
+   * frozen as it was the day it was written — so improving how a record reads
+   * meant doing it again for every widget that opened one.
+   *
+   * Absent for a widget built endpoint-first against an API nobody has
+   * described, which still gets the private view exactly as before.
+   */
+  entity: z.string().min(1).max(64).optional(),
   op: z.string().min(1).optional(),
   rowsPath: z.string().default("$"),
   join: joinDraftSchema.optional(),
@@ -446,6 +465,15 @@ export const conciergeDraftSchema = z.object({
   drilldown: drilldownDraftSchema.optional(),
   /** Columns accepted from the "these look related" step. */
   extras: z.array(fieldName).max(40).default([]),
+  /**
+   * Fields the reader can filter the finished widget by.
+   *
+   * A strip of values with a count beside each, above the rows. Deliberately
+   * not a pipeline filter: this narrows what somebody is looking at and can be
+   * put back, where a filter step narrows what the widget *is*. Asking for
+   * "tasks I can filter by category" means this one.
+   */
+  filters: z.array(fieldName).max(FACET_MAX_PER_WIDGET).default([]),
   /** Columns accepted for status marking. */
   highlights: z.array(fieldName).max(8).default([]),
   title: z.string().max(120).optional(),
@@ -701,6 +729,9 @@ export const applyAnswer = (
     case "extras":
       return { ...next, extras: [...values] };
 
+    case "filters":
+      return { ...next, filters: [...values] };
+
     case "highlights":
       return { ...next, highlights: [...values] };
 
@@ -740,6 +771,7 @@ export const skipStep = (draft: ConciergeDraft, stepId: string): ConciergeDraft 
   if (stepId === "groupBy" && marked.shape) {
     return { ...marked, shape: { ...marked.shape, groupBy: [] } };
   }
+  if (stepId === "filters") return { ...marked, filters: [] };
   if (stepId === "offer") return { ...marked, offer: undefined };
   /*
    * An optional role is one of these too. Its control only exists *because*

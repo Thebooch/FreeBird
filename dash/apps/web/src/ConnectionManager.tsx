@@ -1,5 +1,10 @@
 import type { CatalogEntry, WidgetSpec } from "@freebirdai/dash-spec";
-import { parseWidget, connectionAuths, connectionNeedsAuthSetup } from "@freebirdai/dash-spec";
+import {
+  VERIFY_BUDGET_DEFAULT,
+  parseWidget,
+  connectionAuths,
+  connectionNeedsAuthSetup,
+} from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useState } from "react";
 import {
   ApiError,
@@ -10,6 +15,8 @@ import {
   type EnumerationPlan,
   type MapRunResult,
   type MapState,
+  type DescribeRunResult,
+  type RecordCheckResult,
   type RelationsResult,
   type SampleResult,
   api,
@@ -22,7 +29,16 @@ const SOURCE_LABELS: Record<DiscoveryResult["source"], string> = {
   none: "Nothing found",
 };
 
-type View = "list" | "choose" | "manual" | "key" | "verify" | "endpoints" | "read" | "manage";
+type View =
+  | "list"
+  | "choose"
+  | "manual"
+  | "key"
+  | "verify"
+  | "endpoints"
+  | "read"
+  | "manage"
+  | "records";
 
 const STEPS: ReadonlyArray<{ id: View; label: string }> = [
   { id: "choose", label: "Choose" },
@@ -64,7 +80,7 @@ const AUTH_KINDS = [
 
 const PAGINATION_KINDS = [
   { value: "none", label: "Single page only" },
-  { value: "link-header", label: "Link header (GitHub style)" },
+  { value: "link-header", label: "Link header (next page in a Link: header)" },
   { value: "cursor", label: "Cursor" },
   { value: "page", label: "Page number" },
 ] as const;
@@ -139,6 +155,16 @@ export const ConnectionManager = ({
   /** The proposal for the managed connection. Nothing here is stored yet. */
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   /** How records link, as currently believed — editable, and free to read. */
+  /*
+   * Deliberately its own state rather than the wizard's `mapInfo`: that one
+   * belongs to the API being set up, and a screen about an already-connected
+   * API must not be able to put a half-loaded answer in front of it.
+   */
+  const [recordsInfo, setRecordsInfo] = useState<MapState | null>(null);
+  const [check, setCheck] = useState<RecordCheckResult | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [describing, setDescribing] = useState(false);
+  const [described, setDescribed] = useState<DescribeRunResult | null>(null);
   const [relations, setRelations] = useState<RelationsResult | null>(null);
   const [relationsSaved, setRelationsSaved] = useState(false);
 
@@ -545,6 +571,23 @@ export const ConnectionManager = ({
         const result = await api.mapApi(id);
         setMapRun(result);
         setMapInfo(result);
+
+        /*
+         * And what the records *are*, in the same breath.
+         *
+         * Mapping learns the endpoints; describing learns the record types,
+         * and everything entity-first is built on the second. Splitting them
+         * into two buttons meant only the first ever got pressed — an API
+         * could be connected, mapped, and left with no record types at all,
+         * which is the state the rest of the product has no answer for.
+         *
+         * A failure here is not a failure of the connection: the endpoints are
+         * mapped and usable, and describing can be run again from Records.
+         */
+        setMapInfo(await api.describeRecords(id).then(
+          async () => api.mapState(id).catch(() => result),
+          () => result,
+        ));
       } finally {
         setMapping(false);
       }
@@ -574,6 +617,58 @@ export const ConnectionManager = ({
         setReadResult(capabilities);
       } finally {
         window.clearInterval(tick);
+      }
+    });
+
+  /**
+   * What is known about this API's records, and how much of it is proven.
+   *
+   * Costs nothing to open: every count is read off the stored integration.
+   * The one thing here that spends anything is the check, and that is a button
+   * rather than something this screen does on the way in.
+   */
+  const openRecords = (connection: ConnectionSummary): Promise<void> =>
+    run(async () => {
+      setManaged(connection);
+      setCheck(null);
+      setDescribed(null);
+      setRecordsInfo(
+        connection.catalog ? await api.mapState(connection.catalog).catch(() => null) : null,
+      );
+      setView("records");
+    });
+
+  /**
+   * Describe this API's records: what they are, and how they link.
+   *
+   * The pass the whole entity-first product rests on, and until now the only
+   * thing with no way to start it — so an API could be connected and mapped
+   * and still have no record types, which is what the screen below was left
+   * reporting with nothing to do about it.
+   */
+  const runDescribe = (): Promise<void> =>
+    run(async () => {
+      if (!managed?.catalog) return;
+      setDescribing(true);
+      try {
+        setDescribed(await api.describeRecords(managed.catalog));
+        setRecordsInfo(await api.mapState(managed.catalog).catch(() => null));
+      } finally {
+        setDescribing(false);
+      }
+    });
+
+  const runCheck = (): Promise<void> =>
+    run(async () => {
+      if (!managed) return;
+      setChecking(true);
+      try {
+        setCheck(await api.checkRecords(managed.id));
+        // Re-read rather than patch: the counts on screen are the stored
+        // artifact's, and this is what it now says.
+        if (managed.catalog) setRecordsInfo(await api.mapState(managed.catalog).catch(() => null));
+      } finally {
+        setChecking(false);
       }
     });
 
@@ -870,6 +965,14 @@ export const ConnectionManager = ({
                     </div>
                     <button
                       className="dash-iconbtn"
+                      data-testid={`records-${connection.id}`}
+                      aria-label={`Records ${connection.title} knows about`}
+                      onClick={() => void openRecords(connection)}
+                    >
+                      Records
+                    </button>
+                    <button
+                      className="dash-iconbtn"
                       data-testid={`manage-${connection.id}`}
                       aria-label={`Manage endpoints for ${connection.title}`}
                       onClick={() => void openManage(connection)}
@@ -902,6 +1005,180 @@ export const ConnectionManager = ({
             </div>
           </>
         );
+
+      case "records": {
+        const records = recordsInfo?.records;
+        const unproven = records ? records.entities - records.verified : 0;
+        return (
+          <>
+            <h4>What {managed?.title ?? "this API"} knows about its records</h4>
+
+            {!records?.described ? (
+              <div className="dash-callout" data-testid="records-none">
+                <p>
+                  <strong>Nothing here has been described yet.</strong>
+                </p>
+                <p className="dash-hint">
+                  Until it is, widgets show raw field names and records show numbers where names
+                  belong — there are no record types to build from at all. Describing reads what
+                  each kind of record is, what its fields mean and which of them point at each
+                  other. It is done once and shared: every later connection to this API starts
+                  where this one finished.
+                </p>
+                <p className="dash-hint">
+                  It costs AI usage and makes <strong>no requests against your API</strong> —
+                  everything it needs is in what has already been read, which is what makes the
+                  result a fact about the API rather than about your account.
+                </p>
+                {recordsInfo?.canRunRecords === false && (
+                  <p className="dash-hint">
+                    This needs an AI key on the server. Everything else still works without one.
+                  </p>
+                )}
+                <div className="dash-row dash-row--end" style={{ marginTop: 8 }}>
+                  <button
+                    className="dash-control dash-control--primary"
+                    data-testid="records-describe"
+                    disabled={busy || describing || recordsInfo?.canRunRecords === false}
+                    onClick={() => void runDescribe()}
+                  >
+                    {describing ? "Describing…" : "Describe the records"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <ul className="dash-conn-list" data-testid="records-state">
+                  <li>
+                    <div className="dash-conn-list__text">
+                      <div className="dash-conn-list__title">
+                        {records.entities} record type(s)
+                      </div>
+                      <div className="dash-conn-list__meta">
+                        {records.withIdentity} can open a page of their own, {records.withName} know
+                        what to call a record, and {records.fieldsDescribed} field(s) have a
+                        description a person can read.
+                      </div>
+                    </div>
+                  </li>
+                  <li>
+                    <div className="dash-conn-list__text">
+                      <div className="dash-conn-list__title">
+                        {records.references} link(s) between them
+                      </div>
+                      <div className="dash-conn-list__meta">
+                        What lets a record on a row be opened by name, instead of showing the
+                        number the API stores.
+                      </div>
+                    </div>
+                  </li>
+                  <li>
+                    <div className="dash-conn-list__text">
+                      <div className="dash-conn-list__title" data-testid="records-verified">
+                        {records.verified} of {records.entities} confirmed against your account
+                      </div>
+                      <div className="dash-conn-list__meta">
+                        {records.referencesVerified} of {records.references} link(s) have been
+                        followed to a real record.
+                        {recordsInfo?.entitiesVerifiedAt
+                          ? ` Last checked ${new Date(recordsInfo.entitiesVerifiedAt).toLocaleString()}.`
+                          : " Never checked."}
+                      </div>
+                    </div>
+                  </li>
+                </ul>
+
+                {/*
+                 * Everything above was read for nothing. This is the one thing
+                 * on the screen that spends the user's own API quota, so it
+                 * says so before it is pressed rather than after.
+                 */}
+                <div className="dash-callout">
+                  <p>
+                    <strong>
+                      {unproven > 0
+                        ? `${unproven} record type(s) have not been checked against real data.`
+                        : "Every record type here has been checked against real data."}
+                    </strong>
+                  </p>
+                  <p className="dash-hint">
+                    A description is written from {managed?.title ?? "the API"}&rsquo;s own
+                    specification, which can be confidently wrong: two things can only be settled
+                    by asking your account — that the field a record calls its id is really on the
+                    rows, and that a link really resolves to the record it claims. Checking makes
+                    real requests against your API, up to {VERIFY_BUDGET_DEFAULT} of them, and stops early if{" "}
+                    {managed?.title ?? "the API"} starts rate limiting.
+                  </p>
+                  <div className="dash-row dash-row--end" style={{ marginTop: 8 }}>
+                    <button
+                      className="dash-control dash-control--primary"
+                      data-testid="records-check"
+                      disabled={busy || checking}
+                      onClick={() => void runCheck()}
+                    >
+                      {checking ? "Checking…" : "Check against my account"}
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {described && (
+              <div
+                className={`dash-callout ${(described.errors ?? []).length > 0 ? "" : "dash-callout--good"}`}
+                data-testid="records-describe-done"
+              >
+                {described.ranPass
+                  ? `Described ${described.entities} record type(s), ${described.references} link(s) between them.`
+                  : (described.note ?? "Nothing to describe.")}
+                {(described.errors ?? []).length > 0 && (
+                  <>
+                    {" "}
+                    {described.errors!.length} part(s) did not finish; running it again picks up
+                    where it stopped.
+                  </>
+                )}
+                {(described.skipped ?? []).length > 0 && (
+                  <ul className="dash-hint" style={{ marginTop: 6 }}>
+                    {described.skipped!.slice(0, 4).map((note) => (
+                      <li key={note}>{note}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            {check && (
+              <div
+                className={`dash-callout ${check.stopped ? "" : "dash-callout--good"}`}
+                data-testid="records-check-done"
+              >
+                Confirmed {check.identitiesConfirmed} record type(s) and followed{" "}
+                {check.referencesResolved} link(s), using {check.requests} request(s).
+                {check.stopped === "refused" &&
+                  ` ${managed?.title ?? "The API"} began rate limiting, so the rest were left unchecked — nothing was marked wrong.`}
+                {check.stopped === "rejected" &&
+                  ` ${managed?.title ?? "The API"} would not accept the stored key, so nothing could be checked. That is a problem with the key rather than with the descriptions, and nothing was marked wrong.`}
+                {check.stopped === "budget" &&
+                  " That is as far as one check goes; running it again picks up more."}
+                {check.notes.length > 0 && (
+                  <ul className="dash-hint" style={{ marginTop: 6 }}>
+                    {check.notes.slice(0, 6).map((note) => (
+                      <li key={note}>{note}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            <div className="dash-row dash-row--end" style={{ marginTop: 14 }}>
+              <button className="dash-control" onClick={() => setView("list")}>
+                Back
+              </button>
+            </div>
+          </>
+        );
+      }
 
       case "manage":
         return (
@@ -1200,7 +1477,7 @@ export const ConnectionManager = ({
                 id="op-title"
                 data-testid="op-title"
                 value={newOp.title}
-                placeholder="Invoices"
+                placeholder="Items"
                 onChange={(event) => setNewOp({ ...newOp, title: event.target.value })}
               />
             </div>
@@ -1210,7 +1487,7 @@ export const ConnectionManager = ({
                 id="op-path"
                 data-testid="op-path"
                 value={newOp.path}
-                placeholder="/v1/invoices"
+                placeholder="/v1/items"
                 onChange={(event) => setNewOp({ ...newOp, path: event.target.value })}
               />
               <span className="dash-hint">
@@ -1819,7 +2096,10 @@ export const ConnectionManager = ({
                   {draft?.title ?? "This API"} has {mapInfo.endpoints} endpoints, and{" "}
                   {mapInfo.described} of them describe themselves. Creating the integration reads
                   the rest — what each endpoint returns, and how its records relate — so the
-                  assistant can find the right one from a plain description.
+                  assistant can find the right one from a plain description, and then what each
+                  kind of record <em>is</em>: its name, what its fields mean, and which of them
+                  point at other records. That second half is what lets a widget show a name where
+                  the API stores a number.
                 </p>
                 <p className="dash-hint">
                   {mapInfo.wouldSample === 0
@@ -1839,7 +2119,7 @@ export const ConnectionManager = ({
                     disabled={busy || mapping || !mapInfo.canRun}
                     onClick={() => void runMap()}
                   >
-                    {mapping ? "Creating…" : "Create integration"}
+                    {mapping ? "Reading and describing…" : "Create integration"}
                   </button>
                 </div>
               </div>

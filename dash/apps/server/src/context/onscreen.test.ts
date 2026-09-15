@@ -53,7 +53,7 @@ const reading = (body: unknown, calls: string[] = []): OpReader =>
 
 const load = (open: { widgetId: string; recordId: string }, read: OpReader) =>
   focusFromScreen({
-    open,
+    open: { kind: "record", ...open },
     handles,
     context,
     resolved,
@@ -71,6 +71,7 @@ const load = (open: { widgetId: string; recordId: string }, read: OpReader) =>
 describe("parseView", () => {
   it("reads an open record", () => {
     expect(parseView("record:all-tasks:5216612")).toEqual({
+      kind: "record",
       widgetId: "all-tasks",
       recordId: "5216612",
     });
@@ -78,9 +79,34 @@ describe("parseView", () => {
 
   it("decodes ids that needed escaping", () => {
     expect(parseView("record:my%3Awidget:a%2Fb")).toEqual({
+      kind: "record",
       widgetId: "my:widget",
       recordId: "a/b",
     });
+  });
+
+  it("reads a record opened by what it is", () => {
+    /*
+     * The address of a record page names the API, the record type and the id —
+     * no widget, because the same vendor is the same page however somebody
+     * reached it.
+     */
+    expect(parseView("entity:buildium:vendor:350113")).toEqual({
+      kind: "entity",
+      connectionId: "buildium",
+      entityId: "vendor",
+      recordId: "350113",
+    });
+  });
+
+  it("keeps an entity record id containing a colon whole", () => {
+    expect(parseView("entity:api:thing:urn:x:7")?.recordId).toBe("urn:x:7");
+  });
+
+  it("treats a half-written entity view as no record open", () => {
+    for (const value of ["entity", "entity:api", "entity:api:vendor", "entity:::"]) {
+      expect(parseView(value), value).toBeNull();
+    }
   });
 
   it("keeps a record id containing a colon whole", () => {
@@ -156,7 +182,7 @@ describe("focusFromScreen", () => {
     ];
     const asked: string[] = [];
     const focus = await focusFromScreen({
-      open: { widgetId: "all-tasks", recordId: "5216612" },
+      open: { kind: "record", widgetId: "all-tasks", recordId: "5216612" },
       handles: workspaceHandles(withDrilldown, "ops"),
       context,
       resolved,
@@ -196,6 +222,62 @@ describe("focusFromScreen", () => {
   it("gives up on a widget that is not in the workspace", async () => {
     expect(await load({ widgetId: "ghost", recordId: "1" }, reading([{ Id: 1 }]))).toBeNull();
   });
+
+  it("resolves a record opened on its own page, through its record type", async () => {
+    /*
+     * No widget is involved, so there is no drill-down to follow. The page
+     * called the record type's own detail endpoint, which is exactly why that
+     * request is the one already in the cache.
+     */
+    const asked: string[] = [];
+    const focus = await focusFromScreen({
+      open: { kind: "entity", connectionId: "acme", entityId: "vendor", recordId: "350113" },
+      entityDetail: () => ({
+        op: "get_vendor",
+        idParam: "vendorId",
+        idField: "Id",
+        title: "Supplier",
+      }),
+      handles,
+      context,
+      resolved,
+      read: (async (input) => {
+        asked.push(`${input.op}:${JSON.stringify(input.params)}:cacheOnly=${input.cacheOnly}`);
+        return {
+          ok: true as const,
+          body: { Id: 350113, CompanyName: "McKinney Strategic" },
+          requests: 0,
+          truncated: false,
+        };
+      }) as OpReader,
+      now: () => 0,
+      timeZone: "UTC",
+      rowsOf: (body) => (body && typeof body === "object" ? [body as Record<string, unknown>] : []),
+    });
+
+    expect(asked).toEqual(['get_vendor:{"vendorId":"350113"}:cacheOnly=true']);
+    expect(focus?.sourceTitle).toBe("Supplier");
+    expect(focus?.idField).toBe("Id");
+    expect(focus?.records[0]).toMatchObject({ CompanyName: "McKinney Strategic" });
+  });
+
+  it("gives up on a record page when nothing can say where its records live", async () => {
+    // An older deployment supplies no resolver at all, and a record type the
+    // catalog does not describe resolves to nothing. Both are "not known"
+    // rather than a guessed endpoint.
+    expect(
+      await focusFromScreen({
+        open: { kind: "entity", connectionId: "acme", entityId: "ghost", recordId: "1" },
+        handles,
+        context,
+        resolved,
+        read: (async () => null) as OpReader,
+        now: () => 0,
+        timeZone: "UTC",
+        rowsOf: () => [],
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("describeScreen", () => {
@@ -206,7 +288,7 @@ describe("describeScreen", () => {
   it("says the record is in hand when it could be resolved", () => {
     const line = describeScreen({
       tab: "Ops",
-      open: { widgetId: "all-tasks", recordId: "1" },
+      open: { kind: "record", widgetId: "all-tasks", recordId: "1" },
       record: {
         question: "the record they have open",
         source: "all-tasks",
@@ -229,10 +311,41 @@ describe("describeScreen", () => {
   it("admits when a record is open but its fields are not held", () => {
     const line = describeScreen({
       tab: "Ops",
-      open: { widgetId: "all-tasks", recordId: "77" },
+      open: { kind: "record", widgetId: "all-tasks", recordId: "77" },
       record: null,
     });
     expect(line).toContain("77");
+    expect(line).toContain("not in hand");
+  });
+
+  it("names a record open on its own page by what it is", () => {
+    // "from a widget" would be a small lie about a page no widget opened, and
+    // small lies are what make an assistant sound like it is guessing.
+    const line = describeScreen({
+      tab: "Ops",
+      open: { kind: "entity", connectionId: "acme", entityId: "vendor", recordId: "350113" },
+      record: {
+        question: "the record they have open",
+        source: "vendor",
+        sourceTitle: "Supplier",
+        connection: "acme",
+        op: "get_vendor",
+        idField: "Id",
+        records: [{ Id: 350113 }],
+        savedAt: "",
+      },
+    });
+    expect(line).toContain("one supplier open");
+    expect(line).not.toContain("from a widget");
+  });
+
+  it("says a record page is open even when its fields are not held", () => {
+    const line = describeScreen({
+      tab: "Ops",
+      open: { kind: "entity", connectionId: "acme", entityId: "vendor", recordId: "350113" },
+      record: null,
+    });
+    expect(line).toContain("its own page");
     expect(line).toContain("not in hand");
   });
 });

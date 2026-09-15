@@ -13,6 +13,7 @@ import { WidgetErrorBoundary } from "./WidgetErrorBoundary.jsx";
 import { WidgetGroup } from "./WidgetGroup.jsx";
 import { WidgetShell } from "./WidgetShell.jsx";
 import { useDashboard } from "./context.jsx";
+import type { OpenReference } from "./entityDetail.js";
 import { completeLayout, persistCells } from "./layout.js";
 
 /**
@@ -64,6 +65,7 @@ export const DashboardGrid = ({
   onRemoveWidget,
   onCustomiseWidget,
   onOpenRecordPage,
+  onOpenReference,
   editing,
 }: {
   onLayoutChange?: (cells: LayoutCell[]) => void;
@@ -71,6 +73,8 @@ export const DashboardGrid = ({
   onRemoveWidget?: (widgetId: string) => void;
   onCustomiseWidget?: (widgetId: string) => void;
   onOpenRecordPage?: (widgetId: string, row: Record<string, unknown>) => void;
+  /** Open the record a cell names. Absent means references render as plain text. */
+  onOpenReference?: OpenReference;
   /** Drag and resize are off unless the board is in edit mode. */
   editing?: boolean;
 }): JSX.Element => {
@@ -290,6 +294,7 @@ export const DashboardGrid = ({
                       {...(onRemoveWidget ? { onRemoveWidget } : {})}
                       {...(onCustomiseWidget ? { onCustomiseWidget } : {})}
                       {...(onOpenRecordPage ? { onOpenRecordPage } : {})}
+                      {...(onOpenReference ? { onOpenReference } : {})}
                     />
                   ) : (
                     <WidgetErrorBoundary widgetTitle={unit.widget.title}>
@@ -299,6 +304,7 @@ export const DashboardGrid = ({
                         {...(onRemoveWidget ? { onRemove: onRemoveWidget } : {})}
                         {...(onCustomiseWidget ? { onCustomise: onCustomiseWidget } : {})}
                         {...(onOpenRecordPage ? { onOpenPage: onOpenRecordPage } : {})}
+                        {...(onOpenReference ? { onOpenReference } : {})}
                       />
                     </WidgetErrorBoundary>
                   )}

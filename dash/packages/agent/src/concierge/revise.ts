@@ -45,12 +45,22 @@ export interface DraftPatch {
   readonly coercions?: Readonly<Record<string, Coercion>> | undefined;
   readonly format?: Readonly<Record<string, FormatSpec>> | undefined;
   readonly connection?: string | undefined;
+  /** The record type this widget is about, where it was decided from one. */
+  readonly entity?: string | undefined;
   readonly endpoint?: string | undefined;
   readonly join?: string | undefined;
   readonly component?: string | undefined;
   /** role name → the field(s) bound to it. */
   readonly roles?: Readonly<Record<string, readonly string[]>> | undefined;
   readonly controls?: readonly string[] | undefined;
+  /**
+   * Fields the reader can filter the finished widget by.
+   *
+   * A strip of values above the rows, never a pipeline filter: this narrows
+   * what somebody is looking at and can be put back, where `shape.filter`
+   * narrows what the widget is. "Tasks I can filter by category" is this one.
+   */
+  readonly filters?: readonly string[] | undefined;
   /**
    * What the widget counts, as the answer the machine offers: `count:` for the
    * records themselves, or `<aggregation>:<field>` for anything else.
@@ -302,6 +312,7 @@ const ORDER = [
   "offer",
   "roles",
   "controls",
+  "filters",
   "drilldown",
   "drilldownFields",
   "extras",
@@ -343,6 +354,8 @@ const answersFor = (
       }));
     case "controls":
       return patch.controls ? [{ stepId: "options", values: patch.controls }] : [];
+    case "filters":
+      return patch.filters ? [{ stepId: "filters", values: patch.filters }] : [];
     case "drilldown":
       return patch.drilldown ? [{ stepId: "drilldown", values: [patch.drilldown] }] : [];
     case "drilldownFields":
@@ -376,6 +389,14 @@ const reviseOne = (
   // Recorded before anything can be rejected: who proposed this is true even
   // if half of what they proposed turns out not to fit.
   if (patch.model) draft = { ...draft, model: patch.model };
+
+  /*
+   * Set directly rather than answered as a step, because it is not a question.
+   * Nobody picks a record type from a list here — it was already decided, by
+   * the brief, before this patch was written — and the step machine exists to
+   * ask things.
+   */
+  if (patch.entity) draft = { ...draft, entity: patch.entity };
 
   /*
    * The measurement lands first, and that ordering is load-bearing.

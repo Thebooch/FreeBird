@@ -7,11 +7,11 @@ import type { Candidate } from "./types.js";
 /**
  * The loop: pick, read, judge, and pick again when it did not answer.
  *
- * Server-side and not chat tool steps, for the reason `pickEndpoints` and
- * `proposeWidget` are: `ChatEngine`'s inner loop exits the moment a step
- * produces prose and hints the model toward text from step one. It is "one
- * action then summarise", not an agentic loop, and an iterative search cannot
- * live in it. This runs whole inside one processing tool call instead.
+ * Server-side and not chat tool steps, for the reason `proposeWidget` is:
+ * `ChatEngine`'s inner loop exits the moment a step produces prose and hints
+ * the model toward text from step one. It is "one action then summarise", not
+ * an agentic loop, and an iterative search cannot live in it. This runs whole
+ * inside one processing tool call instead.
  */
 
 export interface Budget {

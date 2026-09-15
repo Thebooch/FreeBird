@@ -15,6 +15,7 @@ import {
   isNumericColumn,
   labelOf,
   makeFormatter,
+  referenceText,
   roleColumns,
   titleFor,
 } from "../resolve.js";
@@ -77,6 +78,50 @@ export const Table = (props: WidgetRenderProps): JSX.Element => {
 
   const display = (row: Record<string, unknown>, column: string): string =>
     formatters.get(column)?.(row[column]) ?? "";
+
+  const metaByName = useMemo(
+    () => new Map(props.columns.map((column) => [column.name, column])),
+    [props.columns],
+  );
+
+  /**
+   * A cell's contents: a plain value, a record's name, or a way in.
+   *
+   * The button appears only when the host can actually route to that record —
+   * the same contract `onSelectRow` follows. A name that looks clickable and
+   * is not is worse than a name that plainly is not.
+   */
+  const cellContent = (row: Record<string, unknown>, name: string): JSX.Element | string => {
+    const reference = metaByName.get(name)?.reference;
+    if (!reference) return display(row, name);
+
+    const resolved = referenceText({
+      row,
+      column: name,
+      reference,
+      names: props.referenceNames,
+      formatted: display(row, name),
+    });
+    const target = resolved.target;
+    if (!resolved.canOpen || !target || !props.onOpenReference) return resolved.text;
+
+    return (
+      <button
+        type="button"
+        className="dash-ref"
+        /*
+         * The row itself may open its own record. Without this, following a
+         * vendor would also open the task it was sitting on.
+         */
+        onClick={(event) => {
+          event.stopPropagation();
+          props.onOpenReference?.(target);
+        }}
+      >
+        {resolved.text}
+      </button>
+    );
+  };
 
   const searched = searchable ? filterRows(props.rows, columns, query, display) : props.rows;
   const shaped = sortRows(searched, activeSort);
@@ -254,7 +299,7 @@ export const Table = (props: WidgetRenderProps): JSX.Element => {
                       // there is to put in front of someone.
                       title={titleFor(row[name])}
                     >
-                      {display(row, name)}
+                      {cellContent(row, name)}
                       {/* Pills ride in the first bound cell rather than a
                           column of their own: an extra column would
                           desynchronise the header from `roles.columns`,

@@ -1,10 +1,24 @@
 import type { FetchMeta } from "@freebirdai/dash-adapters";
-import type { BindingValidation, ColumnMeta, FieldLabels, WidgetSpec } from "@freebirdai/dash-spec";
+import type {
+  BindingValidation,
+  ColumnMeta,
+  EntityLinkView,
+  FieldLabels,
+  WidgetSpec,
+} from "@freebirdai/dash-spec";
 import { interpolateValue, parseDuration, widgetSources } from "@freebirdai/dash-spec";
 import type { Row, RowHighlight, RunMeta } from "@freebirdai/dash-runtime";
 import { compilePlan, executeWidget, runPipeline } from "@freebirdai/dash-runtime";
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { useDashboard } from "./context.jsx";
+import { derivedSources, entityFor, referenceColumns } from "./references.js";
+import {
+  fetchLookupsInOrder,
+  type ReferenceNames,
+  referenceLookups,
+  referenceNames as resolveNames,
+  withLinkedValues,
+} from "./recordIndex.js";
 import { type QueryClient, type QueryParams, queryKey } from "./store.js";
 
 /**
@@ -32,38 +46,47 @@ export const labelColumns = (
   columns: readonly ColumnMeta[],
   widget: WidgetSpec,
   labels: Readonly<Record<string, FieldLabels>> | undefined,
+  links?: Readonly<Record<string, readonly EntityLinkView[]>> | undefined,
 ): ColumnMeta[] => {
-  if (!labels || columns.length === 0) return [...columns];
+  if (columns.length === 0) return [...columns];
+
+  /*
+   * What this widget's own record type calls its fields, which outranks the
+   * API-wide lexicon and is the reason that lexicon is on its way out.
+   *
+   * A lexicon has one entry per bare field name for a whole API, so `Title`
+   * gets a single meaning shared by tasks, files and everything else — and on
+   * a real API at least one of them is then wrong. A record type answers for
+   * its own fields only, so both can be right at once.
+   */
+  const entity = links ? entityFor(widget, links) : undefined;
+  const own = entity?.labels ?? {};
+  if (!labels && Object.keys(own).length === 0) return [...columns];
 
   const merged: Record<string, string> = {};
   for (const source of widgetSources(widget)) {
-    for (const [name, label] of Object.entries(labels[source.connection] ?? {})) {
+    for (const [name, label] of Object.entries(labels?.[source.connection] ?? {})) {
       if (merged[name] === undefined) merged[name] = label;
     }
   }
 
-  /** Column name → the API field it was derived from, where one is named. */
-  const derivedFrom: Record<string, string> = {};
-  const readPipeline = (steps: WidgetSpec["pipeline"]): void => {
-    for (const step of steps) {
-      if (step.op !== "derive") continue;
-      for (const [name, source] of Object.entries(step.fields)) {
-        // Only a plain path names a single field. Anything carrying an
-        // operator is a computed value, and no field's label describes it.
-        if (PLAIN_PATH.test(source)) derivedFrom[name] = source;
-      }
-    }
-  };
-  readPipeline(widget.pipeline);
-  for (const source of widget.sources) readPipeline(source.pipeline);
+  /*
+   * Column name → the API field it was derived from, where one is named.
+   *
+   * Shared with `referenceColumns`, which needs the identical reading: two
+   * copies would drift on exactly the case that matters — a nested field — and
+   * the symptom either way is something quietly failing to appear.
+   */
+  const derivedFrom = derivedSources(widget);
 
   return columns.map((column) => {
-    const label = merged[column.name] ?? merged[derivedFrom[column.name] ?? ""];
+    const path = derivedFrom[column.name] ?? column.name;
+    const label =
+      own[path] ?? own[column.name] ?? merged[column.name] ?? merged[derivedFrom[column.name] ?? ""];
     return label ? { ...column, label } : column;
   });
 };
 
-const PLAIN_PATH = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)+$/;
 
 /**
  * An identity-stable snapshot of a set of cache entries.
@@ -115,6 +138,13 @@ export interface WidgetData {
   readonly errorStatus: number | null;
   readonly lastFetchedAt: number;
   readonly queryKey: string;
+  /**
+   * Names for the records this view's reference columns point at.
+   *
+   * Empty until they resolve, and empty forever for an API nobody has
+   * described — which is why a cell's fallback has to be legible on its own.
+   */
+  readonly referenceNames: ReferenceNames;
   refetch(): void;
 }
 
@@ -128,7 +158,15 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
    */
   const staleAfterMs = parseDuration(widget.refresh.staleAfter) ?? 900_000;
 
-  const { client, params: baseParams, now, timeZone, labels, approvals } = useDashboard();
+  const {
+    client,
+    params: baseParams,
+    now,
+    timeZone,
+    labels,
+    entityLinks,
+    approvals,
+  } = useDashboard();
 
   /**
    * Whether this binding may run at all.
@@ -374,20 +412,164 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
     else state = "ok";
   }
 
+  /*
+   * The columns, wearing this API's names and carrying its links.
+   *
+   * Both stamped in one place for the same reason: this is the only spot that
+   * knows the widget's connection *and* the columns its pipeline produced, and
+   * a component knows neither. Every renderer already receives `columns`, so
+   * one line here reaches all of them.
+   */
   const labelled = useMemo<ColumnMeta[]>(
-    () => labelColumns(executed?.columns ?? [], widget, labels),
-    [executed?.columns, labels, widget],
+    () =>
+      referenceColumns(
+        labelColumns(executed?.columns ?? [], widget, labels, entityLinks),
+        widget,
+        entityLinks,
+      ),
+    [executed?.columns, labels, entityLinks, widget],
   );
+
+  /*
+   * Third wave: the names behind this view's reference columns.
+   *
+   * After the rows exist, because which records are needed depends on which
+   * ids are actually in them — and only the visible ones, capped, because this
+   * is the one wave that spends requests in proportion to what is on screen.
+   *
+   * Skipped entirely for a widget with no reference columns, which is every
+   * widget over an API nobody has described and every chart.
+   */
+  /** Columns this widget reads *through* a reference, where it declares any. */
+  const linkedFields = useMemo(() => widget.linked ?? [], [widget]);
+
+  const lookups = useMemo(
+    () =>
+      executed && executed.rows.length > 0 && direct[0]
+        ? referenceLookups({
+            rows: executed.rows,
+            columns: labelled,
+            connection: direct[0].connection,
+            params,
+            /*
+             * A reference that already carries its name is free to draw and
+             * still has to be fetched when a column reads some other field off
+             * that record.
+             */
+            ...(linkedFields.length > 0
+              ? { alsoFetch: new Set(linkedFields.map((one) => one.through)) }
+              : {}),
+          })
+        : [],
+    [executed, labelled, direct, params, linkedFields],
+  );
+
+  const lookupKeys = useMemo(() => lookups.map((lookup) => lookup.key), [lookups]);
+  const lookupStamp = useSyncExternalStore(
+    subscribe,
+    useCallback(() => stampOf(client, lookupKeys), [client, lookupKeys]),
+    useCallback(() => stampOf(client, lookupKeys), [client, lookupKeys]),
+  );
+
+  useEffect(() => {
+    if (!approved || lookups.length === 0) return;
+    let cancelled = false;
+
+    /*
+     * One at a time, stopping the moment the API refuses.
+     *
+     * These are embellishments — names for ids that would otherwise read as
+     * numbers — so they are the last traffic that should cost somebody their
+     * rate limit. Measured against a real account: a collection endpoint
+     * answered and a by-id call seconds later came back 429, which is exactly
+     * the shape a parallel burst of twenty-five would run into.
+     *
+     * A refusal ends the pass rather than being retried per id: the next call
+     * would be refused too, and the cells fall back to naming the kind of
+     * record, which is what that fallback is for.
+     */
+    void fetchLookupsInOrder({
+      lookups,
+      fetch: (lookup) =>
+        client.ensure({
+          key: lookup.key,
+          connection: lookup.connection,
+          op: lookup.op,
+          params: { [lookup.param]: lookup.id },
+          resolved: params,
+          now,
+          maxAgeMs: staleAfterMs,
+        }),
+      statusOf: (lookup) => client.get(lookup.key)?.error?.status,
+      stopped: () => cancelled,
+    });
+
+    return () => {
+      cancelled = true;
+    };
+    // `now` excluded deliberately, as above: the ticking clock must not refetch.
+  }, [client, lookups, params, staleAfterMs, approved]);
+
+  const resolvedNames = useMemo<ReferenceNames>(
+    () =>
+      lookups.length === 0
+        ? {}
+        : resolveNames(
+            lookups,
+            (key) => {
+              const entry = client.get(key);
+              return entry?.status === "ok" ? entry.body : undefined;
+            },
+            labelled,
+          ),
+    // `lookupStamp` is what changes when a name lands.
+    [lookups, client, labelled, lookupStamp],
+  );
+
+  /*
+   * The rows, with anything read through a reference filled in.
+   *
+   * From the same fetch the reference cell uses for its name, so following a
+   * link and reading a field through it cost one request between them.
+   */
+  const rows = useMemo(
+    () =>
+      withLinkedValues({
+        rows: executed?.rows ?? [],
+        linked: linkedFields,
+        lookups,
+        bodyOf: (key) => {
+          const entry = client.get(key);
+          return entry?.status === "ok" ? entry.body : undefined;
+        },
+      }),
+    // `lookupStamp` is what changes when a far record lands.
+    [executed, linkedFields, lookups, client, lookupStamp],
+  );
+
+  /** Those columns wear the name somebody gave them when they added one. */
+  const columns = useMemo(() => {
+    const named = new Map(
+      linkedFields.flatMap((one) => (one.label ? [[one.as, one.label] as const] : [])),
+    );
+    return named.size === 0
+      ? labelled
+      : labelled.map((column) => {
+          const label = named.get(column.name);
+          return label ? { ...column, label } : column;
+        });
+  }, [labelled, linkedFields]);
 
   return {
     widget,
+    referenceNames: resolvedNames,
     previewReceipts: entries.flatMap(({ request, entry }) =>
       entry?.meta?.receipt ? [{ as: request.as, receipt: entry.meta.receipt }] : [],
     ),
     state,
     approval,
     stale,
-    rows: executed?.rows ?? [],
+    rows,
     /*
      * The runtime's columns, wearing this API's names for its fields.
      *
@@ -399,7 +581,7 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
      * Nothing is lost when there is no lexicon: `labelOf` falls back to the
      * mechanical label, which is what the whole library showed before this.
      */
-    columns: labelled,
+    columns,
     ...(executed?.highlights ? { highlights: executed.highlights } : {}),
     runMeta: executed?.meta ?? null,
     fetchMeta: primary?.meta ?? null,

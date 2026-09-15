@@ -4,9 +4,12 @@ import type { StoredPresentations } from "@freebirdai/dash-react";
 import type {
   ConnectionSpec,
   DashboardSpec,
+  EntityLinkView,
+  EntityPageView,
   FieldLabels,
   LayoutCell,
   Presentation,
+  RecordOverride,
   WidgetSpec,
 } from "@freebirdai/dash-spec";
 import { connectionSchema, parseDashboard, withoutWidget } from "@freebirdai/dash-spec";
@@ -22,6 +25,7 @@ import { createLayoutSaver } from "./layoutSave.js";
 import { BOARD_ROUTE, type Route, currentRoute, navigate, onRouteChange } from "./route.js";
 import { TopNav } from "./TopNav.jsx";
 import { PresentationEditor } from "./PresentationEditor.jsx";
+import { RecordLayoutEditor } from "./RecordLayoutEditor.jsx";
 import { WidgetLibrary } from "./WidgetLibrary.jsx";
 
 export interface DashboardSummary {
@@ -44,6 +48,8 @@ const useLiveDashboard = (
   connections: ConnectionSpec[];
   /** connection id → what that API calls its fields. */
   labels: Record<string, FieldLabels>;
+  /** connection id → which of its fields point at other records. */
+  entityLinks: Record<string, EntityLinkView[]>;
   available: DashboardSummary[];
   error: string | null;
 } => {
@@ -52,6 +58,7 @@ const useLiveDashboard = (
     registry: AdapterRegistry | null;
     connections: ConnectionSpec[];
     labels: Record<string, FieldLabels>;
+    entityLinks: Record<string, EntityLinkView[]>;
     available: DashboardSummary[];
     error: string | null;
   }>({
@@ -59,6 +66,7 @@ const useLiveDashboard = (
     registry: null,
     connections: [],
     labels: {},
+    entityLinks: {},
     available: [],
     error: null,
   });
@@ -85,6 +93,7 @@ const useLiveDashboard = (
               registry: null,
               connections: [],
               labels: {},
+              entityLinks: {},
               available: [],
               error: null,
             });
@@ -110,6 +119,13 @@ const useLiveDashboard = (
          * `connectionSchema` — correctly — knows nothing about it.
          */
         const labels: Record<string, FieldLabels> = {};
+        /*
+         * Read off the response for the same reason the labels are: which
+         * fields point at other records is a fact about the API, resolved from
+         * its map on every read, and `connectionSchema` has no business
+         * knowing about it.
+         */
+        const entityLinks: Record<string, EntityLinkView[]> = {};
         for (const entry of raw) {
           const connection = connectionSchema.safeParse(entry);
           if (connection.success) {
@@ -118,6 +134,10 @@ const useLiveDashboard = (
             const carried = (entry as { labels?: unknown }).labels;
             if (carried && typeof carried === "object") {
               labels[connection.data.id] = carried as FieldLabels;
+            }
+            const links = (entry as { entityLinks?: unknown }).entityLinks;
+            if (Array.isArray(links) && links.length > 0) {
+              entityLinks[connection.data.id] = links as EntityLinkView[];
             }
           }
         }
@@ -128,6 +148,7 @@ const useLiveDashboard = (
             registry,
             connections,
             labels,
+            entityLinks,
             available,
             error: null,
           });
@@ -139,6 +160,7 @@ const useLiveDashboard = (
             registry: null,
             connections: [],
             labels: {},
+            entityLinks: {},
             available: [],
             error: error instanceof Error ? error.message : String(error),
           });
@@ -193,6 +215,85 @@ const rowForRoute = (
   return { [field]: recordId };
 };
 
+/**
+ * One record type's page, fetched when a page is opened.
+ *
+ * Separate from the connection payload on purpose: everything pages need for a
+ * real API's record types is about 132 KB, against 8.3 KB for the largest
+ * single type. The first would be paid on every page load by everybody; this
+ * is paid once by whoever opens a page.
+ */
+const useEntityPage = (
+  route: Route,
+  /** Bumped when the layout is edited, which is the one thing that changes it. */
+  token: number,
+): { page: EntityPageView | null; error: string | null } => {
+  const [state, setState] = useState<{ page: EntityPageView | null; error: string | null }>({
+    page: null,
+    error: null,
+  });
+
+  const connectionId = route.kind === "entity" ? route.connectionId : null;
+  const entityId = route.kind === "entity" ? route.entityId : null;
+
+  useEffect(() => {
+    if (!connectionId || !entityId) {
+      setState({ page: null, error: null });
+      return;
+    }
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const response = await fetch(
+          `/api/connections/${encodeURIComponent(connectionId)}` +
+            `/entities/${encodeURIComponent(entityId)}`,
+        );
+        if (!response.ok) {
+          throw new Error(
+            response.status === 404
+              ? "This connection has no record type by that name."
+              : `That record type did not load (${response.status}).`,
+          );
+        }
+        const page = (await response.json()) as EntityPageView;
+        if (!cancelled) setState({ page, error: null });
+      } catch (error) {
+        if (!cancelled) {
+          setState({
+            page: null,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    /*
+     * Deliberately not keyed on the record's id. A page's shape is a property
+     * of the record *type*, so stepping from one vendor to the next reuses
+     * what is already here and spends nothing.
+     */
+  }, [connectionId, entityId, token]);
+
+  return state;
+};
+
+/**
+ * The layout changes belonging to the widget whose row opened this page.
+ *
+ * Only what that widget stored differently, applied over the shared page. A
+ * reference link carries no origin and so always opens the plain one, which is
+ * what makes a linked record the same page for everybody who reaches it.
+ */
+const overrideFor = (
+  widgets: readonly { readonly id: string; readonly record?: RecordOverride }[],
+  widgetId: string | undefined,
+): RecordOverride | undefined =>
+  widgetId ? widgets.find((widget) => widget.id === widgetId)?.record : undefined;
+
 const App = (): JSX.Element => {
   const [reloadToken, setReloadToken] = useState(0);
   /** A failed removal, which otherwise leaves the widget there for no reason. */
@@ -214,10 +315,30 @@ const App = (): JSX.Element => {
   const [route, setRoute] = useState<Route>(() => currentRoute());
   useEffect(() => onRouteChange(() => setRoute(currentRoute())), []);
 
-  // A board named in the URL wins over whatever was picked before.
+  /*
+   * A board named in the URL wins over whatever was picked before.
+   *
+   * A record addressed by what it is names no board of its own — it is the
+   * same page whichever widget reached it — so the board to show is the one
+   * whose row opened it, where a row did.
+   */
   useEffect(() => {
-    if (route.dashboardId && route.dashboardId !== dashboardId) setDashboardId(route.dashboardId);
+    const named = route.kind === "entity" ? route.from?.dashboardId : route.dashboardId;
+    if (named && named !== dashboardId) setDashboardId(named);
   }, [route, dashboardId]);
+
+  /** The record page being rearranged, and what makes the change show up. */
+  const [editingLayout, setEditingLayout] = useState(false);
+  const [layoutToken, setLayoutToken] = useState(0);
+  const entityPage = useEntityPage(route, layoutToken);
+
+  /*
+   * Closed by leaving. Without this, opening the editor and then walking back
+   * to the board leaves it armed, and the next record page opens with it
+   * already up — an editor nobody asked for, over a different record.
+   */
+  const here = route.kind === "entity" ? `${route.connectionId}/${route.entityId}` : route.kind;
+  useEffect(() => setEditingLayout(false), [here]);
 
   const live = useLiveDashboard(reloadToken, dashboardId);
 
@@ -638,6 +759,28 @@ const App = (): JSX.Element => {
   };
 
   /**
+   * Open the record a *cell* names, rather than the row's own.
+   *
+   * The address is the record itself — which API, which record type, which id
+   * — so the same vendor opens the same page from a task table, from a bill,
+   * or from a link somebody pasted into a message. No origin is recorded: a
+   * reference always opens the plain shared page, and only a widget's own row
+   * brings that widget's changes to the layout with it.
+   */
+  const openReference = (target: {
+    connection: string;
+    entity: string;
+    id: string | number;
+  }): void => {
+    navigate({
+      kind: "entity",
+      connectionId: target.connection,
+      entityId: target.entity,
+      recordId: String(target.id),
+    });
+  };
+
+  /**
    * The row a record page was opened from, when it was opened in this session.
    *
    * A cold load has only the identifier from the URL, and the page is honest
@@ -677,6 +820,15 @@ const App = (): JSX.Element => {
         dashboardId={live.dashboard?.id ?? null}
         {...(route.kind === "record" && route.widgetId
           ? { openRecord: { widgetId: route.widgetId, recordId: route.recordId } }
+          : {})}
+        {...(route.kind === "entity"
+          ? {
+              openEntity: {
+                connectionId: route.connectionId,
+                entityId: route.entityId,
+                recordId: route.recordId,
+              },
+            }
           : {})}
       />
       <ChatColumn
@@ -729,10 +881,37 @@ const App = (): JSX.Element => {
           />
         );
       })()}
+      {editingLayout && entityPage.page && live.dashboard && route.kind === "entity" && (
+        <RecordLayoutEditor
+          page={entityPage.page}
+          connection={route.connectionId}
+          dashboard={live.dashboard}
+          {...(route.from?.widgetId ? { widgetId: route.from.widgetId } : {})}
+          onSaveDashboard={saveDashboard}
+          /*
+           * A layout written for everybody changes the page itself, so the
+           * page has to be read again; one written against a widget changes
+           * the board, which `reload` already picks up.
+           */
+          onChanged={() => {
+            setLayoutToken((previous) => previous + 1);
+            reload();
+          }}
+          onClose={() => setEditingLayout(false)}
+        />
+      )}
       {libraryOpen && live.dashboard && (
         <WidgetLibrary
           connections={live.connections}
           takenIds={new Set(live.dashboard.widgets.map((widget) => widget.id))}
+          /*
+           * Which APIs can be described to rather than picked through. An API
+           * whose records nobody has described has no record types to build a
+           * brief from, and offering the box anyway would be offering a
+           * question that cannot be answered.
+           */
+          describable={Object.keys(live.entityLinks)}
+          dashboardId={live.dashboard.id}
           onSave={(widget) => addWidget(widget, [])}
           onClose={() => setLibraryOpen(false)}
         />
@@ -887,6 +1066,15 @@ const App = (): JSX.Element => {
             {layoutError}
           </p>
         )}
+        {/*
+         * Said out loud rather than falling back to the board. A link that
+         * quietly lands somewhere else looks like a link that did nothing.
+         */}
+        {entityPage.error && (
+          <p className="dash-callout dash-callout--bad" data-testid="entity-page-error">
+            {entityPage.error}
+          </p>
+        )}
         <Dashboard
           key={live.dashboard.id}
           /*
@@ -904,6 +1092,25 @@ const App = (): JSX.Element => {
                 },
               }
             : {})}
+          {...(route.kind === "entity" && entityPage.page
+            ? {
+                entityRecord: {
+                  page: entityPage.page,
+                  connection: route.connectionId,
+                  recordId: route.recordId,
+                  backLabel: board.title,
+                  onBack: () =>
+                    navigate({
+                      kind: "board",
+                      dashboardId: route.from?.dashboardId ?? board.id,
+                    }),
+                  ...(overrideFor(board.widgets, route.from?.widgetId)
+                    ? { override: overrideFor(board.widgets, route.from?.widgetId)! }
+                    : {}),
+                  onEditLayout: () => setEditingLayout(true),
+                },
+              }
+            : {})}
           dashboard={
             arranged?.id === live.dashboard.id
               ? {
@@ -916,6 +1123,7 @@ const App = (): JSX.Element => {
           toolbar={overlays}
           presentation={presentationSources}
           labels={live.labels}
+          entityLinks={live.entityLinks}
           editing={arranging}
           onEditingChange={setArranging}
           onAutoArrange={tidyUp}
@@ -926,6 +1134,7 @@ const App = (): JSX.Element => {
           onRemoveWidget={(widgetId) => void removeWidget(widgetId)}
           onCustomiseWidget={setCustomising}
           onOpenRecordPage={openRecordPage}
+          onOpenReference={openReference}
         />
       </div>
     </div>

@@ -14,14 +14,17 @@ import type {
   InferredShape,
 } from "@freebirdai/dash-agent";
 import {
+  briefCandidates,
+  resolveCandidate,
   inferShape,
-  mapReviewProposal,
-  reviewSuggestions,
-  suggestWidgets,
+  patchFromBrief,
+  widgetId,
+  writeBrief,
 } from "@freebirdai/dash-agent";
 import type {
   ConnectionSpec,
   DashboardSpec,
+  EntitySpec,
   RangePreset,
   ResolvedParams,
   TimeRange,
@@ -51,11 +54,9 @@ import {
   type SampleFn,
   analyseConnection,
   analyseStructure,
-  applyPairings,
   estimateEnumeration,
   fromReport,
   toReport,
-  verifyPairings,
   withVerifiedParams,
 } from "./capabilities.js";
 import type { ChatDb } from "./chat/db.js";
@@ -67,7 +68,6 @@ import { rearrangeSetup } from "./concierge/arrange.js";
 import { planDetailSetup } from "./concierge/detail.js";
 import type { DetailPlanRequest, DetailSetup } from "./concierge/detail.js";
 import { planNarrowing } from "./concierge/drilldown.js";
-import { proposeSetup } from "./concierge/propose.js";
 import { NarrowingStore } from "./narrowings.js";
 import { MemoryDraftStore, ScratchDraftStore, type DraftStore } from "./concierge/store.js";
 import { CatalogStore, connectionFromCatalog, refreshCatalogConnection } from "./catalog.js";
@@ -104,8 +104,20 @@ import { conciergeRoutes } from "./routes/concierge.js";
 import { SetupPreviews } from "./concierge/preview.js";
 import { contextForConnection } from "@freebirdai/dash-agent";
 import { migrateCredentialRefs } from "./credential-migration.js";
-import { fingerprintConnection } from "@freebirdai/dash-spec";
-import { mapRoutes } from "./routes/map.js";
+import {
+  compileBrief,
+  entityById,
+  entityLinkViews,
+  entityPageView,
+  fieldLexicon,
+  fieldGroupSchema,
+  fieldPathSchema,
+  fingerprintConnection,
+  recipeFor,
+  widgetBriefSchema,
+} from "@freebirdai/dash-spec";
+import { mapRoutes, mergeDescribedEntities } from "./routes/map.js";
+import { VERIFY_BUDGET_DEFAULT, VERIFY_BUDGET_MAX, verifyRecords } from "./routes/verify.js";
 import type { Settings, SettingsStore } from "./settings.js";
 import { QueryCache, clampMaxAge } from "./cache/queryCache.js";
 import { extractRows, parsePath } from "@freebirdai/dash-expr";
@@ -199,22 +211,20 @@ export const LOCAL_USER_ID = "local";
 export const CHAT_SYSTEM_PROMPT = [
   "You are the assistant inside FreeBird Dash, a dashboard over the user's own APIs.",
   "",
-  "You are always given the whole workspace. Two lists appear in the knowledge for",
-  "the component named after the dashboard, and they mean different things:",
+  "You are always given the whole workspace. The knowledge for the component named",
+  'after the dashboard carries "WIDGETS" — every widget that exists, on every tab,',
+  "grouped by tab. That is the complete list; there is no other widget you have not",
+  "been told about. Match the user's wording against these titles rather than asking",
+  "for an id, and never ask them to switch tabs first — tabs are how they filed",
+  "things, not a limit on what you can talk about. `open_widget` moves the view.",
   "",
-  '  - "WIDGETS" — every widget that exists, on every tab, grouped by tab. This is',
-  "    the complete list; there is no other widget you have not been told about.",
-  "    Match the user's wording against these titles rather than asking for an id,",
-  "    and never ask them to switch tabs first — tabs are how they filed things,",
-  "    not a limit on what you can talk about. `open_widget` moves the view for you.",
-  '  - "NOT YET CREATED" — ready-made widgets that do not exist yet, each with the',
-  "    id `add_widget` expects. These are for browsing: offer them when somebody",
-  "    asks what they could look at. When they describe something specific, build",
-  "    it instead — see BUILDING A WIDGET below. A ready-made offer is a card",
-  '    saying "apply this?"; building gives them the widget itself to adjust.',
+  "There is no list of ready-made widgets to pick from, and that is deliberate.",
+  "When somebody wants something they do not have, build exactly what they asked",
+  "for — see BUILDING A WIDGET below — rather than reaching for the nearest",
+  "approximation of it.",
   "",
-  "Never say you cannot see the dashboard: if a widget is not in the first list,",
-  "it is genuinely not there — say so, and offer the closest thing from the second.",
+  "Never say you cannot see the dashboard: if a widget is not in that list, it is",
+  "genuinely not there. Say so, and offer to build it.",
   "",
   "THREE TOOLS, AND THE DIFFERENCE BETWEEN THEM. You are given full detail for the",
   "widgets on the tab that is open, and only names for the rest. When you need more:",
@@ -307,6 +317,22 @@ export const CHAT_SYSTEM_PROMPT = [
   "  - Never invent a field name to avoid asking. Anything outside the lists is",
   "    rejected and handed back to you, and a binding that looks right but is not",
   "    is worse than one more question.",
+  "",
+  "ASKING A QUESTION. `ask_user` puts two or three plain options in front of them",
+  "and waits. It is for a real fork, where the readings lead to different widgets",
+  "and guessing wrong wastes their time:",
+  "",
+  "  - the records themselves, or a count of them — a list and a chart are not",
+  "    variations on one answer;",
+  "  - two record types their words fit equally well;",
+  "  - a narrowing phrase that matches nothing in their data.",
+  "",
+  "Everything else you decide. Never ask which field to bind to a role, how to",
+  "sort, or what to call it — those have sensible answers and they can change any",
+  "of them by saying so once it is on screen. At most two questions before you",
+  "build something; past that, build it and let them adjust. Put the option you",
+  "would have chosen first, and phrase all of them in their language rather than",
+  "the API's.",
   "",
   "Never invent an id. Keep answers short and concrete.",
 ].join("\n");
@@ -876,6 +902,37 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   // A connection is public except for its key: responses report `hasKey`,
   // never the secret, so a leaked spec file or a screenshotted API response
   // is worthless.
+  /**
+   * The URL of one of a connection's endpoints, for the compiler's one check.
+   *
+   * A path still carrying a parameter needs an id a widget on a board has
+   * nowhere to get, so the compiler refuses rather than emitting something
+   * that cannot fetch. Read off the connection rather than the catalog: what
+   * matters is the endpoint *this* connection would call.
+   */
+  const pathOf = (
+    connection: { readonly ops: readonly { readonly id: string; readonly path: string }[] },
+    op: string | undefined,
+  ): string | undefined => (op ? connection.ops.find((one) => one.id === op)?.path : undefined);
+
+  /**
+   * The rest of an API, for a brief that names two record types.
+   *
+   * The catalog's record types with *this connection's* endpoints, which is
+   * the same pairing a record page is built from and for the same reason: the
+   * catalog describes the whole API, a connection may hold a subset of it, and
+   * a join naming an endpoint this connection does not carry is one nothing
+   * here could ever fetch.
+   */
+  const relatedFor = (
+    connection: NonNullable<ReturnType<SpecStore["getConnection"]>>,
+    entities: readonly EntitySpec[],
+  ) => ({
+    entities,
+    resources: connection.resources,
+    ops: connection.ops.map((op) => ({ id: op.id, path: op.path, params: op.params })),
+  });
+
   const publicConnection = (connection: ReturnType<SpecStore["getConnection"]>) => {
     if (!connection) return null;
     const refs = connectionKeyRefs(connection);
@@ -883,22 +940,58 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     // exists somewhere, we just have not been told where it goes.
     const hasKey = !connectionNeedsAuthSetup(connection) && refs.every((ref) => keys.has(ref));
     /*
-     * What this API's fields are called, resolved rather than copied.
+     * What this API's fields are called, derived rather than stored.
      *
-     * The lexicon is a fact about the API, so it lives on the catalog entry
-     * with the relations and is looked up here on every read instead of being
-     * written onto the stored connection. That way re-running the labelling
-     * pass is live for every connection to that API at once, and there is one
-     * copy to correct rather than one per person who connected.
+     * Read off the described record types on every request, so there is one
+     * copy to correct and re-describing an API is live for every connection to
+     * it at once. It used to be written by a model pass of its own, run inside
+     * every mapping and costing a call per batch of field names — for a worse
+     * answer than the describing pass already gives, since one map keyed by
+     * bare field name has to give `Title` a single meaning for the whole API.
      *
-     * Empty for a connection made by hand against an API nothing has mapped,
-     * which every renderer already handles: they fall back to the mechanical
-     * label, which is what the product showed before this existed.
+     * This is the fallback, not the answer: a widget that knows its record
+     * type gets that record type's own words (`EntityLinkView.labels`), which
+     * outrank these. This serves the places holding a field name and nothing
+     * else.
+     *
+     * Empty for a connection to an API nobody has described, which every
+     * renderer already handles by falling back to the mechanical label.
      */
     const labels = connection.catalog
-      ? (options.catalog?.get(connection.catalog)?.labels ?? {})
+      ? fieldLexicon(options.catalog?.get(connection.catalog)?.entities ?? [])
       : {};
-    return { ...connection, hasKey, labels };
+    /*
+     * Which of this API's fields point at other records, resolved the same way
+     * and for the same reason — a property of the API, kept once on the
+     * catalog entry rather than copied onto every connection to it.
+     *
+     * Deliberately the *links* and not the record types. A browser needs to
+     * know that a column holds a vendor's id, what a vendor is called, and
+     * which endpoint returns one; it does not need the twelve hundred field
+     * descriptions that make the artifact worth sharing, and on a real API
+     * that difference is tens of kilobytes against well over a megabyte on a
+     * payload read at every page load.
+     *
+     * The ops come from the *connection* rather than the catalog: a reach plan
+     * that names an endpoint this connection does not carry is a link nothing
+     * here could follow.
+     */
+    const entities = connection.catalog
+      ? (options.catalog?.get(connection.catalog)?.entities ?? [])
+      : [];
+    const entityLinks =
+      entities.length > 0
+        ? entityLinkViews({
+            entities,
+            resources: connection.resources,
+            ops: connection.ops.map((op) => ({
+              id: op.id,
+              path: op.path,
+              params: op.params,
+            })),
+          })
+        : [];
+    return { ...connection, hasKey, labels, entityLinks };
   };
 
   app.get("/api/connections", async () =>
@@ -910,6 +1003,472 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     if (!connection) return reply.status(404).send({ error: "no such connection" });
     return publicConnection(connection);
   });
+
+  /**
+   * The record types this connection has, for choosing between.
+   *
+   * A hundred plain nouns with a sentence each, which is what the manual
+   * builder offers instead of two hundred endpoints titled "Retrieve all X".
+   * Deliberately light: what each record type *contains* is a second request,
+   * made only for the one somebody picked.
+   */
+  app.get<{ Params: { id: string } }>("/api/connections/:id/entities", async (request, reply) => {
+    const connection = store.getConnection(request.params.id);
+    if (!connection) return reply.status(404).send({ error: "no such connection" });
+
+    const entities = connection.catalog
+      ? (options.catalog?.get(connection.catalog)?.entities ?? [])
+      : [];
+
+    /*
+     * The endpoints *this connection* carries, which is not the same as the
+     * ones the API has. A connection may hold a subset, and a resource keeps
+     * declaring its list endpoint either way — so asking the resource alone
+     * would advertise a record type nothing here could fetch.
+     */
+    const carried = new Set(connection.ops.map((op) => op.id));
+
+    return entities.map((entity) => {
+      const resource = connection.resources.find((one) => one.id === entity.resource);
+      return {
+        entity: entity.id,
+        name: entity.name,
+        kind: entity.kind,
+        ...(entity.description ? { description: entity.description } : {}),
+        /** Whether somebody would start a widget from these, or only reach them. */
+        starting: recipeFor(entity.kind).starting,
+        /**
+         * Whether anything here lists them.
+         *
+         * A record type nothing lists cannot be a widget however well
+         * described it is, and offering it would be offering a dead end.
+         */
+        listable: Boolean(resource?.listOp && carried.has(resource.listOp)),
+      };
+    });
+  });
+
+  /**
+   * A brief somebody assembled by hand, compiled.
+   *
+   * The same compiler the described path uses, which is the point: a widget
+   * built by picking fields and one built by describing it cannot disagree
+   * about what the same request means, because there is only one thing that
+   * turns a brief into a widget.
+   *
+   * No model and no API requests — every decision is already recorded in the
+   * record type.
+   */
+  app.post<{ Params: { id: string }; Body: unknown }>(
+    "/api/connections/:id/compile",
+    async (request, reply) => {
+      const parsed = z
+        .object({ brief: widgetBriefSchema, dashboardId: z.string().optional() })
+        .safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({ error: "invalid brief", detail: parsed.error.issues });
+      }
+
+      const connection = store.getConnection(request.params.id);
+      if (!connection) return reply.status(404).send({ error: "no such connection" });
+
+      const entities = connection.catalog
+        ? (options.catalog?.get(connection.catalog)?.entities ?? [])
+        : [];
+      const entity = entityById(entities, parsed.data.brief.entity);
+      const resource = entity
+        ? connection.resources.find((one) => one.id === entity.resource)
+        : undefined;
+      if (!entity || !resource) {
+        return reply
+          .status(409)
+          .send({ error: "That record type is not one this connection carries." });
+      }
+      /*
+       * And the endpoint that lists them has to be one this connection holds.
+       * Compiling against a resource's declaration alone would produce a widget
+       * naming an endpoint nothing here can call — which fails at the first
+       * fetch, long after the point anybody could understand why.
+       */
+      if (!resource.listOp || !connection.ops.some((op) => op.id === resource.listOp)) {
+        return reply.status(409).send({
+          error: `This connection does not carry the endpoint that lists ${entity.name.many.toLowerCase()}.`,
+        });
+      }
+
+      const board = parsed.data.dashboardId ? store.getDashboard(parsed.data.dashboardId) : null;
+      const taken = new Set((board?.widgets ?? []).map((widget) => widget.id));
+
+      const compiled = compileBrief({
+        brief: parsed.data.brief,
+        entity,
+        resource,
+        connection: connection.id,
+        listPath: pathOf(connection, resource.listOp),
+        related: relatedFor(connection, entities),
+        id: widgetId(parsed.data.brief.title ?? entity.name.many, taken),
+      });
+
+      return { widget: compiled.widget, notes: compiled.notes, errors: compiled.errors };
+    },
+  );
+
+  /**
+   * One record type, with everything its page needs.
+   *
+   * Separate from the connection payload, and that is a measurement rather
+   * than a preference: everything pages need for a real API's 108 record types
+   * is about 132 KB, against 8.3 KB for the largest single record type on its
+   * own. The first would be paid on every page load by everybody; this is paid
+   * once by whoever opens a page.
+   *
+   * The ops come from the *connection* rather than the catalog, for the same
+   * reason the links do: a reach plan naming an endpoint this connection does
+   * not carry is a section nothing here could fetch.
+   */
+  app.get<{ Params: { id: string; entity: string } }>(
+    "/api/connections/:id/entities/:entity",
+    async (request, reply) => {
+      const connection = store.getConnection(request.params.id);
+      if (!connection) return reply.status(404).send({ error: "no such connection" });
+
+      const entities = connection.catalog
+        ? (options.catalog?.get(connection.catalog)?.entities ?? [])
+        : [];
+      const page = entityPageView(
+        {
+          entities,
+          resources: connection.resources,
+          ops: connection.ops.map((op) => ({ id: op.id, path: op.path, params: op.params })),
+        },
+        request.params.entity,
+      );
+      /*
+       * A record type nobody has described is a 404 rather than an empty page:
+       * the difference between "this API has no such thing" and "this thing
+       * has nothing on it" is the whole question the reader is asking.
+       */
+      if (!page) return reply.status(404).send({ error: "no such record type" });
+      return page;
+    },
+  );
+
+  /**
+   * How a record type's page is laid out, changed for everybody.
+   *
+   * The layer between the code's own guess and one widget's private change:
+   * the record type's own answer, so every route into a record — a link from
+   * another record's column, a shared URL, any widget's row — arrives at the
+   * same page, and improving it improves all of them at once. A widget that
+   * wants something different stores only that difference against itself and
+   * inherits the rest.
+   *
+   * Written to the catalog's local tier, which is what makes this an override
+   * rather than an edit to what shipped: abandoning it is a delete, not an
+   * unwinding.
+   */
+  app.put<{ Params: { id: string; entity: string }; Body: unknown }>(
+    "/api/connections/:id/entities/:entity/layout",
+    async (request, reply) => {
+      const parsed = z
+        .object({
+          facts: z.array(fieldPathSchema).max(4).default([]),
+          groups: z.array(fieldGroupSchema).max(8).default([]),
+        })
+        .safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.status(400).send({ error: "invalid layout", detail: parsed.error.issues });
+      }
+
+      const connection = store.getConnection(request.params.id);
+      if (!connection) return reply.status(404).send({ error: "no such connection" });
+      const entry = connection.catalog ? options.catalog?.get(connection.catalog) : undefined;
+      const entity = entry?.entities?.find((one) => one.id === request.params.entity);
+      if (!entry || !entity) return reply.status(404).send({ error: "no such record type" });
+
+      /*
+       * Checked against the record type's own fields rather than trusted.
+       * A layout naming a field that does not exist produces a pane that
+       * cannot bind, and that renders as "this view no longer matches its
+       * data" — which blames the reader's data for a bad write here.
+       */
+      const shown = new Set(
+        entity.fields.filter((f) => f.visibility !== "hidden").map((f) => f.path),
+      );
+      const unknown = [
+        ...parsed.data.facts,
+        ...parsed.data.groups.flatMap((group) => group.fields),
+      ].filter((path) => !shown.has(path));
+      if (unknown.length > 0) {
+        return reply.status(400).send({
+          error: `${entity.name.many} do not show ${unknown.join(", ")}.`,
+        });
+      }
+
+      const saved = options.catalog!.put({
+        ...entry,
+        entities: (entry.entities ?? []).map((one) =>
+          one.id === entity.id
+            ? {
+                ...one,
+                views: {
+                  ...one.views,
+                  // Only the page's half. Columns, sort, strips and stats are
+                  // a different screen's business and must not be cleared by
+                  // a write about the layout of a record.
+                  record: { facts: parsed.data.facts, groups: parsed.data.groups },
+                },
+              }
+            : one,
+        ),
+      });
+
+      return saved.entities?.find((one) => one.id === entity.id)?.views.record ?? { facts: [], groups: [] };
+    },
+  );
+
+  /**
+   * Check what has been described against the real account.
+   *
+   * The one thing in this whole layer that spends somebody's API quota, which
+   * is why it is a request somebody makes rather than something that happens
+   * on its own. Two claims cannot be settled by re-reading a specification:
+   * that a field identifies a record, and that a field pointing at another
+   * record type really resolves there. Both are settled by asking.
+   *
+   * Budgeted, and the budget is the point: a real API has a hundred record
+   * types and as many links again, so an unbounded check is hundreds of
+   * requests against an account that rate-limits.
+   */
+  app.post<{ Params: { id: string }; Body: unknown }>(
+    "/api/connections/:id/verify",
+    async (request, reply) => {
+      const parsed = z
+        .object({ budget: z.number().int().min(1).max(VERIFY_BUDGET_MAX).optional() })
+        .safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.status(400).send({ error: "invalid budget", detail: parsed.error.issues });
+      }
+
+      const connection = store.getConnection(request.params.id);
+      if (!connection) return reply.status(404).send({ error: "no such connection" });
+
+      const entry = connection.catalog ? options.catalog?.get(connection.catalog) : undefined;
+      const entities = entry?.entities ?? [];
+      if (entities.length === 0) {
+        return reply.status(409).send({
+          error: "This API's records have not been described yet, so there is nothing to check.",
+        });
+      }
+      registry.addConnection(connection);
+
+      const carried = new Set(connection.ops.map((op) => op.id));
+      const result = await verifyRecords({
+        entities,
+        resources: connection.resources,
+        carried,
+        rowsPathOf: (op) => getOp(connection, op)?.rowsPath,
+        budget: parsed.data.budget ?? VERIFY_BUDGET_DEFAULT,
+        read: async (op, params) => {
+          try {
+            /*
+             * The id goes in as a filter rather than as an override: a by-id
+             * endpoint carries it in its *path*, and a path token reads the
+             * filters, while an override would only ever become a query
+             * parameter the endpoint never asked for.
+             */
+            const fetched = await registry.fetch(connection.id, op, {}, {
+              params: {
+                range: resolveRange({ preset: "30d", now: Date.now() }),
+                filters: params,
+              },
+              now: Date.now(),
+              resolveSecret: async (keyRef) => keys.get(keyRef),
+            });
+            return { ok: true, body: fetched.body };
+          } catch (error) {
+            /*
+             * A refusal is an outcome here, not a failure: the run records how
+             * far it got and stops. Only the status matters — what is being
+             * decided is whether to keep asking.
+             */
+            return {
+              ok: false,
+              body: null,
+              ...(error instanceof AdapterError ? { status: error.status } : {}),
+            };
+          }
+        },
+      });
+
+      /*
+       * Merged rather than written over, and through the same rule a
+       * re-description uses: evidence gathered here is carried onto whatever
+       * the catalog holds *now*, so a describe run that finished while this
+       * was in flight keeps its newer prose, and evidence about a claim that
+       * has since changed lapses instead of vouching for something else.
+       */
+      if (entry && options.catalog) {
+        const current = options.catalog.get(entry.id) ?? entry;
+        options.catalog.put({
+          ...current,
+          entities: mergeDescribedEntities(result.entities, current.entities ?? []),
+          entitiesVerifiedAt: new Date().toISOString(),
+        });
+      }
+
+      return {
+        checked: result.checked,
+        identitiesConfirmed: result.identitiesConfirmed,
+        referencesResolved: result.referencesResolved,
+        requests: result.spent,
+        stopped: result.stopped,
+        notes: result.notes,
+      };
+    },
+  );
+
+  /**
+   * A request for a widget, answered from the record types.
+   *
+   * The entity-first path: one model call names the records and says what the
+   * widget is *for*, and everything else — the endpoint, the columns, the
+   * sort, the filter strips, the pipeline — is worked out deterministically
+   * from the record type and its kind. The model never writes a pipeline it
+   * could get subtly wrong; it writes a handful of names that are checked
+   * against the real thing.
+   *
+   * Returns a widget rather than storing one. Adding it to a board is the
+   * caller's own act, through the path that already does that — so a proposal
+   * nobody accepted changes nothing.
+   */
+  app.post<{ Params: { id: string }; Body: unknown }>(
+    "/api/connections/:id/brief",
+    async (request, reply) => {
+      const parsed = z
+        .object({
+          intent: z.string().min(1).max(500),
+          /** The board it will land on, so its id cannot collide there. */
+          dashboardId: z.string().optional(),
+        })
+        .safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({ error: "a request in the user's own words is needed" });
+      }
+
+      const connection = store.getConnection(request.params.id);
+      if (!connection) return reply.status(404).send({ error: "no such connection" });
+
+      const entities = connection.catalog
+        ? (options.catalog?.get(connection.catalog)?.entities ?? [])
+        : [];
+      if (entities.length === 0) {
+        return reply.status(409).send({
+          error:
+            "This API's records have not been described yet, so there is nothing to build from.",
+        });
+      }
+
+      const llm = resolveLlm("widget");
+      if (!llm) {
+        return reply.status(400).send({
+          error:
+            "Building a widget needs an AI key. Set ANTHROPIC_API_KEY or OPENAI_API_KEY on the server.",
+        });
+      }
+
+      const written = await writeBrief(llm, {
+        intent: parsed.data.intent,
+        // One source by construction: this route is addressed to one
+        // connection, so there is nothing to choose between.
+        candidates: briefCandidates([
+          { connection: connection.id, title: connection.title, entities },
+        ]),
+      });
+      if (!written.brief) {
+        return reply.status(502).send({ error: written.error ?? "no brief was written" });
+      }
+
+      /*
+       * The record type has to be one *this connection* carries. The catalog
+       * describes the whole API; a connection may hold a subset of it, and a
+       * widget over an endpoint this connection does not have is one nothing
+       * could ever fetch.
+       */
+      const entity = entityById(entities, written.brief.entity);
+      const resource = entity
+        ? connection.resources.find((one) => one.id === entity.resource)
+        : undefined;
+      if (!entity || !resource) {
+        return reply
+          .status(409)
+          .send({ error: "That record type is not one this connection carries." });
+      }
+
+      const board = parsed.data.dashboardId ? store.getDashboard(parsed.data.dashboardId) : null;
+      const taken = new Set((board?.widgets ?? []).map((widget) => widget.id));
+
+      const compiled = compileBrief({
+        brief: written.brief,
+        entity,
+        resource,
+        connection: connection.id,
+        listPath: pathOf(connection, resource.listOp),
+        related: relatedFor(connection, entities),
+        id: widgetId(written.brief.title ?? entity.name.many, taken),
+      });
+
+      /*
+       * The other reading, compiled in the same breath as the first.
+       *
+       * Offered rather than asked about: blocking on "did you mean the records
+       * or a count of them?" makes every request an interrogation, and the
+       * answer is usually plain. Compiling both here means switching costs no
+       * second model call and no second wait — which is what lets the question
+       * go unasked without the other reading becoming unreachable.
+       */
+      const other = written.alternative;
+      const otherEntity = other ? entityById(entities, other.brief.entity) : undefined;
+      const otherResource = otherEntity
+        ? connection.resources.find((one) => one.id === otherEntity.resource)
+        : undefined;
+      const otherCompiled =
+        other && otherEntity && otherResource
+          ? compileBrief({
+              brief: other.brief,
+              entity: otherEntity,
+              resource: otherResource,
+              connection: connection.id,
+              listPath: pathOf(connection, otherResource.listOp),
+              related: relatedFor(connection, entities),
+              id: widgetId(
+                otherEntity.name.many,
+                new Set([...taken, ...(compiled.widget ? [compiled.widget.id] : [])]),
+              ),
+            })
+          : null;
+
+      return {
+        widget: compiled.widget,
+        brief: written.brief,
+        /** The model's own sentence about what it built, for the reader. */
+        reason: written.reason,
+        /** Where the answer differs from what was asked, in a reader's words. */
+        notes: compiled.notes,
+        errors: compiled.errors,
+        /** A different reading, ready to swap to. Absent on almost every request. */
+        ...(other && otherCompiled?.widget
+          ? {
+              alternative: {
+                label: other.label,
+                widget: otherCompiled.widget,
+                notes: otherCompiled.notes,
+              },
+            }
+          : {}),
+      };
+    },
+  );
 
   app.put<{ Params: { id: string }; Body: unknown }>(
     "/api/connections/:id",
@@ -1394,166 +1953,6 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         : {};
       const { value } = await enumerate(connection, request.body?.refresh === true, budget);
       return value;
-    },
-  );
-
-  /**
-   * What is worth building here, in sentences.
-   *
-   * Deterministic: no model is involved. It reads the same enumeration
-   * `/capabilities` produces — shared, so opening the drawer does not spend a
-   * second round of requests on someone else's API — and emits real widget
-   * specs with a plain-English rationale attached. A chat turn later becomes a
-   * third author of the same object; the build path already cannot tell the
-   * difference.
-   */
-  app.post<{ Params: { id: string }; Body: { refresh?: boolean; review?: boolean } }>(
-    "/api/connections/:id/suggestions",
-    async (request, reply) => {
-      const connection = store.getConnection(request.params.id);
-      if (!connection) return reply.status(404).send({ error: "no such connection" });
-      registry.addConnection(connection);
-
-      const { value, shapes } = await enumerate(connection, request.body?.refresh === true);
-
-      const suggestions = suggestWidgets({
-        connection: connection.id,
-        resources: value.resources,
-        shapes,
-        toneOf: statusTone,
-      });
-
-      /*
-       * The relationship pass: propose → verify → build → remember.
-       *
-       * The model reasons over the whole resource graph, including the parts
-       * nobody has read, because a pairing like "properties have units" is
-       * legible from the nouns long before any request is made. What it cannot
-       * know is which field carries the link, so every pairing it proposes is
-       * checked against real rows — one request each, paced — and anything
-       * unconfirmed is dropped rather than shown.
-       *
-       * Confirmed links are folded back into the resource graph, so this is
-       * paid for once: later widgets and the chat read them off the report.
-       *
-       * Still entirely optional. No key, a refusal, a malformed answer — all
-       * of them leave the rule-authored suggestions exactly as they were.
-       */
-      let reviewed: ReturnType<typeof mapReviewProposal>[] = [];
-      let reviewError: string | null = null;
-      let learned: Awaited<ReturnType<typeof verifyPairings>> = [];
-      let resources = value.resources;
-      const reviewLlm = request.body?.review === false ? null : llmForReview();
-
-      if (reviewLlm) {
-        const { proposals, error } = await reviewSuggestions(reviewLlm, {
-          connection: connection.id,
-          resources,
-          shapes,
-          existing: suggestions,
-        });
-        reviewError = error;
-
-        const pairings = proposals.flatMap((proposal) =>
-          (proposal.children ?? []).map((child) => ({
-            parent: proposal.resource,
-            child: child.resource,
-            linkField: child.linkField,
-          })),
-        );
-
-        if (pairings.length > 0) {
-          const knownFields = Object.fromEntries(
-            Object.entries(shapes).map(([id, shape]) => [id, shape.fields]),
-          );
-          learned = await verifyPairings(pairings, resources, knownFields, sampleFor(connection));
-
-          // A child read only to check a link is still a resource we now know
-          // the fields of — keep it, so the widget can bind real columns.
-          for (const pairing of learned) {
-            if (pairing.ok && pairing.fields && !shapes[pairing.child]) {
-              shapes[pairing.child] = {
-                rowsPath: "$",
-                rowCount: pairing.fields.length,
-                schemaHash: "",
-                fields: pairing.fields,
-              };
-            }
-          }
-          // The ops go in so a filter parameter is looked up rather than
-          // invented — see the note in `applyPairings`.
-          resources = applyPairings(resources, learned, connection.ops);
-        }
-
-        const confirmed = new Set(
-          learned.filter((pairing) => pairing.ok).map((p) => `${p.parent}→${p.child}`),
-        );
-        const reviewInput = { connection: connection.id, resources, shapes, existing: suggestions };
-        reviewed = proposals
-          .map((proposal) =>
-            mapReviewProposal(
-              {
-                ...proposal,
-                // Only pairings a request stood behind reach the builder.
-                children: (proposal.children ?? []).filter((child) =>
-                  confirmed.has(`${proposal.resource}→${child.resource}`),
-                ),
-              },
-              reviewInput,
-            ),
-          )
-          .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-
-        // Remember what was learned, so the next caller pays nothing for it.
-        if (learned.some((pairing) => pairing.ok)) {
-          store.putReport(
-            toReport(connection, { ...value, resources }, shapes, {
-              outcome: value.outcome,
-              requestsSpent: value.requestsSpent,
-            }),
-          );
-          enumerated.delete(connection.id);
-        }
-      }
-
-      /*
-       * Why there is nothing, when there is nothing.
-       *
-       * An empty list has several very different causes — the credential was
-       * rejected, the API rate-limited us, the account genuinely has no
-       * records, or none of its endpoints return collections — and the drawer
-       * cannot tell them apart from the list alone. It was left asserting one
-       * of them, which reads as the engine being broken when it is working
-       * correctly on an API that will not answer.
-       */
-      const sampled = Object.keys(shapes).length;
-      return {
-        connection: connection.id,
-        suggestions,
-        reviewed,
-        // Read off the adapter rather than re-derived, so this names the model
-        // that actually ran even when the resolution above changes.
-        reviewModel: reviewLlm?.defaultModel ?? null,
-        reviewError,
-        notes: value.notes,
-        outcome: value.outcome,
-        ...(value.retryAfter ? { retryAfter: value.retryAfter } : {}),
-        /** Structure understood vs rows actually seen — the two fail apart. */
-        resourceCount: value.resources.length,
-        sampledCount: sampled,
-        /*
-         * What this pass learned about how records relate, and what it tried
-         * and could not confirm. Shown so a rejected pairing is visible as a
-         * rejected pairing rather than as a missing feature.
-         */
-        relationships: learned.map((pairing) => ({
-          parent: pairing.parent,
-          child: pairing.child,
-          linkField: pairing.linkField,
-          ok: pairing.ok,
-          ...(pairing.reason ? { reason: pairing.reason } : {}),
-        })),
-      };
     },
   );
 
@@ -2295,6 +2694,32 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
      * held, and a chat turn must never quietly buy data merely to work out
      * what somebody is looking at.
      */
+    /**
+     * Where one of a record type's records is fetched from.
+     *
+     * A record page calls the record type's own detail endpoint, so this names
+     * the request already sitting in the cache when somebody asks about what
+     * they are looking at. Resolved from the catalog rather than from a widget,
+     * because a record page has no widget behind it.
+     */
+    const entityDetailFor = (connectionId: string, entityId: string) => {
+      const connection = store.getConnection(connectionId);
+      if (!connection) return null;
+      const entities = connection.catalog
+        ? (options.catalog?.get(connection.catalog)?.entities ?? [])
+        : [];
+      const entity = entityById(entities, entityId);
+      if (!entity) return null;
+      const resource = connection.resources.find((one) => one.id === entity.resource);
+      if (!resource?.detailOp || !resource.detailParam) return null;
+      return {
+        op: resource.detailOp,
+        idParam: resource.detailParam,
+        idField: entity.identity?.field ?? null,
+        title: entity.name.one,
+      };
+    };
+
     const onScreenFocus = async (
       auth: { extra?: Record<string, unknown> },
       dashboards: readonly DashboardSpec[],
@@ -2305,6 +2730,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       if (!open) return null;
       return focusFromScreen({
         open,
+        entityDetail: entityDetailFor,
         handles: workspaceHandles(dashboards, dashboard.id),
         context,
         resolved: resolvedFor(dashboard, auth.extra?.["range"]),
@@ -2674,17 +3100,6 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         }
 
         const reports = store.listReports();
-        const suggestions = reports.flatMap((report) => {
-          const connection = store.getConnection(report.connection);
-          if (!connection) return [];
-          const { value, shapes } = fromReport(report);
-          return suggestWidgets({
-            connection: report.connection,
-            resources: value.resources,
-            shapes,
-            toneOf: statusTone,
-          });
-        });
 
         /*
          * Which connections have actually been read. `stale` is the third
@@ -2706,7 +3121,6 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         return buildChatRegistry({
           dashboard,
           reports,
-          suggestions,
           connections,
           /*
            * Every question the guided setup can ask, derived from disk alone.
@@ -2828,20 +3242,131 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
                 }
               : {}),
             /*
-             * The two model calls that choose the endpoint and bind the
-             * fields. Omitted entirely when there is no model, which is what
-             * makes the card fall back to asking rather than to failing.
+             * The one model call that chooses the records and says what the
+             * widget is for. Omitted entirely when there is no model, which is
+             * what makes the card fall back to asking rather than to failing.
              */
             ...(options.llm
               ? {
                   propose: async (intent: string) => {
                     const model = resolveLlm("widget");
                     if (!model) return { patch: {}, reason: "", notes: [], ambiguities: [] };
-                    return proposeSetup({
-                      llm: model,
-                      intent,
-                      context: conciergeContext(),
+
+                    /*
+                     * Entity-first, and now the only way in.
+                     *
+                     * It is deliberately only the *decisions* that moved: the
+                     * card, its questions and its confirm step read a patch,
+                     * and a patch is what this still produces. What changed is
+                     * that "show me X filtered by Y" is settled as a list with
+                     * a filter strip before a patch is written, where the
+                     * older path could only express it as a grouping and so
+                     * answered with a chart.
+                     *
+                     * Across every API whose records have been described, not
+                     * just one. A workspace with a second connection used to
+                     * fall straight back to picking endpoints by hand — the
+                     * brief could only ever see one roster, so two made it
+                     * useless rather than merely harder.
+                     */
+                    const described = store.listConnections().flatMap((entry) => {
+                      const records = entry.catalog
+                        ? (options.catalog?.get(entry.catalog)?.entities ?? [])
+                        : [];
+                      return records.length > 0
+                        ? [{ connection: entry.id, title: entry.title, entities: records, entry }]
+                        : [];
                     });
+
+                    if (described.length > 0) {
+                      const candidates = briefCandidates(described);
+                      const written = await writeBrief(model, { intent, candidates });
+                      const picked = written.brief
+                        ? resolveCandidate(candidates, written.brief.entity)
+                        : null;
+                      const source = picked
+                        ? described.find((one) => one.connection === picked.connection)
+                        : undefined;
+                      const chosen = picked && source
+                        ? entityById(source.entities, picked.recordType)
+                        : undefined;
+                      const resource = chosen && source
+                        ? source.entry.resources.find((one) => one.id === chosen.resource)
+                        : undefined;
+
+                      if (written.brief && picked && source && chosen && resource) {
+                        const mapped = patchFromBrief({
+                          /*
+                           * The record type's own id, not the handle the model
+                           * copied — the handle is qualified on collision and
+                           * means nothing to the compiler.
+                           */
+                          brief: { ...written.brief, entity: chosen.id },
+                          entity: chosen,
+                          resource,
+                          connection: source.connection,
+                          listPath: pathOf(source.entry, resource.listOp),
+                          related: relatedFor(source.entry, source.entities),
+                          id: chosen.id,
+                        });
+                        /*
+                         * A patch with no endpoint is one that did not compile,
+                         * and saying so beats handing the card an answer it
+                         * cannot build from.
+                         */
+                        if (mapped.patch.endpoint) {
+                          return {
+                            patch: mapped.patch,
+                            reason: written.reason,
+                            notes: mapped.notes,
+                            ambiguities: [],
+                          };
+                        }
+                        return {
+                          patch: {},
+                          reason: "",
+                          notes:
+                            mapped.errors.length > 0
+                              ? [...mapped.errors, ...mapped.notes]
+                              : [
+                                  `I could not build a widget of ${chosen.name.many} from what this API offers.`,
+                                  ...mapped.notes,
+                                ],
+                          ambiguities: [],
+                        };
+                      }
+                      return {
+                        patch: {},
+                        reason: "",
+                        notes: [
+                          written.error
+                            ? `I could not work out which records this is about: ${written.error}`
+                            : "I could not work out which kind of record this is about.",
+                        ],
+                        ambiguities: [],
+                      };
+                    }
+
+                    /*
+                     * No record types, so nothing to build from.
+                     *
+                     * Describing an API happens once, when it is connected, so
+                     * reaching this means that pass has not run or did not
+                     * finish — and the answer is to finish it rather than to
+                     * fall back to hunting through two hundred endpoints named
+                     * "Retrieve all X". That fallback is what produced the
+                     * failure this whole path replaced: asked to *see* records
+                     * narrowed by something, it could only express a grouping,
+                     * and answered with a chart.
+                     */
+                    return {
+                      patch: {},
+                      reason: "",
+                      notes: [
+                        "I do not know what kinds of record this API has yet — that is read once, from Connections → Records.",
+                      ],
+                      ambiguities: [],
+                    };
                   },
                 }
               : {}),
@@ -2960,6 +3485,18 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       // `DashboardGrid` for control of the same cells.
       enablePlanLayout: false,
       citations: { enabled: true },
+
+      /*
+       * One structured question, where guessing would waste their time.
+       *
+       * Off everywhere by default because it changes the shape of a turn — the
+       * reply can be a card rather than prose — and Dash renders one, so it is
+       * on here. What it is *for* is narrow and stated in the prompt: a fork
+       * where the readings produce different widgets. Asked about anything
+       * with a sensible default it becomes a wizard, which is the thing the
+       * whole setup card exists to not be.
+       */
+      askUser: { enabled: true },
 
       /*
        * One generated reply per turn, and no other writer.

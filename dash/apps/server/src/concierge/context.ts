@@ -14,6 +14,7 @@ import type {
   PersistedShape,
 } from "@freebirdai/dash-spec";
 import {
+  fieldLexicon,
   getOp,
   isStale,
   pathParamNames,
@@ -287,6 +288,10 @@ const buildSingleContext = (input: ContextInput): ConciergeContext => {
    * a field and the column that field becomes cannot read as two things.
    */
   const labels: Record<string, Readonly<Record<string, string>>> = {};
+  const records: Record<
+    string,
+    Readonly<Record<string, { id: string; one: string; many: string; description?: string }>>
+  > = {};
 
   const reportFor = new Map(input.reports.map((report) => [report.connection, report]));
   const mapFor = new Map((input.maps ?? []).map((entry) => [entry.id, entry]));
@@ -303,7 +308,27 @@ const buildSingleContext = (input: ContextInput): ConciergeContext => {
      */
     const map = mapFor.get(connection.catalog ?? connection.id) ?? mapFor.get(connection.id);
     const mappedOps = new Map((map?.ops ?? []).map((op) => [op.id, op]));
-    if (map?.labels && Object.keys(map.labels).length > 0) labels[connection.id] = map.labels;
+    const lexicon = fieldLexicon(map?.entities ?? []);
+    if (Object.keys(lexicon).length > 0) labels[connection.id] = lexicon;
+
+    /*
+     * What each resource is actually called. A resource id comes from a URL
+     * and reads like one; a record type is the name a person would use, and it
+     * is what the assistant should be addressing records by.
+     */
+    const described: Record<
+      string,
+      { id: string; one: string; many: string; description?: string }
+    > = {};
+    for (const entity of map?.entities ?? []) {
+      described[entity.resource] = {
+        id: entity.id,
+        one: entity.name.one,
+        many: entity.name.many,
+        ...(entity.description ? { description: entity.description } : {}),
+      };
+    }
+    if (Object.keys(described).length > 0) records[connection.id] = described;
     /*
      * Which resource each op lists, taken from whichever side declares it.
      *
@@ -371,7 +396,6 @@ const buildSingleContext = (input: ContextInput): ConciergeContext => {
         ...(params && params.length > 0 ? { params } : {}),
         // Only the map has this: it is a fact about the API rather than about
         // any account's data, which is why it travels with the catalog.
-        ...(mappedOps.get(op.id)?.facet ? { facet: mappedOps.get(op.id)!.facet } : {}),
       });
     }
 
@@ -516,6 +540,7 @@ const buildSingleContext = (input: ContextInput): ConciergeContext => {
     rangeFilterable,
     readPlans,
     labels,
+    records,
   };
 };
 

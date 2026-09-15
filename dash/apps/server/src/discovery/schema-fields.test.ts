@@ -36,7 +36,8 @@ const doc: Json = {
         required: ["Id", "LeaseStatus"],
         properties: {
           Id: { type: "integer", description: "The lease's unique identifier." },
-          LeaseStatus: { type: "string" },
+          LeaseStatus: { type: "string", enum: ["Active", "Ended", 3] },
+          Kind: { type: "string", const: "residential" },
           LeaseToDate: { type: "string", format: "date" },
           SignedAt: { type: "string", format: "date-time" },
           Contact: { $ref: "#/components/schemas/Contact" },
@@ -233,5 +234,41 @@ describe("a schema that never says what it is", () => {
     expect(names).toContain("A.B");
     expect(names).toContain("A.B.C");
     expect(names).not.toContain("A.B.C.D");
+  });
+});
+
+/**
+ * The closed sets a spec declares, which nothing was capturing.
+ *
+ * The one fact about a field that a sample cannot establish: rows show the
+ * values an account happens to have, so a filter strip built from them alone
+ * has no tile for the status nobody is currently in. On a real API this was
+ * populated for 0 of 1,508 fields — not because the specs were silent, but
+ * because the importer read the enum for parameters and dropped it for
+ * response fields.
+ */
+describe("declared values", () => {
+  const fields = fieldsFromSchema(
+    doc.components && typeof doc.components === "object"
+      ? ((doc.components as Json).schemas as Json).Lease
+      : {},
+    resolverFor(doc),
+  );
+  const byName = (name: string) => fields.find((field) => field.name === name);
+
+  it("keeps an enum, in the order the spec declared it", () => {
+    // Declaration order is the workflow's order — Active before Ended reads
+    // as a lifecycle, alphabetical reads as a list.
+    expect(byName("LeaseStatus")?.values).toEqual(["Active", "Ended", "3"]);
+  });
+
+  it("reads a single-valued const, which says the same thing", () => {
+    expect(byName("Kind")?.values).toEqual(["residential"]);
+  });
+
+  it("says nothing for a field the spec left open", () => {
+    // Absent rather than empty: this is stored once per field per endpoint,
+    // and an empty array is bytes spent to say nothing.
+    expect(byName("Notes")?.values).toBeUndefined();
   });
 });

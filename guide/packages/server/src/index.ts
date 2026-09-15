@@ -108,6 +108,17 @@ export interface CreateFreeBirdRouterOptions<TAuth = unknown> {
   /** Forwarded to ChatEngineOptions.citations (default disabled). */
   citations?: { enabled?: boolean };
   /**
+   * Forwarded to ChatEngineOptions.askUser (default disabled).
+   *
+   * Lets the model ask one structured question and wait for the answer. Off
+   * unless a host opts in, because it changes the shape of a turn — the reply
+   * can be a card rather than prose — and a client that does not know to
+   * render one shows nothing at all. The engine has always supported it;
+   * nothing exposed it to a host mounting the plugin, which meant every host
+   * had to clarify in prose or not at all.
+   */
+  askUser?: import("@freebirdai/core").ChatEngineOptions["askUser"];
+  /**
    * Forwarded to ChatEngineOptions.knowledgeContext (default enabled).
    * Includes the optional `retrieve` hook for per-message knowledge
    * retrieval (embeddings search) in place of exhaustive injection.
@@ -208,6 +219,7 @@ export const resolveDeps = <TAuth = unknown>(opts: CreateFreeBirdRouterOptions<T
       systemPrompt: opts.systemPrompt,
       enablePlanLayout: opts.enablePlanLayout,
       citations: opts.citations,
+      askUser: opts.askUser,
       knowledgeContext: opts.knowledgeContext,
       maxToolSteps: opts.maxToolSteps,
       processingToolCatalog: opts.processingToolCatalog,
@@ -336,6 +348,7 @@ export const createDepsResolver = <TAuth = unknown>(
         systemPrompt: opts.systemPrompt,
         enablePlanLayout: opts.enablePlanLayout,
         citations: opts.citations,
+        askUser: opts.askUser,
         knowledgeContext: opts.knowledgeContext,
         maxToolSteps: opts.maxToolSteps,
         processingToolCatalog: opts.processingToolCatalog,

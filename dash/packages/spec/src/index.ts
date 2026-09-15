@@ -23,6 +23,7 @@ export type {
   BindingIssue,
   BindingValidation,
   ColumnMeta,
+  ColumnReference,
   ComponentContract,
   ComponentId,
   GridHints,
@@ -53,7 +54,6 @@ export type { AuthSpec, ConnectionSpec, OpDef, OpSpec, PaginationSpec } from "./
 export {
   ARCHETYPES,
   ARCHETYPE_IDS,
-  LABEL_VERSION,
   MAP_VERSION,
   archetypeSchema,
   catalogEntrySchema,
@@ -87,6 +87,79 @@ export {
   validateFacets,
 } from "./facet.js";
 export type { FacetOption, FacetSpec, FacetValue } from "./facet.js";
+
+export {
+  ENTITY_KINDS,
+  ENTITY_VERSION,
+  VERIFY_BUDGET_DEFAULT,
+  VERIFY_BUDGET_MAX,
+  displayFields,
+  displayName,
+  entityById,
+  entityDisplaySchema,
+  entityFieldSchema,
+  entityForResource,
+  entityKindSchema,
+  entitySchema,
+  entityStatSchema,
+  entityViewsSchema,
+  fieldGroupSchema,
+  fieldPathSchema,
+  inferTitleMode,
+  titleModeOf,
+  recordOverrideSchema,
+  referenceFields,
+  referenceSchema,
+} from "./entity.js";
+export type {
+  EntityDisplay,
+  EntityField,
+  EntityKind,
+  EntitySpec,
+  EntityStat,
+  EntityViews,
+  RecordOverride,
+  ReferenceSpec,
+} from "./entity.js";
+
+export { RECIPES, facetsFromRecipe, recipeFor } from "./recipes.js";
+export type { EntityRecipe } from "./recipes.js";
+
+export { WIDGET_INTENTS, columnForPath, compileBrief, widgetBriefSchema } from "./brief.js";
+export type {
+  CompileBriefInput,
+  CompiledBrief,
+  WidgetBrief,
+  WidgetIntent,
+} from "./brief.js";
+
+export { referenceIds, targetOfRow } from "./reference.js";
+export type { ReferenceRow } from "./reference.js";
+
+export {
+  entityGraph,
+  entityLinkViews,
+  fieldLexicon,
+  entityPageView,
+  linkColumn,
+  targetFor,
+  targetsOf,
+} from "./entity-graph.js";
+export type {
+  EntityBackref,
+  EntityGraph,
+  EntityGraphInput,
+  EntityLinkView,
+  EntityPageField,
+  EntityPageSection,
+  EntityPageView,
+  EntityReference,
+  EntityReferenceView,
+  OmittedSection,
+  ReachCost,
+  ReachPlan,
+  UnreachableLink,
+} from "./entity-graph.js";
 
 export { authKeyRefs, fnv1a, idSchema, paramDefSchema, queryValueSchema } from "./primitives.js";
 export type { ParamDef } from "./primitives.js";
@@ -251,6 +324,10 @@ export {
   formatSchema,
   formatValue,
   guessSemantic,
+  isFieldNoise,
+  looksLikeApiLink,
+  looksLikeIdentifier,
+  normaliseName,
   semanticTypeSchema,
   valueTypeSchema,
 } from "./semantics.js";

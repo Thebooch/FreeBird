@@ -221,6 +221,15 @@ export const settleDetail = async (
 ): Promise<{ draft: ConciergeDraft; detail: DetailSetup | null }> => {
   if (!plan || !draft.drilldown || !draft.component || !draft.op) return { draft, detail: null };
 
+  /*
+   * A widget that names its record type already has a record page, and it is
+   * the shared one — every route into a record arrives at it, so improving it
+   * improves all of them at once. Planning a private copy here would spend a
+   * model call on every confirm to produce a worse answer: frozen as it was
+   * the day it was written, and inheriting nothing afterwards.
+   */
+  if (draft.entity) return { draft, detail: null };
+
   const detail = await plan({
     connection: draft.connection,
     listOp: draft.op,

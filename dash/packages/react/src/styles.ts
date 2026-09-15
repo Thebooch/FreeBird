@@ -808,6 +808,19 @@ export const DASH_REACT_STYLES = `
 }
 .dash-record-page__here { color: var(--dash-ink); font-weight: var(--dash-weight-semi); }
 
+/* The figures above a record. Wraps rather than scrolls: four numbers on two
+   lines still read at a glance, where a horizontal scroll hides one of them. */
+.dash-record-page__stats {
+  display: flex; flex-wrap: wrap; gap: var(--dash-space-2);
+  margin: var(--dash-space-3) 0;
+}
+.dash-record-page__stat {
+  flex: 1 1 140px; min-width: 0;
+  padding: var(--dash-space-2);
+  border: 1px solid var(--dash-border); border-radius: var(--dash-radius-sm);
+  background: var(--dash-surface);
+}
+
 /* Tabs and their panel are one card, so the panel reads as belonging to the
    selected tab rather than floating under a detached strip. */
 .dash-record-tabs {

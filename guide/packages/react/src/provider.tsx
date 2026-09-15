@@ -13,6 +13,7 @@ import type {
   CustomTab,
   GridCell,
   LayoutPlan,
+  PendingQuestion,
   Reference,
 } from "@freebirdai/core";
 import {
@@ -48,6 +49,8 @@ export interface FreeBirdContextValue {
   activeComponentIds: string[];
   /** The last error the chat stream reported, or null. */
   lastChatError: string | null;
+  /** A structured question the assistant is waiting on, or null. */
+  pendingQuestion: PendingQuestion | null;
   pausedRecords: ActionRecord[];
 
   // Setters / actions (delegate to store)
@@ -161,6 +164,7 @@ export const FreeBirdProvider: React.FC<FreeBirdProviderProps> = ({
       actionState: state.actionState,
       activeComponentIds: state.activeComponentIds,
       lastChatError: state.lastChatError,
+      pendingQuestion: state.pendingQuestion,
       pausedRecords,
 
       setSessionId: (id) => store.setSessionId(id),

@@ -6,17 +6,19 @@ import {
   humanLabel,
   groupColumn,
   isEmptyShape,
+  isFieldNoise,
   parseWidget,
   rolesForShape,
   shapeSteps,
   statusTone,
 } from "@freebirdai/dash-spec";
 import { coercionsFor, widgetId, type RoleBinding } from "../bind.js";
-import { deriveFacet } from "./facets.js";
+import { facetFields } from "./facets.js";
 import type { FieldInfo } from "../infer.js";
 import type { Ambiguity } from "../propose.js";
-import { flatten, highlightCandidates, pane } from "../suggest.js";
-import type { AuthoredWidget } from "../suggest.js";
+import { flatten, highlightCandidates, pane } from "../authoring.js";
+import type { PipelineStep } from "@freebirdai/dash-spec";
+import type { AuthoredWidget } from "../authoring.js";
 import type { ConciergeDraft } from "./draft.js";
 import { partView, partsOf } from "./draft.js";
 import type { DraftPart } from "./draft.js";
@@ -161,8 +163,26 @@ export const buildFromDraft = (
   const fields = fieldPool(draft, context);
   if (fields.length === 0) return fail(`nothing has been read from "${draft.op}" yet`);
 
+  /*
+   * What these records are called, before what the endpoint is called.
+   *
+   * An endpoint title is the API's own vocabulary and belongs in the
+   * inspector: falling back to it put "Retrieve all units" on the card and
+   * "table of retrieve all units, built from your answers" under it, which is
+   * a sentence about somebody's REST API rather than about their work. The
+   * record type has a plural for exactly this, and the draft now carries which
+   * record type it is about.
+   */
+  const named = draft.entity
+    ? Object.values(context.records?.[draft.connection ?? ""] ?? {}).find(
+        (record) => record.id === draft.entity,
+      )
+    : undefined;
   const title =
-    draft.title?.trim() || context.ops.find((op) => op.id === draft.op)?.title || "Widget";
+    draft.title?.trim() ||
+    named?.many ||
+    context.ops.find((op) => op.id === draft.op)?.title ||
+    "Widget";
   const id = widgetId(title, options.taken ?? new Set());
   const bound = withExtras(draft, draft.component);
 
@@ -266,10 +286,25 @@ export const buildFromDraft = (
   let drilldown: Record<string, unknown> | undefined;
   if (draft.drilldown) {
     const detail = (context.shapes[draft.drilldown.op]?.fields ?? []).map((field) => field.name);
-    // Skipping the field question means "show me everything", which is the
-    // right default for a record: a detail response is one thing, and hiding
-    // part of it is a decision somebody should make deliberately.
-    const names = draft.drilldown.fields.length > 0 ? draft.drilldown.fields : detail.slice(0, 40);
+    /*
+     * Skipping the field question means "show me the record" — which is not
+     * the same as showing everything the endpoint returns.
+     *
+     * A detail response carries fields that exist for the API rather than for
+     * a person: links back to itself, and the ids of other records. Handing
+     * the lot over is how a record comes to open on `VendorId: 4711` beside
+     * forty of its neighbours, with the three values somebody opened it for
+     * somewhere in the middle.
+     *
+     * Only the fallback is filtered. A field list somebody chose is theirs,
+     * and an endpoint made entirely of references still renders rather than
+     * opening blank.
+     */
+    const readable = detail.filter((name) => !isFieldNoise(name));
+    const names =
+      draft.drilldown.fields.length > 0
+        ? draft.drilldown.fields
+        : (readable.length > 0 ? readable : detail).slice(0, 40);
     if (names.length > 0) {
       /*
        * The collections shown beside the record. Each is fetched the way its
@@ -402,21 +437,32 @@ export const buildFromDraft = (
    * ordinary thing to want, and the derive costs one extra column nothing
    * renders.
    */
-  const facetField = deriveFacet({
-    facetField: context.ops.find((op) => op.id === draft.op)?.facet,
+  const facetNames = facetFields({
+    requested: draft.filters,
     fields,
     contract,
     aggregated: shape !== undefined && !isEmptyShape(shape),
   });
-  const facets = facetField ? [{ field: rename(facetField) }] : [];
-  if (facetField) {
-    why.push(`with a filter across the top by ${fieldLabel(facetField, labels)}`);
+  const facets = facetNames.map((name) => ({ field: rename(name) }));
+  if (facetNames.length > 0) {
+    why.push(
+      `with a filter across the top by ${facetNames
+        .map((name) => fieldLabel(name, labels))
+        .join(" and ")}`,
+    );
   }
 
   const shared = {
     id,
     title,
     component: draft.component,
+    /*
+     * The record type, where the draft was decided from one.
+     *
+     * What makes a row open the *shared* page for that record type instead of
+     * a private copy of a record view frozen into this widget.
+     */
+    ...(draft.entity ? { entity: draft.entity } : {}),
     roles: boundRoles,
     format,
     highlights,
@@ -679,6 +725,30 @@ export const buildFromDraft = (
     const leftAs = draft.op;
     const rightAs = draft.join.op;
 
+    /*
+     * A nested key, flattened on the side it belongs to and before the match.
+     *
+     * `joinRows` reads one key off each row, and a row's keys are flat: a task
+     * carries a `Property` object, so `Property.Id` is a path into it rather
+     * than a column, and matching on the name found nothing on any row. The
+     * join then kept every row with the far columns empty — a widget that had
+     * fetched a second endpoint, paid for it, and shows nothing from it.
+     *
+     * The widget's own `deriveStep` cannot serve: it runs over the joined
+     * rows, which is after the moment the key is needed. So each side derives
+     * its own, which is the same rule the union sides already follow.
+     */
+    const key = (name: string): { column: string; derive: PipelineStep[] } => {
+      if (!name.includes(".")) return { column: name, derive: [] };
+      const { bound, derive } = flatten([name]);
+      const column = bound[0];
+      return column
+        ? { column, derive: [{ op: "derive", fields: derive } as PipelineStep] }
+        : { column: name, derive: [] };
+    };
+    const leftKey = key(draft.join.leftField);
+    const rightKey = key(draft.join.rightField);
+
     spec = {
       ...shared,
       sources: [
@@ -687,19 +757,22 @@ export const buildFromDraft = (
           connection: draft.connection,
           op: draft.op,
           params,
-          pipeline: [{ op: "extract", path: draft.rowsPath || "$" }],
+          pipeline: [{ op: "extract", path: draft.rowsPath || "$" }, ...leftKey.derive],
         },
         {
           as: rightAs,
           connection: draft.connection,
           op: draft.join.op,
           params: {},
-          pipeline: [{ op: "extract", path: draft.join.rowsPath || "$" }],
+          pipeline: [
+            { op: "extract", path: draft.join.rowsPath || "$" },
+            ...rightKey.derive,
+          ],
           ...(draft.join.needsFanOut && draft.join.fanOutParam
             ? {
                 fanOut: {
                   from: leftAs,
-                  field: draft.join.leftField,
+                  field: leftKey.column,
                   as: draft.join.fanOutParam,
                   maxRows: draft.join.maxRows,
                 },
@@ -711,7 +784,7 @@ export const buildFromDraft = (
         op: "join",
         left: leftAs,
         right: rightAs,
-        on: { left: draft.join.leftField, right: draft.join.rightField },
+        on: { left: leftKey.column, right: rightKey.column },
         kind: draft.join.kind,
       },
       // The rows arrive already extracted by each source, so the widget's own

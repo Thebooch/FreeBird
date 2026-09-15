@@ -17,6 +17,19 @@ export interface DetailPane {
   /** Present when rows in this pane open something of their own. */
   readonly opens?: WidgetSpec;
   /**
+   * Present when a row *is* a record with a page of its own.
+   *
+   * The entity-page counterpart to `opens`, and deliberately not the same
+   * mechanism: `opens` renders another pane inside this view, which is how a
+   * drill-down shows a child. A record with its own address is navigated to
+   * instead, so the reader can link to it, and so following a chain of records
+   * has no depth limit.
+   *
+   * `column` is the identity as the pipeline produced it, which is not the
+   * field path when the identity nests.
+   */
+  readonly opensEntity?: { readonly entity: string; readonly column: string };
+  /**
    * Whether this pane wants to be a tab where there is room for tabs.
    *
    * The record pane is never a tab — it is the thing the tabs belong to.
@@ -24,6 +37,20 @@ export interface DetailPane {
   readonly tab?: boolean;
   /** Field sections, on the record pane only. */
   readonly groups?: readonly FieldGroup[];
+  /**
+   * What the record type's own dictionary calls each column, and what it says.
+   *
+   * Keyed by column name rather than by field path, because that is what a
+   * component sees once a derive step has flattened anything nested.
+   *
+   * Stamped over the API-wide lexicon deliberately. That lexicon holds one
+   * entry per bare field name for a whole API, so a task's `Title` and a
+   * file's `Title` share it and one of them is always wrong; a record type's
+   * dictionary knows which record it is describing.
+   */
+  readonly fields?: Readonly<
+    Record<string, { readonly label?: string; readonly description?: string }>
+  >;
 }
 
 /**
@@ -130,6 +157,10 @@ export const headerPane = (panes: readonly DetailPane[]): DetailPane | undefined
 export const recordPane = (panes: readonly DetailPane[]): DetailPane | undefined =>
   panes.find((pane) => pane.id === "record");
 
+/** Numbers read off the record's collections, shown above it. */
+export const statPanes = (panes: readonly DetailPane[]): DetailPane[] =>
+  panes.filter((pane) => pane.id.startsWith("stat__"));
+
 /**
  * The collections belonging to the record.
  *
@@ -147,7 +178,9 @@ export const relatedPanes = (
   panes: readonly DetailPane[],
   wide: boolean,
 ): { tabs: DetailPane[]; sections: DetailPane[] } => {
-  const rest = panes.filter((pane) => pane.id !== "record" && pane.id !== "header");
+  const rest = panes.filter(
+    (pane) => pane.id !== "record" && pane.id !== "header" && !pane.id.startsWith("stat__"),
+  );
   const wanted = rest.filter((pane) => pane.tab === true);
   if (!wide && wanted.length < 2) return { tabs: [], sections: rest };
   return {

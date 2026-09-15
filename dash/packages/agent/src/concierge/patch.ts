@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { coercionSchema, formatSchema, widgetShapeSchema } from "@freebirdai/dash-spec";
+import {
+  FACET_MAX_PER_WIDGET,
+  coercionSchema,
+  formatSchema,
+  widgetShapeSchema,
+} from "@freebirdai/dash-spec";
 import { choiceDraftSchema } from "./draft.js";
 
 const partPatchSchema = z
@@ -47,6 +52,8 @@ const partPatchSchema = z
     drilldown: z.string().max(120).optional(),
     drilldownFields: z.array(z.string().max(200)).max(40).optional(),
     extras: z.array(z.string().max(200)).max(40).optional(),
+    /** Fields the reader can filter the finished widget by. */
+    filters: z.array(z.string().max(200)).max(FACET_MAX_PER_WIDGET).optional(),
     highlights: z.array(z.string().max(120)).max(8).optional(),
     title: z.string().max(120).optional(),
     /*

@@ -2,7 +2,8 @@ import { z } from "zod";
 import { componentIdSchema, contractFor } from "./contracts.js";
 import { dashboardParamsSchema } from "./params.js";
 import { facetsSchema } from "./facet.js";
-import { highlightSchema, pipelineSchema } from "./pipeline.js";
+import { recordOverrideSchema } from "./entity.js";
+import { fieldNameSchema, highlightSchema, pipelineSchema } from "./pipeline.js";
 import { presentationSchema } from "./presentation.js";
 import { formatSchema } from "./semantics.js";
 
@@ -148,6 +149,30 @@ export const widgetSchema = z
   component: componentIdSchema,
   /** The single-endpoint form. Mutually exclusive with `sources`. */
   source: widgetSourceSchema.optional(),
+  /**
+   * The record type these rows are, when they are records of one.
+   *
+   * What makes a widget relational rather than a table of values. Naming the
+   * entity is what lets a cell holding another record's id render that
+   * record's *name* and open its page, and lets a row click open the shared
+   * page for this type — none of which the widget has to describe itself,
+   * because all of it was worked out once for the API.
+   *
+   * Absent is ordinary and always will be: a chart's marks are aggregates
+   * rather than records, and a widget built before entities existed carries
+   * no entity and renders exactly as it did.
+   */
+  entity: idSchema.optional(),
+  /**
+   * This widget's own changes to the record page its rows open.
+   *
+   * Only what differs from the entity's shared page — an extra fact, a
+   * different section order. A widget that stores a whole copy of a record
+   * layout freezes it as it was the day it was written, which is what
+   * per-widget drill-downs did and why every improvement to a record view had
+   * to be made again for every widget that opened one.
+   */
+  record: recordOverrideSchema.optional(),
   pipeline: pipelineSchema.default([]),
   /** role → column name, or a list of column names for multi roles. */
   roles: z.record(z.string(), z.union([z.string(), z.array(z.string())])).default({}),
@@ -203,6 +228,34 @@ export const widgetSchema = z
    * nothing else. See `validateFacets`, which only ever warns.
    */
   facets: facetsSchema,
+  /**
+   * Columns read *through* a reference — a task's vendor's phone number.
+   *
+   * The value lives on a different record, so it cannot come out of this
+   * endpoint however the pipeline is written. It is filled in at render time
+   * from the record the reference points at, the same way a reference cell
+   * gets the name it shows — which is why the far record is fetched once and
+   * shared between the two rather than twice.
+   *
+   * The column itself is produced by the pipeline as an empty one, so a role
+   * may bind to it and the binding check passes. Until the far record lands it
+   * reads as blank, which is the same honest "not yet" a reference name has.
+   */
+  linked: z
+    .array(
+      z.object({
+        /** The column on these rows holding the other record's identity. */
+        through: fieldNameSchema,
+        /** The field to read on that record, as the API spells it. */
+        field: z.string().min(1).max(200),
+        /** The column this produces. */
+        as: fieldNameSchema,
+        /** What to call it on screen. */
+        label: z.string().min(1).max(60).optional(),
+      }),
+    )
+    .max(4)
+    .default([]),
   /**
    * Two or more endpoints combined into one dataset.
    *

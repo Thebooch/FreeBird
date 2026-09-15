@@ -28,34 +28,83 @@ import type { OpReader } from "./types.js";
  * exactly the invisible cost this codebase refuses everywhere else.
  */
 
+/** A record opened from a widget's row, which is what a drill-down does. */
 export interface OpenRecord {
+  readonly kind: "record";
   readonly widgetId: string;
   readonly recordId: string;
 }
 
 /**
+ * A record opened by what it *is*, from its own page.
+ *
+ * No widget is involved: the address names the API, the record type and the
+ * id, which is what makes the same vendor the same page however somebody
+ * reached it. So it cannot be resolved through a widget's drill-down, and goes
+ * through the record type's own detail endpoint instead.
+ */
+export interface OpenEntity {
+  readonly kind: "entity";
+  readonly connectionId: string;
+  readonly entityId: string;
+  readonly recordId: string;
+}
+
+export type OpenView = OpenRecord | OpenEntity;
+
+/**
  * Parse the view the client reported.
  *
- * `board`, or `record:<widgetId>:<recordId>`. Anything unrecognised is treated
+ * `board`, `record:<widgetId>:<recordId>`, or
+ * `entity:<connection>:<record type>:<id>`. Anything unrecognised is treated
  * as the board rather than an error: a newer client, a hand-edited header or a
  * stale tab should cost the conversation nothing more than this extra context.
+ *
+ * The identifier is joined back from whatever remains, because an id may
+ * legitimately contain the delimiter — `urn:thing:7` is one id, not three.
  */
-export const parseView = (header: unknown): OpenRecord | null => {
+export const parseView = (header: unknown): OpenView | null => {
   if (typeof header !== "string") return null;
   const parts = header.split(":");
-  if (parts[0] !== "record" || parts.length < 3) return null;
   try {
-    const widgetId = decodeURIComponent(parts[1] ?? "");
-    const recordId = decodeURIComponent(parts.slice(2).join(":"));
-    if (!widgetId || !recordId) return null;
-    return { widgetId, recordId };
+    if (parts[0] === "record" && parts.length >= 3) {
+      const widgetId = decodeURIComponent(parts[1] ?? "");
+      const recordId = decodeURIComponent(parts.slice(2).join(":"));
+      if (!widgetId || !recordId) return null;
+      return { kind: "record", widgetId, recordId };
+    }
+    if (parts[0] === "entity" && parts.length >= 4) {
+      const connectionId = decodeURIComponent(parts[1] ?? "");
+      const entityId = decodeURIComponent(parts[2] ?? "");
+      const recordId = decodeURIComponent(parts.slice(3).join(":"));
+      if (!connectionId || !entityId || !recordId) return null;
+      return { kind: "entity", connectionId, entityId, recordId };
+    }
+    return null;
   } catch {
     return null;
   }
 };
 
 export interface OnScreenInput {
-  readonly open: OpenRecord;
+  readonly open: OpenView;
+  /**
+   * Where one of a record type's records is fetched from.
+   *
+   * Supplied by the caller, which holds the catalog and the connection — this
+   * module deliberately holds neither. Absent means a record opened on its own
+   * page cannot be resolved, which is where every deployment was before those
+   * pages existed.
+   */
+  readonly entityDetail?: (
+    connectionId: string,
+    entityId: string,
+  ) => {
+    readonly op: string;
+    readonly idParam: string;
+    readonly idField: string | null;
+    readonly title: string;
+  } | null;
   readonly handles: readonly WidgetHandle[];
   readonly context: ConciergeContext;
   readonly resolved: ResolvedParams;
@@ -76,6 +125,60 @@ export interface OnScreenInput {
 export const focusFromScreen = async (
   input: OnScreenInput,
 ): Promise<Focus | null> => {
+  const open = input.open;
+
+  /*
+   * A record on its own page has no widget behind it.
+   *
+   * The address names the API, the record type and the id, so the record is
+   * read from the record type's own detail endpoint — which is the very
+   * request the page made a moment ago, and therefore the one already in the
+   * cache. Looking for a widget here would find nothing, because none was
+   * involved in opening it.
+   */
+  if (open.kind === "entity") {
+    const found = input.entityDetail?.(open.connectionId, open.entityId);
+    if (!found) return null;
+
+    const opened = await readRecords({
+      binding: {
+        verb: "read",
+        id: open.entityId,
+        connection: open.connectionId,
+        connectionTitle: open.connectionId,
+        resource: found.title,
+        title: found.title,
+        describes: "",
+        op: found.op,
+        idParam: found.idParam,
+        ...(found.idField ? { idField: found.idField } : {}),
+      },
+      ids: [open.recordId],
+      deps: {
+        read: input.read,
+        resolved: input.resolved,
+        rowsOf: (body) => input.rowsOf(body),
+        rowsPathFor: () => "$",
+      },
+      // Free or not at all: the page drew this record a moment ago.
+      cacheOnly: true,
+    });
+
+    const record = opened.records[0];
+    if (!record) return null;
+
+    return {
+      question: "the record they have open",
+      source: open.entityId,
+      sourceTitle: found.title,
+      connection: open.connectionId,
+      op: found.op,
+      idField: found.idField,
+      records: [record],
+      savedAt: new Date(input.now()).toISOString(),
+    };
+  }
+
   /*
    * The DOM carries the widget's own id; the registry addresses widgets by a
    * handle that is only qualified when two tabs share an id. Match on the
@@ -83,8 +186,8 @@ export const focusFromScreen = async (
    */
   const entry =
     input.handles.find(
-      (candidate) => candidate.widgetId === input.open.widgetId && candidate.current,
-    ) ?? input.handles.find((candidate) => candidate.widgetId === input.open.widgetId);
+      (candidate) => candidate.widgetId === open.widgetId && candidate.current,
+    ) ?? input.handles.find((candidate) => candidate.widgetId === open.widgetId);
   if (!entry) return null;
 
   const sources = entry.widget.sources.length > 0 ? entry.widget.sources : [];
@@ -142,7 +245,7 @@ export const focusFromScreen = async (
   if (binding) {
     const opened = await readRecords({
       binding,
-      ids: [input.open.recordId],
+      ids: [open.recordId],
       deps: {
         read: input.read,
         resolved: input.resolved,
@@ -189,7 +292,7 @@ export const focusFromScreen = async (
   if (!evidence) return null;
 
   const record = evidence.rows.find(
-    (row) => String(row[idField] ?? "") === input.open.recordId,
+    (row) => String(row[idField] ?? "") === open.recordId,
   );
   if (!record) return null;
 
@@ -258,21 +361,32 @@ export const describeFilters = (
 /** One line for the prompt, so the assistant can talk about what is on screen. */
 export const describeScreen = (input: {
   readonly tab: string;
-  readonly open: OpenRecord | null;
+  readonly open: OpenView | null;
   readonly record: Focus | null;
 }): string => {
   if (!input.open) {
     return `ON SCREEN — the "${input.tab}" tab, showing its widgets.`;
   }
   if (input.record) {
+    /*
+     * A record on its own page is named by *what it is*; one opened from a
+     * widget is named by the widget it came from. Saying "from a widget" about
+     * a page no widget opened is a small lie, and small lies are what make an
+     * assistant sound like it is guessing.
+     */
+    const opened =
+      input.open.kind === "entity"
+        ? `one ${input.record.sourceTitle.toLowerCase()} open`
+        : `one record open from "${input.record.sourceTitle}"`;
     return (
-      `ON SCREEN — they have one record open from "${input.record.sourceTitle}" on the ` +
-      `"${input.tab}" tab. It is in hand, so "this", "it" and "that one" mean that record ` +
-      "and questions about it can be answered without searching."
+      `ON SCREEN — they have ${opened} on the "${input.tab}" tab. It is in hand, so ` +
+      `"this", "it" and "that one" mean that record and questions about it can be ` +
+      "answered without searching."
     );
   }
+  const origin = input.open.kind === "entity" ? "its own page" : "a widget";
   return (
-    `ON SCREEN — they have a record open (${input.open.recordId}) from a widget on the ` +
+    `ON SCREEN — they have a record open (${input.open.recordId}) from ${origin} on the ` +
     `"${input.tab}" tab, but its rows are not loaded here, so its fields are not in hand. ` +
     "Read it rather than guessing at what it says."
   );

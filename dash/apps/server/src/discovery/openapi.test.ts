@@ -1025,3 +1025,108 @@ describe("a genuine union of several shapes", () => {
     expect(fields.map((field) => field.name)).not.toContain("source.iban");
   });
 });
+
+/**
+ * One record is not an envelope, whatever it happens to contain.
+ *
+ * The rule that reads "an object with exactly one array property" as a
+ * collection is right for a collection and catastrophic for a by-id endpoint —
+ * and one record routinely contains exactly one array: a supplier with its
+ * phone numbers, a member with theirs. Read as an envelope, the phone numbers
+ * became the rows. The field list for the whole record was then `Number` and
+ * `Type`, the record page bound fields no row carried and refused to draw at
+ * all, and the runtime's extract step would have served a supplier's phone
+ * numbers in place of the supplier. Two of a real API's 108 record types.
+ */
+describe("a by-id response is one record", () => {
+  const withRecord = () => ({
+    openapi: "3.0.0",
+    info: { title: "Contacts API", version: "1" },
+    servers: [{ url: "https://api.example.com" }],
+    components: {
+      schemas: {
+        Phone: {
+          type: "object",
+          properties: { Number: { type: "string" }, Type: { type: "string" } },
+        },
+        Supplier: {
+          type: "object",
+          properties: {
+            Id: { type: "number" },
+            CompanyName: { type: "string" },
+            IsActive: { type: "boolean" },
+            // The one array that made the whole record look like an envelope.
+            PhoneNumbers: { type: "array", items: { $ref: "#/components/schemas/Phone" } },
+          },
+        },
+      },
+    },
+    paths: {
+      "/v1/suppliers/{supplierId}": {
+        get: {
+          summary: "Retrieve a supplier",
+          parameters: [
+            { name: "supplierId", in: "path", required: true, schema: { type: "string" } },
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": { schema: { $ref: "#/components/schemas/Supplier" } },
+              },
+            },
+          },
+        },
+      },
+      "/v1/suppliers/{supplierId}/notes": {
+        get: {
+          summary: "Retrieve a supplier's notes",
+          parameters: [
+            { name: "supplierId", in: "path", required: true, schema: { type: "string" } },
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      data: { type: "array", items: { type: "object", properties: {} } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  const opsOf = () => parseOpenApi(withRecord(), SPEC_URL)!.entry.ops;
+
+  it("takes the record itself as the row, not the array inside it", () => {
+    const op = opsOf().find((one) => one.path.endsWith("{{param.supplierId}}"));
+    expect(op?.rowsPath).toBe("$");
+  });
+
+  it("reads the record's own fields, not the array's", () => {
+    const op = opsOf().find((one) => one.path.endsWith("{{param.supplierId}}"));
+    const names = (op?.fields ?? []).map((field) => field.name);
+    expect(names).toContain("CompanyName");
+    expect(names).toContain("IsActive");
+    // The shape that was being read for the whole record.
+    expect(names).not.toContain("Number");
+    expect(names).not.toContain("Type");
+  });
+
+  it("still reads a collection that hangs off a record as a collection", () => {
+    /*
+     * The path has a parameter in it but does not end in one — these are the
+     * rows belonging to a record, and reading them as a single record would
+     * break the far commoner case to fix the rarer one.
+     */
+    const op = opsOf().find((one) => one.path.endsWith("/notes"));
+    expect(op?.rowsPath).toBe("$.data");
+    expect(op?.archetype).toBe("list");
+  });
+});

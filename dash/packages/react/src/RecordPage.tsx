@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { RecordView } from "./RecordView.jsx";
 import { useDashboard } from "./context.jsx";
 import { type DetailPane, type TrailEntry, detailPanes, popTrail, truncateTrail } from "./detail.js";
+import type { OpenReference } from "./entityDetail.js";
 
 /**
  * A record, full width, with a URL.
@@ -17,6 +18,7 @@ export const RecordPage = ({
   widgetId,
   row,
   onBack,
+  onOpenReference,
 }: {
   readonly widgetId: string;
   /**
@@ -28,6 +30,14 @@ export const RecordPage = ({
    */
   readonly row: Row;
   readonly onBack: () => void;
+  /**
+   * Open the record a cell names.
+   *
+   * Forwarded for the same reason the grid forwards it: a vendor's name that
+   * is a link on the board and plain text here would be the only inert one in
+   * the product, and the reader has no way to know which they are looking at.
+   */
+  readonly onOpenReference?: OpenReference;
 }): JSX.Element => {
   const { dashboard } = useDashboard();
   const widget = dashboard.widgets.find((entry) => entry.id === widgetId);
@@ -119,6 +129,7 @@ export const RecordPage = ({
           row={current.row as Row}
           wide
           onOpenChild={open}
+          {...(onOpenReference ? { onOpenReference } : {})}
         />
       )}
     </div>

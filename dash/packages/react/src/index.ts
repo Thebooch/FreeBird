@@ -29,10 +29,36 @@ export { QueryClient, queryKey } from "./store.js";
 export type { QueryEntry, QueryParams, QueryStatus } from "./store.js";
 
 export { DASH_REACT_STYLES } from "./styles.js";
+export { derivedSources, referenceColumns } from "./references.js";
+export {
+  MAX_LOOKUPS,
+  nameOfRecord,
+  referenceLookups,
+  referenceNames,
+  valueAtPath,
+  withLinkedValues,
+} from "./recordIndex.js";
+export type {
+  LinkedField,
+  LookupInput,
+  ReferenceLookup,
+  ReferenceNames,
+} from "./recordIndex.js";
 export { labelColumns, useWidgetData } from "./useWidgetData.js";
 export type { ApprovalVerdict, WidgetData, WidgetState } from "./useWidgetData.js";
 export { WidgetDetail } from "./WidgetDetail.js";
 export { RecordView } from "./RecordView.jsx";
 export { RecordPage, missingTokens } from "./RecordPage.jsx";
-export { detailPanes, headerPane, popTrail, recordPane, relatedPanes, truncateTrail } from "./detail.js";
+export { EntityRecordPage } from "./EntityRecordPage.jsx";
+export {
+  detailPanes,
+  headerPane,
+  popTrail,
+  recordPane,
+  relatedPanes,
+  statPanes,
+  truncateTrail,
+} from "./detail.js";
 export type { DetailPane, TrailEntry } from "./detail.js";
+export { canEmbedInExpression, entityPanes } from "./entityDetail.js";
+export type { EntityPaneInput, OpenReference } from "./entityDetail.js";

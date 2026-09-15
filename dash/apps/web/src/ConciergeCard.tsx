@@ -161,6 +161,8 @@ const patchFor = (stepId: string, values: string[]): ConciergePatch => {
       return { drilldownFields: values };
     case "extras":
       return { extras: values };
+    case "filters":
+      return { filters: values };
     case "highlights":
       return { highlights: values };
     case "title":
@@ -185,6 +187,7 @@ const CONTROL_LABELS: Readonly<Record<string, string>> = {
   drilldown: "On click",
   drilldownFields: "Record shows",
   extras: "Also showing",
+  filters: "Filter by",
   highlights: "Marks",
   title: "Name",
 };

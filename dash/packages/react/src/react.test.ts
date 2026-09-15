@@ -552,6 +552,59 @@ describe("labelColumns", () => {
     },
   };
 
+  /**
+   * The defect that made the lexicon worth replacing.
+   *
+   * One entry per bare field name for a whole API means `Title` has a single
+   * meaning shared by every record type that has one — so a task's title and a
+   * file's title get the same word, and on a real API at least one of them is
+   * wrong. A record type answers only for its own fields, so both are right.
+   */
+  const linksFor = (entity: string, labels: Record<string, string>) => ({
+    api: [
+      {
+        entity,
+        resource: entity,
+        name: { one: entity, many: `${entity}s` },
+        title: [],
+        ops: ["detail"],
+        references: [],
+        labels,
+      },
+    ],
+  });
+
+  it("lets each record type name its own field", () => {
+    const shared = { api: { Title: "File title" } };
+
+    const [onATask] = labelColumns(
+      columns("Title"),
+      widget({ entity: "task" }),
+      shared,
+      linksFor("task", { Title: "Summary" }),
+    );
+    const [onAFile] = labelColumns(columns("Title"), widget({ entity: "file" }), shared, {
+      api: [],
+    });
+
+    expect(onATask?.label).toBe("Summary");
+    // Nothing describes a file, so the API-wide lexicon still answers for it.
+    expect(onAFile?.label).toBe("File title");
+  });
+
+  it("reaches a nested field through the widget's own derive step", () => {
+    const [city] = labelColumns(
+      columns("Address_City"),
+      widget({
+        entity: "task",
+        pipeline: [{ op: "derive", fields: { Address_City: "Address.City" } }],
+      }),
+      undefined,
+      linksFor("task", { "Address.City": "Town" }),
+    );
+    expect(city?.label).toBe("Town");
+  });
+
   it("labels a plain column from the lexicon", () => {
     const [active] = labelColumns(columns("IsActive"), widget(), lexicon);
     expect(active?.label).toBe("Active");

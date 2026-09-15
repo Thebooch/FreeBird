@@ -31,6 +31,7 @@ import { WidgetDetail } from "./WidgetDetail.jsx";
 import { WidgetErrorBoundary } from "./WidgetErrorBoundary.jsx";
 import { WidgetInspector } from "./WidgetInspector.jsx";
 import { useDashboard } from "./context.jsx";
+import type { OpenReference } from "./entityDetail.js";
 import { chromePresentationFor, presentationFor, presentationStyle } from "./presentation.js";
 import type { WidgetData } from "./useWidgetData.js";
 import { useWidgetData } from "./useWidgetData.js";
@@ -59,6 +60,7 @@ export const WidgetShell = ({
   onRemove,
   onCustomise,
   onOpenPage,
+  onOpenReference,
 }: {
   widget: WidgetSpec;
   hero?: boolean;
@@ -68,8 +70,31 @@ export const WidgetShell = ({
   onCustomise?: (widgetId: string) => void;
   /** Absent when the host cannot route to a record page. */
   onOpenPage?: (widgetId: string, row: Row) => void;
+  /**
+   * Open the record a *cell* names, rather than the row's own.
+   *
+   * Absent when the host has nowhere to send it, and then a reference renders
+   * as a name in plain text rather than as a control — the same contract every
+   * other affordance in this file follows.
+   */
+  onOpenReference?: OpenReference;
 }): JSX.Element => {
   const data = useWidgetData(widget);
+  /*
+   * A cell names a record type and an id; *which API* those belong to is a
+   * property of this widget's source, so it is injected here rather than
+   * carried down to every component that can draw a reference.
+   *
+   * The first source deliberately, because that is the one `referenceColumns`
+   * stamped these columns from — reading it any other way would let the mark
+   * and the link disagree about which API they mean.
+   */
+  const connection = widget.source?.connection ?? widget.sources[0]?.connection;
+  const openReference =
+    onOpenReference && connection
+      ? (target: { entity: string; id: string | number }) =>
+          onOpenReference({ ...target, connection })
+      : undefined;
   const [inspecting, setInspecting] = useState(false);
   /** The row a drill-down was opened from. Null when the sheet is closed. */
   const [openRow, setOpenRow] = useState<Row | null>(null);
@@ -294,6 +319,7 @@ export const WidgetShell = ({
             now={now}
             presentation={look}
             {...(widget.drilldown ? { onSelectRow: setOpenRow } : {})}
+            {...(openReference ? { onOpenReference: openReference } : {})}
           />
         </WidgetErrorBoundary>
         {openRow && widget.drilldown && (
@@ -302,6 +328,7 @@ export const WidgetShell = ({
             row={openRow}
             onClose={() => setOpenRow(null)}
             {...(onOpenPage ? { onOpenPage } : {})}
+            {...(onOpenReference ? { onOpenReference } : {})}
           />
         )}
       </div>
@@ -419,6 +446,7 @@ const WidgetBody = ({
   now,
   presentation,
   onSelectRow,
+  onOpenReference,
 }: {
   data: WidgetData;
   /**
@@ -437,6 +465,7 @@ const WidgetBody = ({
   now: number;
   presentation?: Presentation;
   onSelectRow?: (row: Row) => void;
+  onOpenReference?: (target: { entity: string; id: string | number }) => void;
 }): JSX.Element => {
   switch (data.state) {
     case "loading":
@@ -519,9 +548,9 @@ const WidgetBody = ({
         return <Message>No component named “{data.widget.component}” is available here.</Message>;
       }
       const Component = registered.render;
-      // Highlights are read off `data` rather than threaded down as a prop:
-      // this is the only place that renders the component, and one fewer hop
-      // is one fewer place to forget.
+      // Highlights and resolved reference names are read off `data` rather
+      // than threaded down as props: this is the only place that renders the
+      // component, and one fewer hop is one fewer place to forget.
       return (
         <Component
           rows={rows}
@@ -534,6 +563,10 @@ const WidgetBody = ({
           timeZone={timeZone}
           {...(hero ? { hero } : {})}
           {...(onSelectRow ? { onSelectRow } : {})}
+          {...(onOpenReference ? { onOpenReference } : {})}
+          {...(Object.keys(data.referenceNames).length > 0
+            ? { referenceNames: data.referenceNames }
+            : {})}
           {...(highlights ? { highlights } : {})}
           {...(presentation ? { presentation } : {})}
         />

@@ -3,6 +3,7 @@ import { Tabs, useMeasure } from "@freebirdai/dash-components";
 import { useState } from "react";
 import { WidgetErrorBoundary } from "./WidgetErrorBoundary.jsx";
 import { WidgetShell } from "./WidgetShell.jsx";
+import type { OpenReference } from "./entityDetail.js";
 
 /**
  * Several widgets drawn inside one frame.
@@ -82,6 +83,14 @@ export interface WidgetGroupProps {
   readonly onRemoveWidget?: (widgetId: string) => void;
   readonly onCustomiseWidget?: (widgetId: string) => void;
   readonly onOpenRecordPage?: (widgetId: string, row: Record<string, unknown>) => void;
+  /**
+   * Open the record a cell names, forwarded to every member.
+   *
+   * A grouped widget is an ordinary one in an ordinary shell, so it gets this
+   * for the same reason it gets the others — without the forward, references
+   * inside a group would be the only inert ones on the board.
+   */
+  readonly onOpenReference?: OpenReference;
 }
 
 export const WidgetGroup = ({
@@ -90,6 +99,7 @@ export const WidgetGroup = ({
   onRemoveWidget,
   onCustomiseWidget,
   onOpenRecordPage,
+  onOpenReference,
 }: WidgetGroupProps): JSX.Element => {
   const [frameRef, size] = useMeasure<HTMLDivElement>();
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -111,6 +121,7 @@ export const WidgetGroup = ({
         {...(onRemoveWidget ? { onRemove: onRemoveWidget } : {})}
         {...(onCustomiseWidget ? { onCustomise: onCustomiseWidget } : {})}
         {...(onOpenRecordPage ? { onOpenPage: onOpenRecordPage } : {})}
+        {...(onOpenReference ? { onOpenReference } : {})}
       />
     </WidgetErrorBoundary>
   );

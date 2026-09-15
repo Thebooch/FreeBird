@@ -1,11 +1,10 @@
 import type { FieldInfo } from "@freebirdai/dash-agent";
-import { connectionSchema, isStale } from "@freebirdai/dash-spec";
+import { connectionSchema, deriveResourceModel, isStale } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import {
   type SampleFn,
   PACE_MAX_GAP_MS,
   analyseConnection,
-  deriveResourcesFromOps,
   estimateEnumeration,
   findFilterParam,
   findForeignKeys,
@@ -76,8 +75,13 @@ const connection = connectionSchema.parse({
   validateOpId: "gadgets",
 });
 
-describe("deriveResourcesFromOps", () => {
-  const resources = deriveResourcesFromOps(connection.ops);
+/*
+ * These used to go through a one-line wrapper in `capabilities.ts` that
+ * forwarded to exactly this. The wrapper is gone; the rules it was testing are
+ * the spec's, so the tests now ask the spec directly.
+ */
+describe("deriveResourceModel", () => {
+  const resources = deriveResourceModel(connection.ops);
 
   it("pairs a collection with its by-id endpoint", () => {
     expect(resources.map((resource) => resource.id).sort()).toEqual(["gadget", "order"]);
@@ -95,7 +99,7 @@ describe("deriveResourcesFromOps", () => {
   });
 
   it("finds nothing in a connection of unrelated endpoints", () => {
-    expect(deriveResourcesFromOps([connection.ops[5]!])).toEqual([]);
+    expect(deriveResourceModel([connection.ops[5]!])).toEqual([]);
   });
 
   it("disambiguates two collections that singularise to the same noun", () => {
@@ -109,7 +113,7 @@ describe("deriveResourcesFromOps", () => {
       ],
       validateOpId: "a",
     });
-    expect(deriveResourcesFromOps(collide.ops).map((resource) => resource.id)).toEqual([
+    expect(deriveResourceModel(collide.ops).map((resource) => resource.id)).toEqual([
       "box",
       "box-2",
     ]);

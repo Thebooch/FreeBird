@@ -223,6 +223,16 @@ const proposalFields = {
         "separate setting.",
     ),
   extras: z.array(z.string()).optional().describe("Extra field names to show alongside."),
+  filters: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Fields the reader can filter the finished widget by — a strip of values above the " +
+        'rows, which is what somebody means by "tasks I can filter by category". Use a ' +
+        "category, status or type field from that endpoint's FIELDS list, at most three. " +
+        "This shows the records themselves and does not group or count anything, so it is " +
+        "never a substitute for a chart and a chart is never a substitute for it.",
+    ),
   controls: z
     .array(z.string())
     .optional()
@@ -335,6 +345,7 @@ const patchFrom = (args: {
   groupBy?: string;
   roles?: Array<{ role: string; fields: string[] }>;
   extras?: string[];
+  filters?: string[];
   controls?: string[];
   highlights?: string[];
   drilldown?: string;
@@ -370,6 +381,7 @@ const patchFrom = (args: {
     ? { roles: Object.fromEntries(args.roles.map((entry) => [entry.role, entry.fields])) }
     : {}),
   ...(args.controls ? { controls: args.controls } : {}),
+  ...(args.filters ? { filters: args.filters } : {}),
   ...(args.drilldown ? { drilldown: args.drilldown } : {}),
   ...(args.extras ? { extras: args.extras } : {}),
   ...(args.highlights ? { highlights: args.highlights } : {}),

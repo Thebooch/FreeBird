@@ -1,10 +1,19 @@
 import { DASH_STYLES } from "@freebirdai/dash-components";
 import type { AdapterRegistry } from "@freebirdai/dash-adapters";
-import type { DashboardSpec, FieldLabels, LayoutCell } from "@freebirdai/dash-spec";
+import type {
+  DashboardSpec,
+  EntityLinkView,
+  EntityPageView,
+  FieldLabels,
+  LayoutCell,
+  RecordOverride,
+} from "@freebirdai/dash-spec";
 import { Button } from "@freebirdai/dash-components";
 import { type ReactNode, useEffect } from "react";
 import { DashboardGrid } from "./DashboardGrid.jsx";
+import { EntityRecordPage } from "./EntityRecordPage.jsx";
 import { RecordPage } from "./RecordPage.jsx";
+import type { OpenReference } from "./entityDetail.js";
 import { ParamBar } from "./ParamBar.jsx";
 import { DashboardProvider } from "./context.jsx";
 import type { PresentationSources } from "./presentation.js";
@@ -104,6 +113,14 @@ export interface DashboardProps {
    */
   readonly labels?: Readonly<Record<string, FieldLabels>>;
   /**
+   * Which of each connection's fields point at other records.
+   *
+   * From `GET /api/connections`, resolved out of the API's own map alongside
+   * the labels. Left out, no column is marked as a link and every value
+   * renders as the plain thing it is.
+   */
+  readonly entityLinks?: Readonly<Record<string, readonly EntityLinkView[]>>;
+  /**
    * Whether the board can be rearranged right now.
    *
    * Owned by the host because the toggle lives in the app's own nav, and
@@ -117,6 +134,14 @@ export interface DashboardProps {
   /** Open a record as a full page. Absent in an embed with no routing. */
   readonly onOpenRecordPage?: (widgetId: string, row: Record<string, unknown>) => void;
   /**
+   * Open the record a cell names, rather than the row's own.
+   *
+   * Absent when the host has nowhere to send it — and then a reference renders
+   * as a name in plain text rather than as a control, which is the honest
+   * state until there is a page to open.
+   */
+  readonly onOpenReference?: OpenReference;
+  /**
    * A record to show instead of the grid.
    *
    * Rendered inside the provider rather than beside it: the page needs the
@@ -127,6 +152,25 @@ export interface DashboardProps {
     readonly widgetId: string;
     readonly row: Record<string, unknown>;
     readonly onBack: () => void;
+  };
+  /**
+   * A record shown by what it *is*, rather than by which widget showed it.
+   *
+   * Rendered inside the provider for the same reason `record` is — it needs
+   * the query cache, so a record opened from a row already on screen costs no
+   * second request — but it belongs to the record type rather than to a
+   * widget, so every route into it arrives at the same page.
+   */
+  readonly entityRecord?: {
+    readonly page: EntityPageView;
+    readonly connection: string;
+    readonly recordId: string;
+    readonly onBack: () => void;
+    readonly backLabel?: string;
+    /** One widget's changes to this layout, when its row is what opened it. */
+    readonly override?: RecordOverride;
+    /** Offer to rearrange the page. Absent where nothing could store it. */
+    readonly onEditLayout?: () => void;
   };
 }
 
@@ -140,12 +184,15 @@ export const Dashboard = ({
   toolbar,
   presentation,
   labels,
+  entityLinks,
   editing,
   onEditingChange,
   onAutoArrange,
   onCustomiseWidget,
   onOpenRecordPage,
+  onOpenReference,
   record,
+  entityRecord,
 }: DashboardProps): JSX.Element => {
   // Exactly one hero figure per view: the first stat widget leads.
   const hero = dashboard.widgets.find((widget) => widget.component === "stat")?.id;
@@ -158,6 +205,7 @@ export const Dashboard = ({
       {...(locale ? { locale } : {})}
       {...(presentation ? { presentation } : {})}
       {...(labels ? { labels } : {})}
+      {...(entityLinks ? { entityLinks } : {})}
     >
       <DashStyleSheet />
       <div className="dash-root dash-page">
@@ -170,10 +218,23 @@ export const Dashboard = ({
          * to the collection you came from, and leaving it on screen over one
          * record implies it filters something here.
          */}
-        {record ? (
+        {entityRecord ? (
           <>
             {toolbar}
-            <RecordPage widgetId={record.widgetId} row={record.row} onBack={record.onBack} />
+            <EntityRecordPage
+              {...entityRecord}
+              {...(onOpenReference ? { onOpenReference } : {})}
+            />
+          </>
+        ) : record ? (
+          <>
+            {toolbar}
+            <RecordPage
+              widgetId={record.widgetId}
+              row={record.row}
+              onBack={record.onBack}
+              {...(onOpenReference ? { onOpenReference } : {})}
+            />
           </>
         ) : (
           <>
@@ -205,6 +266,7 @@ export const Dashboard = ({
           {...(onRemoveWidget ? { onRemoveWidget } : {})}
           {...(onCustomiseWidget ? { onCustomiseWidget } : {})}
           {...(onOpenRecordPage ? { onOpenRecordPage } : {})}
+          {...(onOpenReference ? { onOpenReference } : {})}
           {...(editing !== undefined ? { editing } : {})}
         />
           </>

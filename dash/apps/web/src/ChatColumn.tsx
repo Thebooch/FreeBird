@@ -495,6 +495,35 @@ const ChatBody = ({
         {chat.streaming && !chat.streamingText && <Thinking what={working} />}
 
         {/*
+         * A question with the answers already written down.
+         *
+         * The turn has genuinely ended — nothing is streaming — so this is the
+         * last thing in the log and typing still works if none of the options
+         * fit. Without it the assistant's question still arrives as text, but
+         * the choices it had in mind do not, which is most of the point of
+         * asking a structured question rather than a prose one.
+         */}
+        {chat.pendingQuestion && !chat.streaming && (
+          <div className="dash-chat__msg" data-role="assistant" data-testid="chat-question">
+            {chat.pendingQuestion.question}
+            <div className="dash-row" style={{ flexWrap: "wrap", marginTop: 8 }}>
+              {chat.pendingQuestion.options.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className="dash-control"
+                  title={option.description ?? undefined}
+                  onClick={() => void chat.answerQuestion([option.value])}
+                  data-testid={`chat-answer-${option.value}`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/*
          * The guided setup, when one is running. It renders itself away when
          * there is no draft, so no condition is needed here.
          */}

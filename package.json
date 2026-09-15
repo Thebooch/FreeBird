@@ -26,6 +26,8 @@
     "typecheck": "pnpm -r run typecheck",
     "test": "vitest run",
     "test:watch": "vitest",
+    "eval:entities": "pnpm --filter @freebirdai/dash-server eval:entities",
+    "eval:steps": "pnpm --filter @freebirdai/dash-server eval:steps",
     "eval:models": "pnpm --filter @freebirdai/dash-server eval:models",
     "lint": "eslint .",
     "format": "prettier --write .",

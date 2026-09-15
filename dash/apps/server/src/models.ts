@@ -227,6 +227,7 @@ export type LlmTask =
   | "widget"
   | "discover"
   | "map"
+  | "entity"
   | "record"
   | "label"
   | "chat"
@@ -272,6 +273,18 @@ export const TASKS: readonly TaskInfo[] = [
     label: "Mapping an API",
     tier: "capable",
     note: "Finds how an API's resources relate. Runs once per API.",
+  },
+  {
+    /*
+     * Describing what an API's records *are*, which is the hardest reading
+     * here and the one whose answer everybody downstream inherits. It runs
+     * once per API and is then shared, so a cheap wrong reading is not one
+     * person's mistake — it is everyone's, permanently.
+     */
+    id: "entity",
+    label: "Describing record types",
+    tier: "capable",
+    note: "Names an API's records and their fields, and works out which point at each other. Once per API.",
   },
   {
     id: "record",
