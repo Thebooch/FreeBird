@@ -14,9 +14,12 @@ import type {
   PersistedShape,
 } from "@freebirdai/dash-spec";
 import {
+  entityGraph,
+  entityById,
   fieldLexicon,
   getOp,
   isStale,
+  linkColumn,
   pathParamNames,
   relationGraph,
   requiredInputs,
@@ -270,6 +273,95 @@ const asJoinCandidates = (
       fetch: { mode: "filtered", param: peer.filterParam },
     }));
 
+/**
+ * The same links, read from the record types instead of the endpoint graph.
+ *
+ * Two models of how records relate have been running side by side: the
+ * endpoint-level `resource.relations`, written by the map pass, and the
+ * record-level references the describe pass writes onto the entities. Only the
+ * second one decides what a brief compiles to, and only the second one can be
+ * corrected — so where it exists, it is the one that should answer.
+ *
+ * These are pushed ahead of the endpoint-derived ones and the endpoint-derived
+ * duplicates are dropped, which is all "prefer the graph" has to mean: every
+ * caller either takes the first match or offers the list in order.
+ *
+ * `relationGraph` is not retired by this and must not be. It reads an API that
+ * nobody has paid a model to describe, which is exactly the keyless install —
+ * so it stays as what answers when there are no record types to ask.
+ */
+const asEntityJoins = (
+  map: CatalogEntry | undefined,
+  shapes: Readonly<Record<string, InferredShape>>,
+): JoinCandidate[] => {
+  const entities = map?.entities ?? [];
+  if (!map || entities.length === 0) return [];
+
+  const graph = entityGraph({
+    entities,
+    resources: map.resources,
+    ops: map.ops.map((op) => ({ id: op.id, path: op.path, params: op.params })),
+  });
+  const listOpOf = (entityId: string): string | undefined => {
+    const entity = entityById(entities, entityId);
+    const resource = entity ? map.resources.find((one) => one.id === entity.resource) : undefined;
+    return resource?.listOp;
+  };
+
+  const out: JoinCandidate[] = [];
+  for (const entity of entities) {
+    const fromOp = listOpOf(entity.id);
+    if (!fromOp) continue;
+    for (const reference of graph.referencesOf(entity.id)) {
+      const far = entityById(entities, reference.target);
+      const toOp = far ? listOpOf(far.id) : undefined;
+      const right = far?.identity?.field;
+      /*
+       * Both sides need rows that have been read from, or the join's columns
+       * cannot be named and the offer renders blank — the same last check the
+       * endpoint-derived candidates make, for the same reason.
+       */
+      if (!far || !toOp || !right || toOp === fromOp) continue;
+      if ((shapes[fromOp]?.fields.length ?? 0) === 0) continue;
+      if ((shapes[toOp]?.fields.length ?? 0) === 0) continue;
+
+      const field = entity.fields.find((one) => one.path === reference.field);
+      if (!field?.reference) continue;
+      out.push({
+        id: `${fromOp}:${reference.field}:${toOp}`,
+        fromOp,
+        toOp,
+        title: `${entity.name.many} → ${far.name.many}`,
+        leftField: linkColumn(field, field.reference),
+        rightField: right,
+        // Fetched whole and matched in memory. A parameter is only ever one
+        // the API declared, and a reference does not carry one.
+        fetch: { mode: "filtered" },
+      });
+    }
+  }
+  return out;
+};
+
+/**
+ * The record-level readings first, and the endpoint-level duplicates dropped.
+ *
+ * Two entries for the same pair of endpoints are the same relationship read
+ * twice, and offering both puts a choice in front of somebody that has no
+ * answer — the fields either match or they do not, and the record types are
+ * the half of it a person can correct.
+ */
+const preferEntityJoins = (
+  fromEntities: readonly JoinCandidate[],
+  fromRelations: readonly JoinCandidate[],
+): JoinCandidate[] => {
+  const pairs = new Set(fromEntities.map((join) => `${join.fromOp}:${join.toOp}`));
+  return [
+    ...fromEntities,
+    ...fromRelations.filter((join) => !pairs.has(`${join.fromOp}:${join.toOp}`)),
+  ];
+};
+
 const buildSingleContext = (input: ContextInput): ConciergeContext => {
   const connections: Array<{ id: string; title: string }> = [];
   const ops: Array<ConciergeContext["ops"][number]> = [];
@@ -432,7 +524,7 @@ const buildSingleContext = (input: ContextInput): ConciergeContext => {
        */
       applyDeclared(declaredShapes, shapes);
       const graph = graphFor(map, shapes);
-      joins.push(...asJoinCandidates(graph, shapes));
+      joins.push(...preferEntityJoins(asEntityJoins(map, shapes), asJoinCandidates(graph, shapes)));
       children.push(
         ...(graph?.children ?? []).map((link) =>
           asChildCollection(link, mappedOps.get(link.op)?.path),
@@ -513,7 +605,7 @@ const buildSingleContext = (input: ContextInput): ConciergeContext => {
 
     applyDeclared(declaredShapes, shapes);
     const graph = graphFor(map, shapes);
-    joins.push(...asJoinCandidates(graph, shapes));
+    joins.push(...preferEntityJoins(asEntityJoins(map, shapes), asJoinCandidates(graph, shapes)));
     children.push(
       ...(graph?.children ?? []).map((link) =>
         asChildCollection(link, mappedOps.get(link.op)?.path),

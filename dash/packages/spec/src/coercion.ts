@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { SemanticType } from "./semantics.js";
 
 /**
  * Coercions are the answer to "is `amount: 4200` forty-two dollars or
@@ -30,6 +31,70 @@ export const coercionSchema = z.enum([
 ]);
 
 export type Coercion = z.infer<typeof coercionSchema>;
+
+/**
+ * What a schema says a field's values *are*, in the shapes specs really use.
+ *
+ * Declared by the API rather than observed, so it travels with the map and
+ * with every record type derived from it. One spelling, because the mapping
+ * below turns it into behaviour and two enums would drift apart silently.
+ */
+export const fieldFormatSchema = z.enum([
+  "iso8601",
+  "unix_seconds",
+  "unix_millis",
+  "email",
+  "url",
+  "minor_units",
+]);
+
+export type FieldFormat = z.infer<typeof fieldFormatSchema>;
+
+/**
+ * The coercion a declared format justifies on its own — and the one it does not.
+ *
+ * Dates are safe to derive: "iso8601" means the same thing on every API there
+ * has ever been, and reading one as a date cannot be wrong in a way that
+ * changes a number.
+ *
+ * **`minor_units` is deliberately absent.** A spec calling a field minor units
+ * is a claim, not a measurement, and acting on it divides every value by a
+ * hundred — the single most damaging failure this product can produce, because
+ * the result renders beautifully. It is written onto the field only once
+ * something has confirmed it, which is what `EntityField.coercion` is for.
+ *
+ * `email` and `url` describe what a string *is*, not a conversion to perform.
+ */
+export const coercionForFormat = (format: FieldFormat | undefined): Coercion | null => {
+  if (format === "iso8601") return "iso->datetime";
+  if (format === "unix_seconds") return "unix_s->datetime";
+  if (format === "unix_millis") return "unix_ms->datetime";
+  return null;
+};
+
+/**
+ * What a coercion tells us about a column's meaning.
+ *
+ * This is why little has to be guessed at render time: the spec already said
+ * whether a number is money in cents or a Unix timestamp. Shared so the
+ * compiler that writes a coercion and the runtime that executes one cannot
+ * disagree about what it implies.
+ */
+export const COERCION_SEMANTICS: Partial<Record<Coercion, SemanticType>> = {
+  "unix_s->datetime": "timestamp",
+  "unix_ms->datetime": "timestamp",
+  "iso->datetime": "timestamp",
+  "auto->datetime": "timestamp",
+  "money:cents->major": "currency",
+  "money:major": "currency",
+  "percent:fraction->percent": "percent",
+  percent: "percent",
+  "->number": "number",
+  "->string": "text",
+  lower: "text",
+  upper: "text",
+  trim: "text",
+};
 
 export const COERCION_DESCRIPTIONS: Readonly<Record<Coercion, string>> = {
   "unix_s->datetime": "Unix seconds to a timestamp.",

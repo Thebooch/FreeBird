@@ -233,13 +233,6 @@ const viewActions = (
     requiresConfirmation: "none",
     handler: async () => ({ opened: "connections" }),
   },
-  {
-    id: "open_add_widget",
-    description: "Open the Add-a-widget panel so the user can build one from a connection.",
-    schema: z.object({}),
-    requiresConfirmation: "none",
-    handler: async () => ({ opened: "add-widget" }),
-  },
 ];
 
 /**

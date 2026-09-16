@@ -1,4 +1,9 @@
-import type { Arrangement, ConciergeContext, ConciergeDraft } from "@freebirdai/dash-agent";
+import type {
+  Arrangement,
+  ConciergeContext,
+  ConciergeDraft,
+  DraftPatch,
+} from "@freebirdai/dash-agent";
 import {
   EFFECT_STEPS,
   applyStepAcross,
@@ -10,6 +15,7 @@ import {
   readinessAcross,
   revise,
   skipStepAcross,
+  takeReading,
 } from "@freebirdai/dash-agent";
 import type { DashboardSpec } from "@freebirdai/dash-spec";
 import { commitSetup } from "../concierge/commit.js";
@@ -114,6 +120,23 @@ export interface ConciergeRouteDeps {
         notes: readonly string[];
         error?: string;
       }>)
+    | undefined;
+  /**
+   * Compile a brief into a patch, using the record types on disk.
+   *
+   * No model runs here — a brief is compiled, not written — but the record
+   * types it names live in the catalog, which is the one thing these routes
+   * deliberately do not reach into. So it arrives the way `getDashboard` does:
+   * supplied by whoever has it.
+   *
+   * Absent on a server with no described API, where nothing could have written
+   * an alternative in the first place.
+   */
+  readonly compileReading?:
+    | ((brief: NonNullable<ConciergeDraft["alternative"]>["brief"]) => {
+        patch: DraftPatch;
+        error?: string;
+      })
     | undefined;
 }
 
@@ -299,6 +322,48 @@ export const conciergeRoutes =
 
         await deps.drafts.put(id, outcome.draft);
         return { ...stateOf(outcome.draft, deps, id), notes: outcome.notes };
+      },
+    );
+
+    /*
+     * Take the other reading of the same request.
+     *
+     * Its own route for the reason the arrangement has one: this is not an
+     * adjustment to the widget on screen, it replaces what the widget is
+     * about — so it rebuilds from a brief rather than merging fields into
+     * bindings that belong to a different answer.
+     *
+     * No model runs. Both readings came out of the one call that read the
+     * request, which is what lets the question go unasked without the reading
+     * nobody took becoming unreachable.
+     */
+    app.post<{ Params: Params }>(
+      "/api/concierge/:dashboardId/reading",
+      async (request, reply) => {
+        const id = request.params.dashboardId;
+        const draft = await deps.drafts.get(id);
+        if (!draft) return reply.status(409).send({ error: "no setup is in progress" });
+
+        const offered = draft.alternative;
+        /*
+         * Refuses a stale click rather than reshaping into something that no
+         * longer makes sense — the same guard the arrangement route keeps, and
+         * for the same reason: the card can only show what it was given, and
+         * the draft may have moved on since.
+         */
+        if (!offered) {
+          return reply.status(409).send({ error: "there is no other reading to take" });
+        }
+        if (!deps.compileReading) {
+          return reply.status(409).send({ error: "this server cannot rebuild from a request" });
+        }
+
+        const compiled = deps.compileReading(offered.brief);
+        if (compiled.error) return reply.status(400).send({ error: compiled.error });
+
+        const result = takeReading(draft, { label: offered.label, patch: compiled.patch }, deps.context());
+        await deps.drafts.put(id, result.draft);
+        return { ...stateOf(result.draft, deps, id), rejected: result.rejected };
       },
     );
 

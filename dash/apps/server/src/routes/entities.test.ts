@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakeLlm } from "@freebirdai/dash-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { connectionSchema } from "@freebirdai/dash-spec";
 import { CatalogStore } from "../catalog.js";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
@@ -267,5 +268,126 @@ describe("POST /api/catalog/:id/entities", () => {
     const after = (await app.inject({ method: "GET", url: "/api/catalog/records/map" })).json();
     expect(after.records).toMatchObject({ described: true, entities: 2, references: 1 });
     expect(after.entitiesAt).not.toBeNull();
+  });
+});
+
+/**
+ * Correcting where a field points.
+ *
+ * The links that decide what a widget is built from live on the record types,
+ * and they were the only ones nobody could change: the editor that existed
+ * edits `resource.relations`, an endpoint-level model that a described API no
+ * longer consults — so correcting a wrong link there changed nothing anybody
+ * could see. A link you can watch being wrong and cannot fix is worse than one
+ * that is merely missing.
+ */
+describe("the links between record types, and correcting one", () => {
+  const connect = (): void => {
+    const entry = catalog.get("records")!;
+    store.putConnection(
+      connectionSchema.parse({
+        id: "works",
+        title: "Works",
+        kind: "rest",
+        baseUrl: "https://api.example.com",
+        catalog: "records",
+        dialect: { auth: { type: "none" } },
+        resources: entry.resources,
+        ops: entry.ops,
+      }),
+    );
+  };
+
+  /** An API whose records have been described, with one link between them. */
+  const described = async () => {
+    const app = buildServer({ store, keys, catalog, llm: scripted(), http: noNetwork });
+    await app.inject({ method: "POST", url: "/api/catalog/records/entities" });
+    connect();
+    return buildServer({ store, keys, catalog, llm: scripted(), http: noNetwork });
+  };
+
+  const links = async (app: ReturnType<typeof buildServer>) =>
+    (await app.inject({ method: "GET", url: "/api/connections/works/references" })).json();
+
+  it("reports what each link points at and whether anything can open it", async () => {
+    const body = await links(await described());
+    expect(body.described).toBe(true);
+    expect(body.links).toEqual([
+      expect.objectContaining({ entity: "task", field: "VendorId", target: "vendor", to: "Suppliers" }),
+    ]);
+  });
+
+  it("points a field at a different record type", async () => {
+    const app = await described();
+    const response = await app.inject({
+      method: "PUT",
+      url: "/api/connections/works/entities/task/reference",
+      payload: { field: "VendorId", target: "task" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect((await links(app)).links[0]).toMatchObject({ target: "task" });
+  });
+
+  it("forgets that a link was followed, because a new target inherits no proof", async () => {
+    /*
+     * Somebody saying where a field points is not the same as a request having
+     * resolved there. Carrying the old confirmation over would mark a guess as
+     * checked and take it out of the queue the check pass works through.
+     */
+    const app = await described();
+    await app.inject({
+      method: "PUT",
+      url: "/api/connections/works/entities/task/reference",
+      payload: { field: "VendorId", target: "task" },
+    });
+    expect((await links(app)).links[0]?.verified).toBe(false);
+  });
+
+  it("accepts that a field is not a link at all, and keeps offering it back", async () => {
+    // A field that resembles a link and is not one is worth saying so about —
+    // and a field corrected that way has to stay on the one screen that could
+    // put it back, or the correction is one-way.
+    const app = await described();
+    await app.inject({
+      method: "PUT",
+      url: "/api/connections/works/entities/task/reference",
+      payload: { field: "VendorId", target: null },
+    });
+
+    const body = await links(app);
+    expect(body.links).toEqual([]);
+    expect(body.candidates).toEqual([
+      expect.objectContaining({ entity: "task", field: "VendorId" }),
+    ]);
+  });
+
+  it("refuses a record type that is not on this API", async () => {
+    // A reference naming a record type nothing describes resolves to nothing,
+    // and every reader of it reports a link that simply never opens.
+    const app = await described();
+    const response = await app.inject({
+      method: "PUT",
+      url: "/api/connections/works/entities/task/reference",
+      payload: { field: "VendorId", target: "invented" },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toContain("invented");
+  });
+
+  it("refuses a field the record type does not have", async () => {
+    const app = await described();
+    const response = await app.inject({
+      method: "PUT",
+      url: "/api/connections/works/entities/task/reference",
+      payload: { field: "NotAField", target: "vendor" },
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("says plainly that nothing has been described rather than showing an empty list", async () => {
+    connect();
+    const app = buildServer({ store, keys, catalog, llm: scripted(), http: noNetwork });
+    expect((await links(app)).described).toBe(false);
   });
 });

@@ -5,9 +5,16 @@ export { GRAINS, parseGrain, truncateToBucket } from "@freebirdai/dash-expr";
 export { isAggregation, parseAggregation } from "./aggregation.js";
 export type { ParsedAggregation } from "./aggregation.js";
 
-export { COERCION_DESCRIPTIONS, applyCoercion, coercionSchema } from "./coercion.js";
+export {
+  COERCION_DESCRIPTIONS,
+  COERCION_SEMANTICS,
+  applyCoercion,
+  coercionForFormat,
+  coercionSchema,
+  fieldFormatSchema,
+} from "./coercion.js";
 export { connectionKeyRef } from "./primitives.js";
-export type { Coercion } from "./coercion.js";
+export type { Coercion, FieldFormat } from "./coercion.js";
 
 export {
   COMPONENT_CONTRACTS,
@@ -125,13 +132,25 @@ export type {
 export { RECIPES, facetsFromRecipe, recipeFor } from "./recipes.js";
 export type { EntityRecipe } from "./recipes.js";
 
-export { WIDGET_INTENTS, columnForPath, compileBrief, widgetBriefSchema } from "./brief.js";
+export {
+  ALONGSIDE_MODES,
+  WIDGET_INTENTS,
+  columnForPath,
+  compileBrief,
+  widgetBriefSchema,
+} from "./brief.js";
 export type {
+  AlongsideMode,
   CompileBriefInput,
   CompiledBrief,
   WidgetBrief,
   WidgetIntent,
 } from "./brief.js";
+
+export { answerBrief, briefOptions } from "./brief-options.js";
+export type { BriefControl, BriefOption, BriefOptionsInput } from "./brief-options.js";
+
+export { recompileWidget } from "./recompile.js";
 
 export { referenceIds, targetOfRow } from "./reference.js";
 export type { ReferenceRow } from "./reference.js";
@@ -306,6 +325,7 @@ export {
 export type { ExtractStep, GroupStep, HighlightSpec, PipelineStep } from "./pipeline.js";
 
 export {
+  ALL_ROWS,
   groupByShapeSchema,
   groupColumn,
   isEmptyShape,

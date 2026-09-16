@@ -131,6 +131,8 @@ export interface DashboardProps {
   /** Re-pack every widget with the deterministic placer. */
   readonly onAutoArrange?: () => void;
   readonly onCustomiseWidget?: (widgetId: string) => void;
+  /** Arrange this widget with others, or take it out of the frame it is in. */
+  readonly onFrameWidget?: (widgetId: string) => void;
   /** Open a record as a full page. Absent in an embed with no routing. */
   readonly onOpenRecordPage?: (widgetId: string, row: Record<string, unknown>) => void;
   /**
@@ -189,6 +191,7 @@ export const Dashboard = ({
   onEditingChange,
   onAutoArrange,
   onCustomiseWidget,
+  onFrameWidget,
   onOpenRecordPage,
   onOpenReference,
   record,
@@ -265,6 +268,7 @@ export const Dashboard = ({
           {...(hero ? { heroWidgetId: hero } : {})}
           {...(onRemoveWidget ? { onRemoveWidget } : {})}
           {...(onCustomiseWidget ? { onCustomiseWidget } : {})}
+          {...(onFrameWidget ? { onFrameWidget } : {})}
           {...(onOpenRecordPage ? { onOpenRecordPage } : {})}
           {...(onOpenReference ? { onOpenReference } : {})}
           {...(editing !== undefined ? { editing } : {})}

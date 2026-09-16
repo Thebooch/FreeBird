@@ -1438,42 +1438,6 @@ export const allSteps = (input: ConciergeDraft, context: ConciergeContext): Step
   }
 
   /*
-   * Two readings of the request, put to the person who made it.
-   *
-   * Asked before anything else about the widget, because everything else
-   * depends on which records these are — and asked at all only when the model
-   * said the two would answer different questions. On almost every build there
-   * is no choice here and this is not reached.
-   *
-   * Required, and that is the whole point: a widget counting the wrong thing
-   * renders perfectly and reads as an answer. It is the one question worth
-   * stopping for.
-   */
-  if (draft.choice) {
-    const applied = draft.choice.role === "primary" ? draft.op : draft.series[0]?.op;
-    add(
-      {
-        id: "choice",
-        question: "Which of these did you mean?",
-        help: "These would answer different questions, so it is worth being sure.",
-        options: draft.choice.options.map((option) => ({
-          value: option.value ?? option.op,
-          label: option.label,
-          description: option.whatItIs,
-          ...(option.op === applied &&
-          (!option.connection || option.connection === draft.connection)
-            ? { recommended: true }
-            : {}),
-        })),
-        multiple: false,
-        skippable: false,
-      },
-      answered(draft, "choice"),
-      true,
-    );
-  }
-
-  /*
    * The measurement, the grouping and the filter, each as its own control.
    *
    * Only for a widget that measures something. A table showing rows has no
@@ -1939,38 +1903,6 @@ export const applyStep = (
     // Keeping it is the recommended answer, so only a different one removes.
     const kept = values[0] === draft.series[index]!.op;
     return kept ? recorded : { ...recorded, series: draft.series.filter((_, at) => at !== index) };
-  }
-
-  if (stepId === "choice") {
-    const choice = draft.choice;
-    const chosen = choice?.options.find((option) => (option.value ?? option.op) === values[0]);
-    if (!choice || !chosen) return recorded;
-
-    /*
-     * A different set of records means different fields, so choosing the
-     * primary resets what was bound to the old one. `applyAnswer` already does
-     * exactly that for the endpoint question — this is the same answer arriving
-     * through a different door.
-     */
-    if (choice.role === "primary") {
-      const connected =
-        chosen.connection && chosen.connection !== recorded.connection
-          ? applyAnswer(recorded, "connection", [chosen.connection])
-          : recorded;
-      const moved = applyAnswer({ ...connected, choice: undefined }, "endpoint", [chosen.op]);
-      return { ...moved, answered: [...new Set([...moved.answered, "choice"])] };
-    }
-
-    /*
-     * A second endpoint that has to be read once per record is a price, not a
-     * detail — so it becomes an offer rather than being applied, and the
-     * existing consent step asks about it next.
-     */
-    const side = chosen.series;
-    if (!side) return { ...recorded, choice: undefined };
-    return side.fanOut
-      ? { ...recorded, choice: undefined, offer: side, series: [] }
-      : { ...recorded, choice: undefined, offer: undefined, series: [side] };
   }
 
   if (stepId === "offer") {

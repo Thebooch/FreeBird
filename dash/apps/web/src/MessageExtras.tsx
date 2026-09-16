@@ -41,6 +41,44 @@ export interface CoverageNote {
   readonly sources: readonly string[];
 }
 
+/** Records an answer came from that the board does not show. */
+export interface WidgetOffer {
+  readonly title: string;
+  readonly connection: string;
+}
+
+/**
+ * Reading the harness's own account of what it read.
+ *
+ * One payload carries both the coverage note and the offer, because a tool
+ * contributes one — so each reader takes the half it is about and ignores the
+ * other. A complete answer carries no coverage and may still carry an offer.
+ */
+const readPayload = (message: ChatMessage): (CoverageNote & { offer?: WidgetOffer }) | null => {
+  const payload = message.toolPayload as
+    | { toolPayloads?: Array<{ tool: string; payload: unknown }> }
+    | null
+    | undefined;
+  for (const entry of payload?.toolPayloads ?? []) {
+    const value = entry.payload as
+      | (CoverageNote & { kind?: string; offer?: WidgetOffer })
+      | null;
+    if (value && typeof value === "object" && value.kind === "coverage") {
+      return {
+        scanned: value.scanned,
+        of: value.of ?? null,
+        orderedBy: value.orderedBy ?? null,
+        sources: value.sources ?? [],
+        ...(value.offer ? { offer: value.offer } : {}),
+      };
+    }
+  }
+  return null;
+};
+
+export const offerOf = (message: ChatMessage): WidgetOffer | null =>
+  message.role === "assistant" ? (readPayload(message)?.offer ?? null) : null;
+
 export const coverageOf = (message: ChatMessage): CoverageNote | null => {
   const payload = message.toolPayload as
     | { toolPayloads?: Array<{ tool: string; payload: unknown }> }
@@ -49,6 +87,12 @@ export const coverageOf = (message: ChatMessage): CoverageNote | null => {
   for (const entry of payload?.toolPayloads ?? []) {
     const value = entry.payload as (CoverageNote & { kind?: string }) | null;
     if (value && typeof value === "object" && value.kind === "coverage") {
+      /*
+       * A payload carrying only an offer says nothing about coverage, and a
+       * note reading "based on the first 0 records" would be worse than
+       * silence.
+       */
+      if (!(value.scanned > 0)) return null;
       return {
         scanned: value.scanned,
         of: value.of ?? null,
@@ -130,6 +174,38 @@ export const Citations = ({ message }: { readonly message: ChatMessage }): JSX.E
           {citation.title}
         </button>
       ))}
+    </div>
+  );
+};
+
+/**
+ * An offer to build the thing the answer came from.
+ *
+ * Deliberately chrome rather than something the assistant says. An offer that
+ * depends on a model remembering to make it appears three times out of five,
+ * and the one time it matters is the time it does not. Clicking sends an
+ * ordinary message, so what happens next is the same conversation that builds
+ * every other widget — it asks what to include rather than guessing.
+ */
+export const OfferWidget = ({
+  message,
+  onAsk,
+}: {
+  readonly message: ChatMessage;
+  readonly onAsk: (question: string) => void;
+}): JSX.Element | null => {
+  const offer = offerOf(message);
+  if (!offer) return null;
+  return (
+    <div className="dash-chat__coverage" data-testid="chat-offer">
+      <button
+        type="button"
+        className="dash-chat__deeper"
+        data-testid="chat-add-widget"
+        onClick={() => onAsk(`Add a widget for ${offer.title}.`)}
+      >
+        add this as a widget?
+      </button>
     </div>
   );
 };

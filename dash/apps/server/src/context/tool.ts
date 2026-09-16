@@ -213,6 +213,21 @@ export interface AnswerResult {
     readonly of: number | null;
     readonly orderedBy: string | null;
     readonly sources: readonly string[];
+    /**
+     * Records this answer came from that the board does not show.
+     *
+     * A question answered by reading an endpoint rather than a widget is one
+     * the board could have answered at a glance and did not — so the reply
+     * carries a standing offer to build the thing. Chrome rather than
+     * something the assistant says: an offer that depends on the model
+     * remembering to make it is one that appears three times out of five.
+     */
+    readonly offer?: {
+      readonly title: string;
+      readonly connection: string;
+      /** The record type, where the read knew which one it was. */
+      readonly entity?: string;
+    };
   };
   readonly componentIds?: readonly string[];
 }
@@ -639,6 +654,22 @@ export const answerFromData = async (
   )[0];
 
   /*
+   * Records that answered this and are not on the board.
+   *
+   * An `endpoint` candidate is by definition something read directly rather
+   * than through a widget — so a question answered from one is a question the
+   * board could have answered at a glance. The first is enough: an offer per
+   * source read would be a row of buttons rather than a suggestion.
+   */
+  const unbuilt = result.evidence.find((evidence) => evidence.candidate.kind === "endpoint");
+  const offerable = unbuilt
+    ? {
+        title: unbuilt.candidate.title,
+        connection: unbuilt.candidate.connection,
+      }
+    : null;
+
+  /*
    * A deep read is a different act, not a bigger sample.
    *
    * One model call over fifty rows answers "how many"; it cannot answer "why
@@ -769,9 +800,26 @@ export const answerFromData = async (
             of: widest.coverage.of,
             orderedBy: widest.coverage.orderedBy,
             sources: result.evidence.map((evidence) => evidence.candidate.title),
+            ...(offerable ? { offer: offerable } : {}),
           },
         }
-      : {}),
+      : offerable
+        ? {
+            payload: {
+              kind: "coverage" as const,
+              /*
+               * Nothing to say about coverage — the answer was complete. The
+               * payload exists only to carry the offer, and the bubble draws
+               * no coverage note for a scan of zero.
+               */
+              scanned: 0,
+              of: null,
+              orderedBy: null,
+              sources: [],
+              offer: offerable,
+            },
+          }
+        : {}),
     /*
      * Every widget that was actually read, so the reply can cite it and the
      * user can click through to the tile the number came from.

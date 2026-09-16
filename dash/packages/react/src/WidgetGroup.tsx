@@ -82,6 +82,7 @@ export interface WidgetGroupProps {
   readonly members: readonly WidgetSpec[];
   readonly onRemoveWidget?: (widgetId: string) => void;
   readonly onCustomiseWidget?: (widgetId: string) => void;
+  readonly onFrameWidget?: (widgetId: string) => void;
   readonly onOpenRecordPage?: (widgetId: string, row: Record<string, unknown>) => void;
   /**
    * Open the record a cell names, forwarded to every member.
@@ -98,6 +99,7 @@ export const WidgetGroup = ({
   members,
   onRemoveWidget,
   onCustomiseWidget,
+  onFrameWidget,
   onOpenRecordPage,
   onOpenReference,
 }: WidgetGroupProps): JSX.Element => {
@@ -120,6 +122,7 @@ export const WidgetGroup = ({
         widget={quieted(widget, hideTitle)}
         {...(onRemoveWidget ? { onRemove: onRemoveWidget } : {})}
         {...(onCustomiseWidget ? { onCustomise: onCustomiseWidget } : {})}
+        {...(onFrameWidget ? { onFrame: onFrameWidget } : {})}
         {...(onOpenRecordPage ? { onOpenPage: onOpenRecordPage } : {})}
         {...(onOpenReference ? { onOpenReference } : {})}
       />

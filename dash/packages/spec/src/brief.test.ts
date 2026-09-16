@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { compileBrief, type WidgetBrief } from "./brief.js";
 import { entitySchema, type EntitySpec } from "./entity.js";
 import { resourceSchema, type ResourceSpec } from "./resource.js";
+import { parseDashboard } from "./dashboard.js";
 
 /**
  * A sentence about records, compiled into a widget.
@@ -776,5 +777,150 @@ describe("compileBrief, alongside", () => {
     expect(result.widget?.sources).toEqual([]);
     expect(result.widget?.source?.op).toBe("tasks_list");
     expect(result.notes).toEqual([]);
+  });
+});
+
+/**
+ * A collection that only exists inside one record.
+ *
+ * Sixty of the hundred and eight record types on the API this was built
+ * against are like this: `/leases/{leaseId}/transactions` and its siblings. The
+ * endpoint cannot be called once for a whole account, so "leases beside their
+ * transactions" was refused outright — *"can only be listed for one record at
+ * a time"* — and the refusal was the only answer anybody ever got.
+ *
+ * It is one request per record, which is why the cap and the price are on the
+ * widget rather than discovered in a rate-limit error. What makes it safe to
+ * offer at all is that nothing is inferred: the API put the parent in the URL,
+ * so `scope` is the strongest link this model has, and the graph is what says
+ * which parameter the id fills.
+ */
+
+/** Lease charges, which only exist under a lease and say which one. */
+const charge = (input: Record<string, unknown> = {}): EntitySpec =>
+  entitySchema.parse({
+    id: "charge",
+    resource: "charge",
+    name: { one: "Charge", many: "Charges" },
+    kind: "money",
+    scope: { parent: "vendor", param: "vendorId" },
+    identity: { field: "Id", observed: true },
+    display: { title: ["Memo"] },
+    fields: [
+      { path: "Id", visibility: "hidden" },
+      { path: "Memo", label: "Memo", visibility: "primary" },
+      { path: "TotalAmount", label: "Amount", semantic: "currency", visibility: "primary" },
+      { path: "VendorId", label: "Vendor", visibility: "hidden", reference: { entity: "vendor" } },
+      ...((input.fields as unknown[]) ?? []),
+    ],
+  });
+
+const chargeResource = resourceSchema.parse({
+  id: "charge",
+  title: "Charges",
+  listOp: "charges_list",
+});
+
+/** The vendor, and the charges that live under one. */
+const underOne = (options: { charge?: EntitySpec } = {}) => ({
+  entities: [vendor(), options.charge ?? charge()],
+  resources: [vendorResource, chargeResource],
+  ops: [
+    { id: "vendors_list", path: "/vendors" },
+    { id: "charges_list", path: "/vendors/{{param.vendorId}}/charges" },
+  ],
+});
+
+describe("compileBrief, a collection listed one record at a time", () => {
+  const built = (related = underOne()) =>
+    compileBrief({
+      brief: { entity: "vendor", intent: "records", alongside: { entity: "charge" } },
+      entity: vendor(),
+      resource: vendorResource,
+      connection: "api",
+      id: "w1",
+      related,
+    });
+
+  it("reads it per record rather than refusing the request", () => {
+    const result = built();
+    expect(result.errors).toEqual([]);
+    expect(result.widget?.sources.map((one) => one.op)).toEqual(["vendors_list", "charges_list"]);
+  });
+
+  it("drives it from the record's own id, into the parameter the URL names", () => {
+    /*
+     * The parameter is read off the graph's reach plan, never guessed from the
+     * path: a fan-out into the wrong input fetches the wrong records and every
+     * one of them is real.
+     */
+    expect(built().widget?.sources[1]?.fanOut).toEqual({
+      from: "vendor",
+      field: "Id",
+      as: "vendorId",
+      maxRows: 25,
+    });
+  });
+
+  it("matches them back by what the rows themselves say, not by arrival order", () => {
+    expect(built().widget?.combine).toMatchObject({
+      op: "join",
+      on: { left: "Id", right: "VendorId" },
+      kind: "left",
+    });
+  });
+
+  it("says what it costs and where it stops, before anybody spends it", () => {
+    const said = built().notes.join(" ");
+    expect(said).toContain("25");
+    expect(said).toContain("extra requests");
+    expect(said).toContain("shows none");
+  });
+
+  it("refuses when the rows carry nothing saying which record they belong to", () => {
+    /*
+     * The fan-out asks the right question — these are that vendor's charges —
+     * but every answer arrives in one pile, and without a back-pointer on the
+     * row the only way to pair them is arrival order. Rows in the wrong order
+     * are still real rows, which is precisely what makes it worth refusing.
+     */
+    const anonymous = entitySchema.parse({
+      ...charge(),
+      fields: charge().fields.filter((one) => one.path !== "VendorId"),
+    });
+    const result = built(underOne({ charge: anonymous }));
+
+    expect(result.widget?.sources).toEqual([]);
+    expect(result.notes.join(" ")).toContain("carry nothing saying which one");
+  });
+
+  it("still refuses a path parameter nothing in the graph fills", () => {
+    // A scope is the API stating the link. A stray parameter is not, and a
+    // widget has nowhere to get a value for it.
+    const stray = {
+      ...underOne(),
+      ops: [
+        { id: "vendors_list", path: "/vendors" },
+        { id: "charges_list", path: "/accounts/{{param.accountId}}/charges" },
+      ],
+    };
+    expect(built(stray).notes.join(" ")).toContain("one record at a time");
+  });
+
+  it("parses as a dashboard, which is what a fan-out source has to survive", () => {
+    /*
+     * The schema refuses a source that fans out from itself or from a name
+     * nothing declares, and it refuses the whole board rather than the tile —
+     * so a widget this compiles has to pass it whole.
+     */
+    const widget = built().widget!;
+    const parsed = parseDashboard({
+      id: "b",
+      title: "Board",
+      widgets: [widget],
+      layout: { cells: [{ widgetId: widget.id, x: 0, y: 0, w: 6, h: 6 }] },
+    });
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.ok).toBe(true);
   });
 });

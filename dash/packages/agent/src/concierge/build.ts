@@ -463,6 +463,15 @@ export const buildFromDraft = (
      * a private copy of a record view frozen into this widget.
      */
     ...(draft.entity ? { entity: draft.entity } : {}),
+    /*
+     * The request it was compiled from, where the draft came from one.
+     *
+     * Carried so the widget stays editable after it is added: the panel reads
+     * this, changes it, and compiles again. `revise` drops it the moment an
+     * answer changes something the brief also describes, so a widget either
+     * carries a brief that still matches it or carries none.
+     */
+    ...(draft.brief ? { brief: draft.brief } : {}),
     roles: boundRoles,
     format,
     highlights,

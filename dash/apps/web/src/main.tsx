@@ -1,4 +1,5 @@
 import { AdapterRegistry, ProxyAdapter } from "@freebirdai/dash-adapters";
+import { FramePanel } from "./FramePanel.jsx";
 import { Dashboard, DashStyleSheet, RecordPage } from "@freebirdai/dash-react";
 import type { StoredPresentations } from "@freebirdai/dash-react";
 import type {
@@ -21,12 +22,12 @@ import { ChatScopeReporter, ChatSession } from "./ChatSession.jsx";
 import { showWidget } from "./showWidget.js";
 import { ConnectionManager } from "./ConnectionManager.jsx";
 import { autoArrange, isTypingTarget } from "./editing.js";
-import { createLayoutSaver } from "./layoutSave.js";
+import { createLayoutSaver, withLayoutCells } from "./layoutSave.js";
+import { createPendingMessage } from "./pendingMessage.js";
 import { BOARD_ROUTE, type Route, currentRoute, navigate, onRouteChange } from "./route.js";
 import { TopNav } from "./TopNav.jsx";
 import { PresentationEditor } from "./PresentationEditor.jsx";
 import { RecordLayoutEditor } from "./RecordLayoutEditor.jsx";
-import { WidgetLibrary } from "./WidgetLibrary.jsx";
 
 export interface DashboardSummary {
   id: string;
@@ -298,11 +299,16 @@ const App = (): JSX.Element => {
   const [reloadToken, setReloadToken] = useState(0);
   /** A failed removal, which otherwise leaves the widget there for no reason. */
   const [removeError, setRemoveError] = useState<string | null>(null);
-  const [libraryOpen, setLibraryOpen] = useState(false);
   /** The widget whose look is being edited, by id. */
   const [customising, setCustomising] = useState<string | null>(null);
+  /** The widget whose frame is being changed, if any. */
+  const [framing, setFraming] = useState<string | null>(null);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  /** Something the shell is saying for the user, cleared once the chat has it. */
+  const [pendingMessage, setPendingMessage] = useState<string | null>(null);
+  /** The claim on it, so one click can only ever be said once. */
+  const pendingSlot = useMemo(() => createPendingMessage(setPendingMessage), []);
   const [dashboardId, setDashboardId] = useState<string | null>(null);
 
   /*
@@ -386,7 +392,8 @@ const App = (): JSX.Element => {
    * the server, so the picker is enough to keep things separate while testing.
    */
   const addWidget = async (widget: WidgetSpec, confirmed: string[]): Promise<void> => {
-    if (!live.dashboard) throw new Error("There is no dashboard open to add this to.");
+    const board = dashboardRef.current;
+    if (!board) throw new Error("There is no dashboard open to add this to.");
 
     /*
      * A suggestion's id is deterministic by design — a given pairing gets the
@@ -394,15 +401,15 @@ const App = (): JSX.Element => {
      * the server refuses the whole save. Suffixing here is the same thing
      * connections already do for a duplicate name.
      */
-    const taken = new Set(live.dashboard.widgets.map((item) => item.id));
+    const taken = new Set(board.widgets.map((item) => item.id));
     let id = widget.id;
     for (let suffix = 2; taken.has(id); suffix++) id = `${widget.id}-${suffix}`;
 
     const next = {
-      ...live.dashboard,
-      widgets: [...live.dashboard.widgets, { ...widget, id, confirmed }],
+      ...board,
+      widgets: [...board.widgets, { ...widget, id, confirmed }],
     };
-    const response = await fetch(`/api/dashboards/${live.dashboard.id}`, {
+    const response = await fetch(`/api/dashboards/${board.id}`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(next),
@@ -445,13 +452,14 @@ const App = (): JSX.Element => {
    * around a hole.
    */
   const removeWidget = async (widgetId: string): Promise<void> => {
-    if (!live.dashboard) return;
+    const board = dashboardRef.current;
+    if (!board) return;
     setRemoveError(null);
     // The widget, its cell, and any frame left with only one member — which
     // the schema refuses, so leaving it behind made the whole board unsaveable.
-    const next = withoutWidget(live.dashboard, widgetId);
+    const next = withoutWidget(board, widgetId);
 
-    const response = await fetch(`/api/dashboards/${live.dashboard.id}`, {
+    const response = await fetch(`/api/dashboards/${board.id}`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(next),
@@ -505,16 +513,44 @@ const App = (): JSX.Element => {
     [stored, live.dashboard],
   );
 
+  /**
+   * The result of a tidy-up, held until the server catches up.
+   *
+   * The board renders from `live.dashboard`, so re-packing without this would
+   * write new positions and leave the screen showing the old ones. Scoped to a
+   * dashboard id and dropped the moment a fresh copy arrives, so the server
+   * stays the source of truth and this is only ever a bridge.
+   */
+  const [arranged, setArranged] = useState<{ id: string; cells: LayoutCell[] } | null>(null);
+  useEffect(() => setArranged(null), [live.dashboard]);
+
+  /*
+   * The board as it is on screen.
+   *
+   * A repack is written straight through, but `live.dashboard` only learns
+   * about it on the next read — so anything saving the whole board in that
+   * window (a frame change, a presentation edit, an added widget) would send
+   * the cells the repack replaced and silently undo it. Everything that writes
+   * the board reads this, so what is saved is what is shown.
+   *
+   * `withLayoutCells` rather than a spread, because it also drops cells for
+   * widgets that have gone since the repack.
+   */
+  const shown =
+    live.dashboard && arranged?.id === live.dashboard.id
+      ? withLayoutCells(live.dashboard, arranged.cells)
+      : live.dashboard;
+
   /*
    * Where the user put things, saved.
    *
-   * `live.dashboard` is read through a ref rather than captured: a save is
-   * debounced by a second, and in that window the chat can add a widget or a
-   * removal can land. Closing over the spec as it looked when the drag ended
-   * would write that stale copy back and undo whichever change was newer.
+   * The board is read through a ref rather than captured: a save is debounced
+   * by a second, and in that window the chat can add a widget or a removal can
+   * land. Closing over the spec as it looked when the drag ended would write
+   * that stale copy back and undo whichever change was newer.
    */
-  const dashboardRef = useRef(live.dashboard);
-  dashboardRef.current = live.dashboard;
+  const dashboardRef = useRef(shown);
+  dashboardRef.current = shown;
 
   const [layoutError, setLayoutError] = useState<string | null>(null);
 
@@ -608,14 +644,6 @@ const App = (): JSX.Element => {
    */
   const [arranging, setArranging] = useState(false);
 
-  /**
-   * The result of a tidy-up, held until the server catches up.
-   *
-   * The board renders from `live.dashboard`, so re-packing without this would
-   * write new positions and leave the screen showing the old ones. Scoped to a
-   * dashboard id and dropped the moment a fresh copy arrives, so the server
-   * stays the source of truth and this is only ever a bridge.
-   */
   /** True while the assistant is building a widget, so the column has room. */
   const [building, setBuilding] = useState(false);
   /**
@@ -627,9 +655,6 @@ const App = (): JSX.Element => {
    * not being dropped into it at all.
    */
   const [justAdded, setJustAdded] = useState<string | null>(null);
-
-  const [arranged, setArranged] = useState<{ id: string; cells: LayoutCell[] } | null>(null);
-  useEffect(() => setArranged(null), [live.dashboard]);
 
   // Switching boards leaves edit mode: the arrangement being worked on is not
   // the one now on screen.
@@ -646,6 +671,35 @@ const App = (): JSX.Element => {
    * wizard instead. Without it the button would open an empty chat that cannot
    * answer, which is a worse dead end than the one it replaced.
    */
+  /**
+   * "Add a widget", which is a sentence rather than a form.
+   *
+   * It used to open a sheet of its own — a list of record types to scroll and
+   * a grid of checkboxes — which is the opposite of what this product is for.
+   * Describing what you want is the way in, so the button says so on the
+   * user's behalf and the conversation takes it from there, asking whatever it
+   * needs to.
+   *
+   * With no model there is nobody to ask, so it falls through to the same
+   * deterministic wizard `askAssistant` starts. Without that, a keyless
+   * install would lose the ability to build a widget at all.
+   */
+  const startAddingWidget = async (): Promise<void> => {
+    const board = live.dashboard;
+    let hasModel = true;
+    if (board) {
+      try {
+        const models = await api.models();
+        hasModel = Boolean(models.providers.anthropic || models.providers.openai);
+        if (!hasModel) await api.startSetup(board.id, undefined, "wizard");
+      } catch {
+        // Unreachable is not the same as absent; let the first message find out.
+      }
+    }
+    if (hasModel) pendingSlot.arm("I want to add a new widget.");
+    setChatOpen(true);
+  };
+
   const askAssistant = async (): Promise<void> => {
     /*
      * Opening the column is unconditional; the key wizard is the extra.
@@ -835,6 +889,8 @@ const App = (): JSX.Element => {
         open={chatOpen}
         onToggle={setChatOpen}
         dashboardId={live.dashboard?.id ?? null}
+        pending={pendingMessage}
+        takePending={pendingSlot.take}
         onBuildingChange={setBuilding}
         onDashboardChanged={reload}
         /*
@@ -850,13 +906,11 @@ const App = (): JSX.Element => {
         }}
         onSwitchDashboard={(id) => navigate({ kind: "board", dashboardId: id })}
         /*
-         * `open_add_widget` now lands on the palette rather than a second
-         * proposer. The assistant builds widgets itself; the panel it opens is
-         * the one for picking a component by hand.
+         * Only the panels the assistant genuinely cannot stand in for. A
+         * widget is no longer one of them: it builds those itself, in the
+         * conversation, which is the whole of what this phase moved.
          */
-        onOpenPanel={(panel) =>
-          panel === "connections" ? setConnectionsOpen(true) : setLibraryOpen(true)
-        }
+        onOpenPanel={() => setConnectionsOpen(true)}
       />
       {connectionsOpen && (
         <ConnectionManager
@@ -868,24 +922,35 @@ const App = (): JSX.Element => {
           {...(live.dashboard ? { onCreateWidget: (widget) => addWidget(widget, []) } : {})}
         />
       )}
-      {customising && live.dashboard && (() => {
-        const target = live.dashboard.widgets.find((widget) => widget.id === customising);
+      {framing && shown && (
+        <FramePanel
+          dashboard={shown}
+          widgetId={framing}
+          onSave={async (next) => {
+            await saveDashboard(next);
+            reload();
+          }}
+          onClose={() => setFraming(null)}
+        />
+      )}
+      {customising && shown && (() => {
+        const target = shown.widgets.find((widget) => widget.id === customising);
         if (!target) return null;
         return (
           <PresentationEditor
             widget={target}
-            dashboard={live.dashboard}
+            dashboard={shown}
             onSaveDashboard={saveDashboard}
             onChanged={reload}
             onClose={() => setCustomising(null)}
           />
         );
       })()}
-      {editingLayout && entityPage.page && live.dashboard && route.kind === "entity" && (
+      {editingLayout && entityPage.page && shown && route.kind === "entity" && (
         <RecordLayoutEditor
           page={entityPage.page}
           connection={route.connectionId}
-          dashboard={live.dashboard}
+          dashboard={shown}
           {...(route.from?.widgetId ? { widgetId: route.from.widgetId } : {})}
           onSaveDashboard={saveDashboard}
           /*
@@ -900,22 +965,6 @@ const App = (): JSX.Element => {
           onClose={() => setEditingLayout(false)}
         />
       )}
-      {libraryOpen && live.dashboard && (
-        <WidgetLibrary
-          connections={live.connections}
-          takenIds={new Set(live.dashboard.widgets.map((widget) => widget.id))}
-          /*
-           * Which APIs can be described to rather than picked through. An API
-           * whose records nobody has described has no record types to build a
-           * brief from, and offering the box anyway would be offering a
-           * question that cannot be answered.
-           */
-          describable={Object.keys(live.entityLinks)}
-          dashboardId={live.dashboard.id}
-          onSave={(widget) => addWidget(widget, [])}
-          onClose={() => setLibraryOpen(false)}
-        />
-      )}
     </>
   );
 
@@ -928,7 +977,7 @@ const App = (): JSX.Element => {
       onRename={(id, title) => void renameDashboard(id, title)}
       onDelete={(id) => void deleteDashboard(id)}
       onConnect={() => setConnectionsOpen(true)}
-      onAddWidget={() => setLibraryOpen(true)}
+      onAddWidget={() => void startAddingWidget()}
       addWidgetDisabled={!live.dashboard}
       layoutEditing={arranging}
       onToggleLayoutEditing={setArranging}
@@ -1037,9 +1086,10 @@ const App = (): JSX.Element => {
   /*
    * Captured after the guard above, because a closure does not carry the
    * narrowing: `onBack` reads the id long after this render decided the
-   * dashboard was present.
+   * dashboard was present. `shown` is derived from the same value, so the
+   * fallback is only there to carry the narrowing across.
    */
-  const board = live.dashboard;
+  const board = shown ?? live.dashboard;
 
   /*
    * `overlays` rides in the `toolbar` slot so the chat renders inside the
@@ -1111,14 +1161,7 @@ const App = (): JSX.Element => {
                 },
               }
             : {})}
-          dashboard={
-            arranged?.id === live.dashboard.id
-              ? {
-                  ...live.dashboard,
-                  layout: { ...live.dashboard.layout, cells: arranged.cells },
-                }
-              : live.dashboard
-          }
+          dashboard={board}
           registry={live.registry}
           toolbar={overlays}
           presentation={presentationSources}
@@ -1133,6 +1176,7 @@ const App = (): JSX.Element => {
           }}
           onRemoveWidget={(widgetId) => void removeWidget(widgetId)}
           onCustomiseWidget={setCustomising}
+          onFrameWidget={setFraming}
           onOpenRecordPage={openRecordPage}
           onOpenReference={openReference}
         />

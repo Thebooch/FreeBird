@@ -2,6 +2,7 @@ import { z } from "zod";
 import { componentIdSchema, contractFor } from "./contracts.js";
 import { dashboardParamsSchema } from "./params.js";
 import { facetsSchema } from "./facet.js";
+import { widgetBriefSchema } from "./brief-schema.js";
 import { recordOverrideSchema } from "./entity.js";
 import { fieldNameSchema, highlightSchema, pipelineSchema } from "./pipeline.js";
 import { presentationSchema } from "./presentation.js";
@@ -163,6 +164,27 @@ export const widgetSchema = z
    * no entity and renders exactly as it did.
    */
   entity: idSchema.optional(),
+  /**
+   * The request this was compiled from, kept so it can be changed.
+   *
+   * **The spec is what renders; this is what an editor edits.** Changing a
+   * column or a filter strip means changing the brief and compiling it again,
+   * which is one deterministic function rather than a second implementation of
+   * every decision the compiler already makes. Without it a widget's decisions
+   * die the moment it is added to a board: the setup card's controls come from
+   * a draft, and the draft is thrown away on confirm.
+   *
+   * Nothing recompiles on its own. An API described again does not silently
+   * redraw anybody's board; the brief is read when somebody opens the settings
+   * for this widget, and not before.
+   *
+   * **Optional with no default, and that is load-bearing.** Approvals are
+   * keyed on a digest of the widget, and `canonicalize` drops `undefined`
+   * keys — so an absent brief hashes exactly as it did before this field
+   * existed. A `.default({})` would change every widget's digest and silently
+   * revoke every approval on every board.
+   */
+  brief: widgetBriefSchema.optional(),
   /**
    * This widget's own changes to the record page its rows open.
    *

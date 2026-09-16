@@ -104,6 +104,16 @@ export interface WriteBriefResult {
    * wearing different clothes.
    */
   readonly alternative: { readonly label: string; readonly brief: WidgetBrief } | null;
+  /**
+   * More widgets, when the request asked for separate things seen together.
+   *
+   * Empty on almost every request, and it has to stay that way: a set on
+   * everything would turn "show me my tasks" into a dashboard nobody asked
+   * for. A request naming two collections is genuinely two widgets — which is
+   * different from one widget carrying a second record's fields, and different
+   * again from two readings of one request.
+   */
+  readonly plus: readonly WidgetBrief[];
   readonly error: string | null;
 }
 
@@ -279,6 +289,31 @@ export const briefSchema = z.object({
         "measurements against each other on one axis, which is a chart and only makes sense " +
         'with "compare". Defaults to "join".',
     ),
+  plus: z
+    .array(
+      z.object({
+        entity: z.string().describe("The id of this one's record type. Copy it exactly."),
+        intent: z.enum(["records", "measure", "compare"]),
+        title: z.string().optional(),
+        filters: z
+          .array(z.object({ field: z.string(), values: z.array(z.string()).max(8).optional() }))
+          .max(4)
+          .optional(),
+        groupBy: z.string().optional(),
+        measureAgg: z.enum(["count", "sum"]).optional(),
+        measureField: z.string().optional(),
+      }),
+    )
+    .max(3)
+    .optional()
+    .describe(
+      "MORE widgets, when the request asks for separate things to be seen together — " +
+        '"my X and my Y", "X, Y and Z on one tab". One entry each, described exactly as the ' +
+        "first one is. Leave it out for every ordinary request, which is nearly all of them. " +
+        "Never use it to hedge between two readings of the same words — that is `alternative` " +
+        "— and never for a second kind of record that belongs ON these rows, which is " +
+        "`alongsideEntity`.",
+    ),
   alternative: z
     .object({
       label: z
@@ -376,6 +411,18 @@ export const BRIEF_SYSTEM_PROMPT = [
   "  the records the noun names, put the field in filters, and put the word in its values.",
   "- Never leave a narrowing invisible. Somebody who cannot see what was narrowed cannot",
   "  widen it, and will believe they are looking at everything there is.",
+  "",
+  "SEVERAL THINGS AT ONCE.",
+  "",
+  "- Four different things can be a \"second\" one, and they are not interchangeable:",
+  "  - another record's fields ON each row  -> alongsideEntity, alongsideAs \"join\"",
+  "  - two counts set against each other    -> alongsideEntity, alongsideAs \"beside\"",
+  "  - the same words read two ways         -> alternative",
+  "  - two separate things asked for        -> plus",
+  '- "show me my X and my Y" is `plus`: two widgets, seen together. "Show me X with their Y"',
+  "  is not — that is one widget with the other's fields on it.",
+  "- Never use `plus` to hedge. If you are unsure which of two readings they meant, that is",
+  "  `alternative` and it is one widget either way.",
   "",
   "Offering the other reading:",
   "- When the words genuinely read two ways, build the better one and offer the other as an",
@@ -495,6 +542,7 @@ export const writeBrief = async (
     brief: null,
     reason: "",
     alternative: null,
+    plus: [],
     error,
   });
 
@@ -621,5 +669,41 @@ export const writeBrief = async (
     }
   }
 
-  return { brief, reason: args.reason.trim(), alternative, error: null };
+  /*
+   * The other things asked for, each checked as hard as the first.
+   *
+   * A record type not on the roster is dropped rather than approximated, and
+   * one repeating the primary is not a second widget — it is the same request
+   * written twice, which is what a model does when it is padding.
+   */
+  const plus: WidgetBrief[] = [];
+  for (const extra of args.plus ?? []) {
+    const match = input.candidates.find((candidate) => candidate.entity === extra.entity);
+    if (!match) continue;
+    if (match.entity === found.entity && extra.intent === args.intent) continue;
+    plus.push({
+      entity: match.entity,
+      intent: extra.intent,
+      ...(extra.title?.trim() ? { title: extra.title.trim() } : {}),
+      ...(extra.filters && extra.filters.length > 0
+        ? {
+            filters: extra.filters.map((one) => ({
+              field: one.field,
+              ...(one.values && one.values.length > 0 ? { values: one.values } : {}),
+            })),
+          }
+        : {}),
+      ...(extra.groupBy ? { groupBy: extra.groupBy } : {}),
+      ...(extra.intent !== "records" && (extra.measureAgg || extra.measureField)
+        ? {
+            measure: {
+              agg: extra.measureAgg ?? "count",
+              ...(extra.measureField ? { field: extra.measureField } : {}),
+            },
+          }
+        : {}),
+    });
+  }
+
+  return { brief, reason: args.reason.trim(), alternative, plus, error: null };
 };

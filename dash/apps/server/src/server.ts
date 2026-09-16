@@ -11,6 +11,7 @@ import type {
   Arrangement,
   ConciergeContext,
   ConciergeDraft,
+  DraftPatch,
   InferredShape,
 } from "@freebirdai/dash-agent";
 import {
@@ -28,6 +29,7 @@ import type {
   RangePreset,
   ResolvedParams,
   TimeRange,
+  WidgetBrief,
 } from "@freebirdai/dash-spec";
 import {
   connectionKeyRefs,
@@ -105,8 +107,13 @@ import { SetupPreviews } from "./concierge/preview.js";
 import { contextForConnection } from "@freebirdai/dash-agent";
 import { migrateCredentialRefs } from "./credential-migration.js";
 import {
+  answerBrief,
+  briefOptions,
   compileBrief,
   entityById,
+  entityGraph,
+  parseDashboard,
+  recompileWidget,
   entityLinkViews,
   entityPageView,
   fieldLexicon,
@@ -324,8 +331,12 @@ export const CHAT_SYSTEM_PROMPT = [
   "",
   "  - the records themselves, or a count of them — a list and a chart are not",
   "    variations on one answer;",
-  "  - two record types their words fit equally well;",
   "  - a narrowing phrase that matches nothing in their data.",
+  "",
+  "Two record types their words fit equally well is NOT one of them, however",
+  "even the choice looks. That fork is settled where the widget is decided, and",
+  "the reading you did not take is offered back as one click — so asking about",
+  "it here would be asking a question that has already been answered twice.",
   "",
   "Everything else you decide. Never ask which field to bind to a role, how to",
   "sort, or what to call it — those have sensible answers and they can change any",
@@ -876,6 +887,55 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     });
   };
 
+  /**
+   * The other reading of a request, turned back into a patch.
+   *
+   * Compiled here rather than at the moment the brief was written: the
+   * alternative is ignored on nearly every setup, and a compile spent every
+   * time to save one is the wrong way round. Nothing costs a request — the
+   * record types are on disk, and this is the same `patchFromBrief` the
+   * proposal ran through.
+   *
+   * The record type is looked up by the id the brief carries, which was
+   * resolved against the roster when the brief was written. Searching every
+   * described connection rather than one, because a workspace with two APIs
+   * can be asked one question about either.
+   */
+  const compileReading = (brief: WidgetBrief): { patch: DraftPatch; error?: string } => {
+    for (const entry of store.listConnections()) {
+      const entities = entry.catalog ? (options.catalog?.get(entry.catalog)?.entities ?? []) : [];
+      const entity = entityById(entities, brief.entity);
+      const resource = entity
+        ? entry.resources.find((one) => one.id === entity.resource)
+        : undefined;
+      if (!entity || !resource) continue;
+
+      const mapped = patchFromBrief({
+        brief,
+        entity,
+        resource,
+        connection: entry.id,
+        listPath: pathOf(entry, resource.listOp),
+        related: relatedFor(entry, entities),
+        id: entity.id,
+      });
+      /*
+       * A patch with no endpoint did not compile, and the compiler's own
+       * sentence beats a generic one — it is the only thing that knows which
+       * of the record type's fields the reading needed and did not find.
+       */
+      return mapped.patch.endpoint
+        ? { patch: mapped.patch }
+        : {
+            patch: {},
+            error:
+              mapped.notes[0] ??
+              `That reading could not be built from what this API offers of ${entity.name.many}.`,
+          };
+    }
+    return { patch: {}, error: "The record type that reading is about is no longer described." };
+  };
+
   void app.register(
     conciergeRoutes({
       previews,
@@ -883,6 +943,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       context: conciergeContext,
       planDetail: planDetailFor,
       rearrange: rearrangeFor,
+      compileReading,
       getDashboard: (id) => store.getDashboard(id),
       putDashboard: (spec) => store.putDashboard(spec),
       /*
@@ -1224,6 +1285,193 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       });
 
       return saved.entities?.find((one) => one.id === entity.id)?.views.record ?? { facts: [], groups: [] };
+    },
+  );
+
+  /**
+   * A field name that reads as somebody else's identity.
+   *
+   * `userId`, `album_id`, `postIds`, `id` — and deliberately not `valid` or
+   * `hybrid`, which is the whole reason this is not `/id$/i`. Two spellings
+   * rather than one clever pattern, because the two are genuinely different
+   * conventions and a reader should be able to see which one matched.
+   */
+  const looksLikeAnId = (path: string): boolean => {
+    const last = path.split(".").pop() ?? "";
+    return /[a-z0-9]Ids?$/.test(last) || /(?:^|_)ids?$/i.test(last);
+  };
+
+  /**
+   * Every link between this API's record types, and what it would take to
+   * correct one.
+   *
+   * Read from the record types themselves rather than from the endpoint-level
+   * relations: those are two different models, and this is the one that
+   * decides what a widget is built from. The reach travels with each link
+   * because "points at Users" and "points at Users and can be opened" are
+   * different facts, and only the second makes a name appear in a cell.
+   */
+  app.get<{ Params: { id: string } }>(
+    "/api/connections/:id/references",
+    async (request, reply) => {
+      const connection = store.getConnection(request.params.id);
+      if (!connection) return reply.status(404).send({ error: "no such connection" });
+      const entities = connection.catalog
+        ? (options.catalog?.get(connection.catalog)?.entities ?? [])
+        : [];
+      if (entities.length === 0) return { described: false, entities: [], links: [] };
+
+      const graph = entityGraph(relatedFor(connection, entities));
+      const nameOf = (id: string): string =>
+        entityById(entities, id)?.name.many ?? id;
+
+      return {
+        described: true,
+        /** Every record type, so a correction can name a different one. */
+        entities: entities.map((entity) => ({ id: entity.id, title: entity.name.many })),
+        links: entities.flatMap((entity) =>
+          graph.referencesOf(entity.id).map((reference) => ({
+            entity: entity.id,
+            from: entity.name.many,
+            field: reference.field,
+            label: reference.label ?? reference.field,
+            target: reference.target,
+            to: nameOf(reference.target),
+            /*
+             * `free` means the row already carries the name, so nothing is
+             * fetched. A null reach is a link nothing can open — worth saying,
+             * because it looks identical in a widget until it is clicked.
+             */
+            cost: reference.cost,
+            openable: reference.reach !== null,
+            verified: reference.verified,
+          })),
+        ),
+        /**
+         * Fields that look like a link and are not recorded as one.
+         *
+         * Listed for two reasons, and the second is the one that forced it:
+         * the describe pass misses links, and — since saying "not a link" is
+         * an answer here — a field corrected that way would otherwise vanish
+         * from the only screen that could put it back. A name ending in `Id`
+         * is the whole test, which is deliberately weak: this is a list of
+         * things to look at, not a claim that any of them point anywhere.
+         */
+        candidates: entities.flatMap((entity) =>
+          entity.fields
+            .filter(
+              (field) =>
+                !field.reference &&
+                field.path !== entity.identity?.field &&
+                looksLikeAnId(field.path),
+            )
+            .slice(0, 12)
+            .map((field) => ({
+              entity: entity.id,
+              from: entity.name.many,
+              field: field.path,
+              label: field.label ?? field.path,
+            })),
+        ),
+        /** Links the record types record and nothing here could execute. */
+        unreachable: graph.unreachable,
+      };
+    },
+  );
+
+  /**
+   * Correct where one of a record's fields points.
+   *
+   * The links that decide widgets are the ones on the record types, and until
+   * now they were the only ones nobody could correct: the editor in
+   * Connections → Manage edits `resource.relations`, an endpoint-level model
+   * that a described API no longer consults. A link you can see being wrong
+   * and cannot fix is worse than one that is merely missing.
+   *
+   * One field at a time, `PUT` because the reference is replaced whole, and
+   * `null` removes it — which is the honest answer for a field that resembles
+   * a link and is not one. What is written here is what the describing pass
+   * wrote, in the same place, so everything downstream — the brief compiler,
+   * record pages, the reference cells — reads the correction with no second
+   * path to keep in step.
+   */
+  app.put<{ Params: { id: string; entity: string }; Body: unknown }>(
+    "/api/connections/:id/entities/:entity/reference",
+    async (request, reply) => {
+      const parsed = z
+        .object({
+          field: fieldPathSchema,
+          /** The record type it points at, or null to say it points at none. */
+          target: z.string().min(1).max(64).nullable(),
+        })
+        .safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.status(400).send({ error: "invalid reference", detail: parsed.error.issues });
+      }
+
+      const connection = store.getConnection(request.params.id);
+      if (!connection) return reply.status(404).send({ error: "no such connection" });
+      const entry = connection.catalog ? options.catalog?.get(connection.catalog) : undefined;
+      const entity = entry?.entities?.find((one) => one.id === request.params.entity);
+      if (!entry || !entity) return reply.status(404).send({ error: "no such record type" });
+
+      const field = entity.fields.find((one) => one.path === parsed.data.field);
+      if (!field) {
+        return reply.status(400).send({
+          error: `${entity.name.many} have no field called ${parsed.data.field}.`,
+        });
+      }
+      /*
+       * A target off the roster is refused rather than stored. A reference
+       * naming a record type nothing describes resolves to nothing, and every
+       * reader of it would report a link that simply never opens.
+       */
+      const target = parsed.data.target
+        ? entityById(entry.entities ?? [], parsed.data.target)
+        : null;
+      if (parsed.data.target && !target) {
+        return reply.status(400).send({
+          error: `There is no record type here called "${parsed.data.target}".`,
+        });
+      }
+
+      const saved = options.catalog!.put({
+        ...entry,
+        entities: (entry.entities ?? []).map((one) =>
+          one.id === entity.id
+            ? {
+                ...one,
+                fields: one.fields.map((each) =>
+                  each.path !== field.path
+                    ? each
+                    : target
+                      ? {
+                          ...each,
+                          reference: {
+                            ...(each.reference ?? { holds: "scalar" as const, embedded: [] }),
+                            entity: target.id,
+                            /*
+                             * A correction is somebody saying so, which is not
+                             * the same as a request having resolved there.
+                             * Clearing this puts the link back in the queue the
+                             * check pass works through, rather than letting a
+                             * new target inherit the old one's proof.
+                             */
+                            verified: false,
+                          },
+                        }
+                      : { ...each, reference: undefined },
+                ),
+              }
+            : one,
+        ),
+      });
+
+      const after = saved.entities?.find((one) => one.id === entity.id);
+      return {
+        field: field.path,
+        reference: after?.fields.find((one) => one.path === field.path)?.reference ?? null,
+      };
     },
   );
 
@@ -2441,6 +2689,165 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     },
   );
 
+  /**
+   * What a widget on a board can be changed to, and changing it.
+   *
+   * The whole point of storing the brief. Until this existed a widget's
+   * decisions died the moment it was added: the setup card's controls come
+   * from a draft, the draft is destroyed on confirm, and the only thing left
+   * on a finished widget was how it looked. Changing a column meant deleting
+   * the widget and describing it again.
+   *
+   * Server-side because it needs what the client has not got — the record
+   * type, the reach graph, and the compiler — and because answering a control
+   * must have exactly one implementation. The same reason `/answer` applies
+   * the setup's own answers here rather than in the browser.
+   */
+  const settingsFor = (dashboardId: string, widgetId: string) => {
+    const dashboard = store.getDashboard(dashboardId);
+    if (!dashboard) return { ok: false as const, status: 404 as const, error: "no such dashboard" };
+    const widget = dashboard.widgets.find((entry) => entry.id === widgetId);
+    if (!widget) return { ok: false as const, status: 404 as const, error: "no such widget" };
+
+    /*
+     * A widget with no brief is not broken and is not rare: everything built
+     * before briefs existed carries none, and so does anything the card
+     * re-answered afterwards. It keeps the settings it always had — how it
+     * looks — and says so rather than offering controls that would rebuild it
+     * from a request nobody made.
+     */
+    const brief = widget.brief;
+    if (!brief) return { ok: true as const, dashboard, widget, brief: null, controls: [] };
+
+    const connection = store.getConnection(
+      widget.source?.connection ?? widget.sources[0]?.connection ?? "",
+    );
+    const entities = connection?.catalog
+      ? (options.catalog?.get(connection.catalog)?.entities ?? [])
+      : [];
+    const entity = entityById(entities, brief.entity);
+    /*
+     * The record type is gone — re-described, renamed, or the connection
+     * removed. Fail closed: presentation only and a plain sentence, never
+     * controls derived from a record type nobody can see.
+     */
+    if (!connection || !entity) {
+      return {
+        ok: true as const,
+        dashboard,
+        widget,
+        brief,
+        controls: [],
+        unavailable: "The record type this was built from is no longer described on this API.",
+      };
+    }
+
+    return {
+      ok: true as const,
+      dashboard,
+      widget,
+      brief,
+      entity,
+      connection,
+      entities,
+      controls: briefOptions({
+        brief,
+        entity,
+        graph: entityGraph(relatedFor(connection, entities)),
+        entities,
+      }),
+    };
+  };
+
+  app.get<{ Params: { id: string; widgetId: string } }>(
+    "/api/dashboards/:id/widgets/:widgetId/settings",
+    async (request, reply) => {
+      const found = settingsFor(request.params.id, request.params.widgetId);
+      if (!found.ok) return reply.status(found.status).send({ error: found.error });
+      return {
+        brief: found.brief,
+        controls: found.controls,
+        ...(found.unavailable ? { unavailable: found.unavailable } : {}),
+      };
+    },
+  );
+
+  /**
+   * One answer, folded into the brief and compiled again.
+   *
+   * `PUT` rather than `PATCH` because the brief is replaced whole, and because
+   * nothing else on this server uses `PATCH`.
+   */
+  app.put<{ Params: { id: string; widgetId: string }; Body: unknown }>(
+    "/api/dashboards/:id/widgets/:widgetId/brief",
+    async (request, reply) => {
+      const parsed = z
+        .object({ stepId: z.string().min(1).max(120), values: z.array(z.string().max(200)).max(40) })
+        .safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({ error: "an answer needs a step and its values" });
+      }
+
+      const found = settingsFor(request.params.id, request.params.widgetId);
+      if (!found.ok) return reply.status(found.status).send({ error: found.error });
+      if (!found.brief || !found.entity || !found.connection) {
+        return reply
+          .status(409)
+          .send({ error: found.unavailable ?? "This widget was not built from a request." });
+      }
+
+      const resource = found.connection.resources.find((one) => one.id === found.entity!.resource);
+      if (!resource) {
+        return reply.status(409).send({ error: "That record type is not one this connection carries." });
+      }
+
+      const next = answerBrief(found.brief, parsed.data.stepId, parsed.data.values);
+      const compiled = compileBrief({
+        brief: next,
+        entity: found.entity,
+        resource,
+        connection: found.connection.id,
+        listPath: pathOf(found.connection, resource.listOp),
+        related: relatedFor(found.connection, found.entities ?? []),
+        /*
+         * The widget's own id, which `recompileWidget` also enforces. A fresh
+         * one orphans its layout cell — and for a widget in a group, drops the
+         * group below two members, which makes the *whole board* unstorable.
+         */
+        id: found.widget.id,
+      });
+
+      if (!compiled.widget) {
+        return reply.status(409).send({ error: compiled.errors[0] ?? "That change cannot be built." });
+      }
+
+      const widget = recompileWidget(found.widget, compiled.widget);
+      const board = {
+        ...found.dashboard,
+        widgets: found.dashboard.widgets.map((entry) =>
+          entry.id === widget.id ? widget : entry,
+        ),
+      };
+      const valid = parseDashboard(board);
+      if (!valid.ok || !valid.value) {
+        return reply.status(409).send({ error: "That change does not produce a usable board.", detail: valid.errors });
+      }
+
+      store.putDashboard(valid.value);
+      queries.invalidate();
+      return {
+        widget,
+        notes: compiled.notes,
+        controls: briefOptions({
+          brief: next,
+          entity: found.entity,
+          graph: entityGraph(relatedFor(found.connection, found.entities ?? [])),
+          entities: found.entities ?? [],
+        }),
+      };
+    },
+  );
+
   app.delete<{ Params: { id: string; widgetId: string } }>(
     "/api/dashboards/:id/widgets/:widgetId/approve",
     async (request, reply) => {
@@ -3315,22 +3722,132 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
                          * cannot build from.
                          */
                         if (mapped.patch.endpoint) {
+                          /*
+                           * The other things asked for, each compiled the same
+                           * way and carried as a part of the same setup.
+                           *
+                           * Parts rather than separate builds because that is
+                           * what everything downstream already understands: one
+                           * preview showing all of them, one Add, the
+                           * arrangement chips, and — since a part now carries
+                           * its own brief and record type — settings per widget
+                           * afterwards. A request naming two collections is two
+                           * widgets, and they arrive together or not at all.
+                           */
+                          const parts = written.plus.flatMap((extra) => {
+                            const also = resolveCandidate(candidates, extra.entity);
+                            const from = also
+                              ? described.find((one) => one.connection === also.connection)
+                              : undefined;
+                            const record = also && from
+                              ? entityById(from.entities, also.recordType)
+                              : undefined;
+                            const holds = record && from
+                              ? from.entry.resources.find((one) => one.id === record.resource)
+                              : undefined;
+                            if (!also || !from || !record || !holds) return [];
+                            const built = patchFromBrief({
+                              brief: { ...extra, entity: record.id },
+                              entity: record,
+                              resource: holds,
+                              connection: from.connection,
+                              listPath: pathOf(from.entry, holds.listOp),
+                              related: relatedFor(from.entry, from.entities),
+                              id: record.id,
+                            });
+                            return built.patch.endpoint ? [built.patch] : [];
+                          });
+
+                          /*
+                           * The other reading, resolved but not compiled.
+                           *
+                           * Resolved here because this is the only place that
+                           * can: the model names a record type by a handle
+                           * that is qualified on collision, and a swap two
+                           * clicks later has no roster to look it up in.
+                           * Compiled only if somebody takes it — it is ignored
+                           * on almost every setup, and paying for the compile
+                           * every time to save it once is the wrong trade.
+                           */
+                          const otherReading = (() => {
+                            const other = written.alternative;
+                            if (!other) return null;
+                            const also = resolveCandidate(candidates, other.brief.entity);
+                            const from = also
+                              ? described.find((one) => one.connection === also.connection)
+                              : undefined;
+                            const record = also && from
+                              ? entityById(from.entities, also.recordType)
+                              : undefined;
+                            if (!record) return null;
+                            /*
+                             * Parsed on the way to storage, which is also what
+                             * turns the compiler's readonly view of a brief
+                             * into the shape the draft holds. A brief that
+                             * does not survive its own schema is one the swap
+                             * could not have compiled anyway.
+                             */
+                            const parsed = widgetBriefSchema.safeParse({
+                              ...other.brief,
+                              entity: record.id,
+                            });
+                            return parsed.success
+                              ? { label: other.label, brief: parsed.data }
+                              : null;
+                          })();
+
                           return {
-                            patch: mapped.patch,
+                            /*
+                             * The other reading, carried through as the phrase
+                             * somebody would recognise. It was written by the
+                             * same call that wrote the brief and was being
+                             * dropped here, so a genuine fork in the request
+                             * reached nobody.
+                             */
+                            ...(otherReading ? { alternative: otherReading } : {}),
+                            patch: {
+                              ...mapped.patch,
+                              ...(parts.length > 0
+                                ? {
+                                    parts,
+                                    /*
+                                     * Shown together, because being asked for
+                                     * together is what makes them one answer.
+                                     * Which arrangement is the reader's, and
+                                     * the chips on the card offer the rest.
+                                     */
+                                    group: {
+                                      title: [chosen.name.many, ...written.plus.map((one) => one.title ?? "")]
+                                        .filter(Boolean)
+                                        .join(" and ")
+                                        .slice(0, 120),
+                                    },
+                                  }
+                                : {}),
+                            },
                             reason: written.reason,
                             notes: mapped.notes,
                             ambiguities: [],
                           };
                         }
+                        /*
+                         * Whatever the compiler said, in its own words.
+                         *
+                         * A generic "could not build" over a brief that
+                         * compiled is worse than saying nothing: the reason is
+                         * usually specific and already written. The fallback
+                         * sentence is only for the case where nothing
+                         * explained itself.
+                         */
+                        const said = [...mapped.errors, ...mapped.notes];
                         return {
                           patch: {},
                           reason: "",
                           notes:
-                            mapped.errors.length > 0
-                              ? [...mapped.errors, ...mapped.notes]
+                            said.length > 0
+                              ? said
                               : [
                                   `I could not build a widget of ${chosen.name.many} from what this API offers.`,
-                                  ...mapped.notes,
                                 ],
                           ambiguities: [],
                         };

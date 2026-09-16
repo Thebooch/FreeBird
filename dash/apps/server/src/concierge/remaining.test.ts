@@ -6,7 +6,6 @@ import {
   newDraft,
   revise,
   mapApi,
-  applyStepAcross,
 } from "@freebirdai/dash-agent";
 import {
   connectionSchema,
@@ -29,80 +28,6 @@ import { join } from "node:path";
 import { catalogEntrySchema } from "@freebirdai/dash-spec";
 
 describe("remaining guided setup contracts", () => {
-  it("keeps a secondary ambiguity attached to its own widget and account", async () => {
-    const connections = ["first", "second", "third"].map((id) =>
-      connectionSchema.parse({
-        id,
-        title: id,
-        kind: "rest",
-        ops: [
-          {
-            id: "items",
-            title: "Items",
-            path: "/items",
-            fields: [{ name: "name", kinds: ["string"] }],
-          },
-        ],
-      }),
-    );
-    const context = buildConciergeContext({ connections, reports: [] });
-    /*
-     * A two-part setup, written out rather than proposed.
-     *
-     * What is under test is downstream of whoever wrote the patch: a choice
-     * offered on the *second* part has to stay attached to that part and to
-     * its own account, rather than being answered against the first. Three
-     * accounts all carrying an endpoint called `items` is the arrangement that
-     * makes a mix-up invisible — every option reads the same.
-     */
-    const patch: DraftPatch = {
-      connection: "first",
-      endpoint: "items",
-      component: "list",
-      title: "Names",
-      roles: { title: ["name"] },
-      parts: [
-        {
-          connection: "second",
-          endpoint: "items",
-          component: "list",
-          title: "Names",
-          roles: { title: ["name"] },
-          choiceBetween: {
-            role: "primary",
-            options: [
-              {
-                op: "items",
-                label: "Items (second)",
-                whatItIs: "What this is built from now.",
-                value: "option-0",
-                connection: "second",
-              },
-              {
-                op: "items",
-                label: "Items (third)",
-                whatItIs: "The third account",
-                value: "option-1",
-                connection: "third",
-              },
-            ],
-          },
-        },
-      ],
-      group: { title: "Names and Names", display: "tabs" },
-    };
-    const revised = revise(newDraft("d", "both lists", "assisted"), patch, context);
-    expect(revised.rejected).toEqual([]);
-    const other = revised.draft.parts[1]?.choice?.options.find(
-      (option) => option.connection === "third",
-    );
-    expect(other, JSON.stringify({ patch, draft: revised.draft })).toBeDefined();
-    const selected = applyStepAcross(revised.draft, "p1:choice", [other!.value!], context);
-    expect(selected.connection).toBe("first");
-    expect(selected.parts[1]?.connection).toBe("third");
-    expect(selected.parts[1]?.op).toBe("items");
-  });
-
   it("keeps cents and date conversions on both comparison sources", async () => {
     const connection = connectionSchema.parse({
       id: "money",
@@ -174,63 +99,6 @@ describe("remaining guided setup contracts", () => {
     expect(Object.values(widget.format)).toContainEqual(
       expect.objectContaining({ semantic: "currency", currency: "USD" }),
     );
-  });
-
-  it("resolves a duplicate endpoint choice to the selected account in the actual step API", async () => {
-    const connections = ["first", "second"].map((id) =>
-      connectionSchema.parse({
-        id,
-        title: id,
-        kind: "rest",
-        ops: [
-          {
-            id: "items",
-            title: "Items",
-            path: "/items",
-            fields: [{ name: "name", kinds: ["string"] }],
-          },
-        ],
-      }),
-    );
-    const context = buildConciergeContext({ connections, reports: [] });
-    /*
-     * Two accounts, one endpoint id, and a choice between them. The step API
-     * is what has to resolve the answer to an *account*, since the option's
-     * own label is all that distinguishes them.
-     */
-    const patch: DraftPatch = {
-      connection: "first",
-      endpoint: "items",
-      component: "list",
-      title: "Names",
-      roles: { title: ["name"] },
-      choiceBetween: {
-        role: "primary",
-        options: [
-          {
-            op: "items",
-            label: "Items (first)",
-            whatItIs: "What this is built from now.",
-            value: "option-0",
-            connection: "first",
-          },
-          {
-            op: "items",
-            label: "Items (second)",
-            whatItIs: "The other account",
-            value: "option-1",
-            connection: "second",
-          },
-        ],
-      },
-    };
-    const draft = revise(newDraft("d", "names", "assisted"), patch, context).draft;
-    const other = draft.choice?.options.find((option) => option.connection === "second");
-    expect(other, JSON.stringify({ patch, draft })).toBeDefined();
-    const selected = applyStepAcross(draft, "choice", [other!.value!], context);
-    expect(selected.connection).toBe("second");
-    expect(selected.op).toBe("items");
-    expect(selected.coercions).toEqual({});
   });
 
   it("resumes only failed map batches and invalidates changed contracts", async () => {

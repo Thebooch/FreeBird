@@ -5,6 +5,7 @@ import type {
   PresentationManifest,
   ResourceSpec,
   SemanticType,
+  WidgetBrief,
   WidgetSpec,
 } from "@freebirdai/dash-spec";
 
@@ -228,6 +229,38 @@ export interface RelationsResult {
   lastRead: string | null;
 }
 
+/**
+ * Every link between record types, and what it would take to correct one.
+ *
+ * Distinct from `RelationsResult`, which describes the endpoint-level model:
+ * these are the links on the *record types*, which are what a widget is
+ * compiled from and what a record page follows.
+ */
+export interface ReferencesResult {
+  described: boolean;
+  entities: { id: string; title: string }[];
+  links: {
+    entity: string;
+    from: string;
+    field: string;
+    label: string;
+    target: string;
+    to: string;
+    cost: "free" | "cheap" | "partial";
+    /** False for a link nothing here can follow — it renders as a bare id. */
+    openable: boolean;
+    verified: boolean;
+  }[];
+  /**
+   * Fields that look like a link and are not recorded as one.
+   *
+   * What lets a missed link be added — and what keeps a field somebody has
+   * just called "not a link" on the screen that could put it back.
+   */
+  candidates: { entity: string; from: string; field: string; label: string }[];
+  unreachable: { from: string; field: string; reason: string }[];
+}
+
 export interface UnknownResource {
   resource: string;
   title: string;
@@ -308,6 +341,20 @@ export interface ConciergeControl extends ConciergeStep {
 }
 
 /** One way several widgets could be shown together. */
+/**
+ * A widget's own settings, as the server derives them.
+ *
+ * `brief` is null for a widget that was not built from a request — everything
+ * made before briefs existed, and anything the setup card re-answered
+ * afterwards. Those keep the settings they always had, which is how they look,
+ * and `unavailable` says so when the reason is worth a sentence.
+ */
+export interface WidgetSettings {
+  brief: WidgetBrief | null;
+  controls: ConciergeControl[];
+  unavailable?: string;
+}
+
 export interface ArrangementOption {
   id: "tabs" | "row" | "stack" | "list" | "merged";
   label: string;
@@ -384,6 +431,15 @@ export interface ConciergeActive {
    * built — the picker never shows a possibility that turns out not to be one.
    */
   arrangements: ArrangementOption[];
+  /**
+   * The other reading of the same request, as a phrase to click.
+   *
+   * Null on almost every setup. It is what the assistant did *not* build from
+   * the same words — the records rather than a count of them, usually — and it
+   * was written by the call that wrote the brief, so taking it costs no second
+   * model call and no second wait.
+   */
+  alternative: { label: string } | null;
   summary: ConciergeSummary | null;
   warnings: string[];
   errors: string[];
@@ -489,95 +545,6 @@ export interface MapRunResult extends MapState {
   readonly errors: readonly string[];
 }
 
-/** One record type, as the builder lists it. */
-export interface RecordTypeSummary {
-  readonly entity: string;
-  readonly name: { readonly one: string; readonly many: string };
-  readonly kind: string;
-  readonly description?: string;
-  /** Whether somebody would start a widget from these, or only reach them. */
-  readonly starting: boolean;
-  /** False when nothing here lists them, which makes them unbuildable. */
-  readonly listable: boolean;
-}
-
-/** One field of a record type, described for the person choosing it. */
-export interface RecordTypeField {
-  readonly path: string;
-  readonly label: string;
-  readonly description?: string;
-  readonly group?: string;
-  readonly visibility: "primary" | "detail";
-  /** What kind of value this holds, where the describing pass could tell. */
-  readonly semantic?: SemanticType;
-}
-
-/** A field on a record type that points at another record. */
-export interface RecordTypeReference {
-  readonly field: string;
-  readonly label: string;
-  readonly target: string;
-  readonly targetName: string;
-}
-
-/** What one record type contains, for building from. */
-export interface RecordTypePage {
-  readonly entity: string;
-  readonly name: { readonly one: string; readonly many: string };
-  readonly description?: string;
-  readonly fields: readonly RecordTypeField[];
-  /** What can be followed from here, for reading a field through a link. */
-  readonly references: readonly RecordTypeReference[];
-  /** The filter strips this record type gets before anybody chooses. */
-  readonly filters: readonly string[];
-  /** How a list of these is ordered before anybody chooses. */
-  readonly sort?: { readonly field: string; readonly dir: "asc" | "desc" };
-}
-
-/** A brief assembled by hand, as the compiler takes it. */
-export interface HandBrief {
-  readonly entity: string;
-  readonly intent: "records" | "measure";
-  readonly title?: string;
-  readonly columns?: readonly string[];
-  /**
-   * Fields to offer as filter strips.
-   *
-   * Absent means "choose for me"; an empty list means none. The builder always
-   * states it, so unticking the last strip actually removes it.
-   */
-  readonly filters?: readonly { readonly field: string }[];
-  /** How to order the list. Absent takes the record type's own default. */
-  readonly sort?: { readonly field: string; readonly dir?: "asc" | "desc" };
-  /** Columns read through a reference — a task's vendor's phone number. */
-  readonly linked?: readonly {
-    readonly through: string;
-    readonly field: string;
-    readonly label?: string;
-  }[];
-}
-
-/** A widget built from a request, with what it could not honour said plainly. */
-export interface BriefResult {
-  readonly widget: WidgetSpec | null;
-  /** The model's own sentence about what it built, for the reader. */
-  readonly reason: string;
-  /** Where the answer differs from what was asked, in a reader's words. */
-  readonly notes: readonly string[];
-  readonly errors: readonly string[];
-  /**
-   * A different reading of the same words, already built.
-   *
-   * Offered instead of asked about, and absent on almost every request —
-   * an alternative on everything is a question on everything.
-   */
-  readonly alternative?: {
-    readonly label: string;
-    readonly widget: WidgetSpec;
-    readonly notes: readonly string[];
-  };
-}
-
 export const api = {
   checkSetupPreview: (
     dashboardId: string,
@@ -630,6 +597,15 @@ export const api = {
     arrangement: ArrangementOption["id"],
   ): Promise<ConciergeState & { notes?: string[] }> =>
     request(`/api/concierge/${encodeURIComponent(dashboardId)}/arrangement`, json({ arrangement })),
+
+  /**
+   * Take the other reading of the same request.
+   *
+   * No body: the server holds the reading it offered, and sending it back
+   * would give the two a chance to disagree about what was on the chip.
+   */
+  takeReading: (dashboardId: string): Promise<ConciergeState & { rejected: ConciergeRejection[] }> =>
+    request(`/api/concierge/${encodeURIComponent(dashboardId)}/reading`, json({})),
 
   /**
    * Record one answer and get the next question.
@@ -759,6 +735,28 @@ export const api = {
   checkRecords: (connectionId: string, budget?: number): Promise<RecordCheckResult> =>
     request(`/api/connections/${connectionId}/verify`, json(budget ? { budget } : {})),
 
+  references: (connectionId: string): Promise<ReferencesResult> =>
+    request(`/api/connections/${connectionId}/references`),
+
+  /**
+   * Correct where one field points, or say it points nowhere.
+   *
+   * One field at a time and `PUT`, because a reference is replaced whole —
+   * and `null` is a real answer: a field that resembles a link and is not one
+   * is worth saying so about.
+   */
+  setReference: (
+    connectionId: string,
+    entity: string,
+    field: string,
+    target: string | null,
+  ): Promise<{ field: string; reference: unknown }> =>
+    request(`/api/connections/${connectionId}/entities/${encodeURIComponent(entity)}/reference`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ field, target }),
+    }),
+
   presentation: (): Promise<PresentationResult> => request("/api/presentation"),
 
   /**
@@ -869,43 +867,25 @@ export const api = {
     request(`/api/connections/${id}/sample`, json({ op })),
 
   /**
-   * A request in the user's own words, answered as a widget.
+   * What a widget on a board could be changed to, and changing it.
    *
-   * One model call names the records and says what the widget is *for*;
-   * everything else — the endpoint, the columns, the sort, the filter strips —
-   * is worked out from the record type itself. Returns the widget rather than
-   * storing it, so nothing changes until somebody adds it.
+   * Derived on the server because it needs the record type, the reach graph
+   * and the compiler — none of which the browser has — and because answering a
+   * control must have exactly one implementation.
    */
-  brief: (id: string, intent: string, dashboardId?: string): Promise<BriefResult> =>
-    request(
-      `/api/connections/${id}/brief`,
-      json({ intent, ...(dashboardId ? { dashboardId } : {}) }),
-    ),
+  widgetSettings: (dashboardId: string, widgetId: string): Promise<WidgetSettings> =>
+    request(`/api/dashboards/${dashboardId}/widgets/${widgetId}/settings`),
 
-  /** The record types this connection has, for choosing between. */
-  recordTypes: (id: string): Promise<RecordTypeSummary[]> =>
-    request(`/api/connections/${id}/entities`),
-
-  /** What one record type contains: its fields, as a person reads them. */
-  recordType: (id: string, entity: string): Promise<RecordTypePage> =>
-    request(`/api/connections/${id}/entities/${encodeURIComponent(entity)}`),
-
-  /**
-   * A brief assembled by hand, compiled.
-   *
-   * The same compiler the described path uses, so a widget built by picking
-   * fields and one built by describing it cannot disagree. No model, and no
-   * request against the API.
-   */
-  compileBrief: (
-    id: string,
-    brief: HandBrief,
-    dashboardId?: string,
-  ): Promise<Omit<BriefResult, "reason">> =>
-    request(
-      `/api/connections/${id}/compile`,
-      json({ brief, ...(dashboardId ? { dashboardId } : {}) }),
-    ),
+  answerWidget: (
+    dashboardId: string,
+    widgetId: string,
+    stepId: string,
+    values: readonly string[],
+  ): Promise<{ widget: WidgetSpec; notes: string[]; controls: ConciergeControl[] }> =>
+    request(`/api/dashboards/${dashboardId}/widgets/${widgetId}/brief`, {
+      ...json({ stepId, values }),
+      method: "PUT",
+    }),
 
   /** A POST because it samples the API for real. Changes nothing. */
   capabilities: (id: string, refresh = false, deep = false): Promise<Capabilities> =>

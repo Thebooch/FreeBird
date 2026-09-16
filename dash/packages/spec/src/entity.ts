@@ -2,6 +2,7 @@ import { z } from "zod";
 import { componentIdSchema } from "./contracts.js";
 import { FACET_MAX_PER_WIDGET } from "./facet.js";
 import { idSchema } from "./primitives.js";
+import { coercionSchema, fieldFormatSchema } from "./coercion.js";
 import { aggregationSchema, semanticTypeSchema } from "./semantics.js";
 
 /**
@@ -209,6 +210,31 @@ export const entityFieldSchema = z.object({
    */
   filter: z.object({ param: z.string().min(1).max(120), via: fieldPathSchema.optional() }).optional(),
   reference: referenceSchema.optional(),
+  /**
+   * What the API's own schema says these values are.
+   *
+   * Carried from the declared field rather than asked of a model, like `kinds`
+   * and `values` beside it: whether a string is an ISO date is a fact about
+   * the API, true for everyone who connects it, and paying to be told it once
+   * per record type would be paying many times for one answer.
+   */
+  format: fieldFormatSchema.optional(),
+  /**
+   * How to read these values, where reading them needs saying.
+   *
+   * Lives on the record type rather than on a widget because it is a property
+   * of the data, not of one view of it: "amount is in cents" is true of every
+   * widget that ever shows this field, and answering it per widget means
+   * answering it again every time somebody builds one — and getting a
+   * different answer on the day somebody guesses.
+   *
+   * Usually absent, because `coercionForFormat` derives the safe cases from
+   * `format` and nothing needs to be written down. What lands here is the part
+   * that cannot be derived: minor units, which a schema may *claim* and only a
+   * person or a look at real values can confirm. Being wrong about it renders
+   * beautifully and is off by a hundred.
+   */
+  coercion: coercionSchema.optional(),
 });
 
 export type EntityField = z.infer<typeof entityFieldSchema>;

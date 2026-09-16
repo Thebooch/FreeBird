@@ -1,5 +1,11 @@
-import type { CompileBriefInput, PipelineStep, WidgetSpec } from "@freebirdai/dash-spec";
-import { compileBrief } from "@freebirdai/dash-spec";
+import type {
+  Coercion,
+  CompileBriefInput,
+  PipelineStep,
+  WidgetShape,
+  WidgetSpec,
+} from "@freebirdai/dash-spec";
+import { ALL_ROWS, compileBrief, parseAggregation } from "@freebirdai/dash-spec";
 import type { DraftPatch } from "./revise.js";
 
 /**
@@ -46,6 +52,95 @@ const fieldsOf = (pipeline: readonly PipelineStep[]): ((column: string) => strin
   return (column: string): string => derived.get(column) ?? column;
 };
 
+/**
+ * A source's conversions, in the API's own spelling.
+ *
+ * The compiler wrote them into the source's pipeline from what the record
+ * type declares; the draft carries them as `coercions`, keyed by field rather
+ * than by the column a derive step made of it. Carried so the widget the card
+ * builds converts what the compiled one would have — a conversion decided once
+ * and lost in translation is a value that renders differently depending on
+ * which door the widget came in by.
+ */
+const coercionsOf = (
+  pipeline: readonly PipelineStep[],
+): { coercions?: Record<string, Coercion> } => {
+  const step = pipeline.find((one) => one.op === "coerce");
+  if (!step || step.op !== "coerce") return {};
+  const fieldOf = fieldsOf(pipeline);
+  const coercions = Object.fromEntries(
+    Object.entries(step.fields).map(([column, coercion]) => [fieldOf(column), coercion]),
+  ) as Record<string, Coercion>;
+  return Object.keys(coercions).length > 0 ? { coercions } : {};
+};
+
+/**
+ * A measurement, as the shape a draft already understands.
+ *
+ * The other half of the same translation. A patch cannot describe a count the
+ * way it describes a column — `measure` and `groupBy` are steps that *change*
+ * a shape, and a `value` role bound to an aggregate names a column the
+ * endpoint does not have. `shape` is the key that carries one whole, and
+ * `buildFromDraft` binds the roles from it rather than from anything sent
+ * here: `rolesForShape` overrides whatever a patch bound, because after a
+ * group step the endpoint's own columns are gone.
+ *
+ * Read off the compiled widget's own pipeline, in the API's spelling — the
+ * same inversion `proposalPatch` performs, and for the same reason: the widget
+ * carries the flattened column and the step that validates this offers the
+ * field the API declares.
+ *
+ * Without this, asking the assistant for a chart or a count produced an empty
+ * patch and a sentence saying the widget could not be built — of a brief that
+ * had compiled perfectly well.
+ */
+const shapeOf = (
+  widget: WidgetSpec,
+  fieldOf: (column: string) => string,
+): WidgetShape | null => {
+  const group = widget.pipeline.find((step) => step.op === "group");
+  if (!group || group.op !== "group") return null;
+
+  const measures: WidgetShape["measures"] = [];
+  for (const [as, expression] of Object.entries(group.agg)) {
+    const parsed = parseAggregation(expression);
+    if (!parsed) return null;
+    measures.push({
+      as,
+      agg: parsed.fn,
+      ...(parsed.field ? { field: fieldOf(parsed.field) } : {}),
+    });
+  }
+
+  const sort = widget.pipeline.find((step) => step.op === "sort");
+  const limit = widget.pipeline.find((step) => step.op === "limit");
+
+  return {
+    /*
+     * The constant grouping is dropped rather than carried.
+     *
+     * Totalling every row is grouping on a literal `1`, which is how the
+     * pipeline says "all of them" — but it is a detail of the emitted steps,
+     * not of what was asked. `shapeSteps` puts it back on the way out, so
+     * carrying it here would ask the draft to name a column the endpoint has
+     * never heard of.
+     */
+    groupBy: group.by
+      .filter((key) => key.field !== ALL_ROWS)
+      .map((key) => ({
+        field: fieldOf(key.field),
+        ...(key.bucket ? { bucket: key.bucket } : {}),
+        ...(key.as ? { as: key.as } : {}),
+      })),
+    measures,
+    sort:
+      sort && sort.op === "sort"
+        ? sort.by.map((key) => ({ field: fieldOf(key.field), dir: key.dir ?? "asc" }))
+        : [],
+    ...(limit && limit.op === "limit" ? { limit: limit.count } : {}),
+  };
+};
+
 export const patchFromBrief = (
   input: CompileBriefInput,
 ): { patch: DraftPatch; notes: readonly string[]; errors: readonly string[] } => {
@@ -65,13 +160,114 @@ export const patchFromBrief = (
    * to *see* records and was handed a chart instead. That is the reading this
    * replaces, and a measurement is left where it already works.
    */
-  if (input.brief.intent !== "records") return { patch: {}, notes: [], errors: [] };
-
   const compiled = compileBrief(input);
   const widget = compiled.widget;
   if (!widget) return { patch: {}, notes: compiled.notes, errors: compiled.errors };
 
   const notes = [...compiled.notes];
+
+  /*
+   * A number, or a number broken down — carried as a shape rather than as
+   * roles.
+   *
+   * These used to be handed back as an empty patch on the reasoning that a
+   * draft cannot express a measurement. It can: `shape` is a first-class patch
+   * key, `applyShape` validates it against the endpoint's own field names, and
+   * `buildFromDraft` binds the roles from it. What a patch cannot express is a
+   * measurement described as *steps* — `measure` and `groupBy` change a shape
+   * that already exists — which is a different thing.
+   *
+   * Sending nothing was not neutral. With the endpoint-first planner retired
+   * there is nothing behind this to catch it, so asking for a chart produced a
+   * refusal to build a brief that had compiled perfectly well.
+   */
+  if (input.brief.intent !== "records") {
+    const shape = shapeOf(widget, fieldsOf(widget.pipeline));
+    /*
+     * Two measurements stacked on one axis.
+     *
+     * Each side does its own grouping inside its own source, so the widget's
+     * pipeline has none to read back — the shapes are read off each source's
+     * pipeline instead, and the second arrives as `seriesWith`, which is how a
+     * draft has always carried a comparison. That machinery sat complete and
+     * unreachable once the endpoint-first planner that wrote it was retired,
+     * and this request was refused at the card for want of a writer.
+     *
+     * The column names each side groups into are deliberately not carried:
+     * `buildFromDraft` aligns every side onto its own names at the moment they
+     * are stacked, so sending the compiler's would be sending a convention the
+     * builder immediately replaces.
+     */
+    const union = !shape && widget.combine?.op === "union";
+    const sides = union ? widget.sources.filter((source) => !source.hidden) : [];
+    const sideShapes = sides.map((source) => ({
+      source,
+      shape: shapeOf({ ...widget, pipeline: source.pipeline }, fieldsOf(source.pipeline)),
+    }));
+    const [first, ...rest] = sideShapes;
+    if (union && first?.shape && rest.length > 0 && rest.every((side) => side.shape)) {
+      return {
+        patch: {
+          connection: input.connection,
+          entity: input.entity.id,
+          brief: widget.brief,
+          endpoint: first.source.op,
+          component: widget.component,
+          shape: first.shape,
+          ...coercionsOf(first.source.pipeline),
+          seriesWith: rest.map((side) => ({
+            endpoint: side.source.op,
+            label: (side.source.label ?? side.source.op).slice(0, 80),
+            shape: side.shape!,
+            ...coercionsOf(side.source.pipeline),
+            ...(side.source.fanOut
+              ? {
+                  fanOut: {
+                    // The draft names a driver by its endpoint; the widget by its source.
+                    from:
+                      widget.sources.find((one) => one.as === side.source.fanOut!.from)?.op ??
+                      side.source.fanOut.from,
+                    field: side.source.fanOut.field,
+                    ...(side.source.fanOut.as ? { as: side.source.fanOut.as } : {}),
+                    maxRows: side.source.fanOut.maxRows,
+                  },
+                }
+              : {}),
+          })),
+          ...(Object.keys(widget.format).length > 0 ? { format: widget.format } : {}),
+        },
+        notes,
+        errors: compiled.errors,
+      };
+    }
+    if (!shape) {
+      notes.push(
+        widget.sources.length > 1
+          ? "This compares two kinds of record in a way the setup card cannot carry — ask for one of them and add the other afterwards."
+          : `${input.entity.name.many} could not be measured from what this API offers.`,
+      );
+      return { patch: {}, notes, errors: compiled.errors };
+    }
+    return {
+      patch: {
+        connection: input.connection,
+        entity: input.entity.id,
+        brief: widget.brief,
+        ...(widget.source?.op ? { endpoint: widget.source.op } : {}),
+        component: widget.component,
+        shape,
+        /*
+         * Deliberately no `roles`. After a group step the endpoint's own
+         * columns are gone, and `buildFromDraft` replaces whatever a patch
+         * bound with `rolesForShape(shape)` for exactly that reason — so
+         * sending them would be sending something guaranteed to be discarded.
+         */
+        ...(Object.keys(widget.format).length > 0 ? { format: widget.format } : {}),
+      },
+      notes,
+      errors: compiled.errors,
+    };
+  }
 
   /*
    * The two sides of a join, where the brief asked for one.
@@ -147,6 +343,12 @@ export const patchFromBrief = (
   return {
     patch: {
       connection: input.connection,
+      /*
+       * The request itself, so the finished widget stays editable. Everything
+       * below is derived from it; storing only the derivation is what made a
+       * widget's decisions die the moment it reached a board.
+       */
+      brief: widget.brief,
       /*
        * Carried, because it is what lets the finished widget's rows open the
        * *shared* page for this record type — and so the one thing that stops

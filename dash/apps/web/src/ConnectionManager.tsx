@@ -17,6 +17,7 @@ import {
   type MapState,
   type DescribeRunResult,
   type RecordCheckResult,
+  type ReferencesResult,
   type RelationsResult,
   type SampleResult,
   api,
@@ -161,6 +162,8 @@ export const ConnectionManager = ({
    * API must not be able to put a half-loaded answer in front of it.
    */
   const [recordsInfo, setRecordsInfo] = useState<MapState | null>(null);
+  /** Every link between record types, and what each could be corrected to. */
+  const [references, setReferences] = useState<ReferencesResult | null>(null);
   const [check, setCheck] = useState<RecordCheckResult | null>(null);
   const [checking, setChecking] = useState(false);
   const [describing, setDescribing] = useState(false);
@@ -632,10 +635,28 @@ export const ConnectionManager = ({
       setManaged(connection);
       setCheck(null);
       setDescribed(null);
-      setRecordsInfo(
-        connection.catalog ? await api.mapState(connection.catalog).catch(() => null) : null,
-      );
+      const [state, links] = await Promise.all([
+        connection.catalog ? api.mapState(connection.catalog).catch(() => null) : null,
+        api.references(connection.id).catch(() => null),
+      ]);
+      setRecordsInfo(state);
+      setReferences(links);
       setView("records");
+    });
+
+  /**
+   * Point a field at a different record type, or at none.
+   *
+   * The links that decide widgets live on the record types, and they were the
+   * ones nobody could correct: the editor in Manage edits the endpoint-level
+   * model, which a described API no longer consults. Re-read rather than
+   * patched, so what is on screen is what the catalog now says.
+   */
+  const setReference = (entity: string, field: string, target: string | null): Promise<void> =>
+    run(async () => {
+      if (!managed) return;
+      await api.setReference(managed.id, entity, field, target);
+      setReferences(await api.references(managed.id).catch(() => null));
     });
 
   /**
@@ -678,14 +699,16 @@ export const ConnectionManager = ({
       setOpTest(null);
       setCapabilities(null);
       setNewOp({ title: "", path: "", archetype: "list" });
-      const [ops, links] = await Promise.all([
+      const [ops, links, records] = await Promise.all([
         api.availableOps(connection.id).catch(() => []),
-        // Free — it reads the stored report, never the API. A failure here is
+        // Free — both read what is stored, never the API. A failure here is
         // not worth blocking the screen for.
         api.relations(connection.id).catch(() => null),
+        api.references(connection.id).catch(() => null),
       ]);
       setAvailable(ops);
       setRelations(links);
+      setReferences(records);
       setView("manage");
     });
 
@@ -1148,6 +1171,125 @@ export const ConnectionManager = ({
               </div>
             )}
 
+            {/*
+             * The links, and the chance to correct one.
+             *
+             * These are the ones that decide what a widget is built from and
+             * what a record page follows — and they were the only ones nobody
+             * could change. The editor that existed edits the endpoint-level
+             * relations, a model a described API no longer consults, so
+             * correcting a wrong link there changed nothing anybody could see.
+             */}
+            {references?.described &&
+              (references.links.length > 0 || references.candidates.length > 0) && (
+              <>
+                <h4>How records link</h4>
+                <p className="dash-hint">
+                  A link is what turns the number an API stores into the name of the record it
+                  points at. These were read from {managed?.title ?? "the API"}&rsquo;s own
+                  specification, which can be confidently wrong — so each one can be pointed
+                  somewhere else, or told it is not a link at all.
+                </p>
+                <ul className="dash-conn-list" data-testid="references">
+                  {references.links.map((link) => (
+                    <li key={`${link.entity}-${link.field}`}>
+                      <div className="dash-conn-list__text">
+                        <div className="dash-conn-list__title">
+                          {link.from} · {link.label}
+                        </div>
+                        <div className="dash-conn-list__meta">
+                          {link.openable
+                            ? link.cost === "free"
+                              ? "The row already carries the name, so opening it costs nothing."
+                              : "Opened with one request."
+                            : "Nothing here can open the record this points at, so it shows as the raw id."}
+                          {link.verified ? " · followed to a real record" : " · not yet confirmed"}
+                        </div>
+                      </div>
+                      <select
+                        className="dash-control"
+                        data-testid={`reference-${link.entity}-${link.field}`}
+                        value={link.target}
+                        disabled={busy}
+                        onChange={(event) =>
+                          void setReference(
+                            link.entity,
+                            link.field,
+                            event.target.value === "" ? null : event.target.value,
+                          )
+                        }
+                      >
+                        {references.entities.map((entity) => (
+                          <option key={entity.id} value={entity.id}>
+                            {entity.title}
+                          </option>
+                        ))}
+                        {/*
+                         * A real answer, not an empty state: a field that
+                         * resembles a link and is not one is worth saying so
+                         * about, and saying so stops every widget over it
+                         * offering a record that never opens.
+                         */}
+                        <option value="">Not a link</option>
+                      </select>
+                    </li>
+                  ))}
+                  {/*
+                   * Fields that look like a link and are not one. Listed last
+                   * and in the same list, because "this should point at
+                   * Albums" and "this one should not" are the same correction
+                   * from opposite ends — and because a field somebody has just
+                   * called "not a link" has to stay somewhere they can put it
+                   * back.
+                   */}
+                  {references.candidates.map((field) => (
+                    <li key={`candidate-${field.entity}-${field.field}`}>
+                      <div className="dash-conn-list__text">
+                        <div className="dash-conn-list__title">
+                          {field.from} · {field.label}
+                        </div>
+                        <div className="dash-conn-list__meta">
+                          Looks like it holds a record&rsquo;s id and is not recorded as a link, so
+                          it shows as a bare number.
+                        </div>
+                      </div>
+                      <select
+                        className="dash-control"
+                        data-testid={`reference-${field.entity}-${field.field}`}
+                        value=""
+                        disabled={busy}
+                        onChange={(event) =>
+                          void setReference(
+                            field.entity,
+                            field.field,
+                            event.target.value === "" ? null : event.target.value,
+                          )
+                        }
+                      >
+                        <option value="">Not a link</option>
+                        {references.entities.map((entity) => (
+                          <option key={entity.id} value={entity.id}>
+                            {entity.title}
+                          </option>
+                        ))}
+                      </select>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+
+            {references?.described && references.unreachable.length > 0 && (
+              <p className="dash-hint" data-testid="references-unreachable">
+                {references.unreachable.length} link(s) are recorded and cannot be followed here:{" "}
+                {references.unreachable
+                  .slice(0, 3)
+                  .map((one) => `${one.from}.${one.field} (${one.reason})`)
+                  .join("; ")}
+                .
+              </p>
+            )}
+
             {check && (
               <div
                 className={`dash-callout ${check.stopped ? "" : "dash-callout--good"}`}
@@ -1297,7 +1439,20 @@ export const ConnectionManager = ({
              * second is a judgement, so only the second is editable here.
              */}
             <h4>How records relate</h4>
-            {!relations || relations.resources.every((r) => r.relations.length === 0) ? (
+            {references?.described ? (
+              /*
+               * Described APIs answer from their record types, so the
+               * endpoint-level links below no longer decide anything — and an
+               * editor whose edits change nothing visible is worse than no
+               * editor. The correction moved to where the model that decides
+               * actually lives.
+               */
+              <p className="dash-hint" data-testid="relations-superseded">
+                {managed?.title ?? "This API"}&rsquo;s records are described, so its links are
+                read from the record types — correct them under <strong>Records</strong>. What is
+                below is the endpoint-level reading, kept for the parts nothing has described.
+              </p>
+            ) : !relations || relations.resources.every((r) => r.relations.length === 0) ? (
               <p className="dash-hint" data-testid="relations-empty">
                 Nothing known yet. Reading this API works out which records belong to which — a
                 record you can open to reveal what is inside it.

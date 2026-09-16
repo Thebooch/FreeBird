@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { CatalogEntry, ConnectionSpec, AuthSpec } from "@freebirdai/dash-spec";
+import type { CatalogEntry, ConnectionSpec, AuthSpec, FieldFormat } from "@freebirdai/dash-spec";
 import {
   catalogEntrySchema,
   connectionSchema,
@@ -53,6 +53,59 @@ export interface IntegrationStore {
  * without waiting for an upstream release, and a good local dialect is exactly
  * what gets contributed back.
  */
+/**
+ * An entry read back with what its record types never stored.
+ *
+ * `EntityField.format` is carried from the declared schema when a record type
+ * is described — but every catalog written before that arrived has record
+ * types without it, and re-describing an API is a paid model pass over every
+ * resource it has. This is the same fact, recovered for free: the op's own
+ * `MappedField.format` is sitting beside it in the very same file.
+ *
+ * Read-only and load-time, deliberately. Writing the hydrated copy back would
+ * rewrite catalogs nobody asked to change, and would make a file's contents
+ * depend on which version last opened it. A described field whose `format`
+ * *is* stored is never touched, so a deliberate correction always wins.
+ */
+export const hydrateFieldFormats = (entry: CatalogEntry): CatalogEntry => {
+  const entities = entry.entities;
+  if (!entities || entities.length === 0) return entry;
+
+  const opById = new Map(entry.ops.map((op) => [op.id, op]));
+  const resourceById = new Map(entry.resources.map((resource) => [resource.id, resource]));
+
+  let changed = false;
+  const hydrated = entities.map((entity) => {
+    const resource = resourceById.get(entity.resource);
+    if (!resource) return entity;
+
+    /*
+     * Both endpoints, because a field described on the detail response and
+     * absent from the list is still a field of this record.
+     */
+    const declared = new Map<string, FieldFormat>();
+    for (const opId of [resource.listOp, resource.detailOp]) {
+      for (const field of (opId ? opById.get(opId) : undefined)?.fields ?? []) {
+        if (field.format && !declared.has(field.name)) declared.set(field.name, field.format);
+      }
+    }
+    if (declared.size === 0) return entity;
+
+    let touched = false;
+    const fields = entity.fields.map((field) => {
+      const format = declared.get(field.path);
+      if (!format || field.format) return field;
+      touched = true;
+      return { ...field, format };
+    });
+    if (!touched) return entity;
+    changed = true;
+    return { ...entity, fields };
+  });
+
+  return changed ? { ...entry, entities: hydrated } : entry;
+};
+
 export class CatalogStore implements IntegrationStore {
   constructor(
     private readonly seedDir: string,
@@ -91,7 +144,8 @@ export class CatalogStore implements IntegrationStore {
   }
 
   get(id: string): CatalogEntry | null {
-    return this.list().find((entry) => entry.id === id) ?? null;
+    const found = this.list().find((entry) => entry.id === id);
+    return found ? hydrateFieldFormats(found) : null;
   }
 
   /** Only ever writes to the overlay — the repo seed is read-only at runtime. */

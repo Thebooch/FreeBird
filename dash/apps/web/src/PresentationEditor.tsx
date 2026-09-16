@@ -1,4 +1,5 @@
 import { Button, Checkbox, Field, Message, StatusPill, Toolbar } from "@freebirdai/dash-components";
+import { WidgetSettings } from "./WidgetSettings.jsx";
 import {
   DENSITIES,
   EMPTY_PRESENTATION,
@@ -159,6 +160,25 @@ export const PresentationEditor = ({
 
   return (
     <Panel onClose={onClose} title={`Customise “${widget.title}”`}>
+      {/*
+       * What it shows, above how it looks.
+       *
+       * Two independent halves of one panel, and the order is the point: a
+       * widget is a question about some records first and a rendering of them
+       * second. The top half is absent for a widget that was not built from a
+       * request, which is every one built before briefs existed — those keep
+       * exactly the settings they have always had.
+       */}
+      {dashboard && (
+        <WidgetSettings
+          dashboardId={dashboard.id}
+          widgetId={widget.id}
+          onChanged={onChanged}
+        />
+      )}
+
+      <h4 className="dash-sheet__sub">How it looks</h4>
+
       <Field label="Apply this to" hint="Where the change is stored, and how far it reaches.">
         {(id) => (
           <select

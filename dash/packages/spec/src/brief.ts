@@ -1,4 +1,6 @@
-import { z } from "zod";
+import type { AlongsideMode, WidgetBrief } from "./brief-schema.js";
+import type { Coercion } from "./coercion.js";
+import { COERCION_SEMANTICS, coercionForFormat } from "./coercion.js";
 import type { BuiltinComponentId } from "./contracts.js";
 import type { WidgetSpec } from "./dashboard.js";
 import { parseWidget } from "./dashboard.js";
@@ -11,11 +13,12 @@ import { idSchema, pathParamNames } from "./primitives.js";
 import { defaultFacets, defaultSort, recipeFor } from "./recipes.js";
 import type { ResourceSpec } from "./resource.js";
 import type { PipelineStep } from "./pipeline.js";
+import type { SemanticType } from "./semantics.js";
 import type { WidgetShape } from "./shape.js";
 import { shapeSteps } from "./shape.js";
 
 /**
- * What somebody asked for, and the widget that answers it.
+ * A brief, compiled into the widget that answers it.
  *
  * The layer that replaces an endpoint hunt with a sentence. Everything a
  * widget needs used to be assembled per request from raw endpoint shapes —
@@ -24,147 +27,23 @@ import { shapeSteps } from "./shape.js";
  * kind of record. A brief states only what is *particular* to this request;
  * the record type and its kind's recipe supply the rest.
  *
- * **Intent is stated, never inferred.** This is the whole of the fix for the
- * failure that started this: asked for "tasks with a filter by category", the
- * old path produced a bar chart of task counts per category, because "filter
- * by category" and "grouped by category" were the same thing to it — a
- * grouping was the only way to express either. Here they are different
- * intents. `records` is a list of records that a reader narrows with a filter
- * strip, and it cannot become a chart; `compare` is a chart, and it requires
- * something to group by. No wording can slide from one to the other.
- *
  * Deterministic and pure: the same brief over the same record type always
  * compiles to the same widget. A model's only job is to write the brief, which
  * is a handful of names it can be checked against — not a pipeline it could
  * get subtly wrong.
+ *
+ * The brief's own shape lives in `brief-schema.ts` and is re-exported here, so
+ * every caller still imports it from one place. See that file for why.
  */
 
-export const WIDGET_INTENTS = ["records", "measure", "compare"] as const;
-
-/**
- * What the widget is for.
- *
- * - `records`  the records themselves, narrowed by filter strips.
- * - `measure`  one number about them: how many, or how much.
- * - `compare`  that number broken down by something, as a chart.
- */
-export type WidgetIntent = (typeof WIDGET_INTENTS)[number];
-
-export const ALONGSIDE_MODES = ["join", "beside"] as const;
-
-/**
- * How a second record type is brought in beside the first.
- *
- * - `join`   what else is true of this row: the other record's fields, on it.
- * - `beside` how these two compare: two measurements over one axis.
- *
- * They are not two spellings of one thing. A join matches rows against each
- * other and needs something to match *on*; a comparison matches nothing —
- * neither set of rows is an attribute of the other, and asked for listings per
- * month against applications per month, a join has nothing to work with. The
- * `combineSchema` comment draws the same line from the runtime's side.
- */
-export type AlongsideMode = (typeof ALONGSIDE_MODES)[number];
-
-/**
- * A brief, as a shape that can arrive over the wire.
- *
- * Needed because a brief is no longer only something a model writes: the
- * manual builder assembles one by hand, and both go through the same compiler
- * — which is what stops a hand-built widget and a described one disagreeing
- * about what the same request means.
- */
-export const widgetBriefSchema = z.object({
-  entity: idSchema,
-  intent: z.enum(WIDGET_INTENTS),
-  title: z.string().max(120).optional(),
-  columns: z.array(fieldPathSchema).max(12).optional(),
-  filters: z
-    .array(
-      z.object({
-        field: fieldPathSchema,
-        values: z.array(z.string().max(120)).max(20).optional(),
-      }),
-    )
-    .max(4)
-    .optional(),
-  linked: z
-    .array(
-      z.object({
-        through: fieldPathSchema,
-        field: fieldPathSchema,
-        label: z.string().min(1).max(60).optional(),
-      }),
-    )
-    .max(4)
-    .optional(),
-  sort: z.object({ field: fieldPathSchema, dir: z.enum(["asc", "desc"]).optional() }).optional(),
-  groupBy: fieldPathSchema.optional(),
-  measure: z
-    .object({ agg: z.enum(["count", "sum"]), field: fieldPathSchema.optional() })
-    .optional(),
-  limit: z.number().int().min(1).max(10_000).optional(),
-  alongside: z
-    .object({ entity: idSchema, as: z.enum(ALONGSIDE_MODES).optional() })
-    .optional(),
-});
-
-export interface WidgetBrief {
-  /** The record type this is about. */
-  readonly entity: string;
-  readonly intent: WidgetIntent;
-  /** What to call it. Defaults to the record type's own plural. */
-  readonly title?: string | undefined;
-  /** Fields to show. Absent takes the record type's own default view. */
-  readonly columns?: readonly string[] | undefined;
-  /**
-   * Fields to offer as filter strips, and what to start them narrowed to.
-   *
-   * `values` is where a scope phrase lands. "Maintenance tasks" is a list of
-   * tasks with the category strip already narrowed to maintenance — visible,
-   * and one click from being widened — rather than a filter baked into the
-   * pipeline where the reader can neither see it nor undo it.
-   *
-   * A value that matches nothing in the data is dropped by the strip itself,
-   * so the widget shows everything rather than nothing. That is what makes an
-   * approximate value safe to carry: the worst case is the unnarrowed list the
-   * reader would otherwise have got.
-   */
-  readonly filters?: readonly { readonly field: string; readonly values?: readonly string[] }[];
-  /**
-   * Columns read *through* a reference — a task's vendor's phone number.
-   *
-   * `through` is a field on these records that holds another record's
-   * identity; `field` is what to read on that record. The value lives on a
-   * different record entirely, so no pipeline over this endpoint could produce
-   * it — it is filled in from the record the reference already points at.
-   */
-  readonly linked?: readonly {
-    readonly through: string;
-    readonly field: string;
-    readonly label?: string;
-  }[];
-  readonly sort?: { readonly field: string; readonly dir?: "asc" | "desc" } | undefined;
-  /** What a comparison is broken down by. Required for `compare`. */
-  readonly groupBy?: string | undefined;
-  /** What is counted or totalled. Defaults to counting records. */
-  readonly measure?: { readonly agg: "count" | "sum"; readonly field?: string } | undefined;
-  readonly limit?: number | undefined;
-  /**
-   * A second record type, brought in beside this one.
-   *
-   * The one thing a brief could not say. A brief names a record type, so "my
-   * vendors alongside their open work orders" fell through to a planner that
-   * hunted endpoints — and everything the entity-first path had established
-   * about which records those were went with it.
-   *
-   * The link itself is never stated here, because it is never a matter of
-   * opinion: the record types already record which fields point at which, in
-   * both directions, with what each one costs to reach. Naming the second
-   * record type is the whole of what a request adds.
-   */
-  readonly alongside?: { readonly entity: string; readonly as?: AlongsideMode } | undefined;
-}
+export {
+  ALONGSIDE_MODES,
+  WIDGET_INTENTS,
+  widgetBriefSchema,
+  type AlongsideMode,
+  type WidgetBrief,
+  type WidgetIntent,
+} from "./brief-schema.js";
 
 export interface CompileBriefInput {
   readonly brief: WidgetBrief;
@@ -423,10 +302,23 @@ const handleFor = (id: string): string => {
   return /^[A-Za-z_]/.test(safe) ? safe : `_${safe}`;
 };
 
+/** How many of a record's rows are read for their nested collection. */
+const FAN_OUT_MAX_ROWS = 25;
+
 /** The far record type, and the endpoint that lists it. */
 interface FarSide {
   readonly entity: EntitySpec;
   readonly op: string;
+  /**
+   * The URL parameter the primary's own id fills, for a collection that only
+   * exists inside one record.
+   *
+   * Present exactly when the graph says the far side is reached by `path` —
+   * `/leases/{leaseId}/transactions` and its sixty siblings on this API. The
+   * endpoint cannot be called once for the whole account, so it is called once
+   * per record instead, capped, and the cap is said out loud.
+   */
+  readonly perRecordParam?: string;
 }
 
 /** Either the thing, or the sentence saying why there is not one. */
@@ -470,11 +362,37 @@ const farSideOf = (input: CompileBriefInput, wanted: string): Resolved<FarSide> 
       refusal: `${far.name.many} cannot be listed: this API has no endpoint that returns them. ${primary.name.many} are shown on their own.`,
     };
   }
-  if (pathParamNames(op.path).length > 0) {
-    return {
-      ok: false,
-      refusal: `${far.name.many} can only be listed for one record at a time, so they cannot be shown beside every ${primary.name.one}.`,
-    };
+  const needs = pathParamNames(op.path);
+  if (needs.length > 0) {
+    /*
+     * A collection that only exists inside one record, reached one record at a
+     * time.
+     *
+     * Derived from the graph rather than proposed: `scope` is the strongest
+     * kind of link this model has — the API put the parent in the URL, so
+     * nothing was inferred from a field name — and the reach it produces says
+     * which parameter the id fills. Anything else with a parameter in its path
+     * is still refused, because a widget has nowhere to get a value for it.
+     */
+    const graph = entityGraph({
+      entities: related.entities,
+      resources: related.resources,
+      ops: related.ops,
+    });
+    const under = graph
+      .backrefsOf(primary.id)
+      .find(
+        (one) =>
+          one.entity === far.id && one.reach.mode === "path" && one.reach.op === listOp,
+      );
+    const param = under?.reach.mode === "path" ? under.reach.param : undefined;
+    if (!param || needs.length !== 1 || needs[0] !== param) {
+      return {
+        ok: false,
+        refusal: `${far.name.many} can only be listed for one record at a time, so they cannot be shown beside every ${primary.name.one}.`,
+      };
+    }
+    return { ok: true, value: { entity: far, op: listOp, perRecordParam: param } };
   }
   return { ok: true, value: { entity: far, op: listOp } };
 };
@@ -498,7 +416,12 @@ interface JoinOn {
  * a guess pairs rows that have nothing to do with each other — which reads
  * exactly like data, because every row in it is real.
  */
-const joinOn = (input: CompileBriefInput, far: EntitySpec): Resolved<JoinOn> => {
+const joinOn = (
+  input: CompileBriefInput,
+  far: EntitySpec,
+  /** Set when the far collection is fetched one primary record at a time. */
+  perRecord = false,
+): Resolved<JoinOn> => {
   const primary = input.entity;
   const related = input.related;
   if (!related) return { ok: false, refusal: `Nothing links ${primary.name.many} to ${far.name.many}.` };
@@ -508,6 +431,34 @@ const joinOn = (input: CompileBriefInput, far: EntitySpec): Resolved<JoinOn> => 
     resources: related.resources,
     ops: related.ops,
   });
+
+  /*
+   * A collection fetched per record is matched back by what its own rows say.
+   *
+   * The fan-out already asks the right question — these are that lease's
+   * transactions — but the answers all arrive in one pile, and nothing on a
+   * row says which request brought it unless the row itself carries the
+   * parent's id. Where it does not, this is refused rather than paired on
+   * position, because rows in the wrong order are still real rows and read
+   * exactly like data.
+   */
+  if (perRecord) {
+    const left = primary.identity?.field;
+    if (!left) {
+      return {
+        ok: false,
+        refusal: `Nothing on ${primary.name.one} holds its own identity, so ${far.name.many} could not be looked up for one.`,
+      };
+    }
+    const back = graph.referencesOf(far.id).find((one) => one.target === primary.id);
+    if (!back) {
+      return {
+        ok: false,
+        refusal: `${far.name.many} are listed under one ${primary.name.one} at a time, and their rows carry nothing saying which one — so they could not be put beside the right ${primary.name.one}.`,
+      };
+    }
+    return { ok: true, value: { left, right: back.field, note: null } };
+  }
 
   /*
    * This record pointing at the far one comes first.
@@ -797,7 +748,13 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
    */
   const wanted = brief.alongside;
   const mode: AlongsideMode = wanted?.as ?? "join";
-  let pair: { readonly far: EntitySpec; readonly op: string; readonly on?: JoinOn } | null = null;
+  let pair: {
+    readonly far: EntitySpec;
+    readonly op: string;
+    readonly on?: JoinOn;
+    /** Set when the far collection is read one primary record at a time. */
+    readonly perRecordParam?: string;
+  } | null = null;
   if (wanted) {
     const side = farSideOf(input, wanted.entity);
     if (!side.ok) {
@@ -817,11 +774,27 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
         `${entity.name.many} and ${side.value.entity.name.many} can only be set against each other as a chart, so ${side.value.entity.name.many} were left out.`,
       );
     } else if (mode === "join") {
-      const on = joinOn(input, side.value.entity);
+      const on = joinOn(input, side.value.entity, side.value.perRecordParam !== undefined);
       if (!on.ok) notes.push(on.refusal);
       else {
         if (on.value.note) notes.push(on.value.note);
-        pair = { far: side.value.entity, op: side.value.op, on: on.value };
+        pair = {
+          far: side.value.entity,
+          op: side.value.op,
+          on: on.value,
+          ...(side.value.perRecordParam ? { perRecordParam: side.value.perRecordParam } : {}),
+        };
+        if (side.value.perRecordParam) {
+          /*
+           * The price, on the widget rather than discovered in a rate-limit
+           * error. One request per record is the honest degradation this kind
+           * of link has — the same shape the join's own caveats take — and a
+           * cap that truncates in silence is the outcome this product refuses.
+           */
+          notes.push(
+            `${side.value.entity.name.many} are listed one ${entity.name.one} at a time, so the first ${FAN_OUT_MAX_ROWS} ${entity.name.many} are read for theirs — ${FAN_OUT_MAX_ROWS} extra requests, and any ${entity.name.one} past them shows none.`,
+          );
+        }
       }
     } else {
       /* A comparison needs no link — only an axis, settled with the grouping. */
@@ -989,7 +962,12 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
     shape.measures = [{ as: "value", agg: measure.agg, ...(measure.field ? { field: columnForPath(measure.field) } : {}) }];
     roles = { value: "value" };
   } else {
-    component = recipe.component;
+    /*
+     * What was asked for, else what this kind of record reads best as. A view
+     * that cannot be bound from what the record carries falls through to the
+     * table below, with the reason, exactly as an unbindable default does.
+     */
+    component = brief.view ?? recipe.component;
     /*
      * A join reads as a table, whatever this kind of record usually reads as.
      * The far record's fields arrive as columns, and a card has no honest slot
@@ -1086,6 +1064,71 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
   const derive: PipelineStep[] =
     Object.keys(deriveFields).length > 0 ? [{ op: "derive", fields: deriveFields }] : [];
 
+  /*
+   * How to read the values, from what the record type says they are.
+   *
+   * A pipeline reads what the endpoint sent: an ISO date is a string until
+   * something turns it into a moment, and minor units are a plain number until
+   * something divides them. Nothing here guesses — the safe half is derived
+   * from the format the API itself declared, and the half that cannot be
+   * derived is whatever somebody confirmed onto the field.
+   *
+   * Only the columns this widget actually carries. Coercing a column the
+   * pipeline never produced would name a field the rows have not got.
+   */
+  const readingOf = (
+    of: EntitySpec,
+    paths: Iterable<string>,
+    name: (path: string) => string,
+  ): { coercions: Record<string, Coercion>; format: Record<string, { semantic: SemanticType }> } => {
+    const coercions: Record<string, Coercion> = {};
+    const format: Record<string, { semantic: SemanticType }> = {};
+    for (const path of new Set(paths)) {
+      const field = of.fields.find((one) => one.path === path);
+      if (!field) continue;
+      const coercion = field.coercion ?? coercionForFormat(field.format);
+      if (!coercion) continue;
+      coercions[name(path)] = coercion;
+      /*
+       * What the coercion implies, said out loud on the widget rather than
+       * left for the renderer to infer from a column's name — which is how a
+       * date called `Period` renders as the string it arrived as.
+       */
+      const semantic = COERCION_SEMANTICS[coercion];
+      if (semantic) format[name(path)] = { semantic };
+    }
+    return { coercions, format };
+  };
+
+  /**
+   * A comparison's axis, read as a label where the API sends a number.
+   *
+   * A bar's category is a name by definition, and a chart grouped by `userId`
+   * binds its category to a numeric column — which the contract refuses, so
+   * the widget compiled cleanly and then rendered "no longer matches its
+   * data". Found on the first API with numeric ids to group by; the one before
+   * it only ever grouped by names.
+   *
+   * Only where the field is recorded as holding a number or a boolean, and
+   * never on a bucketed date, which is a time axis and wants the number. A
+   * field that already holds text is left alone, so nothing that worked
+   * before gains a step — or a different digest.
+   */
+  const axisAsLabel = (of: EntitySpec, path: string | null): Record<string, Coercion> => {
+    if (brief.intent !== "compare" || bucket || !path) return {};
+    const field = of.fields.find((one) => one.path === path);
+    if (!field || field.coercion || coercionForFormat(field.format)) return {};
+    return field.kinds.some((kind) => kind === "number" || kind === "boolean")
+      ? { [columnForPath(path)]: "->string" }
+      : {};
+  };
+
+  const own = readingOf(entity, mentioned, columnForPath);
+  const coercions = { ...own.coercions, ...axisAsLabel(entity, groupColumn) };
+  const readAs = own.format;
+  const coerce: PipelineStep[] =
+    Object.keys(coercions).length > 0 ? [{ op: "coerce", fields: coercions }] : [];
+
   /** The same flattening, for the far side's own field names. */
   const farDerive = (paths: readonly string[]): PipelineStep[] => {
     const fields = Object.fromEntries(
@@ -1117,6 +1160,15 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
   let combine: Record<string, unknown> | null = null;
   let pipeline: PipelineStep[];
 
+  /*
+   * The far side's own reading of its own fields, named as the join will
+   * prefix them so the format map matches the columns the rows carry.
+   */
+  const farReading =
+    pair?.on !== undefined
+      ? readingOf(pair.far, [pair.on.right, ...farColumns], columnForPath)
+      : { coercions: {}, format: {} };
+
   if (pair?.on) {
     sources = [
       {
@@ -1125,7 +1177,7 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
         op: listOp,
         params: {},
         label: entity.name.many,
-        pipeline: [{ op: "extract", path: "$" }, ...derive],
+        pipeline: [{ op: "extract", path: "$" }, ...derive, ...coerce],
       },
       {
         as: rightAs,
@@ -1134,6 +1186,21 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
         params: {},
         label: pair.far.name.many,
         /*
+         * One request per record, because the endpoint has no other form. The
+         * cap is the spec's own, and it is reported as a caveat above rather
+         * than trimming the answer without saying so.
+         */
+        ...(pair.perRecordParam
+          ? {
+              fanOut: {
+                from: leftAs,
+                field: columnForPath(pair.on.left),
+                as: pair.perRecordParam,
+                maxRows: FAN_OUT_MAX_ROWS,
+              },
+            }
+          : {}),
+        /*
          * Narrowed to what the join needs and what it shows. A record type has
          * every field it has, and carrying all of them through a join to drop
          * them at the component costs memory per matched row for nothing.
@@ -1141,6 +1208,15 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
         pipeline: [
           { op: "extract", path: "$" },
           ...farDerive([pair.on.right, ...farColumns]),
+          /*
+           * The far record's values read by its own record type, before the
+           * join prefixes its columns — otherwise a date on one side of a
+           * joined row renders as a date and the other as the string it
+           * arrived as, which is the same widget disagreeing with itself.
+           */
+          ...(Object.keys(farReading.coercions).length > 0
+            ? [{ op: "coerce" as const, fields: farReading.coercions }]
+            : []),
           {
             op: "select",
             fields: [
@@ -1168,23 +1244,32 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
     pipeline = [...shaped];
   } else if (pair && farAxis && groupColumn) {
     /** One side of a comparison, grouped into the shared column names. */
-    const side = (axis: string, flatten: readonly string[]): PipelineStep[] => [
-      { op: "extract", path: "$" },
-      ...farDerive(flatten),
-      ...shapeSteps({
-        groupBy: [
-          { field: columnForPath(axis), ...(bucket ? { bucket } : {}), as: PAIR_BUCKET },
-        ],
-        measures: [
-          {
-            as: PAIR_VALUE,
-            agg: measure.agg,
-            ...(measure.field ? { field: columnForPath(measure.field) } : {}),
-          },
-        ],
-        sort: [],
-      }),
-    ];
+    const side = (
+      axis: string,
+      flatten: readonly string[],
+      of: EntitySpec,
+    ): PipelineStep[] => {
+      // Each side reads its own axis by its own record type's account of it.
+      const fields = { ...coercions, ...axisAsLabel(of, axis) };
+      return [
+        { op: "extract", path: "$" },
+        ...farDerive(flatten),
+        ...(Object.keys(fields).length > 0 ? [{ op: "coerce" as const, fields }] : []),
+        ...shapeSteps({
+          groupBy: [
+            { field: columnForPath(axis), ...(bucket ? { bucket } : {}), as: PAIR_BUCKET },
+          ],
+          measures: [
+            {
+              as: PAIR_VALUE,
+              agg: measure.agg,
+              ...(measure.field ? { field: columnForPath(measure.field) } : {}),
+            },
+          ],
+          sort: [],
+        }),
+      ];
+    };
     sources = [
       {
         as: leftAs,
@@ -1192,7 +1277,7 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
         op: listOp,
         params: {},
         label: entity.name.many,
-        pipeline: side(groupColumn, [groupColumn, ...(measure.field ? [measure.field] : [])]),
+        pipeline: side(groupColumn, [groupColumn, ...(measure.field ? [measure.field] : [])], entity),
       },
       {
         as: rightAs,
@@ -1200,7 +1285,7 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
         op: pair.op,
         params: {},
         label: pair.far.name.many,
-        pipeline: side(farAxis, [farAxis, ...(measure.field ? [measure.field] : [])]),
+        pipeline: side(farAxis, [farAxis, ...(measure.field ? [measure.field] : [])], pair.far),
       },
     ];
     combine = { op: "union", as: PAIR_SERIES };
@@ -1214,7 +1299,12 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
       ...(shape.limit !== undefined ? [{ op: "limit" as const, count: shape.limit, from: "start" as const }] : []),
     ];
   } else {
-    pipeline = [{ op: "extract", path: "$" }, ...derive, ...shaped];
+    /*
+     * Flatten, then read, then shape. A coercion names a column, so it has to
+     * come after the derive that produces one — and before the grouping, or a
+     * date would be bucketed as the string it arrived as.
+     */
+    pipeline = [{ op: "extract", path: "$" }, ...derive, ...coerce, ...shaped];
   }
 
   if (errors.length > 0) return { widget: null, errors, notes };
@@ -1259,6 +1349,12 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
     title: brief.title?.trim() || entity.name.many,
     component,
     /*
+     * Carried on the widget so it can be changed later. Everything below is
+     * derived from it, so storing the derivation without what it came from is
+     * what made a finished widget uneditable.
+     */
+    brief,
+    /*
      * Stacked rows are two record types at once, so naming either of them
      * would be a claim about rows that are not its own — and every one of
      * them is a bucket rather than a record in any case.
@@ -1269,7 +1365,27 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
       : { source: { connection, op: listOp, params: {} } }),
     pipeline,
     roles,
-    ...(bucket ? { format: { [combine ? PAIR_BUCKET : columnForPath(groupColumn ?? "")]: { semantic: "timestamp" } } } : {}),
+    /*
+     * How each column reads, where the record type says something about it.
+     * The bucket of a time axis is a column the grouping invented, so it is
+     * named here rather than found among the record type's fields.
+     */
+    ...(Object.keys(readAs).length > 0 || Object.keys(farReading.format).length > 0 || bucket
+      ? {
+          format: {
+            ...readAs,
+            ...Object.fromEntries(
+              Object.entries(farReading.format).map(([column, spec]) => [
+                `${rightAs}_${column}`,
+                spec,
+              ]),
+            ),
+            ...(bucket
+              ? { [combine ? PAIR_BUCKET : columnForPath(groupColumn ?? "")]: { semantic: "timestamp" as const } }
+              : {}),
+          },
+        }
+      : {}),
     ...(facets.length > 0 ? { facets } : {}),
     ...(linked.length > 0 ? { linked } : {}),
   });

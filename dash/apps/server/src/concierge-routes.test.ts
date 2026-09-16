@@ -603,8 +603,16 @@ describe("the revise schema declares every patch field", () => {
       "groupBy",
       "joinWith",
       "offer",
-      "choice",
       "model",
+      /*
+       * What a widget is about and the request it came from, plus the reading
+       * nobody took. `DraftPatch` carried the first two from the day briefs
+       * existed and this schema had heard of neither, so the same patch
+       * applied in process and was refused over HTTP.
+       */
+      "entity",
+      "brief",
+      "alternative",
       /*
        * The reader's own filter strip. Declared here for the same reason as
        * the rest: a widget asked for "with a filter by category" would have

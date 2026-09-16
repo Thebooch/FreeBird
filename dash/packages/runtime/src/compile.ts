@@ -1,6 +1,6 @@
 import { parseExpr, parsePath } from "@freebirdai/dash-expr";
 import type { Coercion, SemanticType, WidgetSpec } from "@freebirdai/dash-spec";
-import { hasTokens, parseAggregation } from "@freebirdai/dash-spec";
+import { COERCION_SEMANTICS, hasTokens, parseAggregation } from "@freebirdai/dash-spec";
 import type {
   CompiledHighlight,
   CompileError,
@@ -9,26 +9,6 @@ import type {
   CompiledStep,
 } from "./types.js";
 
-/**
- * What a coercion tells us about a column's meaning. This is why the runtime
- * rarely has to guess a semantic type: the spec already said whether a number
- * is money in cents or a Unix timestamp, and a human confirmed it.
- */
-const COERCION_SEMANTICS: Partial<Record<Coercion, SemanticType>> = {
-  "unix_s->datetime": "timestamp",
-  "unix_ms->datetime": "timestamp",
-  "iso->datetime": "timestamp",
-  "auto->datetime": "timestamp",
-  "money:cents->major": "currency",
-  "money:major": "currency",
-  "percent:fraction->percent": "percent",
-  percent: "percent",
-  "->number": "number",
-  "->string": "text",
-  lower: "text",
-  upper: "text",
-  trim: "text",
-};
 
 const compileExpression = (source: string): CompiledExpression => ({
   source,

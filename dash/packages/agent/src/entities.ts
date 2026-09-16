@@ -366,6 +366,13 @@ export const entityFromProposal = (input: {
        * omits the status nobody is currently in.
        */
       ...(field.values && field.values.length > 0 ? { values: [...field.values] } : {}),
+      /*
+       * And again from the declared schema. Whether a string is an ISO date or
+       * a number is in minor units is the API's own claim about its data, and
+       * carrying it here is what lets a widget read the values correctly
+       * without anybody being asked the same question per widget.
+       */
+      ...(field.format ? { format: field.format } : {}),
     };
   });
 

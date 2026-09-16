@@ -59,6 +59,7 @@ export const WidgetShell = ({
   hero,
   onRemove,
   onCustomise,
+  onFrame,
   onOpenPage,
   onOpenReference,
 }: {
@@ -68,6 +69,14 @@ export const WidgetShell = ({
   onRemove?: (widgetId: string) => void;
   /** Absent until an editor exists to open. */
   onCustomise?: (widgetId: string) => void;
+  /**
+   * Show this widget with others, or stop.
+   *
+   * Absent where the host has nowhere to arrange them. Which widgets exist and
+   * which frame holds what is the board's business, not this file's — so this
+   * opens that question rather than answering it here.
+   */
+  onFrame?: (widgetId: string) => void;
   /** Absent when the host cannot route to a record page. */
   onOpenPage?: (widgetId: string, row: Row) => void;
   /**
@@ -123,6 +132,9 @@ export const WidgetShell = ({
     },
     ...(onCustomise
       ? [{ id: "customise", label: "Customise", icon: "◫", onSelect: () => onCustomise(widget.id) }]
+      : []),
+    ...(onFrame
+      ? [{ id: "frame", label: "Shown with…", icon: "▤", onSelect: () => onFrame(widget.id) }]
       : []),
     /*
      * Removal lives behind the menu rather than beside Refresh.

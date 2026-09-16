@@ -194,8 +194,22 @@ describe("Dash reliability boundaries", () => {
 
   it("uses the full patch contract for every widget and refuses unknown fields", () => {
     const patch = {
+      /*
+       * What a widget is about travels with it. `DraftPatch` carried `entity`
+       * and `brief` from the day briefs existed and this schema had heard of
+       * neither, so the same patch applied in process and was refused over
+       * HTTP — the declared contract and the real one disagreed silently.
+       */
+      entity: "task",
+      brief: { entity: "task", intent: "records" as const },
+      alternative: {
+        label: "how many there are",
+        brief: { entity: "task", intent: "compare" as const, groupBy: "status" },
+      },
       parts: [
         {
+          entity: "supplier",
+          brief: { entity: "supplier", intent: "records" as const },
           measure: "count:",
           groupBy: "status",
           controls: [],
@@ -207,6 +221,13 @@ describe("Dash reliability boundaries", () => {
     };
     expect(draftPatchSchema.parse(patch)).toEqual(patch);
     expect(draftPatchSchema.safeParse({ parts: [{ unsupported: true }] }).success).toBe(false);
+    // The other reading is of the request, and a request has one — so a part
+    // claiming its own would be a second answer to a question already settled.
+    expect(
+      draftPatchSchema.safeParse({
+        parts: [{ alternative: { label: "x", brief: { entity: "task", intent: "records" } } }],
+      }).success,
+    ).toBe(false);
   });
 
   it("does not call an API without endpoints ready", () => {

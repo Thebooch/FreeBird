@@ -242,3 +242,114 @@ describe("POST /api/connections/:id/brief", () => {
     expect(response.statusCode).toBe(404);
   });
 });
+
+/**
+ * Taking the reading nobody took, over HTTP.
+ *
+ * The chat's own system prompt has told the assistant for a release that the
+ * reading it did not take "is offered back as one click" — and the label
+ * reached the reply and stopped there. Nothing stored it and no route could
+ * act on it, so the prompt described a capability the product did not have.
+ *
+ * Nothing here spends a model call. Both readings were written by the one call
+ * that read the request; this only compiles the one that was kept, which is
+ * what lets the question go unasked without the other reading becoming
+ * unreachable.
+ */
+describe("POST /api/concierge/:dashboardId/reading", () => {
+  const board = () =>
+    store.putDashboard(
+      dashboardSchema.parse({ id: "ops", title: "Ops", widgets: [], layout: { cells: [] } }),
+    );
+
+  /** A setup showing the records, with the count of them kept on the side. */
+  const started = async (app: ReturnType<typeof buildServer>) => {
+    await app.inject({
+      method: "POST",
+      url: "/api/concierge/ops/start",
+      payload: { intent: "my jobs", mode: "assisted" },
+    });
+    return app.inject({
+      method: "POST",
+      url: "/api/concierge/ops/revise",
+      payload: {
+        connection: "works",
+        endpoint: "tasks",
+        component: "table",
+        roles: { columns: ["Title", "Status"] },
+        brief: { entity: "task", intent: "records", title: "My jobs" },
+        alternative: {
+          label: "how many there are in each category",
+          brief: { entity: "task", intent: "compare", groupBy: "Category.Name" },
+        },
+      },
+    });
+  };
+
+  it("offers the other reading on the card, as a phrase rather than a question", async () => {
+    connect();
+    board();
+    const app = buildServer({ store, keys, catalog, llm: scripted(), http: noNetwork });
+    const response = await started(app);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().alternative).toEqual({ label: "how many there are in each category" });
+  });
+
+  it("compiles it from the record types, spending no request and no model call", async () => {
+    /*
+     * `noNetwork` throws on any call at all and the scripted model has one
+     * scripted reply, already used by the propose that is not running here —
+     * so either would fail this outright rather than merely making it slow.
+     * The route answers 400 when the reading does not compile, so a 200 is the
+     * compile.
+     */
+    connect();
+    board();
+    const app = buildServer({ store, keys, catalog, llm: scripted(), http: noNetwork });
+    await started(app);
+
+    const response = await app.inject({ method: "POST", url: "/api/concierge/ops/reading" });
+    expect(response.statusCode).toBe(200);
+    // Still the same sitting, so nobody is asked whether to resume it.
+    expect(response.json().intent).toBe("my jobs");
+  });
+
+  it("offers the reading it just left, so the chip goes both ways", async () => {
+    connect();
+    board();
+    const app = buildServer({ store, keys, catalog, llm: scripted(), http: noNetwork });
+    await started(app);
+
+    const response = await app.inject({ method: "POST", url: "/api/concierge/ops/reading" });
+    expect(response.json().alternative).toEqual({ label: "My jobs" });
+  });
+
+  it("refuses a stale click rather than rebuilding something nobody offered", async () => {
+    /*
+     * The card can only show what it was given, and a card left open through a
+     * reload may be describing a draft that has since moved on — the same
+     * guard the arrangement route keeps, for the same reason.
+     */
+    connect();
+    board();
+    const app = buildServer({ store, keys, catalog, llm: scripted(), http: noNetwork });
+    await app.inject({
+      method: "POST",
+      url: "/api/concierge/ops/start",
+      payload: { intent: "my jobs", mode: "assisted" },
+    });
+
+    const response = await app.inject({ method: "POST", url: "/api/concierge/ops/reading" });
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toContain("no other reading");
+  });
+
+  it("says there is no setup to change rather than starting one", async () => {
+    connect();
+    board();
+    const app = buildServer({ store, keys, catalog, llm: scripted(), http: noNetwork });
+    const response = await app.inject({ method: "POST", url: "/api/concierge/ops/reading" });
+    expect(response.statusCode).toBe(409);
+  });
+});

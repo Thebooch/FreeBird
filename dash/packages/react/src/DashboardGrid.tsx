@@ -64,6 +64,7 @@ export const DashboardGrid = ({
   heroWidgetId,
   onRemoveWidget,
   onCustomiseWidget,
+  onFrameWidget,
   onOpenRecordPage,
   onOpenReference,
   editing,
@@ -72,6 +73,7 @@ export const DashboardGrid = ({
   heroWidgetId?: string;
   onRemoveWidget?: (widgetId: string) => void;
   onCustomiseWidget?: (widgetId: string) => void;
+  onFrameWidget?: (widgetId: string) => void;
   onOpenRecordPage?: (widgetId: string, row: Record<string, unknown>) => void;
   /** Open the record a cell names. Absent means references render as plain text. */
   onOpenReference?: OpenReference;
@@ -293,6 +295,7 @@ export const DashboardGrid = ({
                       members={unit.members}
                       {...(onRemoveWidget ? { onRemoveWidget } : {})}
                       {...(onCustomiseWidget ? { onCustomiseWidget } : {})}
+                      {...(onFrameWidget ? { onFrameWidget } : {})}
                       {...(onOpenRecordPage ? { onOpenRecordPage } : {})}
                       {...(onOpenReference ? { onOpenReference } : {})}
                     />
@@ -303,6 +306,7 @@ export const DashboardGrid = ({
                         hero={unit.widget.id === heroWidgetId}
                         {...(onRemoveWidget ? { onRemove: onRemoveWidget } : {})}
                         {...(onCustomiseWidget ? { onCustomise: onCustomiseWidget } : {})}
+                        {...(onFrameWidget ? { onFrame: onFrameWidget } : {})}
                         {...(onOpenRecordPage ? { onOpenPage: onOpenRecordPage } : {})}
                         {...(onOpenReference ? { onOpenReference } : {})}
                       />

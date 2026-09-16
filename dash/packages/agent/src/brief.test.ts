@@ -283,6 +283,87 @@ describe("writeBrief", () => {
     expect(result.brief?.alongside).toEqual({ entity: "invented" });
   });
 
+  it("carries separate things asked for together as more widgets", async () => {
+    /*
+     * Two collections named in one request are two widgets seen together —
+     * which is a different thing from one widget carrying a second record's
+     * fields, and different again from two readings of the same words.
+     */
+    const llm = fakeLlm([
+      {
+        args: {
+          entity: "task",
+          intent: "records",
+          plus: [{ entity: "category", intent: "records", title: "Categories" }],
+          reason: "Your work and the kinds of work, side by side.",
+        },
+      },
+    ]);
+    const result = await writeBrief(llm, { intent: "my tasks and my categories", candidates });
+
+    expect(result.brief).toMatchObject({ entity: "task" });
+    expect(result.plus).toEqual([
+      { entity: "category", intent: "records", title: "Categories" },
+    ]);
+  });
+
+  it("carries none on an ordinary request, which is nearly every request", async () => {
+    // A set on everything would turn "show me my tasks" into a dashboard
+    // nobody asked for.
+    const llm = fakeLlm([{ args: { entity: "task", intent: "records", reason: "Your tasks." } }]);
+    expect((await writeBrief(llm, { intent: "my tasks", candidates })).plus).toEqual([]);
+  });
+
+  it("drops an extra that is the same request written twice", async () => {
+    /*
+     * The same record type read the same way is not a second widget; it is
+     * padding, and building it would put two identical tiles on the board.
+     */
+    const llm = fakeLlm([
+      {
+        args: {
+          entity: "task",
+          intent: "records",
+          plus: [{ entity: "task", intent: "records" }],
+          reason: "Your tasks.",
+        },
+      },
+    ]);
+    expect((await writeBrief(llm, { intent: "my tasks", candidates })).plus).toEqual([]);
+  });
+
+  it("drops an extra naming a record type that is not on the roster", async () => {
+    const llm = fakeLlm([
+      {
+        args: {
+          entity: "task",
+          intent: "records",
+          plus: [{ entity: "invented", intent: "records" }],
+          reason: "Your tasks.",
+        },
+      },
+    ]);
+    expect((await writeBrief(llm, { intent: "tasks and sprockets", candidates })).plus).toEqual([]);
+  });
+
+  it("keeps a second reading of the same record type, which is a real second widget", async () => {
+    // Tasks listed and tasks counted per category are two different answers,
+    // so naming the same record type twice is only padding when the reading
+    // is the same too.
+    const llm = fakeLlm([
+      {
+        args: {
+          entity: "task",
+          intent: "records",
+          plus: [{ entity: "task", intent: "compare", groupBy: "Status" }],
+          reason: "Your work, and how it breaks down.",
+        },
+      },
+    ]);
+    const result = await writeBrief(llm, { intent: "my tasks and a breakdown", candidates });
+    expect(result.plus).toEqual([{ entity: "task", intent: "compare", groupBy: "Status" }]);
+  });
+
   it("refuses a record type that is not on the roster", async () => {
     const llm = fakeLlm([
       { args: { entity: "invented", intent: "records", reason: "Here you go." } },

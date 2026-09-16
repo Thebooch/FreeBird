@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { fieldFormatSchema } from "./coercion.js";
 import { entitySchema } from "./entity.js";
 import { authSchema, paginationSchema, paramDefSchema, queryValueSchema } from "./primitives.js";
 import { resourceSchema } from "./resource.js";
@@ -130,9 +131,7 @@ export const mappedFieldSchema = z.object({
   /** JSON kinds, in the same vocabulary the shape inferrer uses. */
   kinds: z.array(z.enum(["string", "number", "boolean", "object", "array", "null"])).max(6),
   nullable: z.boolean().default(false),
-  format: z
-    .enum(["iso8601", "unix_seconds", "unix_millis", "email", "url", "minor_units"])
-    .optional(),
+  format: fieldFormatSchema.optional(),
   /** Whatever the spec said this field is, when it said anything. */
   description: z.string().max(300).optional(),
   /**
@@ -152,17 +151,16 @@ export const mappedFieldSchema = z.object({
    * is bytes spent to say nothing.
    */
   values: z.array(z.string().max(120)).max(50).optional(),
-  /**
-   * What to call this field on screen, for this endpoint specifically.
+  /*
+   * No `label` here, deliberately.
    *
-   * Nothing writes it yet. The label somebody reads normally comes from the
-   * API-wide lexicon below, because a field name means the same thing wherever
-   * it appears on one API and paying per endpoint to be told that would be
-   * paying a thousand times for one answer. This exists for the case that
-   * breaks the rule — one endpoint where a shared name genuinely means
-   * something else — so recording it later is an edit, not a schema change.
+   * There was one, and nothing ever wrote it — an extension point kept for the
+   * case where one endpoint's field means something other than the same name
+   * elsewhere on the API. What arrived instead was the record type's own field
+   * dictionary, where `EntityField.label` is written, read, and is what every
+   * screen actually renders. Two places to look for a label is one too many,
+   * and the empty one wins arguments it should lose.
    */
-  label: z.string().max(60).optional(),
 });
 
 export type MappedField = z.infer<typeof mappedFieldSchema>;
