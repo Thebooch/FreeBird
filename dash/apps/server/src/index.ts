@@ -17,7 +17,8 @@ import { GrantStore } from "./grants.js";
 import { KeyStore, LocalAesVault } from "./vault.js";
 import { openIntegrationDb } from "./integrations/db.js";
 import { importCatalog } from "./integrations/import.js";
-import { integrationSessions } from "./integrations/bridge.js";
+import { integrationSessions, integrationReadDependencies } from "./integrations/bridge.js";
+import { IntegrationPreparation } from "./integrations/preparation.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -142,20 +143,43 @@ try {
 }
 
 const integrationDb = await openIntegrationDb({ dataDir: join(stateDir, "integration-db") });
-const integrationImport = await importCatalog(integrationDb.repository, "local", catalog.list(), store.listConnections());
-for (const error of integrationImport.errors) console.error(`Integration import ${error.id}: ${error.message}`);
+const integrationImport = await importCatalog(
+  integrationDb.repository,
+  "local",
+  catalog.list(),
+  store.listConnections(),
+);
+for (const error of integrationImport.errors)
+  console.error(`Integration import ${error.id}: ${error.message}`);
 const integrationSession = integrationSessions({
-  repository: integrationDb.repository, store, keys,
+  repository: integrationDb.repository,
+  store,
+  keys,
   http: nodeHttp,
   graphqlHttp: nodeGraphqlHttp,
 });
+const preparationDependencies = integrationReadDependencies({
+  repository: integrationDb.repository,
+  store,
+  keys,
+  http: nodeHttp,
+  graphqlHttp: nodeGraphqlHttp,
+});
+const integrationPreparation = new IntegrationPreparation(integrationDb.repository, (scope) =>
+  preparationDependencies(scope, true),
+);
 
 const app = buildServer({
   integrations: {
     repository: integrationDb.repository,
     // This entrypoint listens on loopback. Managed hosts must supply authenticated scopes.
-    scope: async () => ({ tenant: "local", authorizationRevision: "local", connections: store.listConnections().map(connection => connection.id) }),
+    scope: async () => ({
+      tenant: "local",
+      authorizationRevision: "local",
+      connections: store.listConnections().map((connection) => connection.id),
+    }),
     session: integrationSession,
+    preparation: integrationPreparation,
   },
   store,
   keys,
@@ -169,15 +193,15 @@ const app = buildServer({
   chat,
   logger: true,
 });
-app.addHook("onClose", async () => { await integrationDb.close(); });
+app.addHook("onClose", async () => {
+  await integrationDb.close();
+});
 const port = Number(process.env.PORT ?? 4600);
 
 app
   .listen({ port, host: "127.0.0.1" })
   .then(() => {
-    app.log.info(
-      `dash server on :${port} — specs in ${root}, secrets in ${stateDir} (gitignored)`,
-    );
+    app.log.info(`dash server on :${port} — specs in ${root}, secrets in ${stateDir} (gitignored)`);
     // Names only. A value here is a secret and never reaches the log.
     app.log.info(
       envFile.path

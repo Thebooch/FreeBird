@@ -1,6 +1,7 @@
 import type { CatalogEntry, WidgetSpec } from "@freebirdai/dash-spec";
 import { parseWidget, connectionAuths, connectionNeedsAuthSetup } from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useState } from "react";
+import { IntegrationPreparation } from "./IntegrationPreparation.js";
 import {
   ApiError,
   type Capabilities,
@@ -81,13 +82,16 @@ export const ConnectionManager = ({
   onClose,
   onChanged,
   onCreateWidget,
+  onBrowseRecords,
 }: {
   onClose: () => void;
   onChanged: () => void;
   /** Absent when there is no dashboard to add to — the offers still show. */
   onCreateWidget?: (widget: WidgetSpec) => Promise<void>;
+  onBrowseRecords?: (connection: string) => void;
 }): JSX.Element => {
   const [view, setView] = useState<View>("list");
+  const [preparing, setPreparing] = useState<ConnectionSummary | null>(null);
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [connections, setConnections] = useState<ConnectionSummary[]>([]);
   const [busy, setBusy] = useState(false);
@@ -846,6 +850,8 @@ export const ConnectionManager = ({
     });
 
   const body = (): JSX.Element => {
+    if (preparing) return <IntegrationPreparation key={preparing.id} connection={preparing.id} title={preparing.title}
+      onBack={() => setPreparing(null)} onActivated={onChanged} />;
     switch (view) {
       case "list":
         return (
@@ -868,6 +874,8 @@ export const ConnectionManager = ({
                             : "no key yet"}
                       </div>
                     </div>
+                    {onBrowseRecords && <button className="dash-control" type="button" onClick={() => onBrowseRecords(connection.id)}>Browse records</button>}
+                    <button className="dash-control" type="button" onClick={() => setPreparing(connection)}>Prepare record links</button>
                     <button
                       className="dash-iconbtn"
                       data-testid={`manage-${connection.id}`}

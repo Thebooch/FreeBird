@@ -15,6 +15,10 @@ import {
   semanticTypeSchema,
   shapeSteps,
   widgetShapeSchema,
+  viewIntentSchema,
+  viewIntentProblems,
+  isRecordComponent,
+  type ViewPurpose,
 } from "@freebirdai/dash-spec";
 import type { InferredShape } from "./infer.js";
 import type { Proposal } from "./tool.js";
@@ -113,6 +117,7 @@ export interface MappedProposal {
 }
 
 export const mapProposal = (input: {
+  purpose?: ViewPurpose | undefined;
   proposal: Proposal;
   shape: InferredShape;
   connection: string;
@@ -162,6 +167,7 @@ export const mapProposal = (input: {
     proposal.compareField,
     proposal.targetField,
     ...(proposal.columns ?? []),
+    ...(proposal.availableFilters ?? []),
     ...Object.keys(coercions),
   ].filter((name): name is string => Boolean(usable(shape, name)));
 
@@ -550,7 +556,17 @@ export const mapProposal = (input: {
         errors.push("a table needs at least one column");
         break;
       }
-      pipeline.push({ op: "select", fields: columns });
+      pipeline.push({
+        op: "select",
+        fields: [
+          ...new Set([
+            ...columns,
+            ...(proposal.availableFilters ?? [])
+              .map((name) => resolve(name))
+              .filter((name): name is string => Boolean(name)),
+          ]),
+        ],
+      });
       roles.columns = columns;
       break;
     }
@@ -619,6 +635,62 @@ export const mapProposal = (input: {
     };
   }
 
+  const availableFilters = [...new Set(proposal.availableFilters ?? [])];
+  for (const name of availableFilters) {
+    const field = shape.fields.find((field) => field.name === name);
+    if (!field || field.kinds.some((kind) => kind === "array" || kind === "object"))
+      errors.push(`The filter ${name} must name an available scalar field.`);
+  }
+  const aggregated = Boolean(
+    measuredShape.success &&
+    (measuredShape.data.measures.length || measuredShape.data.groupBy.length),
+  );
+  if (aggregated && availableFilters.length)
+    errors.push(
+      "Record filter controls require individual records; do not attach them to aggregate rows.",
+    );
+  const intentResult = viewIntentSchema.safeParse({
+    purpose:
+      input.purpose ??
+      proposal.purpose ??
+      (component === "timeseries"
+        ? "trend"
+        : aggregated || !isRecordComponent(component)
+          ? "summarize"
+          : "browse"),
+    fields: [...new Set(roleSources)],
+    availableFilters,
+    measurement: measuredShape.success
+      ? {
+          ...measuredShape.data,
+          groupBy: measuredShape.data.groupBy.map((key) => ({
+            ...key,
+            field: derived[key.field] ?? key.field,
+          })),
+          measures: measuredShape.data.measures.map((measure) =>
+            measure.field
+              ? { ...measure, field: derived[measure.field] ?? measure.field }
+              : measure,
+          ),
+        }
+      : undefined,
+    navigation: aggregated ? "filtered-records" : "record",
+  });
+  if (!intentResult.success)
+    return {
+      widget: null,
+      measurement: null,
+      errors: [...errors, "The proposed intent exceeds the supported view limits."],
+      ambiguities: proposal.ambiguities ?? [],
+    };
+  const intent = intentResult.data;
+  errors.push(
+    ...viewIntentProblems(
+      intent,
+      component,
+      measuredShape.success ? measuredShape.data : undefined,
+    ),
+  );
   if (errors.length > 0) {
     return { widget: null, measurement: null, errors, ambiguities: proposal.ambiguities ?? [] };
   }
@@ -631,6 +703,8 @@ export const mapProposal = (input: {
     pipeline,
     roles,
     format,
+    viewIntent: intent,
+    facets: availableFilters.map((name) => ({ field: resolve(name)! })),
     schemaHash: shape.schemaHash,
     states: proposal.emptyMessage ? { empty: proposal.emptyMessage } : {},
   });

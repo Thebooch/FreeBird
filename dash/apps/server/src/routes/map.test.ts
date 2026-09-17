@@ -1,7 +1,31 @@
 import type { CatalogEntry } from "@freebirdai/dash-spec";
-import { catalogEntrySchema } from "@freebirdai/dash-spec";
+import { catalogEntrySchema, resourceSchema, relationSchema } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
-import { mergeRefreshedOps } from "./map.js";
+import { mergeRefreshedOps, mergeRelations } from "./map.js";
+
+it("preserves named roles to the same entity without repeating saved mappings", () => {
+  const assigned = relationSchema.parse({
+    id: "assigned",
+    title: "Assigned vendor",
+    resource: "vendor",
+    localField: "assignedId",
+    foreignField: "id",
+    cardinality: "one",
+    confidence: "declared",
+  });
+  const billing = relationSchema.parse({
+    ...assigned,
+    id: "billing",
+    title: "Billing vendor",
+    localField: "billingId",
+    confidence: "inferred",
+  });
+  const resources = [resourceSchema.parse({ id: "task", title: "Tasks", relations: [assigned] })];
+  const result = mergeRelations(resources, {
+    task: [{ ...assigned, id: "duplicate", confidence: "inferred" }, billing, billing],
+  });
+  expect(result[0]!.relations).toEqual([assigned, billing]);
+});
 
 /**
  * Re-reading a spec without losing what the map has learned.
@@ -59,11 +83,7 @@ describe("mergeRefreshedOps", () => {
   const tasks = merged.find((op) => op.id === "list_tasks");
 
   it("takes the fresh schemas, which is the point of refreshing", () => {
-    expect(tasks?.fields?.map((field) => field.name)).toEqual([
-      "Id",
-      "Category",
-      "Category.Name",
-    ]);
+    expect(tasks?.fields?.map((field) => field.name)).toEqual(["Id", "Category", "Category.Name"]);
     expect(tasks?.fields?.find((field) => field.name === "Category")?.kinds).toEqual(["object"]);
   });
 

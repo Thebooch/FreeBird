@@ -10,6 +10,7 @@ import {
   rolesForShape,
   shapeSteps,
   statusTone,
+  viewIntentProblems,
 } from "@freebirdai/dash-spec";
 import { coercionsFor, widgetId, type RoleBinding } from "../bind.js";
 import { deriveFacet } from "./facets.js";
@@ -154,6 +155,10 @@ export const buildFromDraft = (
   if (!context.ops.some((op) => op.id === draft.op && op.connection === draft.connection))
     return fail("the chosen endpoint is no longer available on this API");
   if (!draft.component) return fail("no view chosen yet");
+  if (draft.viewIntent) {
+    const problems = viewIntentProblems(draft.viewIntent, draft.component, draft.shape);
+    if (problems.length) return fail(...problems);
+  }
 
   const contract = COMPONENT_CONTRACTS[draft.component as keyof typeof COMPONENT_CONTRACTS];
   if (!contract) return fail(`"${draft.component}" is not a component this build knows`);
@@ -345,8 +350,6 @@ export const buildFromDraft = (
    * so there is one place deciding what a flattened field is called and no
    * second list to keep in step.
    */
-  const deriveStep = Object.keys(derived).length > 0 ? [{ op: "derive", fields: derived }] : [];
-
   const coerceStep = Object.keys(coercions).length > 0 ? [{ op: "coerce", fields: coercions }] : [];
 
   /*
@@ -408,10 +411,21 @@ export const buildFromDraft = (
     contract,
     aggregated: shape !== undefined && !isEmptyShape(shape),
   });
-  const facets = facetField ? [{ field: rename(facetField) }] : [];
+  const requestedFilters = draft.viewIntent?.availableFilters ?? [];
+  const unavailableFilters = requestedFilters.filter(
+    (name) => !fields.some((field) => field.name === name),
+  );
+  if (unavailableFilters.length)
+    return fail(`These filters are no longer available: ${unavailableFilters.join(", ")}`);
+  if (requestedFilters.length && (shape?.measures.length || shape?.groupBy.length))
+    return fail("Record filters cannot be applied to aggregated rows.");
+  const facets = [...new Set([...requestedFilters, ...(facetField ? [facetField] : [])])]
+    .slice(0, 3)
+    .map((field) => ({ field: rename(field) }));
   if (facetField) {
     why.push(`with a filter across the top by ${fieldLabel(facetField, labels)}`);
   }
+  const deriveStep = Object.keys(derived).length > 0 ? [{ op: "derive", fields: derived }] : [];
 
   const shared = {
     id,
@@ -420,6 +434,7 @@ export const buildFromDraft = (
     roles: boundRoles,
     format,
     highlights,
+    ...(draft.viewIntent ? { viewIntent: draft.viewIntent } : {}),
     ...(facets.length > 0 ? { facets } : {}),
     ...(Object.keys(settings).length > 0 ? { presentation: { settings } } : {}),
     ...(drilldown ? { drilldown } : {}),

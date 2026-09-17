@@ -1,5 +1,10 @@
 import type { WidgetShape, Coercion, FormatSpec } from "@freebirdai/dash-spec";
-import { shapeProblems } from "@freebirdai/dash-spec";
+import {
+  shapeProblems,
+  viewIntentSchema,
+  intentAfterViewEdit,
+  type ViewIntent,
+} from "@freebirdai/dash-spec";
 import type { ChoiceDraft, ConciergeDraft } from "./draft.js";
 import {
   MAX_PARTS,
@@ -41,6 +46,7 @@ import {
  */
 
 export interface DraftPatch {
+  readonly viewIntent?: ViewIntent | undefined;
   readonly inputs?: Readonly<Record<string, string>> | undefined;
   readonly coercions?: Readonly<Record<string, Coercion>> | undefined;
   readonly format?: Readonly<Record<string, FormatSpec>> | undefined;
@@ -599,6 +605,35 @@ const reviseOne = (
    * showing `listings_Address` for a join that no longer exists.
    */
   draft = withJoinedColumns(draft, context);
+  if (patch.viewIntent) {
+    const parsed = viewIntentSchema.safeParse(patch.viewIntent);
+    const available = new Set(fieldPool(draft, context).map((field) => field.name));
+    const missing = parsed.success
+      ? [...parsed.data.fields, ...parsed.data.availableFilters].filter(
+          (name) => !available.has(name),
+        )
+      : [];
+    if (!parsed.success || missing.length)
+      rejected.push({
+        stepId: "viewIntent",
+        value: "intent",
+        reason: missing.length
+          ? `These fields are unavailable: ${missing.join(", ")}`
+          : "The view intent is invalid.",
+        available: [...available],
+      });
+    else draft = { ...draft, viewIntent: parsed.data };
+  } else if (
+    draft.viewIntent &&
+    (patch.component || patch.shape || patch.measure || patch.groupBy)
+  ) {
+    // An explicit manual edit is a new decision. Preserve its fields/answers,
+    // but do not force the original browse default onto a newly chosen chart.
+    draft = {
+      ...draft,
+      viewIntent: intentAfterViewEdit(draft.viewIntent, draft.component ?? "", draft.shape),
+    };
+  }
 
   return { draft, rejected };
 };

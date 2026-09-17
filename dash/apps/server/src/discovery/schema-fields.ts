@@ -23,24 +23,10 @@ const isObject = (value: unknown): value is Json =>
 const str = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim() !== "" ? value : undefined;
 
-/**
- * Two levels of nesting, matching what `inferShape` flattens to.
- *
- * One level was not enough, and the gap was specific rather than general: a
- * record's own container sits one hop down and the thing worth reading sits
- * inside *that*. An address is the everyday case — a listing carries a
- * property, the property carries an address, and the street is two dots deep —
- * so at one level the map recorded `Property.Address` as an object with
- * nothing under it and the address existed nowhere in the system.
- *
- * Cheap, because it is narrow: across a 230-endpoint API only eleven distinct
- * fields are containers at the second level, almost all of them addresses.
- * Deeper than this is where a schema starts describing its own plumbing.
- */
-const MAX_DEPTH = 2;
-
-/** A ceiling on breadth, so a pathological spec cannot produce a huge entry. */
-const MAX_FIELDS = 300;
+// Resource guards fail explicitly; they must never silently remove the tail
+// of a schema and present it as a complete field list.
+const MAX_DEPTH = 64;
+const MAX_FIELDS = 10000;
 
 /**
  * A JSON Schema type plus format, mapped onto this product's vocabulary.
@@ -136,21 +122,27 @@ export const fieldsFromSchema = (
    */
   let node: Json = root;
   if (rowsPath && rowsPath !== "$") {
-    const key = rowsPath.replace(/^\$\./, "");
-    const properties = isObject(node.properties) ? node.properties : null;
-    const target = properties ? resolve(properties[key]) : null;
-    if (isObject(target)) node = target;
+    for (const key of rowsPath.replace(/^\$\./, "").split(".")) {
+      const properties = isObject(node.properties) ? node.properties : null;
+      const target = properties ? resolve(properties[key]) : null;
+      if (!isObject(target)) return [];
+      node = target;
+    }
   }
 
   // A collection's rows are its `items`; a detail response is the row itself.
-  if (str(node.type) === "array") {
+  if (str(node.type) === "array" || node.items !== undefined) {
     const items = resolve(node.items);
     if (isObject(items)) node = items;
   }
 
   const out: MappedField[] = [];
 
-  const walk = (current: Json, prefix: string, depth: number): void => {
+  const walk = (current: Json, prefix: string, ancestors: Set<Json>, depth: number): void => {
+    if (ancestors.has(current)) return;
+    if (depth > MAX_DEPTH)
+      throw new Error("Response schema nesting exceeds the supported field-index budget.");
+    const next = new Set(ancestors).add(current);
     const properties = isObject(current.properties) ? current.properties : null;
     if (!properties) return;
     const required = new Set(
@@ -160,11 +152,16 @@ export const fieldsFromSchema = (
     );
 
     for (const [name, raw] of Object.entries(properties)) {
-      if (out.length >= MAX_FIELDS) return;
+      if (out.length >= MAX_FIELDS)
+        throw new Error("Response schema exceeds the supported 10,000-field index budget.");
       const child = resolve(raw);
       if (!isObject(child)) continue;
 
       const full = prefix ? `${prefix}.${name}` : name;
+      if (full.length > 200)
+        throw new Error(
+          "Response schema contains a field path longer than the supported 200 characters.",
+        );
       const { kinds, format, nullable } = kindsAndFormat(child);
       const description = str(child.description);
 
@@ -178,17 +175,12 @@ export const fieldsFromSchema = (
         ...(description ? { description: description.slice(0, 300) } : {}),
       });
 
-      /*
-       * One level down, and only for objects.
-       *
-       * `inferShape` flattens exactly one level, so `Address.City` is bindable
-       * and `Address.Geo.Lat` is not. Going deeper here would offer fields the
-       * runtime cannot produce.
-       */
-      if (depth < MAX_DEPTH && kinds.includes("object")) walk(child, full, depth + 1);
+      // Cycles remain visible as reference containers; do not recursively
+      // expand them. Sibling uses of the same type each retain their fields.
+      if (kinds.includes("object")) walk(child, full, next, depth + 1);
     }
   };
 
-  walk(node, "", 0);
+  walk(node, "", new Set(), 0);
   return out;
 };

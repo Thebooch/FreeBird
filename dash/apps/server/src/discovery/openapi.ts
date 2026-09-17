@@ -702,7 +702,14 @@ export const parseOpenApi = (
      * nothing more and is the only way to know the shape of an endpoint that
      * cannot be called without an id — which is most of them.
      */
-    const fields = fieldsFromSchema(responseSchema, (node) => deref(doc, node), shape.rowsPath);
+    let fields: ReturnType<typeof fieldsFromSchema> = [];
+    try {
+      fields = fieldsFromSchema(responseSchema, (node) => deref(doc, node), shape.rowsPath);
+    } catch (error) {
+      warnings.push(
+        `${rawPath}: field discovery is incomplete. ${error instanceof Error ? error.message : "The response schema could not be indexed."}`,
+      );
+    }
     let identifier = opId(rawPath, str(operation.operationId));
     let suffix = 2;
     while (usedIds.has(identifier))

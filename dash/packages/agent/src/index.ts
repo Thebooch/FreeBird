@@ -104,7 +104,9 @@ export type {
 } from "./llm.js";
 export { mapProposal } from "./map.js";
 export type { MappedProposal } from "./map.js";
-export { MAP_SYSTEM_PROMPT, buildMapPrompt, mapApi, pruneAmbiguousRelations } from "./apimap.js";
+export { MAP_SYSTEM_PROMPT, buildMapPrompt, mapApi, planMapPages, pruneAmbiguousRelations } from "./apimap.js";
+export { SchemaFieldIndex } from "./field-index.js";
+export type { FieldPage, IndexedField } from "./field-index.js";
 export type { MapInput, MapProposal, MapResult } from "./apimap.js";
 export {
   LABEL_SYSTEM_PROMPT,

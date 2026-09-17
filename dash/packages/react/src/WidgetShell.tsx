@@ -164,7 +164,11 @@ export const WidgetShell = ({
     ),
     actions: (
       <span className="dash-widget__actions">
-        <Menu items={actions} label={`Actions for ${widget.title}`} testId={`actions-${widget.id}`} />
+        <Menu
+          items={actions}
+          label={`Actions for ${widget.title}`}
+          testId={`actions-${widget.id}`}
+        />
       </span>
     ),
   };
@@ -293,17 +297,22 @@ export const WidgetShell = ({
             timeZone={timeZone}
             now={now}
             presentation={look}
-            {...(widget.drilldown ? { onSelectRow: setOpenRow } : {})}
+            {...(widget.drilldown &&
+            (!widget.viewIntent || widget.viewIntent.navigation === "record")
+              ? { onSelectRow: setOpenRow }
+              : {})}
           />
         </WidgetErrorBoundary>
-        {openRow && widget.drilldown && (
-          <WidgetDetail
-            parent={widget}
-            row={openRow}
-            onClose={() => setOpenRow(null)}
-            {...(onOpenPage ? { onOpenPage } : {})}
-          />
-        )}
+        {openRow &&
+          widget.drilldown &&
+          (!widget.viewIntent || widget.viewIntent.navigation === "record") && (
+            <WidgetDetail
+              parent={widget}
+              row={openRow}
+              onClose={() => setOpenRow(null)}
+              {...(onOpenPage ? { onOpenPage } : {})}
+            />
+          )}
       </div>
 
       {showFooter && <WidgetFooter data={data} rows={faceted.rows} now={now} />}
@@ -330,7 +339,8 @@ const WidgetFooter = ({
   rows: readonly Row[];
   now: number;
 }): JSX.Element => {
-  const truncated = data.fetchMeta?.truncated === true || data.fetchMeta?.completeness?.status === "partial";
+  const truncated =
+    data.fetchMeta?.truncated === true || data.fetchMeta?.completeness?.status === "partial";
   return (
     <div className="dash-widget__foot">
       <span className="dash-widget__count">
@@ -378,7 +388,8 @@ export const describeFailure = (
     case 401:
       return {
         message: userMessage ?? "The key was not accepted.",
-        detail: "It may be wrong, expired, or revoked. Re-entering it under Connections fixes this.",
+        detail:
+          "It may be wrong, expired, or revoked. Re-entering it under Connections fixes this.",
         retryable: false,
       };
     case 403:
@@ -508,7 +519,9 @@ const WidgetBody = ({
             glyph="○"
             title="Nothing matches this filter."
             body={filteredBy.join(" · ")}
-            {...(onClearFilter ? { action: { label: "Clear filter", onClick: onClearFilter } } : {})}
+            {...(onClearFilter
+              ? { action: { label: "Clear filter", onClick: onClearFilter } }
+              : {})}
           />
         );
       }

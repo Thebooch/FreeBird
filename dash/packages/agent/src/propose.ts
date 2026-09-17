@@ -1,5 +1,5 @@
 import type { ColumnMeta, ResolvedParams, WidgetShape, WidgetSpec } from "@freebirdai/dash-spec";
-import { resolveRange } from "@freebirdai/dash-spec";
+import { resolveRange, type ViewPurpose } from "@freebirdai/dash-spec";
 import type { Row } from "@freebirdai/dash-runtime";
 import { executeWidget } from "@freebirdai/dash-runtime";
 import { type InferredShape, inferShape } from "./infer.js";
@@ -51,6 +51,7 @@ export interface ProposalResult {
 }
 
 export interface ProposeInput {
+  readonly purpose?: ViewPurpose;
   readonly llm: LlmAdapter;
   /**
    * A real response to build from, and the only thing that can be previewed.
@@ -95,7 +96,14 @@ const callModel = async (
   repairErrors: readonly string[],
 ): Promise<{ proposal: Proposal | null; error: string | null }> => {
   const messages = [
-    { role: "system" as const, content: SYSTEM_PROMPT },
+    {
+      role: "system" as const,
+      content:
+        SYSTEM_PROMPT +
+        (input.purpose
+          ? `\nThe planned purpose is ${input.purpose}. Preserve it while choosing the component and fields.`
+          : ""),
+    },
     {
       role: "user" as const,
       content: buildUserPrompt({
@@ -208,6 +216,7 @@ export const proposeWidget = async (input: ProposeInput): Promise<ProposalResult
 
   let mapped = mapProposal({
     proposal: attempt.proposal,
+    purpose: input.purpose,
     shape,
     connection: input.connection,
     op: input.op,
@@ -222,6 +231,7 @@ export const proposeWidget = async (input: ProposeInput): Promise<ProposalResult
     if (retry.proposal) {
       mapped = mapProposal({
         proposal: retry.proposal,
+        purpose: input.purpose,
         shape,
         connection: input.connection,
         op: input.op,

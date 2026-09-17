@@ -2,6 +2,7 @@ import { z } from "zod";
 import { componentIdSchema, contractFor } from "./contracts.js";
 import { dashboardParamsSchema } from "./params.js";
 import { facetsSchema } from "./facet.js";
+import { viewIntentSchema } from "./view-intent.js";
 import { highlightSchema, pipelineSchema } from "./pipeline.js";
 import { presentationSchema } from "./presentation.js";
 import { formatSchema } from "./semantics.js";
@@ -203,6 +204,7 @@ export const widgetSchema = z
    * nothing else. See `validateFacets`, which only ever warns.
    */
   facets: facetsSchema,
+  viewIntent: viewIntentSchema.optional(),
   /**
    * Two or more endpoints combined into one dataset.
    *

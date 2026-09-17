@@ -8,12 +8,7 @@ import {
   withRows,
 } from "./paginate.js";
 import type { ConnectionSpec, OpSpec, PaginationSpec } from "@freebirdai/dash-spec";
-import {
-  allowedHost,
-  interpolate,
-  missingInputs,
-  pathParamNames,
-} from "@freebirdai/dash-spec";
+import { allowedHost, interpolate, missingInputs, pathParamNames } from "@freebirdai/dash-spec";
 import { AdapterError, type FetchContext, type FetchResult, type SourceAdapter } from "./types.js";
 import { applyRequestAuth } from "./auth.js";
 import { queryCompleteness } from "./completeness.js";
@@ -249,6 +244,7 @@ export class RestAdapter implements SourceAdapter {
       if (response.status >= 400) {
         throw new AdapterError(`request failed (${response.status})`, {
           status: 502,
+          upstreamStatus: response.status,
           userMessage: `${connection.title} returned an error (${response.status}).`,
         });
       }
@@ -304,7 +300,14 @@ export class RestAdapter implements SourceAdapter {
       ...(validators ? { validators } : {}),
       meta: {
         url: redact(lastUrl, redactQueryParam),
-        completeness: queryCompleteness({ pagination: op.pagination, lastBody: pages[pages.length - 1], rowsPath: op.rowsPath, truncated, paginationPending: connection.paginationPending, warnings }),
+        completeness: queryCompleteness({
+          pagination: op.pagination,
+          lastBody: pages[pages.length - 1],
+          rowsPath: op.rowsPath,
+          truncated,
+          paginationPending: connection.paginationPending,
+          warnings,
+        }),
         status: lastStatus,
         fetchedAt: started,
         durationMs: Date.now() - started,

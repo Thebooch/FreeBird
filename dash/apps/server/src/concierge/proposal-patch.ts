@@ -18,6 +18,7 @@ export const proposalPatch = (proposal: ProposalResult): DraftPatch => {
     ),
   );
   return {
+    ...(widget.viewIntent ? { viewIntent: widget.viewIntent } : {}),
     component: widget.component,
     title: widget.title,
     roles: Object.fromEntries(

@@ -212,7 +212,9 @@ describe("running it over a real API", () => {
 
   it("names links it already knows, so the model does not spend effort on them", () => {
     const prompt = buildMapPrompt(input, input.resources);
-    expect(prompt).toContain("already linked (do not repeat): property");
+    expect(prompt).toContain(
+      "already linked (do not repeat these mappings; distinct roles are allowed): property via declared path",
+    );
   });
 });
 
@@ -271,9 +273,7 @@ const ambiguous: MapInput = {
 };
 
 const linkTo = (from: string, to: string) => ({
-  relations: [
-    { from, to, localField: "UnitId", foreignField: "Id", title: `${from} → ${to}` },
-  ],
+  relations: [{ from, to, localField: "UnitId", foreignField: "Id", title: `${from} → ${to}` }],
 });
 
 describe("two collections sharing a noun", () => {
@@ -311,7 +311,7 @@ describe("two collections sharing a noun", () => {
   it("warns the model in the prompt, naming the rival and its path", () => {
     const prompt = buildMapPrompt(ambiguous, ambiguous.resources);
 
-    expect(prompt).toContain("2 different \"unit\" collections");
+    expect(prompt).toContain('2 different "unit" collections');
     expect(prompt).toContain("/v1/rentals/units");
     expect(prompt).toContain("/v1/associations/units");
   });
@@ -530,9 +530,7 @@ describe("an API shaped nothing like the one this was found on", () => {
   };
 
   const link = (from: string, to: string) => ({
-    relations: [
-      { from, to, localField: "item_id", foreignField: "id", title: `${from} → ${to}` },
-    ],
+    relations: [{ from, to, localField: "item_id", foreignField: "id", title: `${from} → ${to}` }],
   });
 
   it("resolves on one shared section when the API has no version prefix", async () => {
@@ -561,11 +559,15 @@ describe("an API shaped nothing like the one this was found on", () => {
   });
 });
 
-
 const vocab: MapInput = {
   apiTitle: "Property API",
   resources: [
-    resource({ id: "rental", title: "Retrieve all properties", listOp: "list_rentals", idField: "Id" }),
+    resource({
+      id: "rental",
+      title: "Retrieve all properties",
+      listOp: "list_rentals",
+      idField: "Id",
+    }),
     resource({
       id: "propertygroup",
       title: "Retrieve all property groups",

@@ -5,10 +5,12 @@ import {
   pathParamNames,
   pathSegments,
   resolveSameNoun,
+  relationMappingKey,
   singularNoun,
 } from "@freebirdai/dash-spec";
 import { z } from "zod";
 import type { LlmAdapter, LlmTool } from "./llm.js";
+import { SchemaFieldIndex, type FieldPage } from "./field-index.js";
 
 /**
  * Understanding an API once, so nobody has to understand it again.
@@ -129,20 +131,24 @@ export interface MapInput {
   }>;
 }
 
-/** How many field names each endpoint contributes to the prompt. */
-const FIELDS_SHOWN = 14;
-
 /**
  * One batch of resources, rendered for the model.
  *
- * Field names are included but truncated: the model needs enough to spot that
- * `lease.PropertyId` and `property.Id` are the same value, not the whole
- * schema. The whole schema comes later, for the two endpoints a widget
- * actually uses.
+ * The index supplies bounded pages; every declared field has a page. Rendering
+ * a page does not remove other fields from discovery or relationship validation.
  */
-export const buildMapPrompt = (input: MapInput, resources: readonly ResourceSpec[]): string => {
+export const buildMapPrompt = (
+  input: MapInput,
+  resources: readonly ResourceSpec[],
+  page?: FieldPage,
+): string => {
   const opById = new Map(input.ops.map((op) => [op.id, op]));
   const lines: string[] = [`API: ${input.apiTitle}`, ""];
+  if (page)
+    lines.push(
+      "This is one page of the complete declared field index. Propose links supported by fields on this page. Other pages are inspected separately.",
+      "",
+    );
 
   /*
    * Every collection in the API, as a link target.
@@ -222,9 +228,16 @@ export const buildMapPrompt = (input: MapInput, resources: readonly ResourceSpec
       );
     }
 
-    const known = new Set(resource.relations.map((relation) => relation.resource));
+    const known = new Set(
+      resource.relations.map(
+        (relation) =>
+          `${relation.resource} via ${relation.localField ?? relation.param ?? "declared path"} → ${relation.foreignField ?? "identity"}`,
+      ),
+    );
     if (known.size > 0) {
-      lines.push(`  already linked (do not repeat): ${[...known].join(", ")}`);
+      lines.push(
+        `  already linked (do not repeat these mappings; distinct roles are allowed): ${[...known].join(", ")}`,
+      );
     }
 
     for (const opId of [resource.listOp, resource.detailOp]) {
@@ -248,8 +261,10 @@ export const buildMapPrompt = (input: MapInput, resources: readonly ResourceSpec
        */
       const declared = op.fields ?? [];
       if (declared.length > 0) {
-        const shown = declared
-          .slice(0, FIELDS_SHOWN)
+        const selected = page
+          ? page.fields.filter((entry) => entry.endpoint === op.id).map((entry) => entry.field)
+          : declared;
+        const shown = selected
           .map((field) => {
             const shape = field.kinds.includes("array")
               ? " (list)"
@@ -259,8 +274,9 @@ export const buildMapPrompt = (input: MapInput, resources: readonly ResourceSpec
             return `${field.name}${shape}`;
           })
           .join(", ");
-        const more = declared.length - Math.min(declared.length, FIELDS_SHOWN);
-        lines.push(`    fields: ${shown}${more > 0 ? `, +${more} more` : ""}`);
+        lines.push(`    fields: ${shown || "(on other index pages)"}`);
+        for (const field of selected)
+          if (field.description) lines.push(`      ${field.name}: ${field.description}`);
       }
     }
     lines.push("");
@@ -288,6 +304,39 @@ export interface MapResult {
   readonly skipped: readonly string[];
 }
 
+/** Dry-run plan: no model calls. Stable page keys make wide schemas resumable. */
+export const planMapPages = (input: MapInput) => {
+  const index = new SchemaFieldIndex(input.ops);
+  const contract = JSON.stringify({
+    indexVersion: 2,
+    title: input.apiTitle,
+    ops: input.ops.map(({ description: _description, ...op }) => op),
+    resources: input.resources.map(({ relations: _relations, ...resource }) => resource),
+  });
+  const pages: {
+    start: number;
+    resources: readonly ResourceSpec[];
+    fields: FieldPage;
+    key: string;
+  }[] = [];
+  for (let start = 0; start < input.resources.length; start += BATCH) {
+    const resources = input.resources.slice(start, start + BATCH);
+    const endpoints = resources.flatMap((resource) =>
+      [resource.listOp, resource.detailOp].filter((id): id is string => Boolean(id)),
+    );
+    for (const fields of index.pages(endpoints))
+      pages.push({
+        start,
+        resources,
+        fields,
+        key: fnv1a(
+          contract + JSON.stringify(resources.map((resource) => resource.id)) + fields.key,
+        ),
+      });
+  }
+  return pages;
+};
+
 /**
  * Run the pass, batch by batch.
  *
@@ -303,6 +352,15 @@ export const mapApi = async (
     signal?: AbortSignal | undefined;
     completedBatches?: readonly string[];
     onCheckpoint?: (result: MapResult) => void;
+    /** Explicit call ceiling. Legacy callers retain their prior resource-batch
+     * allowance; wide schemas stop with resumable pages instead of spending more.
+     */
+    maxCalls?: number;
+    beforeCall?: (request: {
+      page: string;
+      promptCharacters: number;
+      maxOutputTokens: number;
+    }) => Promise<boolean>;
   } = {},
 ): Promise<MapResult> => {
   const opById = new Map(input.ops.map((op) => [op.id, op]));
@@ -320,21 +378,43 @@ export const mapApi = async (
   const skipped: string[] = [];
   const previous = new Set(options.completedBatches ?? []);
   const completed = new Set<string>();
-  const contract = JSON.stringify({
-    title: input.apiTitle,
-    ops: input.ops.map(({ description: _description, ...op }) => op),
-    resources: input.resources.map(({ relations: _relations, ...resource }) => resource),
-  });
-
-  for (let start = 0; start < input.resources.length; start += BATCH) {
-    const batch = input.resources.slice(start, start + BATCH);
-    const batchKey = fnv1a(contract + JSON.stringify(batch.map((resource) => resource.id)));
+  const pages = planMapPages(input);
+  for (const page of pages) if (previous.has(page.key)) completed.add(page.key);
+  const maxCalls = options.maxCalls ?? Math.ceil(input.resources.length / BATCH);
+  if (!Number.isSafeInteger(maxCalls) || maxCalls < 0 || maxCalls > 10000)
+    throw new Error("Invalid mapping call budget.");
+  let calls = 0;
+  for (const page of pages) {
+    const { start, resources: batch, key: batchKey } = page;
     if (previous.has(batchKey)) {
       completed.add(batchKey);
       continue;
     }
     const errorsBefore = errors.length;
     try {
+      if (calls >= maxCalls) {
+        errors.push(
+          "The mapping call budget was reached. Unread schema pages remain pending and can be resumed with an approved budget.",
+        );
+        break;
+      }
+      const prompt = buildMapPrompt(input, batch, page.fields);
+      if (prompt.length > 100000)
+        throw new Error(
+          "The schema directory exceeds the mapping prompt budget; a narrower indexed scope is required.",
+        );
+      if (
+        options.beforeCall &&
+        !(await options.beforeCall({
+          page: batchKey,
+          promptCharacters: prompt.length + MAP_SYSTEM_PROMPT.length,
+          maxOutputTokens: 4096,
+        }))
+      ) {
+        errors.push("The preparation budget did not authorize another mapping call.");
+        break;
+      }
+      calls++;
       const result = await llm.generate({
         ...(options.model ? { model: options.model } : {}),
         ...(options.signal ? { signal: options.signal } : {}),
@@ -342,7 +422,7 @@ export const mapApi = async (
         maxOutputTokens: 4096,
         messages: [
           { role: "system" as const, content: MAP_SYSTEM_PROMPT },
-          { role: "user" as const, content: buildMapPrompt(input, batch) },
+          { role: "user" as const, content: prompt },
         ],
         tools: { describe_api: mapTool },
         toolChoice: { name: "describe_api" as const },
@@ -426,8 +506,18 @@ export const mapApi = async (
 
         const source = input.resources.find((resource) => resource.id === entry.from)!;
         const target = input.resources.find((resource) => resource.id === entry.to)!;
-        // Already known from the URL, which is stronger than any guess.
-        if (source.relations.some((relation) => relation.resource === entry.to)) continue;
+        // A legacy path association may lack row keys. Do not invent an
+        // identity-to-identity join for it, or suppress other reference roles.
+        if (
+          source.relations.some(
+            (relation) =>
+              relation.resource === entry.to &&
+              relation.via === "path" &&
+              !relation.localField &&
+              entry.localField === source.idField,
+          )
+        )
+          continue;
 
         const localOk = fieldsOf(source, opById).includes(entry.localField);
         const foreignOk = fieldsOf(target, opById).includes(entry.foreignField);
@@ -486,8 +576,8 @@ export const mapApi = async (
           continue;
         }
 
-        (relations[entry.from] ??= []).push({
-          id: `${entry.from}-${entry.to}`.slice(0, 64).replace(/[^a-zA-Z0-9_-]/g, "-"),
+        const candidate: RelationSpec = {
+          id: `relation-${fnv1a(JSON.stringify([entry.from, entry.to, local.field, foreign.field, local.kind]))}`,
           /*
            * The target's own title where the model gave none. A link with no
            * name is still a link, and every consumer already falls back this
@@ -519,7 +609,15 @@ export const mapApi = async (
           // word for that. `verified` stays false until a join matches rows.
           confidence: "inferred",
           verified: false,
-        });
+        };
+        const key = relationMappingKey(candidate);
+        if (
+          [...source.relations, ...(relations[entry.from] ?? [])].some(
+            (relation) => relationMappingKey(relation) === key,
+          )
+        )
+          continue;
+        (relations[entry.from] ??= []).push(candidate);
       }
     } catch (caught) {
       errors.push(

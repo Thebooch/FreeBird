@@ -1,7 +1,12 @@
 import type { LlmAdapter, LabelResult } from "@freebirdai/dash-agent";
 import { labelFields, mapApi, pruneAmbiguousRelations } from "@freebirdai/dash-agent";
 import type { CatalogEntry, ResourceSpec } from "@freebirdai/dash-spec";
-import { LABEL_VERSION, MAP_VERSION, pathParamNames } from "@freebirdai/dash-spec";
+import {
+  LABEL_VERSION,
+  MAP_VERSION,
+  pathParamNames,
+  relationMappingKey,
+} from "@freebirdai/dash-spec";
 import type { FastifyInstance } from "fastify";
 import type { CatalogStore } from "../catalog.js";
 import { looksLikeOpenApi, parseOpenApi, parseSpecDocument } from "../discovery/openapi.js";
@@ -132,19 +137,24 @@ export const mapState = (
 });
 
 /** Relations merged in, without letting a guess shadow something declared. */
-const mergeRelations = (
+export const mergeRelations = (
   resources: readonly ResourceSpec[],
   found: Readonly<Record<string, ResourceSpec["relations"]>>,
 ): ResourceSpec[] =>
   resources.map((resource) => {
     const extra = found[resource.id] ?? [];
     if (extra.length === 0) return resource;
-    const known = new Set(resource.relations.map((relation) => relation.resource));
+    const known = new Set(resource.relations.map(relationMappingKey));
     return {
       ...resource,
       relations: [
         ...resource.relations,
-        ...extra.filter((relation) => !known.has(relation.resource)),
+        ...extra.filter((relation) => {
+          const key = relationMappingKey(relation);
+          if (known.has(key)) return false;
+          known.add(key);
+          return true;
+        }),
       ],
     };
   });

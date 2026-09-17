@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { coercionSchema, formatSchema, widgetShapeSchema } from "@freebirdai/dash-spec";
+import {
+  coercionSchema,
+  formatSchema,
+  widgetShapeSchema,
+  viewIntentSchema,
+} from "@freebirdai/dash-spec";
 import { choiceDraftSchema } from "./draft.js";
 
 const partPatchSchema = z
@@ -75,6 +80,7 @@ const partPatchSchema = z
      * that has not heard of a field discards it and says nothing.
      */
     shape: widgetShapeSchema.optional(),
+    viewIntent: viewIntentSchema.optional(),
     seriesWith: z
       .array(
         z.object({

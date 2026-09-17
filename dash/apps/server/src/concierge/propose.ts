@@ -220,6 +220,7 @@ const proposeSingle = async (input: ProposeSetupInput): Promise<ProposedSetup> =
 
   const proposal = await proposeWidget({
     llm: input.llm,
+    ...(picked.purpose ? { purpose: picked.purpose } : {}),
     shape,
     connection: op.connection,
     connectionTitle: connection?.title ?? op.connection,

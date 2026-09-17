@@ -1,5 +1,5 @@
 import { AdapterRegistry, ProxyAdapter } from "@freebirdai/dash-adapters";
-import { Dashboard, DashStyleSheet, RecordPage } from "@freebirdai/dash-react";
+import { Dashboard, DashStyleSheet } from "@freebirdai/dash-react";
 import type { StoredPresentations } from "@freebirdai/dash-react";
 import type {
   ConnectionSpec,
@@ -23,6 +23,7 @@ import { BOARD_ROUTE, type Route, currentRoute, navigate, onRouteChange } from "
 import { TopNav } from "./TopNav.jsx";
 import { PresentationEditor } from "./PresentationEditor.jsx";
 import { WidgetLibrary } from "./WidgetLibrary.jsx";
+import { EntityBrowser, EntityPage } from "./EntityBrowser.jsx";
 
 export interface DashboardSummary {
   id: string;
@@ -714,6 +715,10 @@ const App = (): JSX.Element => {
           // that does it. Nothing is confirmed by hand, so `confirmed` is
           // empty — the offer was derived, not guessed at.
           {...(live.dashboard ? { onCreateWidget: (widget) => addWidget(widget, []) } : {})}
+          {...(live.dashboard ? { onBrowseRecords: (connection: string) => {
+            setConnectionsOpen(false);
+            navigate({ kind: "entities", dashboardId: live.dashboard!.id, connection });
+          } } : {})}
         />
       )}
       {customising && live.dashboard && (() => {
@@ -889,6 +894,16 @@ const App = (): JSX.Element => {
         )}
         <Dashboard
           key={live.dashboard.id}
+          recordContent={route.kind === "entity-record" ? <EntityPage
+            key={JSON.stringify(route.ref)} reference={route.ref}
+            onOpen={ref => navigate({ kind: "entity-record", dashboardId: board.id, ref })}
+            onBack={() => navigate({ kind: "entities", dashboardId: board.id, connection: route.ref.connection, entity: route.ref.entity })}
+          /> : route.kind === "entities" ? <EntityBrowser
+            key={route.connection} connection={route.connection} {...(route.entity ? { entity: route.entity } : {})}
+            onSelect={entity => navigate({ kind: "entities", dashboardId: board.id, connection: route.connection, entity })}
+            onOpen={ref => navigate({ kind: "entity-record", dashboardId: board.id, ref })}
+            onBack={() => navigate({ kind: "board", dashboardId: board.id })}
+          /> : undefined}
           /*
            * The record page renders *through* the dashboard rather than beside
            * it: it needs the board's widgets to find its drill-down, and the

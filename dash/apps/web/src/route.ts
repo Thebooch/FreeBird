@@ -12,8 +12,17 @@
  * addresses.
  */
 
+import { entityRefSchema, type EntityRef } from "@freebirdai/dash-spec";
+
 export type Route =
   | { readonly kind: "board"; readonly dashboardId: string | null }
+  | {
+      readonly kind: "entities";
+      readonly dashboardId: string;
+      readonly connection: string;
+      readonly entity?: string;
+    }
+  | { readonly kind: "entity-record"; readonly dashboardId: string; readonly ref: EntityRef }
   | {
       readonly kind: "record";
       readonly dashboardId: string;
@@ -31,14 +40,36 @@ export const BOARD_ROUTE: Route = { kind: "board", dashboardId: null };
  * hand-edited link should land somewhere useful, not somewhere apologetic.
  */
 export const parseRoute = (hash: string): Route => {
-  const parts = hash
-    .replace(/^#\/?/, "")
-    .split("/")
-    .filter((part) => part !== "")
-    .map(decodeURIComponent);
+  let parts: string[];
+  try {
+    parts = hash
+      .replace(/^#\/?/, "")
+      .split("/")
+      .filter((part) => part !== "")
+      .map(decodeURIComponent);
+  } catch {
+    return BOARD_ROUTE;
+  }
 
   if (parts[0] !== "d" || !parts[1]) return BOARD_ROUTE;
   const dashboardId = parts[1];
+
+  if (parts[2] === "entity-record" && parts[3]) {
+    try {
+      const parsed = entityRefSchema.safeParse(JSON.parse(parts[3]));
+      if (parsed.success) return { kind: "entity-record", dashboardId, ref: parsed.data };
+    } catch {
+      /* A malformed link never produces a provider request. */
+    }
+    return { kind: "board", dashboardId };
+  }
+  if (parts[2] === "entities" && parts[3])
+    return {
+      kind: "entities",
+      dashboardId,
+      connection: parts[3],
+      ...(parts[4] ? { entity: parts[4] } : {}),
+    };
 
   if (parts[2] === "w" && parts[3] && parts[4] === "r" && parts[5]) {
     return { kind: "record", dashboardId, widgetId: parts[3], recordId: parts[5] };
@@ -47,6 +78,10 @@ export const parseRoute = (hash: string): Route => {
 };
 
 export const routeToHash = (route: Route): string => {
+  if (route.kind === "entity-record")
+    return `#/d/${encodeURIComponent(route.dashboardId)}/entity-record/${encodeURIComponent(JSON.stringify(entityRefSchema.parse(route.ref)))}`;
+  if (route.kind === "entities")
+    return `#/d/${encodeURIComponent(route.dashboardId)}/entities/${encodeURIComponent(route.connection)}${route.entity ? `/${encodeURIComponent(route.entity)}` : ""}`;
   if (route.kind === "board") {
     return route.dashboardId ? `#/d/${encodeURIComponent(route.dashboardId)}` : "#/";
   }

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { LlmAdapter, LlmTool } from "./llm.js";
+import type { ViewPurpose } from "@freebirdai/dash-spec";
 
 /**
  * Choosing which endpoints a request is about, from all of them.
@@ -39,6 +40,7 @@ export interface PickInput {
 }
 
 export interface PickResult {
+  readonly purpose?: ViewPurpose;
   /** The endpoint to build from, or null if nothing was chosen. */
   readonly primary: string | null;
   /** A second endpoint to bring alongside, when the request spans two. */
@@ -88,23 +90,27 @@ export interface PickResult {
 const DESCRIPTION_CHARS = 100;
 
 const pickSchema = z.object({
+  purpose: z
+    .enum(["browse", "inspect", "summarize", "compare", "trend"])
+    .optional()
+    .describe(
+      "Choose the intended use before choosing a view. Show records, including with filters, means browse. Count, total, average means summarize. Comparisons mean compare; changes over time mean trend.",
+    ),
   primary: z.string().describe("The id of the endpoint to build from. Copy it exactly."),
   secondary: z
     .string()
     .optional()
-    .describe(
-      "A second endpoint id, only when the request genuinely needs both. Omit otherwise.",
-    ),
+    .describe("A second endpoint id, only when the request genuinely needs both. Omit otherwise."),
   relationship: z
     .enum(["enrich", "compare", "alongside"])
     .optional()
     .describe(
-      "Only when you name a second endpoint. \"enrich\" means the second adds detail to rows " +
-        "of the first — each row of the first points at one of the second. \"compare\" means " +
-        "both are measured separately against a shared axis, which is what \"X versus Y\" and " +
-        "\"how many X against how many Y\" mean. \"alongside\" means the user simply wants to " +
-        "see both — \"show me my X and also my Y\" — where neither is an attribute of the other " +
-        "and nothing is being measured against anything. Do not call that one \"enrich\": " +
+      'Only when you name a second endpoint. "enrich" means the second adds detail to rows ' +
+        'of the first — each row of the first points at one of the second. "compare" means ' +
+        'both are measured separately against a shared axis, which is what "X versus Y" and ' +
+        '"how many X against how many Y" mean. "alongside" means the user simply wants to ' +
+        'see both — "show me my X and also my Y" — where neither is an attribute of the other ' +
+        'and nothing is being measured against anything. Do not call that one "enrich": ' +
         "joining two unrelated collections finds nothing to match on and shows only the first.",
     ),
   alternatives: z
@@ -153,21 +159,22 @@ export const PICK_SYSTEM_PROMPT = [
   "the user is asking about.",
   "",
   "Rules:",
+  "- Decide the intended use before choosing a component. Ordinary record requests mean browse. A category filter is a control, not a request for counts or a bar chart.",
   "- Answer with an ENDPOINT ID — the first token on an endpoint's own line, not the group",
   "  heading it sits under. The headings group the list; they are not answers.",
   "- Copy the id exactly. One you invent or abbreviate is a failure, not an approximation.",
   "- The path disambiguates. Many APIs have several endpoints with identical titles, and",
   "  the section a path sits under is often the only thing separating them. Two endpoints",
-  "  both called \"Retrieve all items\" under different sections return different records.",
+  '  both called "Retrieve all items" under different sections return different records.',
   "- Pick the records the user wants to SEE. A request to see applicants grouped by status is",
   "  an applicants endpoint, not a statuses endpoint.",
   "- Prefer one endpoint. Name a second only when the request genuinely needs both, and say",
   "  which kind of second it is. If the second supplies a field the first's rows point at,",
-  "  that is \"enrich\" and the first should be the records being listed. If the request asks",
+  '  that is "enrich" and the first should be the records being listed. If the request asks',
   "  how two different things compare — counts of each over time, one against the other —",
-  "  that is \"compare\", and neither is subordinate to the other. If it asks to SEE both and",
-  "  neither of those is true — \"my properties and also my listings\" — that is \"alongside\".",
-  "- \"and also\" is usually \"alongside\", not \"enrich\". Enrich means each row of the first",
+  '  that is "compare", and neither is subordinate to the other. If it asks to SEE both and',
+  '  neither of those is true — "my properties and also my listings" — that is "alongside".',
+  '- "and also" is usually "alongside", not "enrich". Enrich means each row of the first',
   "  literally carries the second's identity — a lease pointing at its unit. Two collections",
   "  someone wants on screen together carry nothing of each other, and calling that enrich",
   "  produces a join with nothing to match on: the second endpoint silently disappears and",
@@ -242,13 +249,7 @@ export const buildPickPrompt = (input: PickInput): string => {
     for (const candidate of group) lines.push(render(candidate));
   }
 
-  return [
-    "ENDPOINTS:",
-    ...lines,
-    "",
-    "THE REQUEST:",
-    input.intent,
-  ].join("\n");
+  return ["ENDPOINTS:", ...lines, "", "THE REQUEST:", input.intent].join("\n");
 };
 
 /**
@@ -357,6 +358,7 @@ export const pickEndpoints = async (
 
   return {
     primary: resolvedPrimary,
+    ...(parsed.data.purpose ? { purpose: parsed.data.purpose } : {}),
     // A bad second choice loses the join, not the widget. The first id is the
     // one everything downstream depends on, so only that one is fatal.
     secondary: second,

@@ -94,6 +94,8 @@ export interface SourceAdapter {
 }
 
 export class AdapterError extends Error {
+  /** Provider status, distinct from the dashboard proxy's response status. */
+  readonly upstreamStatus?: number;
   readonly status: number;
   /** Safe to show a non-technical user. Never contains a secret. */
   readonly userMessage: string;
@@ -108,11 +110,17 @@ export class AdapterError extends Error {
 
   constructor(
     message: string,
-    options: { status?: number; userMessage?: string; retryAfter?: string } = {},
+    options: {
+      status?: number;
+      userMessage?: string;
+      retryAfter?: string;
+      upstreamStatus?: number;
+    } = {},
   ) {
     super(message);
     this.name = "AdapterError";
     this.status = options.status ?? 502;
+    if (options.upstreamStatus !== undefined) this.upstreamStatus = options.upstreamStatus;
     this.userMessage = options.userMessage ?? message;
     if (options.retryAfter) this.retryAfter = options.retryAfter;
   }

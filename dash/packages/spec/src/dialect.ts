@@ -124,7 +124,7 @@ export const ARCHETYPE_IDS = Object.keys(ARCHETYPES) as Archetype[];
  * quietly turn one into the other.
  */
 export const mappedFieldSchema = z.object({
-  /** Dotted for one level of nesting, matching what `inferShape` produces. */
+  /** Dotted paths into nested record objects. Arrays remain separate fields. */
   name: z.string().min(1).max(200),
   /** JSON kinds, in the same vocabulary the shape inferrer uses. */
   kinds: z.array(z.enum(["string", "number", "boolean", "object", "array", "null"])).max(6),
@@ -150,7 +150,7 @@ export const mappedFieldSchema = z.object({
 export type MappedField = z.infer<typeof mappedFieldSchema>;
 
 /** Bumped when the mapping pass changes shape enough to need re-running. */
-export const MAP_VERSION = 1;
+export const MAP_VERSION = 2;
 
 /**
  * Bumped when the labelling pass changes shape enough to need re-running.
@@ -210,7 +210,7 @@ export const catalogEntrySchema = z.object({
          * them on a real API. Absent means the spec described no response;
          * empty means it described one with no fields.
          */
-        fields: z.array(mappedFieldSchema).max(300).optional(),
+        fields: z.array(mappedFieldSchema).max(10000).optional(),
         /**
          * The field whose value tells this endpoint's records apart.
          *

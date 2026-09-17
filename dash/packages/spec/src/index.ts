@@ -275,12 +275,16 @@ export {
   resolveSameNoun,
   sharedPathPrefix,
   relationSchema,
+  relationMappingKey,
   resourceForOp,
   resourceSchema,
   singularNoun,
 } from "./resource.js";
 export type { RelationSpec, ResourceModel, ResourceSpec, ShapeOp } from "./resource.js";
 export { inferIdField, relationGraph } from "./relations.js";
+export type { RecordFieldView, RecordFilterView, RecordSummary, RecordRelationshipView, RelatedRecordViews, RecordPageData, EntityCollectionView, EntityCatalogEntry } from "./record-view.js";
+export { preparationEstimateSchema, preparationJobSchema } from "./preparation.js";
+export type { PreparationJob, PreparationStatus, IntegrationActivationReview } from "./preparation.js";
 export type {
   ChildLink,
   GraphField,
@@ -307,3 +311,4 @@ export type {
   EntityRef, Completeness, CapabilityEvidence, TraversalPlan, IntegrationRelationship,
   IntegrationEntity, IntegrationDefinition, ConnectionBinding,
 } from "./integration.js";
+export * from "./view-intent.js";

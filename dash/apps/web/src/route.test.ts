@@ -51,6 +51,34 @@ describe("parseRoute", () => {
 });
 
 describe("routeToHash", () => {
+  it("preserves typed composite identities and parent scope independently of widgets", () => {
+    const route = {
+      kind: "entity-record",
+      dashboardId: "sales",
+      ref: {
+        connection: "account",
+        entity: "line",
+        keys: { document: "A/B", sequence: 7, active: true },
+        context: { company: "west" },
+      },
+    } as const;
+    expect(parseRoute(routeToHash(route))).toEqual(route);
+    expect(parseRoute("#/d/sales/entity-record/not-json")).toEqual({
+      kind: "board",
+      dashboardId: "sales",
+    });
+    expect(parseRoute("#/d/%E0%A4%A")).toEqual(BOARD_ROUTE);
+  });
+
+  it("round-trips an entity browser with no widget context", () => {
+    const route = {
+      kind: "entities",
+      dashboardId: "sales",
+      connection: "account",
+      entity: "vendor",
+    } as const;
+    expect(parseRoute(routeToHash(route))).toEqual(route);
+  });
   it("round-trips a record", () => {
     const route = {
       kind: "record",

@@ -89,6 +89,8 @@ export interface DashboardProps {
   readonly onRemoveWidget?: (widgetId: string) => void;
   /** Rendered between the params row and the grid — where the chat drawer goes. */
   readonly toolbar?: ReactNode;
+  /** Host-provided entity view using the shared read service, independent of a widget. */
+  readonly recordContent?: ReactNode;
   /**
    * Looks stored outside the spec, from `GET /api/presentation`.
    *
@@ -146,6 +148,7 @@ export const Dashboard = ({
   onCustomiseWidget,
   onOpenRecordPage,
   record,
+  recordContent,
 }: DashboardProps): JSX.Element => {
   // Exactly one hero figure per view: the first stat widget leads.
   const hero = dashboard.widgets.find((widget) => widget.component === "stat")?.id;
@@ -170,7 +173,7 @@ export const Dashboard = ({
          * to the collection you came from, and leaving it on screen over one
          * record implies it filters something here.
          */}
-        {record ? (
+        {recordContent ? <>{toolbar}{recordContent}</> : record ? (
           <>
             {toolbar}
             <RecordPage widgetId={record.widgetId} row={record.row} onBack={record.onBack} />

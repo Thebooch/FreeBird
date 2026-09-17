@@ -1,4 +1,10 @@
-import { widgetShapeSchema, coercionSchema, formatSchema } from "@freebirdai/dash-spec";
+import {
+  widgetShapeSchema,
+  coercionSchema,
+  formatSchema,
+  viewIntentSchema,
+  intentAfterViewEdit,
+} from "@freebirdai/dash-spec";
 import { z } from "zod";
 
 /**
@@ -330,6 +336,7 @@ export const draftPartSchema = z.object({
   choice: choiceDraftSchema.optional(),
   narrow: narrowDraftSchema.optional(),
   shape: widgetShapeSchema.optional(),
+  viewIntent: viewIntentSchema.optional(),
   component: z.string().min(1).optional(),
   roles: z.record(z.string(), z.union([z.string(), z.array(z.string())])).default({}),
   options: z.array(z.string().max(64)).max(20).default([]),
@@ -438,6 +445,7 @@ export const conciergeDraftSchema = z.object({
    * one editable control per decision.
    */
   shape: widgetShapeSchema.optional(),
+  viewIntent: viewIntentSchema.optional(),
   component: z.string().min(1).optional(),
   /** role → column, or columns for a multi role. */
   roles: z.record(z.string(), z.union([z.string(), z.array(z.string())])).default({}),
@@ -671,6 +679,7 @@ export const applyAnswer = (
             coercions: {},
             format: {},
             shape: undefined,
+            viewIntent: undefined,
             series: [],
             offer: undefined,
             choice: undefined,
@@ -689,6 +698,9 @@ export const applyAnswer = (
         ? {
             ...next,
             component: values[0],
+            ...(draft.viewIntent
+              ? { viewIntent: intentAfterViewEdit(draft.viewIntent, values[0], draft.shape) }
+              : {}),
             // A different view asks for different roles.
             roles: {},
             answered: answered.filter((id) => !isRoleStep(id)),

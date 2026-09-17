@@ -109,6 +109,20 @@ export const relationSchema = z.object({
 
 export type RelationSpec = z.infer<typeof relationSchema>;
 
+/** Role identity is the key mapping, not just the target entity or display name.
+ * Preserve endpoint-scoped associations when no row mapping is declared.
+ */
+export const relationMappingKey = (relation: RelationSpec): string =>
+  JSON.stringify([
+    relation.resource,
+    relation.localField ?? null,
+    relation.foreignField ?? null,
+    relation.linkKind ?? "scalar",
+    ...(!relation.localField || !relation.foreignField
+      ? [relation.via, relation.op ?? null, relation.param ?? null]
+      : []),
+  ]);
+
 export const resourceSchema = z.object({
   /** Singular and lowercase by convention, e.g. `lease`. */
   id: idSchema,
@@ -179,8 +193,7 @@ export interface ShapeOp {
 }
 
 /** `/v1/leases` → `v1/leases`, so paths compare regardless of slashes or case. */
-export const collectionKey = (path: string): string =>
-  path.replace(/^\/+|\/+$/g, "").toLowerCase();
+export const collectionKey = (path: string): string => path.replace(/^\/+|\/+$/g, "").toLowerCase();
 
 /** The literal segments of a path, with `{{param.x}}` tokens dropped. */
 export const pathSegments = (path: string): string[] =>

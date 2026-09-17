@@ -138,12 +138,54 @@ describe("fields from a declared response", () => {
 });
 
 describe("what it refuses to choke on", () => {
-  it("terminates on a self-referencing schema", () => {
-    const fields = fieldsFromSchema(
-      { $ref: "#/components/schemas/Node" },
-      resolverFor(doc),
-      "$",
+  it("indexes wide schemas and deeply nested references without presentation cutoffs", () => {
+    const properties = Object.fromEntries(
+      Array.from({ length: 365 }, (_, i) => [`f${i}`, { type: "string" }]),
     );
+    const fields = fieldsFromSchema(
+      {
+        properties: {
+          ...properties,
+          details: {
+            properties: {
+              owner: {
+                properties: { contact: { properties: { organizationId: { type: "string" } } } },
+              },
+            },
+          },
+        },
+      },
+      (node) => node,
+    );
+    expect(fields).toHaveLength(369);
+    expect(fields.at(-1)?.name).toBe("details.owner.contact.organizationId");
+  });
+
+  it("follows nested response envelopes and keeps repeated sibling types", () => {
+    const contact = { properties: { id: { type: "integer" } } };
+    const rows = { items: { properties: { assigned: contact, billing: contact } } };
+    const fields = fieldsFromSchema(
+      { properties: { result: { properties: { records: rows } } } },
+      (node) => node,
+      "$.result.records",
+    );
+    expect(fields.map((field) => field.name)).toEqual([
+      "assigned",
+      "assigned.id",
+      "billing",
+      "billing.id",
+    ]);
+  });
+
+  it("reports resource exhaustion instead of returning a silently truncated schema", () => {
+    const properties = Object.fromEntries(
+      Array.from({ length: 10001 }, (_, i) => [`f${i}`, { type: "string" }]),
+    );
+    expect(() => fieldsFromSchema({ properties }, (node) => node)).toThrow("index budget");
+  });
+
+  it("terminates on a self-referencing schema", () => {
+    const fields = fieldsFromSchema({ $ref: "#/components/schemas/Node" }, resolverFor(doc), "$");
     expect(fields.map((field) => field.name)).toContain("Name");
     expect(fields.length).toBeLessThan(20);
   });
@@ -215,7 +257,7 @@ describe("a schema that never says what it is", () => {
     expect(fields.find((field) => field.name === "Mystery")?.kinds).toEqual(["string"]);
   });
 
-  it("goes two levels down and stops", () => {
+  it("keeps fields beyond two levels", () => {
     /*
      * Two levels, matching `inferShape`, and no further: past that a schema is
      * mostly describing its own plumbing, and every extra level multiplies the
@@ -225,13 +267,15 @@ describe("a schema that never says what it is", () => {
       type: "array",
       items: {
         properties: {
-          A: { properties: { B: { properties: { C: { properties: { D: { type: "string" } } } } } } },
+          A: {
+            properties: { B: { properties: { C: { properties: { D: { type: "string" } } } } } },
+          },
         },
       },
     };
     const names = fieldsFromSchema(deep, (node) => node, "$").map((field) => field.name);
     expect(names).toContain("A.B");
     expect(names).toContain("A.B.C");
-    expect(names).not.toContain("A.B.C.D");
+    expect(names).toContain("A.B.C.D");
   });
 });

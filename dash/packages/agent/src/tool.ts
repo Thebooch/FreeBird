@@ -14,6 +14,19 @@ import type { LlmTool } from "./llm.js";
  * is lost by keeping the wire format dull.
  */
 export const proposalSchema = z.object({
+  purpose: z
+    .string()
+    .optional()
+    .describe(
+      "One of browse, inspect, summarize, compare, trend. Decide before the component. Ordinary requests to show records mean browse. Filters do not mean aggregation.",
+    ),
+  availableFilters: z
+    .array(z.string())
+    .max(3)
+    .optional()
+    .describe(
+      "Fields the reader can filter by. These are controls with no initial selection, not grouping fields or applied row restrictions.",
+    ),
   title: z.string().describe("A short human title for the widget."),
   component: z.string().describe(`One of: ${COMPONENT_IDS.join(", ")}`),
   rowsPath: z.string().describe('Path to the row list, e.g. "$.data".'),
@@ -161,6 +174,8 @@ Available components and the data contract each one requires:
 ${contractSummary()}
 
 Rules:
+- Decide the intended use before choosing a component. Requests to show records default to a table or list. "Tasks with a category filter" means browse, with category in availableFilters. It does not mean a bar chart or counts grouped by category.
+- Only group or aggregate when the user asks for measurements, comparisons, counts, summaries or trends. Useful category/status controls are safe defaults; leave them unselected unless the user requests a restriction.
 - Pick the component whose contract the response can actually satisfy. A field that is text cannot fill a numeric role.
 - Use field names exactly as given in the schema below. Do not invent fields.
 - Timestamps must be coerced to a real point in time. If a number is a Unix time, say whether it is seconds or milliseconds.

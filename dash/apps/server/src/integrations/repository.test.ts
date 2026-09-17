@@ -5,17 +5,31 @@ import { integrationDefinitionSchema } from "@freebirdai/dash-spec";
 
 describe("integration database", () => {
   let database: Awaited<ReturnType<typeof openIntegrationDb>>;
-  beforeAll(async () => { database = await openIntegrationDb({ inMemory: true }); });
-  afterAll(async () => { await database?.close(); });
-  const definition = () => integrationDefinitionSchema.parse({
-    id: "api", version: "one", title: "API", protocol: "rest", schemaFingerprint: "abc", origin: "manual", entities: [], relationships: [],
+  beforeAll(async () => {
+    database = await openIntegrationDb({ inMemory: true });
   });
+  afterAll(async () => {
+    await database?.close();
+  });
+  const definition = () =>
+    integrationDefinitionSchema.parse({
+      id: "api",
+      version: "one",
+      title: "API",
+      protocol: "rest",
+      schemaFingerprint: "abc",
+      origin: "manual",
+      entities: [],
+      relationships: [],
+    });
 
   it("stores immutable versions idempotently and isolates tenants", async () => {
     const repo = database.repository;
     await repo.putVersion("a", definition());
     await repo.putVersion("a", definition());
-    await expect(repo.putVersion("a", { ...definition(), title: "Changed" })).rejects.toBeInstanceOf(IntegrationConflict);
+    await expect(
+      repo.putVersion("a", { ...definition(), title: "Changed" }),
+    ).rejects.toBeInstanceOf(IntegrationConflict);
     expect((await repo.getVersion("a", "api", "one"))?.title).toBe("API");
     expect(await repo.getVersion("b", "api", "one")).toBeNull();
     await expect(repo.listVersions("")).rejects.toThrow("scope");
@@ -24,11 +38,20 @@ describe("integration database", () => {
   it("uses optimistic binding updates and blocks private cross-tenant access", async () => {
     const repo = database.repository;
     await repo.putVersion("a", definition());
-    const binding = { connection: "account", integration: "api", version: "one", context: {}, disabledRelationships: [] };
+    const binding = {
+      connection: "account",
+      integration: "api",
+      version: "one",
+      context: {},
+      disabledRelationships: [],
+    };
     const first = await repo.bind("a", "a", binding, 0);
     await expect(repo.bind("b", "a", binding, 0)).rejects.toThrow("another tenant");
-    const outcomes = await Promise.allSettled([repo.bind("a", "a", binding, first.revision), repo.bind("a", "a", binding, first.revision)]);
-    expect(outcomes.filter(r => r.status === "fulfilled")).toHaveLength(1);
+    const outcomes = await Promise.allSettled([
+      repo.bind("a", "a", binding, first.revision),
+      repo.bind("a", "a", binding, first.revision),
+    ]);
+    expect(outcomes.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     expect(await repo.getBinding("b", "account")).toBeNull();
     await expect(repo.unbind("a", "account", 1)).rejects.toBeInstanceOf(IntegrationConflict);
     await repo.unbind("a", "account", 2);
@@ -37,13 +60,23 @@ describe("integration database", () => {
 
   it("requires exact estimate approval, fences workers and reserves costs atomically", async () => {
     const repo = database.repository;
-    const job = await repo.createJob("a", "api", { maxModelUsd: 1, maxApiRequests: 2, expectedSeconds: 10, contractFingerprint: "abc" });
+    const job = await repo.createJob("a", "api", {
+      maxModelUsd: 1,
+      maxApiRequests: 2,
+      expectedSeconds: 10,
+      contractFingerprint: "abc",
+    });
     expect(await repo.claimJob("a", job.id, 100, 100)).toBeNull();
-    await expect(repo.approveJob("a", job.id, 1, "changed", 100)).rejects.toThrow("estimate changed");
+    await expect(repo.approveJob("a", job.id, 1, "changed", 100)).rejects.toThrow(
+      "estimate changed",
+    );
     await repo.approveJob("a", job.id, 1, "abc", 100);
     const lease = (await repo.claimJob("a", job.id, 100, 100))!;
     expect(await repo.claimJob("a", job.id, 101, 100)).toBeNull();
-    const reservations = await Promise.all([repo.reserve("a", job.id, lease.token, 101, 0.6, 1), repo.reserve("a", job.id, lease.token, 101, 0.6, 1)]);
+    const reservations = await Promise.all([
+      repo.reserve("a", job.id, lease.token, 101, 0.6, 1),
+      repo.reserve("a", job.id, lease.token, 101, 0.6, 1),
+    ]);
     expect(reservations.filter(Boolean)).toHaveLength(1);
     await repo.checkpoint("a", job.id, lease.token, 102, ["entities"]);
     const replacement = (await repo.claimJob("a", job.id, 201, 100))!;
@@ -55,5 +88,40 @@ describe("integration database", () => {
     expect(saved?.completed.sort()).toEqual(["entities", "relations"]);
     expect(saved?.reservedApiRequests).toBe(2);
     expect(await repo.getJob("b", job.id)).toBeNull();
+  });
+
+  it("preserves cooldowns and attempt caps across worker replacements", async () => {
+    const repo = database.repository;
+    const job = await repo.createJob("attempts", "api", {
+      maxModelUsd: 0,
+      maxApiRequests: 5,
+      expectedSeconds: 10,
+      contractFingerprint: "abc",
+    });
+    await repo.approveJob("attempts", job.id, 1, "abc", 100);
+    const first = (await repo.claimJob("attempts", job.id, 100, 100))!;
+    expect(await repo.beginCheck("attempts", job.id, first.token, 101, "link:forward")).toBe(true);
+    const replacement = (await repo.claimJob("attempts", job.id, 201, 100))!;
+    await expect(
+      repo.beginCheck("attempts", job.id, first.token, 202, "link:forward"),
+    ).rejects.toThrow("lease");
+    expect(await repo.beginCheck("attempts", job.id, replacement.token, 202, "link:forward")).toBe(
+      true,
+    );
+    expect(await repo.beginCheck("attempts", job.id, replacement.token, 203, "link:forward")).toBe(
+      true,
+    );
+    expect(await repo.beginCheck("attempts", job.id, replacement.token, 204, "link:forward")).toBe(
+      false,
+    );
+    await repo.checkpoint("attempts", job.id, replacement.token, 205, [], "paused", 1000);
+    const paused = (await repo.getJob("attempts", job.id))!;
+    await repo.resumeJob("attempts", job.id, paused.revision);
+    expect(await repo.claimJob("attempts", job.id, 999, 100)).toBeNull();
+    const resumed = (await repo.claimJob("attempts", job.id, 1000, 100))!;
+    expect(await repo.beginCheck("attempts", job.id, resumed.token, 1001, "link:forward")).toBe(
+      false,
+    );
+    expect(await repo.checks("another", job.id)).toEqual([]);
   });
 });

@@ -5,6 +5,14 @@ import type {
   PresentationManifest,
   ResourceSpec,
   WidgetSpec,
+  EntityRef,
+  EntityCatalogEntry,
+  EntityCollectionView,
+  RecordPageData,
+  RelatedRecordViews,
+  PreparationJob,
+  PreparationStatus,
+  IntegrationActivationReview,
 } from "@freebirdai/dash-spec";
 
 /** The connection as the server reports it — secrets replaced by a boolean. */
@@ -484,6 +492,17 @@ export interface MapRunResult extends MapState {
 }
 
 export const api = {
+  entities: (connection: string, signal?: AbortSignal) => request<EntityCatalogEntry[]>(`/api/integrations/connections/${encodeURIComponent(connection)}/entities`, { signal }),
+  preparationStatus: (connection: string) => request<PreparationStatus>(`/api/integrations/connections/${encodeURIComponent(connection)}/preparations`),
+  estimatePreparation: (connection: string) => request<PreparationJob>("/api/integrations/preparations", json({ connection })),
+  preparationJob: (id: string) => request<PreparationJob>(`/api/integrations/preparations/${encodeURIComponent(id)}`),
+  approvePreparation: (job: PreparationJob) => request<PreparationJob>(`/api/integrations/preparations/${encodeURIComponent(job.id)}/approve`, json({ revision: job.revision, contractFingerprint: job.estimate.contractFingerprint })),
+  runPreparation: (job: PreparationJob) => request<PreparationJob>(`/api/integrations/preparations/${encodeURIComponent(job.id)}/run`, json(job.state === "paused" ? { resumeRevision: job.revision } : {})),
+  reviewIntegration: (id: string) => request<IntegrationActivationReview>(`/api/integrations/preparations/${encodeURIComponent(id)}/activation`),
+  activateIntegration: (id: string, review: IntegrationActivationReview) => request<IntegrationActivationReview>(`/api/integrations/preparations/${encodeURIComponent(id)}/activate`, json({ revision: review.bindingRevision, fingerprint: review.fingerprint })),
+  browseEntity: (connection: string, entity: string, signal?: AbortSignal) => request<EntityCollectionView>("/api/integrations/read", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "browse", connection, entity }), signal }),
+  entityPage: (ref: EntityRef, signal?: AbortSignal) => request<RecordPageData>("/api/integrations/read", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "page", ref }), signal }),
+  relatedRecords: (ref: EntityRef, relationship: string, direction: "forward" | "reverse", signal?: AbortSignal) => request<RelatedRecordViews>("/api/integrations/read", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "related", ref, relationship, direction }), signal }),
   checkSetupPreview: (
     dashboardId: string,
     widget: WidgetSpec,

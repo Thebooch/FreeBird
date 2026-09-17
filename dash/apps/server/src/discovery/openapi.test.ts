@@ -9,6 +9,67 @@ import {
 
 const SPEC_URL = "https://api.example.com/openapi.json";
 
+it("persists every field of a wide endpoint through catalog validation", () => {
+  const properties = Object.fromEntries(
+    Array.from({ length: 365 }, (_, i) => [`field${i}`, { type: "string" }]),
+  );
+  const result = parseOpenApi(
+    {
+      openapi: "3.0.3",
+      info: { title: "Wide" },
+      paths: {
+        "/items": {
+          get: {
+            responses: {
+              "200": {
+                content: {
+                  "application/json": {
+                    schema: { type: "array", items: { type: "object", properties } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    SPEC_URL,
+  );
+  expect(result?.entry.ops[0]?.fields).toHaveLength(365);
+  expect(result?.entry.ops[0]?.fields?.at(-1)?.name).toBe("field364");
+});
+
+it("reports indexing limits while preserving unrelated endpoint discovery", () => {
+  const properties = Object.fromEntries(
+    Array.from({ length: 10001 }, (_, i) => [`field${i}`, { type: "string" }]),
+  );
+  const result = parseOpenApi(
+    {
+      openapi: "3.0.3",
+      info: { title: "Wide" },
+      paths: {
+        "/items": {
+          get: {
+            responses: {
+              "200": {
+                content: {
+                  "application/json": {
+                    schema: { type: "array", items: { type: "object", properties } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    SPEC_URL,
+  );
+  expect(result?.entry.ops).toHaveLength(1);
+  expect(result?.entry.ops[0]?.fields).toBeUndefined();
+  expect(result?.warnings.join(" ")).toContain("field discovery is incomplete");
+});
+
 const spec = (overrides: Record<string, unknown> = {}) => ({
   openapi: "3.0.3",
   info: { title: "Billing API" },
