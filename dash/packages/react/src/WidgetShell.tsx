@@ -2,9 +2,9 @@ import {
   Badge,
   EmptyState,
   ErrorState,
-  FacetBar,
   type FacetSelection,
   type FacetView,
+  FilterGlyph,
   Menu,
   type MenuItem,
   Message,
@@ -32,6 +32,7 @@ import { WidgetErrorBoundary } from "./WidgetErrorBoundary.jsx";
 import { WidgetInspector } from "./WidgetInspector.jsx";
 import { useDashboard } from "./context.jsx";
 import type { OpenReference } from "./entityDetail.js";
+import { entityFor } from "./references.js";
 import { chromePresentationFor, presentationFor, presentationStyle } from "./presentation.js";
 import type { WidgetData } from "./useWidgetData.js";
 import { useWidgetData } from "./useWidgetData.js";
@@ -107,7 +108,41 @@ export const WidgetShell = ({
   const [inspecting, setInspecting] = useState(false);
   /** The row a drill-down was opened from. Null when the sheet is closed. */
   const [openRow, setOpenRow] = useState<Row | null>(null);
-  const { now, locale, timeZone, presentation: sources, reportFacets } = useDashboard();
+  const {
+    now,
+    locale,
+    timeZone,
+    presentation: sources,
+    reportFacets,
+    entityLinks,
+  } = useDashboard();
+
+  /*
+   * A row opens the record type's own page wherever these rows are records of
+   * one — the page that carries what points *at* the record, so a vendor
+   * arrives with its work orders, bills and notes.
+   *
+   * It outranks the widget's private sheet deliberately, and the sheet's own
+   * planner says why: it stops planning one for any widget that names a record
+   * type, because such a widget "already has a record page, and it is the
+   * shared one". Nothing routed there, so those widgets opened a sheet that
+   * was empty by design — and a widget with no sheet at all had rows that did
+   * not respond.
+   *
+   * The sheet stays for rows nothing describes, which is every widget over an
+   * API whose records were never read.
+   */
+  const recordType = entityFor(widget, entityLinks ?? {});
+  /*
+   * After a group step there are no records left, only buckets — the same
+   * reason `referenceColumns` stops marking links on an aggregated widget. A
+   * monthly count has no page, and a bar that looks openable and is not is
+   * worse than one that plainly is not.
+   */
+  const aggregated =
+    widget.pipeline.some((step) => step.op === "group") ||
+    widget.sources.some((source) => source.pipeline.some((step) => step.op === "group"));
+  const opensPage = Boolean(onOpenPage) && Boolean(recordType?.identity) && !aggregated;
 
   /*
    * What the reader has narrowed this widget to.
@@ -121,6 +156,90 @@ export const WidgetShell = ({
 
   const chrome = chromePresentationFor(sources, widget.presentation);
   const look = presentationFor(sources, widget.component, widget.presentation);
+
+  /*
+   * Built from the *unfiltered* rows, which is what lets an unselected tile
+   * keep saying how much is behind it. `buildFacets` owns that rule; the
+   * shell's job is only to hand it everything and never to pre-filter.
+   */
+  const views = useMemo<readonly FacetView[]>(
+    () =>
+      data.state === "ok" && !isSlotHidden(chrome, "facets")
+        ? buildFacets({
+            facets: widget.facets,
+            rows: data.rows,
+            columns: data.columns,
+            selection,
+          })
+        : [],
+    [data.state, data.rows, data.columns, widget.facets, selection, chrome],
+  );
+
+  /*
+   * Rows and highlights narrowed together, never separately — they are
+   * index-parallel, and filtering one without the other moves every status
+   * pill onto a different record.
+   */
+  const faceted = useMemo(
+    () => applyFacets(views, data.rows, data.highlights),
+    [views, data.rows, data.highlights],
+  );
+
+  const filtering = views.some((view) => view.selected.length > 0);
+
+  /*
+   * Tell the board what this widget is narrowed to.
+   *
+   * In an effect rather than in the click handler, because the selection that
+   * matters is the one that survived `buildFacets` — a key whose tile no
+   * longer exists is dropped there, and reporting the raw click would tell the
+   * chat about a filter the reader cannot see and the rows do not have.
+   */
+  const summary = useMemo(() => describeFacets(views), [views]);
+  useEffect(() => {
+    reportFacets(widget.id, summary);
+  }, [reportFacets, widget.id, summary]);
+  useEffect(() => () => reportFacets(widget.id, []), [reportFacets, widget.id]);
+
+  /**
+   * The filter, as the rows a menu can show.
+   *
+   * One item per value, grouped under the field it belongs to, ticked when it
+   * is on and kept open while a run of them is set — narrowing usually means
+   * two or three choices, and a menu that shut after each one would make the
+   * reader reopen it every time.
+   */
+  const filterItems: MenuItem[] = views
+    .filter((view) => view.tiles.length > 0)
+    .flatMap((view) =>
+      view.tiles.map((tile) => ({
+        id: `${view.field}-${tile.key}`,
+        label: tile.label,
+        section: view.label,
+        ...(settingBool(chrome, "facetCounts", true)
+          ? { meta: tile.count.toLocaleString() }
+          : {}),
+        checked: tile.selected,
+        keepOpen: true,
+        onSelect: () => setSelection((previous) => toggleFacet(previous, view, tile.key)),
+      })),
+    );
+
+  const filterCount = views.reduce((total, view) => total + view.selected.length, 0);
+
+  if (filterItems.length > 0 && filterCount > 0) {
+    /*
+     * A way back to everything, at the end of the list it undoes. Only once
+     * something is on: an always-present "Clear" on a menu that filters
+     * nothing reads as a control that does nothing.
+     */
+    filterItems.push({
+      id: "clear",
+      label: "Clear filters",
+      separated: true,
+      onSelect: () => setSelection({}),
+    });
+  }
 
   const actions: MenuItem[] = [
     { id: "refresh", label: "Refresh", icon: "↻", onSelect: data.refetch },
@@ -201,56 +320,35 @@ export const WidgetShell = ({
     ),
     actions: (
       <span className="dash-widget__actions">
+        {/*
+         * The filter, where every other tool is.
+         *
+         * It used to be a row of buttons above the rows — one per value, sized
+         * by whatever the values happened to be called, taking a third of a
+         * short widget before a single row was read. A control that is mostly
+         * unused most of the time belongs behind the affordance people already
+         * look for, and the count on the glyph is what keeps a hidden filter
+         * from being a silent one.
+         */}
+        {filterItems.length > 0 && (
+          <Menu
+            items={filterItems}
+            glyph={<FilterGlyph />}
+            badge={filterCount}
+            label={
+              filterCount > 0
+                ? `Filter ${widget.title}, ${filterCount} applied`
+                : `Filter ${widget.title}`
+            }
+            testId={`filters-${widget.id}`}
+          />
+        )}
         <Menu items={actions} label={`Actions for ${widget.title}`} testId={`actions-${widget.id}`} />
       </span>
     ),
   };
 
   const visible = orderedSlots(chrome, CHROME_SLOTS).filter((id) => !isSlotHidden(chrome, id));
-
-  /*
-   * Built from the *unfiltered* rows, which is what lets an unselected tile
-   * keep saying how much is behind it. `buildFacets` owns that rule; the
-   * shell's job is only to hand it everything and never to pre-filter.
-   */
-  const views = useMemo<readonly FacetView[]>(
-    () =>
-      data.state === "ok" && !isSlotHidden(chrome, "facets")
-        ? buildFacets({
-            facets: widget.facets,
-            rows: data.rows,
-            columns: data.columns,
-            selection,
-          })
-        : [],
-    [data.state, data.rows, data.columns, widget.facets, selection, chrome],
-  );
-
-  /*
-   * Rows and highlights narrowed together, never separately — they are
-   * index-parallel, and filtering one without the other moves every status
-   * pill onto a different record.
-   */
-  const faceted = useMemo(
-    () => applyFacets(views, data.rows, data.highlights),
-    [views, data.rows, data.highlights],
-  );
-
-  const filtering = views.some((view) => view.selected.length > 0);
-
-  /*
-   * Tell the board what this widget is narrowed to.
-   *
-   * In an effect rather than in the click handler, because the selection that
-   * matters is the one that survived `buildFacets` — a key whose tile no
-   * longer exists is dropped there, and reporting the raw click would tell the
-   * chat about a filter the reader cannot see and the rows do not have.
-   */
-  const summary = useMemo(() => describeFacets(views), [views]);
-  useEffect(() => {
-    reportFacets(widget.id, summary);
-  }, [reportFacets, widget.id, summary]);
-  useEffect(() => () => reportFacets(widget.id, []), [reportFacets, widget.id]);
 
   // Counted after the filter, so the footer describes what is on screen.
   const showFooter = !isSlotHidden(chrome, "footer") && data.state === "ok";
@@ -307,18 +405,6 @@ export const WidgetShell = ({
          * badges and the actions, so the message has something to belong to
          * and Refresh is still reachable.
          */}
-        {/*
-         * Above the component rather than inside it, so every renderer gets
-         * this without learning what a facet is — the same reason highlights
-         * are read off `data` here and not threaded through each one.
-         */}
-        <FacetBar
-          views={views}
-          variant={settingString(chrome, "facetVariant", "tiles")}
-          showCounts={settingBool(chrome, "facetCounts", true)}
-          onToggle={(view, key) => setSelection((previous) => toggleFacet(previous, view, key))}
-          onClear={() => setSelection({})}
-        />
         <WidgetErrorBoundary widgetTitle={widget.title}>
           <WidgetBody
             data={data}
@@ -330,7 +416,11 @@ export const WidgetShell = ({
             timeZone={timeZone}
             now={now}
             presentation={look}
-            {...(widget.drilldown ? { onSelectRow: setOpenRow } : {})}
+            {...(opensPage
+              ? { onSelectRow: (row: Row) => onOpenPage?.(widget.id, row) }
+              : widget.drilldown
+                ? { onSelectRow: setOpenRow }
+                : {})}
             {...(openReference ? { onOpenReference: openReference } : {})}
           />
         </WidgetErrorBoundary>

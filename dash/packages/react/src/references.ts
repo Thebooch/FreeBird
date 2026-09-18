@@ -1,5 +1,5 @@
 import type { ColumnMeta, ColumnReference, EntityLinkView, WidgetSpec } from "@freebirdai/dash-spec";
-import { widgetSources } from "@freebirdai/dash-spec";
+import { humanLabel, widgetSources } from "@freebirdai/dash-spec";
 
 /**
  * Columns that hold another record's identity, marked as such.
@@ -145,6 +145,26 @@ export const referenceColumns = (
   if (marked.size === 0) return [...columns];
   return columns.map((column) => {
     const reference = marked.get(column.name);
-    return reference ? { ...column, reference } : column;
+    if (!reference) return column;
+    /*
+     * The heading loses its "id", because the column no longer shows one.
+     *
+     * A reference cell renders the far record's *name* — "Leanne Graham", not
+     * `1` — so "User id" over a column of names reads like a mistake. Only the
+     * suffix goes: "Assigned to user id" keeps everything that says which link
+     * this is, which two references to the same record type depend on.
+     */
+    /*
+     * Read through the same fallback the header uses. A column with no stated
+     * label is drawn as `humanLabel(name)` — "User id" — so stripping only a
+     * *stated* label would leave the commonest case untouched, which is what it
+     * did on the first attempt.
+     */
+    const heading = (column.label ?? humanLabel(column.name)).replace(/\s+id$/i, "").trim();
+    return {
+      ...column,
+      reference,
+      ...(heading.length > 0 ? { label: heading } : {}),
+    };
   });
 };

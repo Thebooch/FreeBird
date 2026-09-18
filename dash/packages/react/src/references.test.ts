@@ -93,6 +93,46 @@ describe("derivedSources", () => {
 });
 
 describe("referenceColumns", () => {
+
+  it("drops the trailing 'id' from the heading, because the cell shows a name", () => {
+    /*
+     * A reference cell renders "Acme Plumbing", not `55`, so "Vendor id" over
+     * a column of names reads like a mistake to the person this is built for.
+     */
+    const marked = referenceColumns(
+      [{ ...column("VendorId"), label: "Vendor id" }],
+      widget({}),
+      LINKS,
+    );
+    expect(marked[0]?.label).toBe("Vendor");
+  });
+
+  it("keeps everything that says which link it is", () => {
+    // Two references to the same record type - "created by" and "assigned to"
+    // - are different questions, and only the suffix is noise.
+    const marked = referenceColumns(
+      [{ ...column("VendorId"), label: "Assigned to vendor ID" }],
+      widget({}),
+      LINKS,
+    );
+    expect(marked[0]?.label).toBe("Assigned to vendor");
+  });
+
+  it("names an unlabelled link column after the record it opens", () => {
+    // The commonest case: nothing stated a label, so the header falls back to
+    // the column name — "User id" over a column of people's names.
+    const marked = referenceColumns([column("VendorId")], widget({}), LINKS);
+    expect(marked[0]?.label).toBe("Vendor");
+  });
+
+  it("leaves a heading that never said 'id' alone", () => {
+    const marked = referenceColumns(
+      [{ ...column("VendorId"), label: "Supplier" }],
+      widget({}),
+      LINKS,
+    );
+    expect(marked[0]?.label).toBe("Supplier");
+  });
   it("marks a plain column that holds another record's id", () => {
     const marked = referenceColumns([column("Title"), column("VendorId")], widget({}), LINKS);
     expect(marked.find((one) => one.name === "VendorId")?.reference).toMatchObject({

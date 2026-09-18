@@ -24,6 +24,7 @@ import { ConnectionManager } from "./ConnectionManager.jsx";
 import { autoArrange, isTypingTarget } from "./editing.js";
 import { createLayoutSaver, withLayoutCells } from "./layoutSave.js";
 import { createPendingMessage } from "./pendingMessage.js";
+import { recordTargetFor } from "./recordRoute.js";
 import { BOARD_ROUTE, type Route, currentRoute, navigate, onRouteChange } from "./route.js";
 import { TopNav } from "./TopNav.jsx";
 import { PresentationEditor } from "./PresentationEditor.jsx";
@@ -795,20 +796,43 @@ const App = (): JSX.Element => {
     const board = dashboardRef.current;
     if (!board) return;
     const widget = board.widgets.find((entry) => entry.id === widgetId);
-    const params = widget?.drilldown?.params ?? {};
-    const first = Object.values(params)
-      .flatMap((value) => [...value.matchAll(/\{\{\s*row\.([^}\s|]+)/g)])
-      .map((match) => match[1])
-      .find((field): field is string => Boolean(field));
-    const value = first ? row[first] : undefined;
-    if (value === undefined || value === null) return;
+    if (!widget) return;
+
+    const target = recordTargetFor(widget, row, live.entityLinks);
+    if (!target) return;
+
+    /*
+     * The record type's own page wherever the row is a record of one.
+     *
+     * The other page is a layout planned for this one widget, and for a widget
+     * that names a record type nothing plans it at all — `settleDetail` skips
+     * it precisely because "a widget that names its record type already has a
+     * record page, and it is the shared one". That was true of the page and
+     * false of the routing: every row click came here and opened the private
+     * sheet, so the collections hanging off a vendor — its work orders, bills
+     * and notes — were reachable only by clicking a reference cell.
+     *
+     * `from` carries which widget was clicked, so the row still brings that
+     * widget's own changes to the record layout with it.
+     */
+    if (target.kind === "entity") {
+      setRecordRow(row);
+      navigate({
+        kind: "entity",
+        connectionId: target.connection,
+        entityId: target.entity,
+        recordId: target.id,
+        from: { dashboardId: board.id, widgetId },
+      });
+      return;
+    }
 
     setRecordRow(row);
     navigate({
       kind: "record",
       dashboardId: board.id,
       widgetId,
-      recordId: String(value),
+      recordId: target.id,
     });
   };
 

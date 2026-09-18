@@ -173,10 +173,26 @@ export const buildFromDraft = (
    * record type has a plural for exactly this, and the draft now carries which
    * record type it is about.
    */
-  const named = draft.entity
-    ? Object.values(context.records?.[draft.connection ?? ""] ?? {}).find(
-        (record) => record.id === draft.entity,
-      )
+  /*
+   * Which record type these rows are, whichever door built the widget.
+   *
+   * A brief names one; the card's questions and the wizard never do, so a
+   * widget built by picking an endpoint had no record type at all — and with
+   * it lost its name ("Retrieve all work orders"), the shared record page its
+   * rows open, and every link the record type states. That was a second class
+   * of widget nobody chose to create.
+   *
+   * It is not a guess: a resource names the endpoint that lists it, so the
+   * endpoint identifies the record type outright. Read only when the draft
+   * settled none, so anything decided deliberately still wins.
+   */
+  const resourceOfOp = context.drillDowns.find((offer) => offer.listOp === draft.op)?.resource;
+  const byResource = context.records?.[draft.connection ?? ""] ?? {};
+  const entity =
+    draft.entity ?? (resourceOfOp ? byResource[resourceOfOp]?.id : undefined);
+
+  const named = entity
+    ? Object.values(byResource).find((record) => record.id === entity)
     : undefined;
   const title =
     draft.title?.trim() ||
@@ -457,12 +473,15 @@ export const buildFromDraft = (
     title,
     component: draft.component,
     /*
-     * The record type, where the draft was decided from one.
+     * The record type these rows are.
      *
      * What makes a row open the *shared* page for that record type instead of
-     * a private copy of a record view frozen into this widget.
+     * a private copy of a record view frozen into this widget — and what every
+     * link on the row is read from. Taken from the draft where one was decided
+     * and from the endpoint otherwise, so a widget built by picking an endpoint
+     * is the same kind of thing as one built from a request.
      */
-    ...(draft.entity ? { entity: draft.entity } : {}),
+    ...(entity ? { entity } : {}),
     /*
      * The request it was compiled from, where the draft came from one.
      *

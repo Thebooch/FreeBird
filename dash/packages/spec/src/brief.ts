@@ -129,21 +129,55 @@ const columnsFor = (
   entity: EntitySpec,
   asked: readonly string[] | undefined,
   known: (path: string) => boolean,
+  /**
+   * Fields that hold another record's identity and can be opened, in order of
+   * what they cost to show. Empty where nothing described the rest of the API.
+   */
+  links: readonly { readonly field: string; readonly embedded: readonly string[] }[] = [],
 ): readonly string[] => {
   const wanted = (asked ?? []).filter(known);
+  // Somebody who named the columns gets exactly those. A link they did not ask
+  // for is a column they did not ask for.
   if (wanted.length > 0) return [...new Set(wanted)].slice(0, MAX_COLUMNS);
-  if (entity.views.columns.length > 0) return entity.views.columns.slice(0, MAX_COLUMNS);
 
-  const visible = visibleFields(entity);
-  const primary = visible.filter((field) => field.visibility === "primary");
-  const pool = primary.length > 0 ? primary : visible;
+  const chosen =
+    entity.views.columns.length > 0
+      ? entity.views.columns
+      : (() => {
+          const visible = visibleFields(entity);
+          const primary = visible.filter((field) => field.visibility === "primary");
+          const pool = primary.length > 0 ? primary : visible;
+          /*
+           * The record's own name leads whatever its visibility says: a list of
+           * work orders opening on an id column is a table of numbers, and the
+           * name is the one column somebody reads to find the row they meant.
+           */
+          return [...(entity.display?.title ?? []), ...pool.map((field) => field.path)];
+        })();
+
   /*
-   * The record's own name leads whatever its visibility says: a list of work
-   * orders opening on an id column is a table of numbers, and the name is the
-   * one column somebody reads to find the row they meant.
+   * One way through to a related record, kept in the table.
+   *
+   * A foreign key is hidden as a *value* — nobody reads `VendorId: 55` — and
+   * every column chooser drops it for that reason, which is how a work order
+   * came to sit next to the vendor who did the work with no way to reach them.
+   * The renderer draws it as that vendor's name, so what lands on screen is a
+   * name that opens their record, not a number.
+   *
+   * One, not all. A record type on a real API points at four or five others,
+   * and a table that is mostly links is a table of somewhere else. The first is
+   * the cheapest to resolve, which is the one most likely to read as a name.
+   *
+   * Left out where the row already spells that record's name in a column being
+   * shown — a task showing `Category.Name` needs no `Category.Id` beside it,
+   * because the name itself is what carries the link.
    */
-  const named = [...(entity.display?.title ?? []), ...pool.map((field) => field.path)];
-  return [...new Set(named)].slice(0, MAX_COLUMNS);
+  const already = new Set(chosen);
+  const link = links.find(
+    (one) => !already.has(one.field) && !one.embedded.some((path) => already.has(path)),
+  );
+  const withLink = link ? [...chosen.slice(0, MAX_COLUMNS - 1), link.field] : chosen;
+  return [...new Set(withLink)].slice(0, MAX_COLUMNS);
 };
 
 /** The first field carrying one of the semantics this kind sorts by. */
@@ -665,7 +699,64 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
     ...new Set(paths.flatMap((path) => bind(path, asked.has(path) ? what : null) ?? [])),
   ];
 
-  const columns = bindAll(columnsFor(entity, brief.columns, known), askedColumns, "columns");
+  /*
+   * The ways through to another record, cheapest first.
+   *
+   * Derived from the graph rather than from the field list: whether a
+   * reference can be *opened* is a fact about the endpoints on the other side,
+   * and one that cannot be is a column of bare ids.
+   */
+  const COST_FIRST = { free: 0, cheap: 1, partial: 2 } as const;
+  const openable = input.related
+    ? entityGraph({
+        entities: input.related.entities,
+        resources: input.related.resources,
+        ops: input.related.ops,
+      })
+        .referencesOf(entity.id)
+        .filter(
+          (reference) =>
+            reference.reach !== null &&
+            known(reference.field) &&
+            /*
+             * A list of ids has no single record to open — the cell renders as
+             * "3 bills" and correctly refuses to be a link — and a field this
+             * widget cannot bind is not a column at all.
+             */
+            reference.holds !== "array" &&
+            bind(reference.field, null) !== null,
+        )
+        .slice()
+        /*
+         * One whose name can actually be resolved, first.
+         *
+         * A reference the row already spells is marked `free` — but only if
+         * the *name* is a column, and these columns are chosen before anything
+         * flattens one. Preferring it would put an id on screen that reads
+         * "Task 9" until something fetches the task, which is the opposite of
+         * free. A plain id resolves to a name through the lookup every
+         * reference column already uses.
+         */
+        .sort(
+          (a, b) =>
+            (a.embedded.length > 0 ? 1 : 0) - (b.embedded.length > 0 ? 1 : 0) ||
+            /*
+             * This record's own field beats one sitting inside another record
+             * it carries: a work order points at a vendor itself, and reaches
+             * a lease only through the task it belongs to. The first is a
+             * relationship somebody would name; the second is a detour.
+             */
+            a.field.split(".").length - b.field.split(".").length ||
+            COST_FIRST[a.cost] - COST_FIRST[b.cost],
+        )
+        .map((reference) => ({ field: reference.field, embedded: reference.embedded }))
+    : [];
+
+  const columns = bindAll(
+    columnsFor(entity, brief.columns, known, openable),
+    askedColumns,
+    "columns",
+  );
 
   /*
    * Filters, and what each starts narrowed to.

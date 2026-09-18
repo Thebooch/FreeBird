@@ -129,6 +129,62 @@ describe("entityPageView", () => {
     ]);
   });
 
+  it("keeps a hidden field that is the way into another record", () => {
+    /*
+     * The failure this exists for: a foreign key is hidden — correctly, nobody
+     * wants to read `VendorId: 55` — and hiding it took the *link* with it. On
+     * a real API every foreign key is hidden, so a work order's page had no way
+     * to reach the vendor who did the work, and the vendor's page (with its
+     * work orders, bills and notes) was unreachable from anywhere.
+     */
+    const linked = entity({
+      ...TASK,
+      fields: [
+        { path: "Id", visibility: "hidden" },
+        { path: "Title" },
+        {
+          path: "VendorId",
+          label: "Vendor",
+          visibility: "hidden",
+          reference: { entity: "vendor", verified: true },
+        },
+      ],
+    });
+    const page = pageOf([linked, VENDOR], "task");
+
+    expect(page?.fields.map((field) => field.path)).toEqual(["Title", "VendorId"]);
+    // Kept as a detail, never promoted: it is a way through, not a headline.
+    expect(page?.fields.find((field) => field.path === "VendorId")?.visibility).toBe("detail");
+    // `Id` is an internal key pointing nowhere, and stays gone.
+    expect(page?.fields.some((field) => field.path === "Id")).toBe(false);
+  });
+
+  it("leaves out a hidden reference nothing here can open", () => {
+    // Kept only where the far record can be fetched. Otherwise the cell has no
+    // name to show and falls back to the bare id this rule exists to avoid.
+    const linked = entity({
+      ...TASK,
+      fields: [
+        { path: "Id", visibility: "hidden" },
+        { path: "Title" },
+        {
+          path: "VendorId",
+          label: "Vendor",
+          visibility: "hidden",
+          reference: { entity: "vendor", verified: true },
+        },
+      ],
+    });
+    const orphaned = entity({ ...VENDOR, resource: "nowhere" });
+    const page = pageOf(
+      [linked, orphaned],
+      "task",
+      OPS.filter((op) => !op.id.startsWith("vendors")),
+      RESOURCES.filter((one) => one.id !== "vendor"),
+    );
+    expect(page?.fields.map((field) => field.path)).toEqual(["Title"]);
+  });
+
   it("gives every field a label, stated or read off the path", () => {
     const page = pageOf([SUPPLIER], "vendor");
     const byPath = new Map(page?.fields.map((field) => [field.path, field]));

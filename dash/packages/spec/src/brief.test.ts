@@ -560,6 +560,93 @@ const bothSides = (options: { taskFilter?: boolean; task?: EntitySpec } = {}) =>
   ],
 });
 
+/**
+ * A way through to a related record, kept in the table.
+ *
+ * The linking was never missing — the graph knew every relationship and the
+ * renderer knew how to draw one. What was missing was somewhere to click: a
+ * foreign key is hidden as a *value*, correctly, and every column chooser drops
+ * it for that reason. So a work order sat next to the vendor who did the work
+ * with no way to reach them, and a non-technical reader had nothing to click.
+ */
+describe("compileBrief keeps a way through to a related record", () => {
+  const openable = () => ({
+    entities: [taskWithVendor(), vendor()],
+    resources: [
+      resource(),
+      resourceSchema.parse({
+        id: "vendor",
+        title: "Vendors",
+        listOp: "vendors_list",
+        detailOp: "vendors_byid",
+        detailParam: "vendorId",
+      }),
+    ],
+    ops: [
+      { id: "tasks_list", path: "/tasks" },
+      { id: "vendors_list", path: "/vendors" },
+      { id: "vendors_byid", path: "/vendors/{{param.vendorId}}" },
+    ],
+  });
+
+  const columnsOf = (related: ReturnType<typeof openable> | undefined) =>
+    compileBrief({
+      brief: { entity: "task", intent: "records" },
+      entity: taskWithVendor(),
+      resource: resource(),
+      connection: "api",
+      id: "w1",
+      ...(related ? { related } : {}),
+    }).widget?.roles.columns;
+
+  it("shows the field that reaches the other record, hidden or not", () => {
+    // Rendered as the vendor's name, not as `55` — which is why keeping a
+    // field the record type hides is not the same as showing an id.
+    expect(columnsOf(openable())).toContain("VendorId");
+  });
+
+  it("adds one, not every link the record type has", () => {
+    // A record type on a real API points at four or five others, and a table
+    // that is mostly links is a table of somewhere else.
+    const columns = [columnsOf(openable()) ?? []].flat();
+    expect(columns.filter((name: string) => name === "VendorId")).toHaveLength(1);
+    expect(columns.length).toBeLessThanOrEqual(6);
+  });
+
+  it("leaves the table alone when nothing can open the far record", () => {
+    /*
+     * Without a by-id endpoint the cell has no name to show and nothing to
+     * open, so the column would be the bare id this rule exists to avoid.
+     */
+    const closed = {
+      ...openable(),
+      resources: [resource(), vendorResource],
+      ops: [
+        { id: "tasks_list", path: "/tasks" },
+        { id: "vendors_list", path: "/vendors" },
+      ],
+    };
+    expect(columnsOf(closed)).not.toContain("VendorId");
+  });
+
+  it("says nothing about links when nothing described the rest of the API", () => {
+    expect(columnsOf(undefined)).not.toContain("VendorId");
+  });
+
+  it("leaves the columns exactly as asked when somebody named them", () => {
+    // A link they did not ask for is a column they did not ask for.
+    const built = compileBrief({
+      brief: { entity: "task", intent: "records", columns: ["Title", "Status"] },
+      entity: taskWithVendor(),
+      resource: resource(),
+      connection: "api",
+      id: "w1",
+      related: openable(),
+    });
+    expect(built.widget?.roles.columns).toEqual(["Title", "Status"]);
+  });
+});
+
 describe("compileBrief, alongside", () => {
   it("joins on the field this record already points at", () => {
     const result = compileBrief({

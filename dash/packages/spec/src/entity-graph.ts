@@ -574,11 +574,31 @@ export const entityPageView = (
   const graph = entityGraph(input);
   const resource = input.resources.find((one) => one.id === entity.resource);
 
+  /*
+   * A hidden field that holds another record's identity is kept.
+   *
+   * `hidden` is the entity pass's verdict on a field's *value*, and for a
+   * foreign key that verdict is right: nobody wants to read `VendorId: 55`.
+   * But the id is also the only way into that record — a renderer turns it
+   * into the vendor's name and a link — so dropping it here removed the link
+   * along with the number. On a real API every foreign key is hidden, which is
+   * how a record page came to have no way to reach anything it pointed at.
+   *
+   * Only where the far record can actually be opened. A reference nothing can
+   * fetch would come back as the bare id this rule exists to keep off a page.
+   */
+  const linkable = new Set(
+    graph
+      .referencesOf(entity.id)
+      .filter((reference) => reference.reach !== null)
+      .map((reference) => reference.field),
+  );
+
   const fields: EntityPageField[] = entity.fields
-    // `hidden` is the entity pass's verdict on self-links, internal keys and
-    // fields that are null on every record. Carrying them for a client to
+    // Everything else `hidden` covers — internal keys and fields that are null
+    // on every record — stays dropped. Carrying those for a client to
     // re-filter would be shipping the noise this layer exists to remove.
-    .filter((field) => field.visibility !== "hidden")
+    .filter((field) => field.visibility !== "hidden" || linkable.has(field.path))
     .map((field) => ({
       path: field.path,
       label: field.label ?? humanLabel(field.path),

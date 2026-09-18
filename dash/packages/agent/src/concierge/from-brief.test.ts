@@ -1113,3 +1113,84 @@ describe("a comparison broken down by a numeric field", () => {
     expect(executeWidget(widget, posts, run).ok).toBe(true);
   });
 });
+
+/**
+ * A widget knows what kind of record it shows, whichever door built it.
+ *
+ * A brief names a record type; the card's questions and the wizard never do.
+ * So a widget built by picking an endpoint was a second class of widget nobody
+ * chose to create: it was called "Retrieve all work orders" after the API's own
+ * endpoint, its rows opened a private sheet instead of the record's own page,
+ * and every link the record type states went unread.
+ *
+ * The endpoint identifies the record type outright — a resource names the
+ * endpoint that lists it — so this is read, not guessed.
+ */
+describe("a widget built by picking an endpoint", () => {
+  const context = {
+    connections: [{ id: "api", title: "The API" }],
+    ops: [{ id: "tasks_list", title: "Retrieve all tasks", connection: "api" }],
+    shapes: {
+      tasks_list: inferShape({ data: [{ Id: 1, Title: "Leak", Status: "Open" }] }),
+    },
+    drillDowns: [
+      {
+        resource: "task",
+        title: "Retrieve all tasks",
+        listOp: "tasks_list",
+        detailOp: "tasks_byid",
+        idField: "Id",
+        detailParam: "taskId",
+      },
+    ],
+    records: { api: { task: { id: "task", one: "Task", many: "Tasks" } } },
+    joins: [],
+    children: [],
+    searchable: [],
+    rangeFilterable: [],
+    readPlans: [],
+  } as unknown as ConciergeContext;
+
+  /** What the card produces: an endpoint, a view, and bound roles. */
+  const built = (patch: Record<string, unknown> = {}) =>
+    buildFromDraft(
+      revise(
+        newDraft("d1", "tasks", "wizard"),
+        { connection: "api", endpoint: "tasks_list", component: "table", roles: { columns: ["Title"] }, ...patch },
+        context,
+      ).draft,
+      context,
+    );
+
+  it("names the record type its endpoint lists", () => {
+    expect(built().widget?.entity).toBe("task");
+  });
+
+  it("is called what the records are called, not what the endpoint is", () => {
+    // "Retrieve all tasks" is the API's own vocabulary, and it was reaching
+    // the board as a widget title.
+    expect(built().widget?.title).toBe("Tasks");
+  });
+
+  it("leaves a deliberate choice alone", () => {
+    // Anything the draft settled outranks what the endpoint implies.
+    expect(built({ entity: "something-else" }).widget?.entity).toBe("something-else");
+  });
+
+  it("claims no record type where the endpoint identifies none", () => {
+    const bare = {
+      ...context,
+      drillDowns: [],
+    } as unknown as ConciergeContext;
+    const widget = buildFromDraft(
+      revise(
+        newDraft("d1", "tasks", "wizard"),
+        { connection: "api", endpoint: "tasks_list", component: "table", roles: { columns: ["Title"] } },
+        bare,
+      ).draft,
+      bare,
+    ).widget;
+    expect(widget?.entity).toBeUndefined();
+    expect(widget?.title).toBe("Retrieve all tasks");
+  });
+});
