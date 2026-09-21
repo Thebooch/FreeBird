@@ -5,9 +5,16 @@ export { GRAINS, parseGrain, truncateToBucket } from "@freebirdai/dash-expr";
 export { isAggregation, parseAggregation } from "./aggregation.js";
 export type { ParsedAggregation } from "./aggregation.js";
 
-export { COERCION_DESCRIPTIONS, applyCoercion, coercionSchema } from "./coercion.js";
+export {
+  COERCION_DESCRIPTIONS,
+  COERCION_SEMANTICS,
+  applyCoercion,
+  coercionForFormat,
+  coercionSchema,
+  fieldFormatSchema,
+} from "./coercion.js";
 export { connectionKeyRef } from "./primitives.js";
-export type { Coercion } from "./coercion.js";
+export type { Coercion, FieldFormat } from "./coercion.js";
 
 export {
   COMPONENT_CONTRACTS,
@@ -23,6 +30,7 @@ export type {
   BindingIssue,
   BindingValidation,
   ColumnMeta,
+  ColumnReference,
   ComponentContract,
   ComponentId,
   GridHints,
@@ -53,7 +61,6 @@ export type { AuthSpec, ConnectionSpec, OpDef, OpSpec, PaginationSpec } from "./
 export {
   ARCHETYPES,
   ARCHETYPE_IDS,
-  LABEL_VERSION,
   MAP_VERSION,
   archetypeSchema,
   catalogEntrySchema,
@@ -87,6 +94,91 @@ export {
   validateFacets,
 } from "./facet.js";
 export type { FacetOption, FacetSpec, FacetValue } from "./facet.js";
+
+export {
+  ENTITY_KINDS,
+  ENTITY_VERSION,
+  VERIFY_BUDGET_DEFAULT,
+  VERIFY_BUDGET_MAX,
+  displayFields,
+  displayName,
+  entityById,
+  entityDisplaySchema,
+  entityFieldSchema,
+  entityForResource,
+  entityKindSchema,
+  entitySchema,
+  entityStatSchema,
+  entityViewsSchema,
+  fieldGroupSchema,
+  fieldPathSchema,
+  inferTitleMode,
+  titleModeOf,
+  recordOverrideSchema,
+  referenceFields,
+  referenceSchema,
+} from "./entity.js";
+export type {
+  EntityDisplay,
+  EntityField,
+  EntityKind,
+  EntitySpec,
+  EntityStat,
+  EntityViews,
+  RecordOverride,
+  ReferenceSpec,
+} from "./entity.js";
+
+export { RECIPES, facetsFromRecipe, recipeFor } from "./recipes.js";
+export type { EntityRecipe } from "./recipes.js";
+
+export {
+  ALONGSIDE_MODES,
+  WIDGET_INTENTS,
+  columnForPath,
+  compileBrief,
+  widgetBriefSchema,
+} from "./brief.js";
+export type {
+  AlongsideMode,
+  CompileBriefInput,
+  CompiledBrief,
+  WidgetBrief,
+  WidgetIntent,
+} from "./brief.js";
+
+export { answerBrief, briefOptions } from "./brief-options.js";
+export type { BriefControl, BriefOption, BriefOptionsInput } from "./brief-options.js";
+
+export { recompileWidget } from "./recompile.js";
+
+export { referenceIds, targetOfRow } from "./reference.js";
+export type { ReferenceRow } from "./reference.js";
+
+export {
+  entityGraph,
+  entityLinkViews,
+  fieldLexicon,
+  entityPageView,
+  linkColumn,
+  targetFor,
+  targetsOf,
+} from "./entity-graph.js";
+export type {
+  EntityBackref,
+  EntityGraph,
+  EntityGraphInput,
+  EntityLinkView,
+  EntityPageField,
+  EntityPageSection,
+  EntityPageView,
+  EntityReference,
+  EntityReferenceView,
+  OmittedSection,
+  ReachCost,
+  ReachPlan,
+  UnreachableLink,
+} from "./entity-graph.js";
 
 export { authKeyRefs, fnv1a, idSchema, paramDefSchema, queryValueSchema } from "./primitives.js";
 export type { ParamDef } from "./primitives.js";
@@ -195,6 +287,7 @@ export {
   parseTokens,
   quantiseEnd,
   queryKey,
+  queryKeyPrefix,
   rangePresetSchema,
   resolveGrain,
   resolveRange,
@@ -233,6 +326,7 @@ export {
 export type { ExtractStep, GroupStep, HighlightSpec, PipelineStep } from "./pipeline.js";
 
 export {
+  ALL_ROWS,
   groupByShapeSchema,
   groupColumn,
   isEmptyShape,
@@ -251,6 +345,10 @@ export {
   formatSchema,
   formatValue,
   guessSemantic,
+  isFieldNoise,
+  looksLikeApiLink,
+  looksLikeIdentifier,
+  normaliseName,
   semanticTypeSchema,
   valueTypeSchema,
 } from "./semantics.js";

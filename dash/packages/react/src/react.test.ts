@@ -352,6 +352,109 @@ describe("QueryClient", () => {
   });
 });
 
+describe("a refused refresh keeps what was already there", () => {
+  const connection = connectionSchema.parse({
+    id: "demo",
+    title: "Demo",
+    kind: "inline",
+    ops: [{ id: "rows", title: "Rows", path: "/rows" }],
+  });
+
+  const params: ResolvedParams = {
+    range: resolveRange({ preset: "7d", now: 1_000_000 }),
+    filters: {},
+  };
+
+  /** Succeeds once, then refuses with the given error for every later call. */
+  const flakyClient = (error: unknown) => {
+    let calls = 0;
+    const adapter = new InlineAdapter();
+    adapter.register("demo", "rows", () => {
+      calls++;
+      if (calls > 1) throw error;
+      return { data: [1, 2, 3] };
+    });
+    const registry = new AdapterRegistry().register(adapter).addConnection(connection);
+    return new QueryClient(registry);
+  };
+
+  const run = (client: QueryClient, now: number, force = false) =>
+    client.ensure({
+      key: "demo.rows|{}",
+      connection: "demo",
+      op: "rows",
+      params: {},
+      resolved: params,
+      now,
+      ...(force ? { force: true } : {}),
+    });
+
+  it("keeps the body and the original fetch time when a refresh 429s", async () => {
+    const client = flakyClient(
+      new AdapterError("rate limited by demo", {
+        status: 429,
+        userMessage: "The API asked for fewer requests.",
+        retryAfter: "30",
+      }),
+    );
+    await run(client, 1_000_000);
+    const first = client.get("demo.rows|{}");
+    await run(client, 2_000_000, true);
+
+    const entry = client.get("demo.rows|{}");
+    // The failure is reported *over* the rows, not instead of them.
+    expect(entry?.status).toBe("error");
+    expect(entry?.body).toEqual({ data: [1, 2, 3] });
+    // Nothing was fetched, so the fetch time must not move.
+    expect(entry?.fetchedAt).toBe(first?.fetchedAt);
+    expect(entry?.error?.userMessage).toBe("The API asked for fewer requests.");
+    expect(entry?.error?.status).toBe(429);
+    // Retry-After: 30 seconds, from the moment of the refusal.
+    expect(entry?.error?.retryAt).toBe(2_000_000 + 30_000);
+  });
+
+  /*
+   * The waste this avoids: a permission error re-asked every minute for as
+   * long as the tab is open, spending the limit everything else needs.
+   */
+  it("schedules no retry for a key or permission problem, which waiting cannot fix", async () => {
+    for (const status of [401, 403]) {
+      const client = flakyClient(new AdapterError(`auth (${status})`, { status }));
+      await run(client, 1_000_000);
+      await run(client, 2_000_000, true);
+      const entry = client.get("demo.rows|{}");
+      expect(entry?.error?.status).toBe(status);
+      expect(entry?.error?.retryAt).toBeUndefined();
+    }
+  });
+
+  it("falls back to a minute when the refusal did not say how long", async () => {
+    const client = flakyClient(new AdapterError("upstream broke", { status: 502 }));
+    await run(client, 1_000_000);
+    await run(client, 2_000_000, true);
+    expect(client.get("demo.rows|{}")?.error?.retryAt).toBe(2_000_000 + 60_000);
+  });
+
+  it("drops one connection's entries and leaves another's alone", async () => {
+    const client = flakyClient(new AdapterError("x"));
+    await run(client, 1_000_000);
+    client.get("demo.rows|{}");
+    // A key belonging to a connection whose id merely starts the same.
+    await client.ensure({
+      key: "demo2.rows|{}",
+      connection: "demo",
+      op: "rows",
+      params: {},
+      resolved: params,
+      now: 1_000_000,
+    });
+
+    client.invalidateConnection("demo");
+    expect(client.get("demo.rows|{}")).toBeUndefined();
+    expect(client.get("demo2.rows|{}")).toBeDefined();
+  });
+});
+
 describe("drill-down cache separation", () => {
   const params = {
     range: { start: 0, end: 1, grain: "1d" as const, preset: "30d" as const },
@@ -518,6 +621,26 @@ describe("describeFailure", () => {
     expect(failure.retryable).toBe(true);
   });
 
+  it("counts a 429 down and withholds the retry until the wait is over", () => {
+    const now = 1_000_000;
+    const waiting = describeFailure(429, "Too many requests.", { at: now + 95_000, now });
+    expect(waiting.detail).toContain("about 2 minutes");
+    // Retrying inside the cooldown meets the cooldown; do not offer it.
+    expect(waiting.retryable).toBe(false);
+
+    const seconds = describeFailure(429, "Too many requests.", { at: now + 30_000, now });
+    expect(seconds.detail).toContain("30 seconds");
+
+    // Once the wait has passed the button comes back.
+    const over = describeFailure(429, "Too many requests.", { at: now - 1, now });
+    expect(over.retryable).toBe(true);
+    expect(over.detail).not.toMatch(/Trying again/);
+  });
+
+  it("offers the retry when nothing said how long to wait", () => {
+    expect(describeFailure(429, "Too many requests.", { at: null, now: 0 }).retryable).toBe(true);
+  });
+
   it("retries anything it cannot identify", () => {
     expect(describeFailure(502, null).retryable).toBe(true);
     expect(describeFailure(null, null).retryable).toBe(true);
@@ -551,6 +674,59 @@ describe("labelColumns", () => {
       Total: "Amount charged",
     },
   };
+
+  /**
+   * The defect that made the lexicon worth replacing.
+   *
+   * One entry per bare field name for a whole API means `Title` has a single
+   * meaning shared by every record type that has one — so a task's title and a
+   * file's title get the same word, and on a real API at least one of them is
+   * wrong. A record type answers only for its own fields, so both are right.
+   */
+  const linksFor = (entity: string, labels: Record<string, string>) => ({
+    api: [
+      {
+        entity,
+        resource: entity,
+        name: { one: entity, many: `${entity}s` },
+        title: [],
+        ops: ["detail"],
+        references: [],
+        labels,
+      },
+    ],
+  });
+
+  it("lets each record type name its own field", () => {
+    const shared = { api: { Title: "File title" } };
+
+    const [onATask] = labelColumns(
+      columns("Title"),
+      widget({ entity: "task" }),
+      shared,
+      linksFor("task", { Title: "Summary" }),
+    );
+    const [onAFile] = labelColumns(columns("Title"), widget({ entity: "file" }), shared, {
+      api: [],
+    });
+
+    expect(onATask?.label).toBe("Summary");
+    // Nothing describes a file, so the API-wide lexicon still answers for it.
+    expect(onAFile?.label).toBe("File title");
+  });
+
+  it("reaches a nested field through the widget's own derive step", () => {
+    const [city] = labelColumns(
+      columns("Address_City"),
+      widget({
+        entity: "task",
+        pipeline: [{ op: "derive", fields: { Address_City: "Address.City" } }],
+      }),
+      undefined,
+      linksFor("task", { "Address.City": "Town" }),
+    );
+    expect(city?.label).toBe("Town");
+  });
 
   it("labels a plain column from the lexicon", () => {
     const [active] = labelColumns(columns("IsActive"), widget(), lexicon);

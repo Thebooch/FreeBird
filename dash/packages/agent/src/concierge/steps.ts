@@ -6,12 +6,14 @@ import {
   fieldLabel,
   humanLabel,
   isEmptyShape,
+  looksLikeIdentifier,
   rolesForShape,
   statusTone,
 } from "@freebirdai/dash-spec";
 import { componentFits, fieldsForRole, valueTypesOf, type BindableField } from "../bind.js";
+import { facetableFields } from "./facets.js";
 import type { FieldInfo, InferredShape } from "../infer.js";
-import { highlightCandidates, nounFromTitle } from "../suggest.js";
+import { highlightCandidates, nounFromTitle } from "../authoring.js";
 import {
   ROLE_STEP,
   applyAnswer,
@@ -281,6 +283,37 @@ export interface ConciergeContext {
    * Empty for an API nothing has mapped, which falls back to `humanLabel`.
    */
   readonly labels?: Readonly<Record<string, Readonly<Record<string, string>>>> | undefined;
+  /**
+   * The record type each resource carries, where somebody has described one.
+   *
+   * Keyed connection → resource id → record type. Carried because a resource
+   * id comes from a URL and reads like one: an API serving properties at
+   * `/v1/rentals` gets the resource `rental`, and its second units collection
+   * gets `unit-2`. Those are fine as internal handles and wrong as names — the
+   * assistant addresses records by them, so a user asking about "properties"
+   * was told there is no such handle on an API that plainly has them.
+   *
+   * Absent for an API nobody has described, which falls back to the resource
+   * id exactly as before.
+   */
+  readonly records?:
+    | Readonly<
+        Record<
+          string,
+          Readonly<
+            Record<
+              string,
+              {
+                readonly id: string;
+                readonly one: string;
+                readonly many: string;
+                readonly description?: string | undefined;
+              }
+            >
+          >
+        >
+      >
+    | undefined;
 }
 
 /**
@@ -450,9 +483,11 @@ const fieldOption = (
   ...(recommended ? { recommended: true } : {}),
 });
 
-/** `PropertyId`, `unit_id`, `id` — a reference, not a measure. */
-const looksLikeIdentifier = (name: string): boolean =>
-  /(^|[a-z0-9_])(Id|id|ID)$/.test(name) && !/(bid|paid|valid|grid|rapid|solid)$/i.test(name);
+/*
+ * `looksLikeIdentifier` used to live here. It moved to `@freebirdai/dash-spec`
+ * unchanged, because the filter-strip rules need the same reading and cannot
+ * import it from this file — `facets.ts` is imported *by* this one.
+ */
 
 /**
  * The field a role most likely wants.
@@ -1062,6 +1097,8 @@ export const valueOf = (draft: ConciergeDraft, stepId: string): readonly string[
       return draft.drilldown?.fields ?? [];
     case "extras":
       return draft.extras;
+    case "filters":
+      return draft.filters;
     case "highlights":
       return draft.highlights;
     case "title":
@@ -1401,42 +1438,6 @@ export const allSteps = (input: ConciergeDraft, context: ConciergeContext): Step
   }
 
   /*
-   * Two readings of the request, put to the person who made it.
-   *
-   * Asked before anything else about the widget, because everything else
-   * depends on which records these are — and asked at all only when the model
-   * said the two would answer different questions. On almost every build there
-   * is no choice here and this is not reached.
-   *
-   * Required, and that is the whole point: a widget counting the wrong thing
-   * renders perfectly and reads as an answer. It is the one question worth
-   * stopping for.
-   */
-  if (draft.choice) {
-    const applied = draft.choice.role === "primary" ? draft.op : draft.series[0]?.op;
-    add(
-      {
-        id: "choice",
-        question: "Which of these did you mean?",
-        help: "These would answer different questions, so it is worth being sure.",
-        options: draft.choice.options.map((option) => ({
-          value: option.value ?? option.op,
-          label: option.label,
-          description: option.whatItIs,
-          ...(option.op === applied &&
-          (!option.connection || option.connection === draft.connection)
-            ? { recommended: true }
-            : {}),
-        })),
-        multiple: false,
-        skippable: false,
-      },
-      answered(draft, "choice"),
-      true,
-    );
-  }
-
-  /*
    * The measurement, the grouping and the filter, each as its own control.
    *
    * Only for a widget that measures something. A table showing rows has no
@@ -1651,6 +1652,38 @@ export const allSteps = (input: ConciergeDraft, context: ConciergeContext): Step
         answered(draft, "extras"),
       );
     }
+  }
+
+  /*
+   * ── what the reader can filter by ──────────────────────────────────────
+   *
+   * A strip of values above the rows, with a count beside each. Offered only
+   * where the marks are records: filtering a chart of monthly totals would
+   * narrow buckets rather than rows, and after a group step the records are
+   * gone.
+   *
+   * Skipping it removes the strip rather than recording that nobody was
+   * asked — the same rule the filter and the comparison follow, and for the
+   * same reason: a control reading as removed over a widget that still
+   * narrows is the silent wrongness this machine refuses.
+   */
+  const filterable = facetableFields({
+    fields,
+    contract,
+    aggregated: draft.shape !== undefined && !isEmptyShape(draft.shape),
+  });
+  if (filterable.length > 0) {
+    add(
+      {
+        id: "filters",
+        question: "Should the reader be able to filter these?",
+        help: "A strip of values sits above the widget with a count beside each, and narrows what is shown without re-fetching anything.",
+        options: filterable.slice(0, 12).map((field) => fieldOption(field, false, names)),
+        multiple: true,
+        skippable: true,
+      },
+      answered(draft, "filters") || draft.filters.length > 0,
+    );
   }
 
   // ── things worth marking ───────────────────────────────────────────────
@@ -1870,38 +1903,6 @@ export const applyStep = (
     // Keeping it is the recommended answer, so only a different one removes.
     const kept = values[0] === draft.series[index]!.op;
     return kept ? recorded : { ...recorded, series: draft.series.filter((_, at) => at !== index) };
-  }
-
-  if (stepId === "choice") {
-    const choice = draft.choice;
-    const chosen = choice?.options.find((option) => (option.value ?? option.op) === values[0]);
-    if (!choice || !chosen) return recorded;
-
-    /*
-     * A different set of records means different fields, so choosing the
-     * primary resets what was bound to the old one. `applyAnswer` already does
-     * exactly that for the endpoint question — this is the same answer arriving
-     * through a different door.
-     */
-    if (choice.role === "primary") {
-      const connected =
-        chosen.connection && chosen.connection !== recorded.connection
-          ? applyAnswer(recorded, "connection", [chosen.connection])
-          : recorded;
-      const moved = applyAnswer({ ...connected, choice: undefined }, "endpoint", [chosen.op]);
-      return { ...moved, answered: [...new Set([...moved.answered, "choice"])] };
-    }
-
-    /*
-     * A second endpoint that has to be read once per record is a price, not a
-     * detail — so it becomes an offer rather than being applied, and the
-     * existing consent step asks about it next.
-     */
-    const side = chosen.series;
-    if (!side) return { ...recorded, choice: undefined };
-    return side.fanOut
-      ? { ...recorded, choice: undefined, offer: side, series: [] }
-      : { ...recorded, choice: undefined, offer: undefined, series: [side] };
   }
 
   if (stepId === "offer") {

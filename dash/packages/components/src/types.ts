@@ -28,6 +28,24 @@ export interface WidgetRenderProps {
    */
   readonly onSelectRow?: (row: Row) => void;
   /**
+   * Names for the records this view's reference columns point at, as
+   * `column → id → name`.
+   *
+   * Resolved above the component, because working them out needs the query
+   * cache and a request budget and a component has neither. Absent means
+   * nothing was resolved, which is an ordinary state: a cell then names the
+   * *kind* of record instead ("Vendor 4711"), which is still legible.
+   */
+  readonly referenceNames?: Readonly<Record<string, Readonly<Record<string, string>>>>;
+  /**
+   * Open the record a *cell* points at, as distinct from the row's own.
+   *
+   * Absent when the host cannot route to one, and components must stay
+   * presentational when it is — the same contract `onSelectRow` follows. A
+   * name that looks clickable and is not is worse than a name that does not.
+   */
+  readonly onOpenReference?: (target: { entity: string; id: string | number }) => void;
+  /**
    * Rows the widget wants attention drawn to, index-parallel to `rows`.
    *
    * Optional and purely additive, exactly like `onSelectRow`: a component that

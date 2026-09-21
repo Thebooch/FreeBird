@@ -281,3 +281,20 @@ export const queryKey = (
     : "";
   return `${connection}.${op}|${stableStringify(params)}${scope}`;
 };
+
+/**
+ * Every key belonging to one connection.
+ *
+ * `queryKey` leads with `${connection}.`, and `idSchema` forbids a dot in an
+ * id, so this prefix is unambiguous: `acme.` cannot match `acme2.…`. That is
+ * what makes a scoped invalidation safe, and scoping matters — a credential
+ * change has to drop that account's data, but dropping *every* connection's
+ * data with it leaves every other widget on the board to refetch cold and
+ * collect its own rate limit.
+ *
+ * Here beside `queryKey` rather than next to either cache, for the same reason
+ * `queryKey` is: the browser and the server must agree on the convention, and
+ * two copies that drifted would have one of them failing to drop rows it was
+ * asked to drop.
+ */
+export const queryKeyPrefix = (connection: string): string => `${connection}.`;

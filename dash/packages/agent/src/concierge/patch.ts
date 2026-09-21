@@ -1,13 +1,17 @@
 import { z } from "zod";
-import { coercionSchema, formatSchema, widgetShapeSchema } from "@freebirdai/dash-spec";
-import { choiceDraftSchema } from "./draft.js";
+import {
+  FACET_MAX_PER_WIDGET,
+  coercionSchema,
+  formatSchema,
+  widgetBriefSchema,
+  widgetShapeSchema,
+} from "@freebirdai/dash-spec";
 
 const partPatchSchema = z
   .object({
     inputs: z.record(z.string().max(500)).optional(),
     coercions: z.record(coercionSchema).optional(),
     format: z.record(formatSchema).optional(),
-    choiceBetween: choiceDraftSchema.optional(),
     narrowWith: z
       .object({
         field: z.string().max(200),
@@ -26,6 +30,18 @@ const partPatchSchema = z
       })
       .optional(),
     connection: z.string().max(120).optional(),
+    /**
+     * The record type this widget is about, and the request it was compiled
+     * from.
+     *
+     * Declared for the reason stated below and not hypothetically: `DraftPatch`
+     * has carried both since briefs existed, this schema had heard of neither,
+     * and the two disagreed silently — a patch posted over HTTP with a brief on
+     * it was refused outright, while the same patch built in process applied
+     * fine. One of them is the contract; it should be this one.
+     */
+    entity: z.string().max(64).optional(),
+    brief: widgetBriefSchema.optional(),
     endpoint: z.string().max(120).optional(),
     join: z.string().max(200).optional(),
     component: z.string().max(64).optional(),
@@ -40,13 +56,13 @@ const partPatchSchema = z
     groupBy: z.string().max(200).optional(),
     /** Whether to take a measurement that costs requests: include or skip. */
     offer: z.enum(["include", "skip"]).optional(),
-    /** Which of two readings of the request was meant, as an endpoint id. */
-    choice: z.string().max(200).optional(),
     roles: z.record(z.string().max(64), z.array(z.string().max(200)).max(40)).optional(),
     controls: z.array(z.string().max(64)).max(20).optional(),
     drilldown: z.string().max(120).optional(),
     drilldownFields: z.array(z.string().max(200)).max(40).optional(),
     extras: z.array(z.string().max(200)).max(40).optional(),
+    /** Fields the reader can filter the finished widget by. */
+    filters: z.array(z.string().max(200)).max(FACET_MAX_PER_WIDGET).optional(),
     highlights: z.array(z.string().max(120)).max(8).optional(),
     title: z.string().max(120).optional(),
     /*
@@ -65,6 +81,18 @@ const partPatchSchema = z
       .optional(),
     /** Stack the parts into one badged list rather than building each on its own. */
     interleave: z.boolean().optional(),
+    /**
+     * The other reading of the same words, to be offered rather than asked
+     * about.
+     *
+     * Declared for the same reason `group` is: a proposal that carries one and
+     * arrives at a schema that has not heard of it loses it without a word,
+     * and the fork the model found reaches nobody. Omitted from a part —
+     * the other reading is of the request, and a request has one.
+     */
+    alternative: z
+      .object({ label: z.string().min(1).max(160), brief: widgetBriefSchema })
+      .optional(),
     /** Which model proposed this, recorded on the widget it builds. */
     model: z.string().max(120).optional(),
     /**
@@ -128,7 +156,7 @@ const partPatchSchema = z
 export const draftPatchSchema = partPatchSchema
   .extend({
     parts: z
-      .array(partPatchSchema.omit({ group: true, interleave: true }))
+      .array(partPatchSchema.omit({ group: true, interleave: true, alternative: true }))
       .max(3)
       .optional(),
   })

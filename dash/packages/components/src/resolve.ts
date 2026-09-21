@@ -1,6 +1,12 @@
-import type { ColumnMeta, FormatSpec, SemanticType } from "@freebirdai/dash-spec";
+import type { ColumnMeta, ColumnReference, FormatSpec, SemanticType } from "@freebirdai/dash-spec";
 import type { Row, RowHighlight } from "@freebirdai/dash-runtime";
-import { SEMANTICS, formatValue, humanLabel } from "@freebirdai/dash-spec";
+import {
+  SEMANTICS,
+  formatValue,
+  humanLabel,
+  referenceIds,
+  targetOfRow,
+} from "@freebirdai/dash-spec";
 import type { WidgetRenderProps } from "./types.js";
 
 export const roleColumn = (
@@ -124,6 +130,78 @@ export const labelOf = (columns: readonly ColumnMeta[], name: string): string =>
   return given && given.trim().length > 0 ? given : humanLabel(name);
 };
 
+export interface ReferenceCell {
+  /** What to draw. Never empty while the cell holds anything at all. */
+  readonly text: string;
+  /** Whether following it would reach a record. */
+  readonly canOpen: boolean;
+  /** What to open, when it can be opened. */
+  readonly target?: { readonly entity: string; readonly id: string | number };
+}
+
+/**
+ * One cell of a reference column: what it says, and whether it opens.
+ *
+ * The single place the three-way precedence lives — the name already on the
+ * row, then one that was fetched, then the honest fallback that at least names
+ * the *kind* of record. A component reimplementing any part of this would
+ * drift on the case that shows least: the unresolved one, which is what most
+ * readers see on a wide table.
+ *
+ * Pure, so every branch is checkable without rendering anything.
+ */
+export const referenceText = (input: {
+  readonly row: Row;
+  readonly column: string;
+  readonly reference: ColumnReference;
+  /** column → id → name, resolved above the component. */
+  readonly names?: Readonly<Record<string, Readonly<Record<string, string>>>> | undefined;
+  /** How the raw value would otherwise have been printed. */
+  readonly formatted?: string | undefined;
+}): ReferenceCell => {
+  const { row, column, reference } = input;
+  const raw = row[column];
+  const plain = input.formatted ?? (raw === null || raw === undefined ? "" : String(raw));
+
+  /*
+   * A row naming a different kind of record than this link's default. Nothing
+   * here knows what that kind is called, and borrowing the default's name
+   * would mislabel the record — so it stays the plain value.
+   */
+  if (targetOfRow(row, reference) !== reference.target) return { text: plain, canOpen: false };
+
+  const ids = referenceIds(raw, reference.holds);
+  const first = ids[0];
+
+  const embedded = reference.embedded
+    .map((name) => row[name])
+    .filter((value) => value !== null && value !== undefined && value !== "")
+    .map((value) => String(value));
+
+  const resolved = first === undefined ? undefined : input.names?.[column]?.[String(first)];
+
+  const text =
+    embedded.length > 0
+      ? embedded.join(" ")
+      : (resolved ??
+        (ids.length > 1
+          ? `${ids.length} ${reference.targetName.toLowerCase()}s`
+          : first !== undefined
+            ? `${reference.targetName} ${first}`
+            : plain));
+
+  /*
+   * A list of ids has no single record to open, and an empty cell has none
+   * either. Both render as text rather than as a control that goes nowhere.
+   */
+  const single = ids.length === 1 && first !== undefined;
+  return {
+    text,
+    canOpen: Boolean(reference.lookup) && single,
+    ...(single ? { target: { entity: reference.target, id: first } } : {}),
+  };
+};
+
 export interface RecordEntry {
   readonly name: string;
   readonly label: string;
@@ -131,6 +209,22 @@ export interface RecordEntry {
   readonly formatted: string;
   /** True for a flattened child like `Address.City`, for indenting. */
   readonly nested: boolean;
+  /**
+   * What this field means, where the record type's dictionary says.
+   *
+   * A record is the one surface with room for it: a table header has none, and
+   * this is where somebody is reading one thing carefully rather than scanning
+   * forty.
+   */
+  readonly description?: string;
+  /**
+   * Set when this field holds another record's identity.
+   *
+   * Carried through so a record view renders a reference the same way a table
+   * cell does — through `referenceText`, rather than a second implementation
+   * of the same precedence that would drift on the unresolved case.
+   */
+  readonly reference?: ColumnReference;
 }
 
 /**
@@ -145,7 +239,10 @@ export interface RecordEntry {
  * showing both means showing the same data twice, once unreadably.
  */
 export const recordEntries = (
-  props: Pick<WidgetRenderProps, "rows" | "columns" | "format" | "now" | "locale" | "timeZone">,
+  props: Pick<
+    WidgetRenderProps,
+    "rows" | "columns" | "format" | "now" | "locale" | "timeZone"
+  >,
   names: readonly string[],
 ): RecordEntry[] => {
   const row = props.rows[0];
@@ -159,12 +256,15 @@ export const recordEntries = (
   for (const name of names) {
     if (expanded.has(name)) continue;
     const value = row[name] ?? readNested(row, name);
+    const meta = props.columns.find((column) => column.name === name);
     entries.push({
       name,
       label: labelOf(props.columns, name),
       value,
       formatted: makeFormatter(props, name)(value),
       nested: name.includes("."),
+      ...(meta?.description ? { description: meta.description } : {}),
+      ...(meta?.reference ? { reference: meta.reference } : {}),
     });
   }
   return entries;

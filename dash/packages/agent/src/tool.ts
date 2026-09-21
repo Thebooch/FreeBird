@@ -33,6 +33,15 @@ export const proposalSchema = z.object({
   compareField: z.string().optional().describe("Prior-period value, for a stat or a metric row."),
   targetField: z.string().optional().describe("The value being aimed at, for a metric row."),
   columns: z.array(z.string()).optional().describe("Columns to show, for a table."),
+  filters: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Fields to give the reader a filter strip over, above the rows — what somebody means " +
+        'by "tasks I can filter by category". A category, status or type field, never a date, ' +
+        "an id or an amount. At most three. This shows the records themselves: it does not " +
+        "group, count or aggregate anything.",
+    ),
 
   aggregation: z
     .string()
@@ -168,6 +177,15 @@ Rules:
 - "How many", "number of", "count of" means COUNTING ROWS, not summing a column. Set aggregation to "count" and leave valueField out — the count itself is the value. Reaching for the nearest numeric column instead produces a confident, beautiful, wrong answer: asked how many records there were each month, plotting the total of some amount they happen to carry answers a question nobody asked.
 - If the request needs data this response does not contain, say so in "ambiguities" and build the closest honest thing from what is here. Do not substitute a field that is merely present for the one that was wanted.
 - Prefer few, meaningful fields over every field available.
+- A filter the READER uses is "filters", and it is not a grouping. "Show tasks
+  with a filter by category", "a list of X I can filter by Y" means a component
+  that shows records — table, list, cards, board, feed — plus filters: ["Y"].
+  The rows stay rows and a strip above them narrows what is shown. Grouping is
+  for counting: "how many tasks per category" is a chart. Reading "filter by" as
+  a group-by answers a question nobody asked, and hands back a chart where they
+  asked to see their records.
+- Only put a field in "filters" when it holds a small set of repeated values — a
+  status, a type, a category, a stage. Never a date, an identifier or an amount.
 - An adjective in the request is NOT automatically a filter. Ask first what
   this endpoint already returns. Records often exist only in the state being
   asked about — where a record is created when something happens, asking for

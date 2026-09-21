@@ -202,6 +202,52 @@ describe("group", () => {
     expect(grouped({ v: "last(customer)" })[1]).toEqual({ region: "emea", v: "a" });
   });
 
+  /*
+   * A record page leads with tiles counting a record's related collections.
+   * A vendor with no bills read "Nothing here." rather than "0" — less useful
+   * than the number, and it reads like a failure to load rather than a count
+   * that came back empty.
+   */
+  it("answers a whole-table count over nothing with zero, not with no row", () => {
+    // How the pipeline spells "all of them": derive a constant, group on it.
+    const totals = (agg: Record<string, string>) =>
+      run(
+        widget({
+          pipeline: [
+            { op: "extract", path: "$[*]" },
+            { op: "derive", fields: { _all: "1" } },
+            { op: "group", by: [{ field: "_all" }], agg },
+          ],
+        }),
+        [],
+      ).rows;
+
+    expect(totals({ total: "count()" })).toEqual([{ _all: null, total: 0 }]);
+    expect(totals({ total: "sum(amount)" })).toEqual([{ _all: null, total: 0 }]);
+    // Nothing to average or take extremes of, which is not the same as zero.
+    expect(totals({ total: "avg(amount)" })).toEqual([{ _all: null, total: null }]);
+    expect(totals({ total: "max(amount)" })).toEqual([{ _all: null, total: null }]);
+  });
+
+  /*
+   * With a key, no rows honestly means no groups: there is nothing to name a
+   * bucket after, and inventing one would put a region on screen that the data
+   * never mentioned.
+   */
+  it("still returns no groups when there are keys and no rows", () => {
+    expect(
+      run(
+        widget({
+          pipeline: [
+            { op: "extract", path: "$[*]" },
+            { op: "group", by: [{ field: "region" }], agg: { total: "count()" } },
+          ],
+        }),
+        [],
+      ).rows,
+    ).toEqual([]);
+  });
+
   it("counts rows, but counts only non-empty values for a named field", () => {
     expect(grouped({ v: "count()" })[1]).toEqual({ region: "emea", v: 3 });
     expect(grouped({ v: "count(amount)" })[1]).toEqual({ region: "emea", v: 2 });

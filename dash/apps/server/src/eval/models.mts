@@ -19,11 +19,15 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ConciergeContext, ConciergeDraft, DraftPatch } from "@freebirdai/dash-agent";
-import { newDraft, readiness, revise } from "@freebirdai/dash-agent";
-import type { CapabilityReport, CatalogEntry, ConnectionSpec } from "@freebirdai/dash-spec";
-import { buildConciergeContext } from "../concierge/context.js";
-import { proposeSetup } from "../concierge/propose.js";
+import { briefCandidates, writeBrief } from "@freebirdai/dash-agent";
+import type {
+  CatalogEntry,
+  EntitySpec,
+  ResourceSpec,
+  WidgetBrief,
+  WidgetSpec,
+} from "@freebirdai/dash-spec";
+import { compileBrief } from "@freebirdai/dash-spec";
 import { loadEnvFile } from "../env.js";
 import { llmForModel, llmSpend, resetLlmSpend } from "../llm.js";
 import { TIER_MODELS } from "../models.js";
@@ -34,89 +38,82 @@ loadEnvFile({ startDir: here });
 
 const root = resolve(process.env.DASH_ROOT ?? join(here, "..", ".."));
 
-/* ── scenarios ────────────────────────────────────────────────────────────
+/* ── the brief, which is how a widget is decided ──────────────────────────
  *
- * Each asserts a *property* of the answer rather than one exact answer. A
- * model that binds a different but equally good field has not regressed, and
- * an eval that says it has will be ignored within a week.
+ * The only path there is. The model writes a *brief* over the record types an
+ * API has been described as having, and a deterministic compiler turns it into
+ * a widget — so what is being measured here is whether a model can name the
+ * right records and say what the widget is for, never whether it can assemble
+ * a pipeline.
  *
- * All three are things that were seen to fail by hand. Nothing speculative is
- * in here: an assertion nobody has watched fail is a guess about what matters.
+ * All three are the failures that started the rewrite, and none of them is
+ * hypothetical:
+ *
+ *   - "tasks with a filter by category" was answered with a bar chart of task
+ *     counts, because the older proposal had no way to say "a filter".
+ *   - "how many X per Y" must still be a chart — the fix must not turn every
+ *     request into a list.
+ *   - "maintenance tasks" baked an invisible pipeline filter, so the reader
+ *     could neither see the narrowing nor undo it.
+ *
+ * Properties, not exact answers, for the same reason as above: a model that
+ * filters on a different but equally good category field has not regressed.
  */
 
-interface Outcome {
-  readonly patch: DraftPatch;
-  readonly draft: ConciergeDraft;
-  readonly context: ConciergeContext;
-  /** Every question still standing between this and a widget. */
-  readonly questions: readonly string[];
+interface BriefOutcome {
+  readonly brief: WidgetBrief | null;
+  readonly widget: WidgetSpec | null;
+  readonly notes: readonly string[];
 }
 
-interface Scenario {
+interface BriefScenario {
   readonly name: string;
   readonly intent: string;
-  /** What good looks like. Return null to pass, or a sentence saying why not. */
-  readonly check: (outcome: Outcome) => string | null;
+  readonly check: (outcome: BriefOutcome) => string | null;
 }
 
-const SCENARIOS: readonly Scenario[] = [
+/** True where the pipeline turns records into buckets — i.e. a measurement. */
+const aggregated = (widget: WidgetSpec | null): boolean =>
+  (widget?.pipeline ?? []).some((step) => step.op === "group");
+
+const BRIEF_SCENARIOS: readonly BriefScenario[] = [
   {
-    name: "counts records rather than plotting a number field",
-    intent: "How many listings per month?",
-    /*
-     * The original report: this asked which numeric field to plot and offered
-     * Rent or Deposit, for a question about how many records there are. The
-     * shape is what fixed it; a model that does not state a count brings the
-     * question straight back.
-     */
-    check: ({ patch, questions }) => {
-      const measures = patch.shape?.measures ?? [];
-      if (!measures.some((measure) => measure.agg === "count")) {
-        return `no count measure — measures: ${JSON.stringify(measures)}`;
-      }
-      if (!(patch.shape?.groupBy ?? []).some((group) => Boolean(group.bucket))) {
-        return "nothing is bucketed, so there is no per-month axis";
-      }
-      const asked = questions.find((question) => /value|number|plot|amount/i.test(question));
-      return asked ? `still asks: "${asked}"` : null;
+    name: "a filter means a filter, not a chart",
+    intent: "show me tasks with a filter by category",
+    check: ({ widget }) => {
+      if (!widget) return "no widget was built";
+      if (aggregated(widget)) return "answered a request for records with a measurement";
+      const facets = widget.facets ?? [];
+      if (facets.length === 0) return "records, but with no filter strip at all";
+      return null;
     },
   },
   {
-    name: "picks the nested applications collection, not the applicants",
-    intent: "Graph listings vs applications received per month",
-    /*
-     * Haiku 4.5 answered `applicants` — the people — where Sonnet 5 answered
-     * `applicantapplications`. Counting the parents of a thing is not counting
-     * the thing, and the widget renders perfectly either way, which is what
-     * makes this worth an assertion rather than an eyeball.
-     *
-     * Asserted on the shape of the answer rather than one endpoint id: any
-     * second series whose endpoint is about applications passes.
-     */
-    check: ({ patch }) => {
-      const second =
-        patch.seriesWith?.[0]?.endpoint ??
-        patch.offerSeries?.endpoint ??
-        patch.joinWith?.endpoint ??
-        null;
-      if (!second) return "only one endpoint — nothing to compare against";
-      return /application/i.test(second) ? null : `second endpoint is "${second}"`;
+    name: "a count is still a count",
+    intent: "how many tasks are there per category?",
+    check: ({ widget }) => {
+      if (!widget) return "no widget was built";
+      // The fix for the case above must not swallow this one.
+      return aggregated(widget) ? null : "answered a request for counts with a plain list";
     },
   },
   {
-    name: "binds a nested field when the useful one is nested",
-    intent: "Show me current listings",
-    /*
-     * Every top-level field on a listing is an id or a flag; the address a
-     * person would identify it by is two levels down. Haiku left the title
-     * unbound rather than reaching for one.
-     */
-    check: ({ patch }) => {
-      const bound = Object.values(patch.roles ?? {}).flat();
-      if (bound.length === 0) return "nothing bound to any role";
-      return bound.some((field) => field.includes("."))
-        ? null
-        : `only top-level fields bound: ${bound.join(", ")}`;
+    name: "a narrowing phrase is visible and reversible",
+    intent: "maintenance tasks",
+    check: ({ widget }) => {
+      if (!widget) return "no widget was built";
+      if (aggregated(widget)) return "answered a request for records with a measurement";
+      const preselected = (widget.facets ?? []).filter((facet) => (facet.default ?? []).length > 0);
+      if (preselected.length > 0) return null;
+      /*
+       * The failure worth naming precisely. A baked `filter` step narrows the
+       * widget invisibly — the reader sees a short list and no way to widen
+       * it — which is what this path exists to stop.
+       */
+      const baked = widget.pipeline.some((step) => step.op === "filter");
+      return baked
+        ? "narrowed with an invisible pipeline filter instead of a preselected strip"
+        : "not narrowed at all";
     },
   },
 ];
@@ -135,61 +132,78 @@ const readDir = <T,>(dir: string): T[] => {
   }
 };
 
-const buildContext = (): ConciergeContext => {
-  const connections = readDir<ConnectionSpec>(join(root, "connections"));
-  const reports = readDir<CapabilityReport>(join(root, "reports"));
+/**
+ * The record types on disk, and the resource each sits on.
+ *
+ * Read from the catalog rather than from a connection: a brief is written over
+ * what the API *is*, which is the shared artifact, and needs no account.
+ */
+const buildRoster = (): { entities: EntitySpec[]; resources: ResourceSpec[] } => {
   const maps = readDir<CatalogEntry>(join(root, ".dash", "catalog"));
-
-  if (connections.length === 0) {
-    throw new Error(
-      `no connections under ${join(root, "connections")} — connect an API in the UI first, ` +
-        "or point DASH_ROOT at an instance that has one",
-    );
-  }
-  return buildConciergeContext({ connections, reports, maps });
+  const described = maps.filter((entry) => (entry.entities?.length ?? 0) > 0);
+  return {
+    entities: described.flatMap((entry) => entry.entities ?? []),
+    resources: described.flatMap((entry) => entry.resources),
+  };
 };
 
-/* ── one run ──────────────────────────────────────────────────────────── */
-
-const run = async (
+const runBrief = async (
   model: string,
-  scenario: Scenario,
-  context: ConciergeContext,
+  scenario: BriefScenario,
+  roster: { entities: EntitySpec[]; resources: ResourceSpec[] },
 ): Promise<{ ok: boolean; why: string; usd: number }> => {
   const llm = llmForModel(model, "widget");
   if (!llm) return { ok: false, why: `no key for ${model}`, usd: 0 };
 
   const before = llmSpend().usd;
-
   try {
-    const proposed = await proposeSetup({ llm, intent: scenario.intent, context });
+    const written = await writeBrief(llm, {
+      intent: scenario.intent,
+      candidates: briefCandidates([
+        { connection: "eval", title: "the API", entities: roster.entities },
+      ]),
+    });
+    if (!written.brief) {
+      return { ok: false, why: written.error || "no brief was written", usd: llmSpend().usd - before };
+    }
+
+    const entity = roster.entities.find((one) => one.id === written.brief!.entity);
+    const resource = entity
+      ? roster.resources.find((one) => one.id === entity.resource)
+      : undefined;
+    if (!entity || !resource) {
+      return {
+        ok: false,
+        why: `chose "${written.brief.entity}", which is not a record type this API has`,
+        usd: llmSpend().usd - before,
+      };
+    }
 
     /*
-     * Put through the real machine, not inspected as a bare patch.
-     *
-     * Half of what this is measuring is whether the answer *survives* — a
-     * nested role the model got right and `revise` then rejected as "not one
-     * of the choices" is the exact bug this harness would have caught, and it
-     * is invisible in the patch alone.
+     * Compiled, not inspected as a bare brief — for the same reason the older
+     * scenarios go through `revise`. Half of what this measures is whether the
+     * answer *survives* the compiler: a filter field the model got right and
+     * `compileBrief` then dropped as unbindable is exactly the bug worth
+     * catching, and it is invisible in the brief alone.
      */
-    const draft = newDraft("eval", scenario.intent, "assisted");
-    const revised = revise(draft, proposed.patch, context);
-    const state = readiness(revised.draft, context);
+    const compiled = compileBrief({
+      brief: written.brief,
+      entity,
+      resource,
+      connection: "eval",
+      id: "eval",
+    });
 
-    const outcome: Outcome = {
-      patch: proposed.patch,
-      draft: revised.draft,
-      context,
-      questions: state.missing.map((piece) => piece.stepId),
-    };
-
-    const why = scenario.check(outcome);
-    const rejected = revised.rejected.map((entry) => `${entry.stepId}=${entry.value}`);
+    const why = scenario.check({
+      brief: written.brief,
+      widget: compiled.widget,
+      notes: compiled.notes,
+    });
     return {
       ok: why === null,
       why:
         why ??
-        (rejected.length > 0 ? `passed, but ${rejected.length} rejected: ${rejected.join(", ")}` : ""),
+        (compiled.notes.length > 0 ? `passed, with notes: ${compiled.notes.join("; ")}` : ""),
       usd: llmSpend().usd - before,
     };
   } catch (cause) {
@@ -209,11 +223,17 @@ const main = async (): Promise<void> => {
     .map((entry) => entry.trim())
     .filter(Boolean);
 
-  const context = buildContext();
+  const roster = buildRoster();
   console.info(
-    `${context.ops.length} endpoints, ${context.children.length} nested collections, ` +
-      `${Object.keys(context.shapes).length} shapes — from ${root}\n`,
+    `${roster.entities.length} record types over ${roster.resources.length} resources — from ${root}
+`,
   );
+  if (roster.entities.length === 0) {
+    console.info(
+      "No record types are described, so there is nothing to write a brief over; describe an API first.",
+    );
+    return;
+  }
 
   resetLlmSpend();
   const failures: string[] = [];
@@ -221,15 +241,18 @@ const main = async (): Promise<void> => {
   for (const model of models) {
     console.info(`── ${model} ${"─".repeat(Math.max(0, 56 - model.length))}`);
     let total = 0;
-    for (const scenario of SCENARIOS) {
-      const result = await run(model, scenario, context);
+    const report = (name: string, result: { ok: boolean; why: string; usd: number }): void => {
       total += result.usd;
-      const mark = result.ok ? "PASS" : "FAIL";
       console.info(
-        `  ${mark}  ${scenario.name.padEnd(52)} ${formatUsd(result.usd).padStart(9)}` +
-          (result.why ? `\n        ${result.why}` : ""),
+        `  ${result.ok ? "PASS" : "FAIL"}  ${name.padEnd(52)} ${formatUsd(result.usd).padStart(9)}` +
+          (result.why ? `
+        ${result.why}` : ""),
       );
-      if (!result.ok) failures.push(`${model}: ${scenario.name}`);
+      if (!result.ok) failures.push(`${model}: ${name}`);
+    };
+
+    for (const scenario of BRIEF_SCENARIOS) {
+      report(scenario.name, await runBrief(model, scenario, roster));
     }
     console.info(`  ${" ".repeat(58)}${formatUsd(total).padStart(9)}\n`);
   }

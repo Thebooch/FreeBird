@@ -8,6 +8,7 @@ import type {
   WidgetSpec,
 } from "@freebirdai/dash-spec";
 import {
+  COMPONENT_CONTRACTS,
   COMPONENT_IDS,
   coercionSchema,
   parseWidget,
@@ -16,6 +17,7 @@ import {
   shapeSteps,
   widgetShapeSchema,
 } from "@freebirdai/dash-spec";
+import { facetFields } from "./concierge/facets.js";
 import type { InferredShape } from "./infer.js";
 import type { Proposal } from "./tool.js";
 
@@ -162,6 +164,13 @@ export const mapProposal = (input: {
     proposal.compareField,
     proposal.targetField,
     ...(proposal.columns ?? []),
+    /*
+     * A filter strip's field has to be derived like any other, and it is the
+     * one that is easy to forget: it is not bound to a role, so nothing else
+     * in this list would carry it. A dotted name with no derive step behind it
+     * names a column no row has, and the strip silently fails to draw.
+     */
+    ...(proposal.filters ?? []),
     ...Object.keys(coercions),
   ].filter((name): name is string => Boolean(usable(shape, name)));
 
@@ -623,6 +632,25 @@ export const mapProposal = (input: {
     return { widget: null, measurement: null, errors, ambiguities: proposal.ambiguities ?? [] };
   }
 
+  /*
+   * The filter strip somebody asked for, checked the same way a role is.
+   *
+   * Validated against the endpoint's own fields before it is flattened, since
+   * that is the vocabulary the model was shown — then emitted as the column
+   * the derive step above produces. A field that cannot carry a strip is
+   * dropped rather than written: `facets` is chrome, so the widget is exactly
+   * what it would have been without it.
+   */
+  const facets = facetFields({
+    requested: proposal.filters ?? [],
+    fields: shape.fields,
+    contract: COMPONENT_CONTRACTS[component as keyof typeof COMPONENT_CONTRACTS],
+    aggregated: measuring.groupBy.length > 0 || measuring.measures.length > 0,
+  })
+    .map((name) => resolve(name))
+    .filter((name): name is string => Boolean(name))
+    .map((field) => ({ field }));
+
   const parsed = parseWidget({
     id: widgetId,
     title: proposal.title || "Untitled",
@@ -631,6 +659,7 @@ export const mapProposal = (input: {
     pipeline,
     roles,
     format,
+    ...(facets.length > 0 ? { facets } : {}),
     schemaHash: shape.schemaHash,
     states: proposal.emptyMessage ? { empty: proposal.emptyMessage } : {},
   });

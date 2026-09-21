@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HttpFetch } from "@freebirdai/dash-adapters";
-import { fakeLlm, proposalSchema, reviewProposalSchema } from "@freebirdai/dash-agent";
+import { fakeLlm, proposalSchema } from "@freebirdai/dash-agent";
 import { capabilityReportSchema, connectionSchema, getOp } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CatalogStore, connectionFromCatalog } from "./catalog.js";
@@ -757,56 +757,6 @@ describe("capabilities", () => {
     expect(response.statusCode).toBe(400);
   });
 
-  it("suggests widgets in sentences, without a model", async () => {
-    // Two rows, because one value is no evidence that a column is a small
-    // closed set — the rule that spots a status needs to see variation.
-    const app = makeApp(
-      stubHttp({
-        data: [
-          { id: 7, name: "Ada", state: "listed" },
-          { id: 8, name: "Grace", state: "vacant" },
-          { id: 9, name: "Alan", state: "listed" },
-        ],
-      }),
-    );
-    await app.inject({ method: "PUT", url: "/api/connections/api", payload: relational });
-    await app.inject({ method: "PUT", url: "/api/connections/api/key", payload: { key: "k" } });
-
-    const response = await app.inject({
-      method: "POST",
-      url: "/api/connections/api/suggestions",
-    });
-
-    expect(response.statusCode).toBe(200);
-    const { suggestions, reviewed } = response.json();
-    const [first] = suggestions;
-    expect(first.source).toBe("rule");
-    expect(first.headline).toMatch(/^This widget will/);
-    // A real spec, not a description of one — it saves through the same path a
-    // model's proposal does. The component is deliberately not pinned: which
-    // rule wins depends on the data, and asserting one here would break every
-    // time a better-scoring rule is added.
-    expect(first.widget.source.connection).toBe("api");
-    expect(first.widget.roles).toBeDefined();
-
-    // Several rules now fire on one resource, so a single collection yields a
-    // list, a breakdown of its status column, and so on.
-    expect(suggestions.length).toBeGreaterThan(1);
-    expect(
-      suggestions.map((entry: { widget: { component: string } }) => entry.widget.component),
-    ).toContain("table");
-
-    // "listed" is not in the status vocabulary, so it is offered and asked
-    // about rather than suppressed or silently coloured.
-    const asking = suggestions.find(
-      (entry: { confirm: Array<{ question: string }> }) => entry.confirm.length > 0,
-    );
-    expect(asking?.confirm[0]?.question).toContain("listed");
-
-    // The AI pass is separate and absent without a key — never merged in.
-    expect(reviewed).toEqual([]);
-  });
-
   it("404s for a connection that does not exist", async () => {
     const app = makeApp();
     expect(
@@ -942,20 +892,6 @@ describe("tool schema conversion", () => {
     expect(schema.properties?.ambiguities?.description).toMatch(/Ask rather than guess/);
   });
 
-  it("handles the review schema's array of objects nested in an array of objects", () => {
-    /*
-     * The relational proposal is one level deeper than anything else here —
-     * `proposals[].children[]` — and the converter is a hand-rolled subset. If
-     * that recursion is not supported the failure lands inside a provider call
-     * at run time, which is a long way from the cause.
-     */
-    const schema = toJsonSchema(reviewProposalSchema);
-    const children = schema.properties?.proposals?.items?.properties?.children;
-    expect(children?.type).toBe("array");
-    expect(children?.items?.type).toBe("object");
-    expect(children?.items?.required).toEqual(["resource", "linkField", "title"]);
-    expect(children?.items?.properties?.linkField?.description).toMatch(/parent's id/);
-  });
 });
 
 describe("dashboard routes", () => {
@@ -1288,5 +1224,201 @@ describe("a board per connection", () => {
       // Slugifying "***" yields nothing; an empty id would fail the schema.
       expect((await create(app, "***")).json().id).toBe("board");
     });
+  });
+});
+
+/**
+ * The user-visible story this whole area exists for.
+ *
+ * Widgets used to show a "rate limit hit" message with nothing behind it,
+ * often enough that people stopped trusting the board. Three things had to be
+ * true at once to fix that, and this pins all three together so none can be
+ * undone on its own.
+ */
+describe("a rate-limited board keeps its numbers", () => {
+  const twoOps = connectionSchema.parse({
+    ...restConnection,
+    ops: [
+      { id: "items", title: "Items", path: "/items", rowsPath: "$.data" },
+      { id: "totals", title: "Totals", path: "/totals", rowsPath: "$.data" },
+    ],
+  });
+
+  const query = (app: ReturnType<typeof makeApp>, op: string, maxAgeMs = 0) =>
+    app.inject({
+      method: "POST",
+      url: "/api/query",
+      payload: {
+        connection: "api",
+        op,
+        params: {},
+        range: { preset: "30d", start: 0, end: 1_000, grain: "1d" },
+        filters: {},
+        maxAgeMs,
+      },
+    });
+
+  it("serves labelled older rows when the API starts refusing, instead of emptying", async () => {
+    let refusing = false;
+    let upstreamCalls = 0;
+    const http: HttpFetch = async (url) => {
+      upstreamCalls++;
+      if (refusing) {
+        return { status: 429, text: "slow down", url, header: (name) =>
+          name.toLowerCase() === "retry-after" ? "120" : null };
+      }
+      return { status: 200, text: JSON.stringify({ data: [{ id: 1 }] }), url, header: () => null };
+    };
+
+    const app = buildServer({ store, keys, http });
+    store.putConnection(twoOps);
+    keys.set("api-key", "k");
+
+    // Warm both widgets while the API is healthy.
+    expect((await query(app, "items")).statusCode).toBe(200);
+    expect((await query(app, "totals")).statusCode).toBe(200);
+    const warmCalls = upstreamCalls;
+    expect(warmCalls).toBe(2);
+
+    refusing = true;
+    const [items, totals] = await Promise.all([query(app, "items"), query(app, "totals")]);
+
+    /*
+     * Both tiles still answer, with rows, saying why they are old.
+     *
+     * The two sentences differ on purpose: whichever read actually went
+     * upstream carries the API's own words, and whichever met the cooldown
+     * carries ours. Both state the wait, which is the part that matters.
+     */
+    for (const response of [items, totals]) {
+      expect(response.statusCode).toBe(200);
+      const payload = response.json();
+      expect(payload.body).toEqual({ data: [{ id: 1 }] });
+      expect(payload.meta.cache).toBe("stale");
+      expect(payload.meta.staleReason).toMatch(/try again|Waiting .* before trying again/);
+    }
+
+    /*
+     * One refusal between them. The second read found the cooldown the first
+     * had just recorded and never went upstream — which is the difference
+     * between one rate limit and a board's worth of them.
+     */
+    expect(upstreamCalls - warmCalls).toBe(1);
+  });
+
+  it("tells the browser how long to wait, in words and as a number", async () => {
+    const http: HttpFetch = async (url) => ({
+      status: 429,
+      text: "slow down",
+      url,
+      header: (name) => (name.toLowerCase() === "retry-after" ? "90" : null),
+    });
+
+    const app = buildServer({ store, keys, http });
+    store.putConnection(twoOps);
+    keys.set("api-key", "k");
+
+    // Nothing cached, so there is genuinely nothing to show and it must say so.
+    const first = await query(app, "items");
+    expect(first.statusCode).toBe(429);
+
+    const second = await query(app, "totals");
+    expect(second.statusCode).toBe(429);
+    const payload = second.json();
+    // The sentence a person reads — not the technical one, which used to win.
+    expect(payload.userMessage).toMatch(/Waiting/);
+    expect(payload.error).toBeDefined();
+    expect(payload.error).not.toBe(payload.userMessage);
+    // And the number the tile counts down with, both ways.
+    expect(Number(payload.retryAfter)).toBeGreaterThan(0);
+    expect(second.headers["retry-after"]).toBeDefined();
+  });
+
+  it("leaves the cache warm when a widget is edited", async () => {
+    let upstreamCalls = 0;
+    const http: HttpFetch = async (url) => {
+      upstreamCalls++;
+      return { status: 200, text: JSON.stringify({ data: [{ id: 1 }] }), url, header: () => null };
+    };
+
+    const app = buildServer({ store, keys, http });
+    store.putConnection(twoOps);
+    keys.set("api-key", "k");
+
+    await query(app, "items");
+    expect(upstreamCalls).toBe(1);
+
+    /*
+     * Saving a dashboard used to wipe every connection's cached responses, so
+     * tweaking one widget in chat left the whole board to refetch cold and
+     * collect its own rate limit. A widget spec cannot change what an endpoint
+     * returns, so it must not invalidate anything.
+     */
+    const board = store.listDashboards()[0];
+    if (board) store.putDashboard(board);
+
+    const again = await query(app, "items", 60_000);
+    expect(again.statusCode).toBe(200);
+    expect(again.json().meta.cache).toBe("hit");
+    expect(upstreamCalls).toBe(1);
+  });
+
+  /*
+   * `/api/query` answers 502 for everything but a rate limit, which is right
+   * for this request but lost the only thing the tile needs to pick its words.
+   */
+  it("passes the upstream's own status through, so a 403 is not shown as a retryable blip", async () => {
+    const http: HttpFetch = async (url) => ({
+      status: 403,
+      text: "forbidden",
+      url,
+      header: () => null,
+    });
+
+    const app = buildServer({ store, keys, http });
+    store.putConnection(twoOps);
+    keys.set("api-key", "k");
+
+    const response = await query(app, "items");
+    // Our status stays 502 — a 403 from the browser to its own origin would
+    // mean something else entirely.
+    expect(response.statusCode).toBe(502);
+    // The upstream's travels separately, so the tile can say the key works and
+    // offer no retry that could not possibly succeed.
+    expect(response.json().status).toBe(403);
+    expect(response.json().userMessage).toMatch(/denied access|not allowed|permission/i);
+  });
+
+  it("does not let a sample run hammer a connection that just refused us", async () => {
+    let refusing = false;
+    let upstreamCalls = 0;
+    const http: HttpFetch = async (url) => {
+      upstreamCalls++;
+      if (refusing) {
+        return { status: 429, text: "slow down", url, header: () => null };
+      }
+      return { status: 200, text: JSON.stringify({ data: [{ id: 1 }] }), url, header: () => null };
+    };
+
+    const app = buildServer({ store, keys, http });
+    store.putConnection(twoOps);
+    keys.set("api-key", "k");
+
+    refusing = true;
+    expect((await query(app, "items")).statusCode).toBe(429);
+    const afterRefusal = upstreamCalls;
+
+    /*
+     * Sampling used to call the adapter directly — no cooldown check, no
+     * pacing — so a setup step could go on hammering an API that had just
+     * asked the board to stop.
+     */
+    const sample = await app.inject({
+      method: "POST",
+      url: "/api/connections/api/sample",
+      payload: { op: "totals" },
+    });
+    expect(sample.statusCode).toBeGreaterThanOrEqual(400);
+    expect(upstreamCalls).toBe(afterRefusal);
   });
 });

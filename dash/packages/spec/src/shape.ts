@@ -131,6 +131,17 @@ export const isEmptyShape = (shape: WidgetShape | undefined): boolean =>
 export const groupColumn = (key: GroupByShape): string => key.as ?? key.field;
 
 /**
+ * The column a total-everything grouping groups on.
+ *
+ * Totalling every row is grouping on a literal `1`, which is how the pipeline
+ * says "all of them" without every component needing a special case. Named
+ * because two places have to agree about it: the one that emits it below, and
+ * anything reading a finished pipeline back — a shape carrying this as a group
+ * key would be naming a column no endpoint has.
+ */
+export const ALL_ROWS = "_all";
+
+/**
  * A shape as pipeline steps. **The only place this translation happens.**
  *
  * Deliberately dull, and deliberately in `@freebirdai/dash-spec` rather than in the agent:
@@ -171,8 +182,8 @@ export const shapeSteps = (shape: WidgetShape | undefined): PipelineStep[] => {
         agg,
       });
     } else {
-      steps.push({ op: "derive", fields: { _all: "1" } });
-      steps.push({ op: "group", by: [{ field: "_all" }], agg });
+      steps.push({ op: "derive", fields: { [ALL_ROWS]: "1" } });
+      steps.push({ op: "group", by: [{ field: ALL_ROWS }], agg });
     }
   } else if (shape.groupBy.length > 0) {
     /*

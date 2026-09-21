@@ -87,12 +87,13 @@ export {
   makeFormatter,
   numericValues,
   recordEntries,
+  referenceText,
   roleColumn,
   roleColumns,
   semanticFor,
   titleFor,
 } from "./resolve.js";
-export type { Formatter, RecordEntry } from "./resolve.js";
+export type { Formatter, RecordEntry, ReferenceCell } from "./resolve.js";
 
 export {
   bandScale,

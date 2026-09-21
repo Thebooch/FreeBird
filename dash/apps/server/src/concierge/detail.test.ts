@@ -397,6 +397,28 @@ describe("settleDetail", () => {
     expect(settled).toBe(draft);
   });
 
+  it("spends no call on a widget that has a shared record page already", async () => {
+    /*
+     * The model call this removes from every confirm.
+     *
+     * A widget naming its record type opens the *shared* page for it — the one
+     * every route into a record arrives at — so planning a private copy here
+     * would buy a worse answer: frozen as it was the day it was written, and
+     * inheriting nothing when the shared page improves.
+     */
+    let calls = 0;
+    const counting = async () => {
+      calls += 1;
+      return plan({ fields: ["Title"] })();
+    };
+    const onEntity = { ...draft, entity: "task" } as typeof draft;
+
+    const { draft: settled, detail } = await settleDetail(onEntity, counting);
+    expect(calls).toBe(0);
+    expect(settled).toBe(onEntity);
+    expect(detail).toBeNull();
+  });
+
   it("does nothing for a widget that opens no record", async () => {
     const noClick = { ...draft, drilldown: undefined } as typeof draft;
     const { draft: settled, detail } = await settleDetail(noClick, plan({ fields: ["Title"] }));

@@ -20,6 +20,22 @@ export type Route =
       readonly widgetId: string;
       /** The record's identifier, as it appeared in the row. */
       readonly recordId: string;
+    }
+  /**
+   * One record, by what it *is* rather than by which widget showed it.
+   *
+   * The address a link between records uses: a task's vendor opens the
+   * vendor's own page, which is the same page for everybody who reaches it,
+   * from any widget or from none. `from` records which widget's row opened it,
+   * so that widget's own changes to the layout apply — a reference link
+   * carries no `from` and always opens the plain shared page.
+   */
+  | {
+      readonly kind: "entity";
+      readonly connectionId: string;
+      readonly entityId: string;
+      readonly recordId: string;
+      readonly from?: { readonly dashboardId: string; readonly widgetId: string };
     };
 
 export const BOARD_ROUTE: Route = { kind: "board", dashboardId: null };
@@ -37,6 +53,24 @@ export const parseRoute = (hash: string): Route => {
     .filter((part) => part !== "")
     .map(decodeURIComponent);
 
+  /*
+   * `#/r/<connection>/<record type>/<id>`, optionally saying which widget's
+   * row opened it. Read before the board form because it is a different root.
+   */
+  if (parts[0] === "r") {
+    const [, connectionId, entityId, recordId, fromMarker, dashboardId, widgetId] = parts;
+    if (!connectionId || !entityId || !recordId) return BOARD_ROUTE;
+    return {
+      kind: "entity",
+      connectionId,
+      entityId,
+      recordId,
+      ...(fromMarker === "from" && dashboardId && widgetId
+        ? { from: { dashboardId, widgetId } }
+        : {}),
+    };
+  }
+
   if (parts[0] !== "d" || !parts[1]) return BOARD_ROUTE;
   const dashboardId = parts[1];
 
@@ -49,6 +83,17 @@ export const parseRoute = (hash: string): Route => {
 export const routeToHash = (route: Route): string => {
   if (route.kind === "board") {
     return route.dashboardId ? `#/d/${encodeURIComponent(route.dashboardId)}` : "#/";
+  }
+  if (route.kind === "entity") {
+    return (
+      `#/r/${encodeURIComponent(route.connectionId)}` +
+      `/${encodeURIComponent(route.entityId)}` +
+      `/${encodeURIComponent(route.recordId)}` +
+      (route.from
+        ? `/from/${encodeURIComponent(route.from.dashboardId)}` +
+          `/${encodeURIComponent(route.from.widgetId)}`
+        : "")
+    );
   }
   return (
     `#/d/${encodeURIComponent(route.dashboardId)}` +

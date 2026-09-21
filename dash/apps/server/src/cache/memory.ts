@@ -73,9 +73,15 @@ export class MemoryCacheStore implements CacheStore {
     return { entries: this.entries.size, bytes: Math.round(this.bytes) };
   }
 
-  clear(): void {
-    this.entries.clear();
-    this.bytes = 0;
+  clear(prefix?: string): void {
+    if (prefix === undefined) {
+      this.entries.clear();
+      this.bytes = 0;
+      return;
+    }
+    for (const key of [...this.entries.keys()]) {
+      if (key.startsWith(prefix)) this.delete(key);
+    }
   }
 
   private evict(): void {

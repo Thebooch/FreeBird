@@ -1,4 +1,3 @@
-import type { AuthoredWidget } from "@freebirdai/dash-agent";
 import { type DashboardSpec, dashboardSchema } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import { type BuildChatRegistryInput, buildChatRegistry } from "./registry.js";
@@ -23,22 +22,6 @@ const widget = (id: string, title: string) => ({
   roles: { columns: ["name"] },
 });
 
-const offer = (id: string, headline: string, connection = "acme"): AuthoredWidget =>
-  ({
-    id,
-    source: "rule",
-    widget: {
-      ...widget(id, id),
-      source: { connection, op: "list_things" },
-    },
-    headline,
-    why: [],
-    confirm: [],
-    confidence: "inferred",
-    cost: { requests: 1, onOpen: 0 },
-    score: 10,
-  }) as unknown as AuthoredWidget;
-
 /** The registry as the server builds it, with everything wired. */
 const build = (overrides: Partial<BuildChatRegistryInput> = {}) => {
   const dashboard = overrides.dashboard ?? board("ops", "Ops", [widget("leases", "Leases")]);
@@ -55,7 +38,6 @@ const build = (overrides: Partial<BuildChatRegistryInput> = {}) => {
       { id: "acme", title: "Acme", read: true, stale: false },
       { id: "beta", title: "Beta", read: false, stale: false },
     ],
-    suggestions: [offer("new-table", "This widget will list your things.")],
     board: {
       getDashboard: () => store.get(dashboard.id) ?? null,
       getDashboardById: (id) => store.get(id) ?? null,
@@ -103,22 +85,22 @@ describe("chat registry knowledge", () => {
     expect(text).toContain("CONNECTIONS");
     expect(text).toMatch(/Acme[^;]*read/);
     expect(text).toMatch(/Beta[^;]*not read yet/);
-    // The reason suggestions are missing, said rather than left to inference.
-    expect(text).toContain("Reading is what produces widget suggestions");
+    // The reason an unread connection has nothing to say, stated rather than
+    // left to inference.
+    expect(text).toContain("Nothing has been read from");
   });
 
-  it("offers what can be added, labelled by connection", () => {
+  it("says outright that nothing is waiting to be added", () => {
+    /*
+     * There used to be a roster of ready-made widgets here, and the assistant
+     * reached for the nearest one instead of answering what was asked. Saying
+     * "there are none" is not the same as saying nothing: left to infer it,
+     * the model invents ids.
+     */
     const text = roster(build());
-    expect(text).toContain("NOT YET CREATED");
-    expect(text).toContain("new-table");
-    expect(text).toContain("[acme]");
-  });
-
-  it("does not offer a widget that is already on the board", () => {
-    const text = roster(
-      build({ suggestions: [offer("leases", "This widget will list your leases.")] }),
-    );
     expect(text).toContain("no ready-made widgets to add");
+    expect(text).toContain("start_setup");
+    expect(text).not.toContain("NOT YET CREATED");
   });
 
   it("still builds for an empty board, rather than throwing", () => {
@@ -126,7 +108,7 @@ describe("chat registry knowledge", () => {
     expect(registry.list()).toHaveLength(1);
     expect(roster(registry)).toContain("no widgets anywhere in this workspace");
     // The actions still have somewhere to live, or an empty board is inert.
-    expect(actionOf(registry, "add_widget")).toBeDefined();
+    expect(actionOf(registry, "create_dashboard")).toBeDefined();
   });
 
   it("steps aside when a widget is already called dashboard", () => {
@@ -143,7 +125,6 @@ describe("chat registry actions", () => {
     const registry = build();
     const confirmation = (id: string) => actionOf(registry, id)?.requiresConfirmation;
 
-    expect(confirmation("add_widget")).toBe("preview");
     expect(confirmation("remove_widget")).toBe("preview");
     expect(confirmation("create_dashboard")).toBe("preview");
     expect(confirmation("rename_dashboard")).toBe("preview");
@@ -174,12 +155,12 @@ describe("chat registry actions", () => {
     ).toMatchObject({ ok: false, status: 404 });
   });
 
-  it("refuses a widget id that was never offered", async () => {
+  it("refuses a widget id it never showed", async () => {
     const registry = build();
-    expect(await authorize(registry, "add_widget", { widgetId: "new-table" })).toBe(true);
-    expect(await authorize(registry, "add_widget", { widgetId: "invented" })).toMatchObject({
+    expect(await authorize(registry, "remove_widget", { widgetId: "leases" })).toBe(true);
+    expect(await authorize(registry, "remove_widget", { widgetId: "invented" })).toMatchObject({
       ok: false,
-      status: 403,
+      status: 404,
     });
   });
 

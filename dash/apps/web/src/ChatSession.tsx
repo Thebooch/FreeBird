@@ -107,10 +107,21 @@ export interface ChatSessionProps {
 export const ChatScopeReporter = ({
   dashboardId,
   openRecord,
+  openEntity,
 }: {
   readonly dashboardId: string | null;
-  /** The record page currently open, when one is. */
+  /** The record page currently open, when one was opened from a widget's row. */
   readonly openRecord?: { readonly widgetId: string; readonly recordId: string } | undefined;
+  /**
+   * The record open by what it *is*, when one is.
+   *
+   * Reported separately because it resolves differently: no widget was
+   * involved, so the assistant reaches it through the record type's own
+   * endpoint rather than through a drill-down.
+   */
+  readonly openEntity?:
+    | { readonly connectionId: string; readonly entityId: string; readonly recordId: string }
+    | undefined;
 }): null => {
   const report = useContext(ChatScopeContext);
   // Optional: the assistant also opens on an empty workspace, where there is
@@ -121,9 +132,13 @@ export const ChatScopeReporter = ({
     ? `${range.preset}:${range.start}:${range.end}:${range.grain}`
     : null;
 
-  const view = openRecord
-    ? `record:${encodeURIComponent(openRecord.widgetId)}:${encodeURIComponent(openRecord.recordId)}`
-    : "board";
+  const view = openEntity
+    ? `entity:${encodeURIComponent(openEntity.connectionId)}` +
+      `:${encodeURIComponent(openEntity.entityId)}` +
+      `:${encodeURIComponent(openEntity.recordId)}`
+    : openRecord
+      ? `record:${encodeURIComponent(openRecord.widgetId)}:${encodeURIComponent(openRecord.recordId)}`
+      : "board";
 
   /*
    * URI-encoded JSON rather than the colon grammar the other two use: a

@@ -976,6 +976,54 @@ export const COMPONENT_IDS = Object.keys(COMPONENT_CONTRACTS) as BuiltinComponen
 export const contractFor = (id: string): ComponentContract | undefined =>
   (COMPONENT_CONTRACTS as Readonly<Record<string, ComponentContract>>)[id];
 
+/**
+ * What a column that holds another record's identity points at.
+ *
+ * Primitives only, and declared here rather than imported: `entity.ts` imports
+ * this file, so reaching the other way would be a cycle. It is also the honest
+ * shape for the job — a renderer needs to know *that* a column is a reference
+ * and how to follow it, not what the far record type's field dictionary says.
+ *
+ * Stamped onto the column by the host, exactly as `label` is, so it reaches
+ * every component without any of them learning what a connection is.
+ */
+export interface ColumnReference {
+  /** The record type on the other end. */
+  readonly target: string;
+  /** What one of them is called, for the fallback when no name resolves. */
+  readonly targetName: string;
+  /**
+   * The fields whose values are the far record's name, on *its* own rows.
+   *
+   * Needed to say "Acme Plumbing" once that record has been fetched: the
+   * far row is a detail response in the API's own shape, so these are the
+   * API's field paths rather than this widget's column names.
+   */
+  readonly targetTitle: readonly string[];
+  /**
+   * Whether those are parts of one name or alternatives for it.
+   *
+   * A record that can be a company or a person carries both kinds of field,
+   * and joining them names nobody.
+   */
+  readonly targetTitleMode?: "join" | "first";
+  readonly holds: "scalar" | "array" | "objectRef";
+  /**
+   * Columns on this row that already spell the far record's name.
+   *
+   * Already translated from the API's field paths into the columns the
+   * pipeline produced, so a component can read them straight off the row.
+   * Non-empty means the link costs nothing to draw.
+   */
+  readonly embedded: readonly string[];
+  /** The column saying which kind of record each row points at. */
+  readonly typeColumn?: string;
+  /** Value from that column → record type id. */
+  readonly typeMap?: Readonly<Record<string, string>>;
+  /** The endpoint returning one far record, when anything can open one. */
+  readonly lookup?: { readonly op: string; readonly param: string };
+}
+
 /** What the runtime reports about each column it produced. */
 export interface ColumnMeta {
   readonly name: string;
@@ -990,11 +1038,31 @@ export interface ColumnMeta {
    * reaches all of them without any of them learning what a connection is.
    */
   readonly label?: string;
+  /**
+   * What this field means, in a sentence a non-technical reader can act on.
+   *
+   * The specification described 2,898 of one real API's 2,927 field entries
+   * and not one of those sentences ever reached a person. Carried on the
+   * column for the same reason `label` is — the runtime hands every component
+   * the same `columns`, so one stamp reaches all of them.
+   *
+   * Absent on every column until a record type's dictionary is stamped over
+   * it, which is what keeps this additive.
+   */
+  readonly description?: string;
   readonly valueType: ValueType;
   readonly semantic?: SemanticType;
   /** How many rows had null/undefined here — surfaced in the inspector. */
   readonly nullCount?: number;
   readonly distinctCount?: number;
+  /**
+   * The record this column's values identify, where they identify one.
+   *
+   * Absent on every ordinary column and on every widget over an API nobody has
+   * described, which is what keeps this additive: a component that ignores it
+   * renders exactly what it always did.
+   */
+  readonly reference?: ColumnReference;
 }
 
 export interface BindingIssue {
@@ -1057,10 +1125,28 @@ export const validateBinding = (
       continue;
     }
 
+    /*
+     * A role that takes several columns and is missing one can still render.
+     *
+     * "Errors mean the widget cannot render" — so a *list* of columns losing a
+     * member is not one: it is a shorter list. Treating it as an error meant a
+     * single bad name blanked the whole view and printed "this view no longer
+     * matches its data", which blames the reader's data for what is almost
+     * always a defect upstream. A real one: an importer misread a by-id
+     * response and put two fields on a record type that had forty, and the
+     * record page — the whole point of the feature — refused to draw at all
+     * rather than drawing the thirty-eight it had.
+     *
+     * Losing *every* member is still an error, through the required check
+     * above: then there is genuinely nothing to show.
+     */
+    const survivors = names.filter((name) => byName.has(name));
+    const partial = contractRole.multi && survivors.length > 0;
+
     for (const name of names) {
       const column = byName.get(name);
       if (!column) {
-        errors.push({
+        (partial ? warnings : errors).push({
           role: contractRole.role,
           message: `"${contractRole.role}" points at "${name}", which the pipeline does not produce`,
         });

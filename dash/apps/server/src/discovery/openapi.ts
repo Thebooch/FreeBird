@@ -331,10 +331,20 @@ const successSchema = (doc: Json, operation: Json): Json | undefined => {
  * A bare array is the rows; an object with exactly one array property is the
  * classic envelope. Anything else is treated as a summary rather than guessed
  * at — the sample step will show the user what actually came back.
+ *
+ * `single` is what stops that envelope rule from eating a record. An endpoint
+ * whose path ends in a parameter returns **one** of something, and one of
+ * something routinely contains exactly one array — a vendor with its phone
+ * numbers, a board member with theirs. Read as an envelope, the phone numbers
+ * became the rows: the field list was `Number` and `Type`, the record page
+ * bound fields no row had and refused to draw at all, and the runtime's
+ * extract step would have returned a vendor's phone numbers in place of the
+ * vendor. Two of a real API's 108 record types were exactly this.
  */
 const shapeOf = (
   doc: Json,
   schema: Json | undefined,
+  single: boolean,
 ): { archetype: "list" | "summary"; rowsPath?: string } => {
   if (!schema) return { archetype: "summary" };
 
@@ -342,6 +352,11 @@ const shapeOf = (
 
   const properties = isObject(schema.properties) ? schema.properties : null;
   if (!properties) return { archetype: "summary" };
+
+  /*
+   * One record is the row. Never an envelope, whatever it happens to contain.
+   */
+  if (single) return { archetype: "summary", rowsPath: "$" };
 
   const arrayProps = Object.entries(properties).filter(([, value]) => {
     const resolved = deref(doc, value);
@@ -693,7 +708,12 @@ export const parseOpenApi = (
     }
 
     const responseSchema = successSchema(doc, operation);
-    const shape = shapeOf(doc, responseSchema);
+    /*
+     * A path ending in a parameter returns one of something. That single fact
+     * is what tells a record apart from an envelope, and it is right here.
+     */
+    const single = /\}\s*$/.test(rawPath.trim());
+    const shape = shapeOf(doc, responseSchema, single);
     /*
      * The other 95% of the schema the line above already resolved.
      *

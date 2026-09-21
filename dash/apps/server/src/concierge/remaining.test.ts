@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
+import type { DraftPatch } from "@freebirdai/dash-agent";
 import {
   buildAll,
   fakeLlm,
   newDraft,
   revise,
   mapApi,
-  labelFields,
-  applyStepAcross,
 } from "@freebirdai/dash-agent";
 import {
   connectionSchema,
@@ -18,7 +17,6 @@ import {
 import { executeWidget } from "@freebirdai/dash-runtime";
 import { RestAdapter } from "@freebirdai/dash-adapters";
 import { buildConciergeContext } from "./context.js";
-import { proposeSetup } from "./propose.js";
 import { parseOpenApi } from "../discovery/openapi.js";
 import { connectionFromCatalog } from "../catalog.js";
 import { CatalogStore } from "../catalog.js";
@@ -30,161 +28,6 @@ import { join } from "node:path";
 import { catalogEntrySchema } from "@freebirdai/dash-spec";
 
 describe("remaining guided setup contracts", () => {
-  it("keeps a secondary ambiguity attached to its own widget and account", async () => {
-    const connections = ["first", "second", "third"].map((id) =>
-      connectionSchema.parse({
-        id,
-        title: id,
-        kind: "rest",
-        ops: [
-          {
-            id: "items",
-            title: "Items",
-            path: "/items",
-            fields: [{ name: "name", kinds: ["string"] }],
-          },
-        ],
-      }),
-    );
-    const context = buildConciergeContext({ connections, reports: [] });
-    const binding = { component: "list", title: "Names", titleField: "name", rowsPath: "$" };
-    const proposed = await proposeSetup({
-      llm: fakeLlm([
-        {
-          args: {
-            primary: "c0-op0",
-            secondary: "c1-op0",
-            relationship: "alongside",
-            reason: "Two accounts",
-            alternatives: [{ id: "c2-op0", role: "secondary", whatItIs: "The third account" }],
-          },
-        },
-        { args: binding },
-        { args: binding },
-      ]),
-      intent: "both lists",
-      context,
-    });
-    const revised = revise(newDraft("d", "both lists", "assisted"), proposed.patch, context);
-    expect(revised.rejected).toEqual([]);
-    const other = revised.draft.parts[1]?.choice?.options.find(
-      (option) => option.connection === "third",
-    );
-    expect(other, JSON.stringify({ proposed, draft: revised.draft })).toBeDefined();
-    const selected = applyStepAcross(revised.draft, "p1:choice", [other!.value!], context);
-    expect(selected.connection).toBe("first");
-    expect(selected.parts[1]?.connection).toBe("third");
-    expect(selected.parts[1]?.op).toBe("items");
-  });
-
-  it("persists batch checkpoints and resumes failed labels through the same map route", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "dash-map-resume-"));
-    const catalog = new CatalogStore(join(directory, "seed"), join(directory, "overlay"));
-    catalog.put(
-      catalogEntrySchema.parse({
-        id: "api",
-        title: "API",
-        baseUrl: "https://example.com",
-        dialect: {},
-        resources: [{ id: "items", title: "Items", listOp: "items" }],
-        ops: [
-          {
-            id: "items",
-            title: "Items",
-            path: "/items",
-            fields: Array.from({ length: 151 }, (_, index) => ({
-              name: `Field${index}`,
-              kinds: ["string"],
-            })),
-          },
-        ],
-      }),
-    );
-    const mapper = fakeLlm([
-      { args: { descriptions: [{ op: "items", description: "All the items." }] } },
-    ]);
-    const labeler = fakeLlm([
-      { args: { labels: [{ name: "Field0", label: "First value" }] } },
-      { text: "failed" },
-      { args: { labels: [] } },
-    ]);
-    const app = Fastify();
-    await app.register(
-      mapRoutes({
-        catalog,
-        llm: (task) => (task === "map" ? mapper : labeler),
-        fetchDocument: async (url) => ({
-          status: 200,
-          url,
-          text: JSON.stringify({
-            openapi: "3.0.3",
-            info: { title: "API" },
-            servers: [{ url: "https://example.com" }],
-            security: [],
-            paths: {
-              "/items": {
-                get: {
-                  operationId: "items",
-                  responses: {
-                    "200": {
-                      content: {
-                        "application/json": {
-                          schema: {
-                            type: "array",
-                            items: {
-                              type: "object",
-                              properties: {
-                                Field0: { type: "string" },
-                                NewField: { type: "number" },
-                              },
-                            },
-                          },
-                        },
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          }),
-        }),
-      }),
-    );
-    try {
-      const first = await app.inject({ method: "POST", url: "/api/catalog/api/map", payload: {} });
-      expect(first.statusCode).toBe(200);
-      expect(first.json().errors).toHaveLength(1);
-      const saved = new CatalogStore(join(directory, "seed"), join(directory, "overlay")).get(
-        "api",
-      )!;
-      expect(saved.mapVersion).toBeDefined();
-      expect(saved.labelVersion).toBeUndefined();
-      expect(saved.labelProgress?.batches).toHaveLength(1);
-      const retry = await app.inject({ method: "POST", url: "/api/catalog/api/map", payload: {} });
-      expect(retry.statusCode).toBe(200);
-      expect(retry.json().errors).toEqual([]);
-      expect(mapper.calls).toHaveLength(1);
-      expect(labeler.calls).toHaveLength(3);
-      expect(catalog.get("api")?.labels.Field0).toBe("First value");
-      expect(catalog.get("api")?.ops[0]?.description).toBe("All the items.");
-      expect(catalog.get("api")?.labelVersion).toBeDefined();
-      const refreshed = await app.inject({
-        method: "POST",
-        url: "/api/catalog/api/refresh",
-        payload: { specUrl: "https://example.com/openapi.json" },
-      });
-      expect(refreshed.statusCode).toBe(200);
-      expect(catalog.get("api")?.mapVersion).toBeUndefined();
-      expect(catalog.get("api")?.labelVersion).toBeUndefined();
-      expect(catalog.get("api")?.labels.Field0).toBe("First value");
-      expect(mapper.calls).toHaveLength(1);
-      expect(labeler.calls).toHaveLength(3);
-    } finally {
-      await app.close();
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
   it("keeps cents and date conversions on both comparison sources", async () => {
     const connection = connectionSchema.parse({
       id: "money",
@@ -202,38 +45,37 @@ describe("remaining guided setup contracts", () => {
       })),
     });
     const context = buildConciergeContext({ connections: [connection], reports: [] });
-    const binding = {
+    /*
+     * Two measurements over one axis, stated rather than planned.
+     *
+     * The failure this guards is in the *building*: a conversion recorded for
+     * the first source and forgotten for the second produces a chart where one
+     * series is in dollars and the other in cents — two lines on one axis,
+     * both plausible, a hundredfold apart.
+     */
+    const shape = {
+      groupBy: [{ field: "when", bucket: "{{range.grain}}" }],
+      measures: [{ as: "price_amount", agg: "sum" as const, field: "price.amount" }],
+      sort: [{ field: "when", dir: "asc" as const }],
+    };
+    const conversions = {
+      coercions: {
+        "price.amount": "money:cents->major" as const,
+        when: "iso->datetime" as const,
+      },
+      format: { "price.amount": { semantic: "currency" as const, currency: "USD" } },
+    };
+    const patch: DraftPatch = {
+      connection: "money",
+      endpoint: "charges",
       component: "timeseries",
       title: "Money over time",
-      rowsPath: "$.data",
-      timeField: "when",
-      valueField: "price.amount",
-      aggregation: "sum",
-      coercions: [
-        { field: "price.amount", coercion: "money:cents->major" },
-        { field: "when", coercion: "iso->datetime" },
-      ],
-      semantics: [{ field: "price.amount", semantic: "currency" }],
-      currency: "USD",
+      ...conversions,
+      shape,
+      seriesWith: [{ endpoint: "refunds", label: "refunds", shape, ...conversions }],
     };
-    const proposed = await proposeSetup({
-      llm: fakeLlm([
-        {
-          args: {
-            primary: "charges",
-            secondary: "refunds",
-            relationship: "compare",
-            reason: "Both in dollars",
-          },
-        },
-        { args: binding },
-        { args: binding },
-      ]),
-      intent: "charges and refunds in dollars",
-      context,
-    });
-    expect(proposed.patch.seriesWith).toHaveLength(1);
-    const revised = revise(newDraft("d", "compare", "assisted"), proposed.patch, context);
+    expect(patch.seriesWith).toHaveLength(1);
+    const revised = revise(newDraft("d", "compare", "assisted"), patch, context);
     expect(revised.rejected).toEqual([]);
     const built = buildAll(revised.draft, context);
     expect(built.errors).toEqual([]);
@@ -252,54 +94,14 @@ describe("remaining guided setup contracts", () => {
     expect(output.rows).toHaveLength(2);
     expect(
       output.rows.every((row) => Object.values(row).includes(123.45)),
-      JSON.stringify({ rows: output.rows, sources: widget.sources, patch: proposed.patch }),
+      JSON.stringify({ rows: output.rows, sources: widget.sources, patch }),
     ).toBe(true);
     expect(Object.values(widget.format)).toContainEqual(
       expect.objectContaining({ semantic: "currency", currency: "USD" }),
     );
   });
 
-  it("resolves a duplicate endpoint choice to the selected account in the actual step API", async () => {
-    const connections = ["first", "second"].map((id) =>
-      connectionSchema.parse({
-        id,
-        title: id,
-        kind: "rest",
-        ops: [
-          {
-            id: "items",
-            title: "Items",
-            path: "/items",
-            fields: [{ name: "name", kinds: ["string"] }],
-          },
-        ],
-      }),
-    );
-    const context = buildConciergeContext({ connections, reports: [] });
-    const proposed = await proposeSetup({
-      llm: fakeLlm([
-        {
-          args: {
-            primary: "c0-op0",
-            reason: "Names from either account",
-            alternatives: [{ id: "c1-op0", role: "primary", whatItIs: "The other account" }],
-          },
-        },
-        { args: { component: "list", title: "Names", titleField: "name", rowsPath: "$" } },
-      ]),
-      intent: "names",
-      context,
-    });
-    const draft = revise(newDraft("d", "names", "assisted"), proposed.patch, context).draft;
-    const other = draft.choice?.options.find((option) => option.connection === "second");
-    expect(other, JSON.stringify({ proposed, draft })).toBeDefined();
-    const selected = applyStepAcross(draft, "choice", [other!.value!], context);
-    expect(selected.connection).toBe("second");
-    expect(selected.op).toBe("items");
-    expect(selected.coercions).toEqual({});
-  });
-
-  it("resumes only failed map and label batches and invalidates changed contracts", async () => {
+  it("resumes only failed map batches and invalidates changed contracts", async () => {
     const ops = Array.from({ length: 26 }, (_, index) => ({
       id: `op${index}`,
       title: `Items ${index}`,
@@ -330,30 +132,6 @@ describe("remaining guided setup contracts", () => {
       { completedBatches: resumed.completedBatches },
     );
     expect(changed.calls).toHaveLength(2);
-    const labelsInput = {
-      apiTitle: "API",
-      ops: [
-        {
-          id: "items",
-          title: "Items",
-          fields: Array.from({ length: 151 }, (_, index) => ({
-            name: `Field${index}`,
-            kinds: ["string" as const],
-            nullable: false,
-          })),
-        },
-      ],
-    };
-    const named = await labelFields(
-      fakeLlm([{ args: { labels: [] } }, { text: "failed" }]),
-      labelsInput,
-    );
-    const labelRetry = fakeLlm([{ args: { labels: [] } }]);
-    expect(
-      (await labelFields(labelRetry, labelsInput, { completedBatches: named.completedBatches }))
-        .errors,
-    ).toEqual([]);
-    expect(labelRetry.calls).toHaveLength(1);
   });
 
   it("imports and executes endpoint auth overrides without leaking the default credential", async () => {

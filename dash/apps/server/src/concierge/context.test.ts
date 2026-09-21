@@ -185,3 +185,91 @@ describe("a relation pointing back at a scoped endpoint", () => {
     expect(scoped.children).toEqual([]);
   });
 });
+
+/**
+ * Which of the two relationship models answers.
+ *
+ * Two have been running side by side: the endpoint-level `resource.relations`
+ * the map pass writes, and the record-level references the describe pass puts
+ * on the entities. Only the second decides what a brief compiles to, and only
+ * the second is one a person can correct — so where record types exist, they
+ * are the half that should answer, and where they do not, the first one still
+ * has to, because that is the install with no AI key.
+ */
+describe("two models of how records relate", () => {
+  const described = (entities: unknown[]) =>
+    buildConciergeContext({
+      connections: [connection],
+      reports: [],
+      maps: [
+        catalogEntrySchema.parse({
+          ...map,
+          entities,
+        }),
+      ],
+    });
+
+  const unit = {
+    id: "unit",
+    resource: "unit",
+    name: { one: "Unit", many: "Units" },
+    kind: "place",
+    identity: { field: "Id", observed: true },
+    display: { title: ["Id"] },
+    fields: [
+      { path: "Id", visibility: "hidden" },
+      {
+        path: "PropertyId",
+        label: "Property",
+        visibility: "detail",
+        reference: { entity: "rental" },
+      },
+    ],
+  };
+
+  const rental = {
+    id: "rental",
+    resource: "rental",
+    name: { one: "Property", many: "Properties" },
+    kind: "place",
+    identity: { field: "Id", observed: true },
+    display: { title: ["Name"] },
+    fields: [
+      { path: "Id", visibility: "hidden" },
+      { path: "Name", label: "Name", visibility: "primary" },
+    ],
+  };
+
+  it("answers from the record types where they describe the same pair", () => {
+    const joins = described([unit, rental]).joins.filter(
+      (join) => join.fromOp === "list_units" && join.toOp === "list_rentals",
+    );
+    // One, not two: the same relationship read twice is a choice with no
+    // answer, and the record-level reading is the one that can be corrected.
+    expect(joins).toHaveLength(1);
+    expect(joins[0]).toMatchObject({
+      leftField: "PropertyId",
+      rightField: "Id",
+      title: "Units → Properties",
+    });
+  });
+
+  it("still answers from the endpoints when nothing has described the records", () => {
+    /*
+     * Describing an API costs a model pass, so an install with no AI key has
+     * no record types at all — and the endpoint graph is the only thing that
+     * can say two collections go together. Retiring it would cost that install
+     * every join it has.
+     */
+    const joins = described([]).joins.filter((join) => join.fromOp === "list_units");
+    expect(joins).toHaveLength(1);
+    expect(joins[0]?.leftField).toBe("PropertyId");
+  });
+
+  it("keeps an endpoint-level link the record types say nothing about", () => {
+    // Preferring the record types is not the same as discarding what they do
+    // not cover: a described API with one undescribed corner keeps it.
+    const joins = described([rental]).joins.filter((join) => join.fromOp === "list_units");
+    expect(joins).toHaveLength(1);
+  });
+});

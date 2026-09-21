@@ -2,9 +2,9 @@ import {
   Badge,
   EmptyState,
   ErrorState,
-  FacetBar,
   type FacetSelection,
   type FacetView,
+  FilterGlyph,
   Menu,
   type MenuItem,
   Message,
@@ -31,6 +31,8 @@ import { WidgetDetail } from "./WidgetDetail.jsx";
 import { WidgetErrorBoundary } from "./WidgetErrorBoundary.jsx";
 import { WidgetInspector } from "./WidgetInspector.jsx";
 import { useDashboard } from "./context.jsx";
+import type { OpenReference } from "./entityDetail.js";
+import { entityFor } from "./references.js";
 import { chromePresentationFor, presentationFor, presentationStyle } from "./presentation.js";
 import type { WidgetData } from "./useWidgetData.js";
 import { useWidgetData } from "./useWidgetData.js";
@@ -58,7 +60,9 @@ export const WidgetShell = ({
   hero,
   onRemove,
   onCustomise,
+  onFrame,
   onOpenPage,
+  onOpenReference,
 }: {
   widget: WidgetSpec;
   hero?: boolean;
@@ -66,14 +70,79 @@ export const WidgetShell = ({
   onRemove?: (widgetId: string) => void;
   /** Absent until an editor exists to open. */
   onCustomise?: (widgetId: string) => void;
+  /**
+   * Show this widget with others, or stop.
+   *
+   * Absent where the host has nowhere to arrange them. Which widgets exist and
+   * which frame holds what is the board's business, not this file's — so this
+   * opens that question rather than answering it here.
+   */
+  onFrame?: (widgetId: string) => void;
   /** Absent when the host cannot route to a record page. */
   onOpenPage?: (widgetId: string, row: Row) => void;
+  /**
+   * Open the record a *cell* names, rather than the row's own.
+   *
+   * Absent when the host has nowhere to send it, and then a reference renders
+   * as a name in plain text rather than as a control — the same contract every
+   * other affordance in this file follows.
+   */
+  onOpenReference?: OpenReference;
 }): JSX.Element => {
   const data = useWidgetData(widget);
+  /*
+   * A cell names a record type and an id; *which API* those belong to is a
+   * property of this widget's source, so it is injected here rather than
+   * carried down to every component that can draw a reference.
+   *
+   * The first source deliberately, because that is the one `referenceColumns`
+   * stamped these columns from — reading it any other way would let the mark
+   * and the link disagree about which API they mean.
+   */
+  const connection = widget.source?.connection ?? widget.sources[0]?.connection;
+  const openReference =
+    onOpenReference && connection
+      ? (target: { entity: string; id: string | number }) =>
+          onOpenReference({ ...target, connection })
+      : undefined;
   const [inspecting, setInspecting] = useState(false);
   /** The row a drill-down was opened from. Null when the sheet is closed. */
   const [openRow, setOpenRow] = useState<Row | null>(null);
-  const { now, locale, timeZone, presentation: sources, reportFacets } = useDashboard();
+  const {
+    now,
+    locale,
+    timeZone,
+    presentation: sources,
+    reportFacets,
+    entityLinks,
+  } = useDashboard();
+
+  /*
+   * A row opens the record type's own page wherever these rows are records of
+   * one — the page that carries what points *at* the record, so a vendor
+   * arrives with its work orders, bills and notes.
+   *
+   * It outranks the widget's private sheet deliberately, and the sheet's own
+   * planner says why: it stops planning one for any widget that names a record
+   * type, because such a widget "already has a record page, and it is the
+   * shared one". Nothing routed there, so those widgets opened a sheet that
+   * was empty by design — and a widget with no sheet at all had rows that did
+   * not respond.
+   *
+   * The sheet stays for rows nothing describes, which is every widget over an
+   * API whose records were never read.
+   */
+  const recordType = entityFor(widget, entityLinks ?? {});
+  /*
+   * After a group step there are no records left, only buckets — the same
+   * reason `referenceColumns` stops marking links on an aggregated widget. A
+   * monthly count has no page, and a bar that looks openable and is not is
+   * worse than one that plainly is not.
+   */
+  const aggregated =
+    widget.pipeline.some((step) => step.op === "group") ||
+    widget.sources.some((source) => source.pipeline.some((step) => step.op === "group"));
+  const opensPage = Boolean(onOpenPage) && Boolean(recordType?.identity) && !aggregated;
 
   /*
    * What the reader has narrowed this widget to.
@@ -88,6 +157,90 @@ export const WidgetShell = ({
   const chrome = chromePresentationFor(sources, widget.presentation);
   const look = presentationFor(sources, widget.component, widget.presentation);
 
+  /*
+   * Built from the *unfiltered* rows, which is what lets an unselected tile
+   * keep saying how much is behind it. `buildFacets` owns that rule; the
+   * shell's job is only to hand it everything and never to pre-filter.
+   */
+  const views = useMemo<readonly FacetView[]>(
+    () =>
+      data.state === "ok" && !isSlotHidden(chrome, "facets")
+        ? buildFacets({
+            facets: widget.facets,
+            rows: data.rows,
+            columns: data.columns,
+            selection,
+          })
+        : [],
+    [data.state, data.rows, data.columns, widget.facets, selection, chrome],
+  );
+
+  /*
+   * Rows and highlights narrowed together, never separately — they are
+   * index-parallel, and filtering one without the other moves every status
+   * pill onto a different record.
+   */
+  const faceted = useMemo(
+    () => applyFacets(views, data.rows, data.highlights),
+    [views, data.rows, data.highlights],
+  );
+
+  const filtering = views.some((view) => view.selected.length > 0);
+
+  /*
+   * Tell the board what this widget is narrowed to.
+   *
+   * In an effect rather than in the click handler, because the selection that
+   * matters is the one that survived `buildFacets` — a key whose tile no
+   * longer exists is dropped there, and reporting the raw click would tell the
+   * chat about a filter the reader cannot see and the rows do not have.
+   */
+  const summary = useMemo(() => describeFacets(views), [views]);
+  useEffect(() => {
+    reportFacets(widget.id, summary);
+  }, [reportFacets, widget.id, summary]);
+  useEffect(() => () => reportFacets(widget.id, []), [reportFacets, widget.id]);
+
+  /**
+   * The filter, as the rows a menu can show.
+   *
+   * One item per value, grouped under the field it belongs to, ticked when it
+   * is on and kept open while a run of them is set — narrowing usually means
+   * two or three choices, and a menu that shut after each one would make the
+   * reader reopen it every time.
+   */
+  const filterItems: MenuItem[] = views
+    .filter((view) => view.tiles.length > 0)
+    .flatMap((view) =>
+      view.tiles.map((tile) => ({
+        id: `${view.field}-${tile.key}`,
+        label: tile.label,
+        section: view.label,
+        ...(settingBool(chrome, "facetCounts", true)
+          ? { meta: tile.count.toLocaleString() }
+          : {}),
+        checked: tile.selected,
+        keepOpen: true,
+        onSelect: () => setSelection((previous) => toggleFacet(previous, view, tile.key)),
+      })),
+    );
+
+  const filterCount = views.reduce((total, view) => total + view.selected.length, 0);
+
+  if (filterItems.length > 0 && filterCount > 0) {
+    /*
+     * A way back to everything, at the end of the list it undoes. Only once
+     * something is on: an always-present "Clear" on a menu that filters
+     * nothing reads as a control that does nothing.
+     */
+    filterItems.push({
+      id: "clear",
+      label: "Clear filters",
+      separated: true,
+      onSelect: () => setSelection({}),
+    });
+  }
+
   const actions: MenuItem[] = [
     { id: "refresh", label: "Refresh", icon: "↻", onSelect: data.refetch },
     {
@@ -98,6 +251,9 @@ export const WidgetShell = ({
     },
     ...(onCustomise
       ? [{ id: "customise", label: "Customise", icon: "◫", onSelect: () => onCustomise(widget.id) }]
+      : []),
+    ...(onFrame
+      ? [{ id: "frame", label: "Shown with…", icon: "▤", onSelect: () => onFrame(widget.id) }]
       : []),
     /*
      * Removal lives behind the menu rather than beside Refresh.
@@ -164,56 +320,35 @@ export const WidgetShell = ({
     ),
     actions: (
       <span className="dash-widget__actions">
+        {/*
+         * The filter, where every other tool is.
+         *
+         * It used to be a row of buttons above the rows — one per value, sized
+         * by whatever the values happened to be called, taking a third of a
+         * short widget before a single row was read. A control that is mostly
+         * unused most of the time belongs behind the affordance people already
+         * look for, and the count on the glyph is what keeps a hidden filter
+         * from being a silent one.
+         */}
+        {filterItems.length > 0 && (
+          <Menu
+            items={filterItems}
+            glyph={<FilterGlyph />}
+            badge={filterCount}
+            label={
+              filterCount > 0
+                ? `Filter ${widget.title}, ${filterCount} applied`
+                : `Filter ${widget.title}`
+            }
+            testId={`filters-${widget.id}`}
+          />
+        )}
         <Menu items={actions} label={`Actions for ${widget.title}`} testId={`actions-${widget.id}`} />
       </span>
     ),
   };
 
   const visible = orderedSlots(chrome, CHROME_SLOTS).filter((id) => !isSlotHidden(chrome, id));
-
-  /*
-   * Built from the *unfiltered* rows, which is what lets an unselected tile
-   * keep saying how much is behind it. `buildFacets` owns that rule; the
-   * shell's job is only to hand it everything and never to pre-filter.
-   */
-  const views = useMemo<readonly FacetView[]>(
-    () =>
-      data.state === "ok" && !isSlotHidden(chrome, "facets")
-        ? buildFacets({
-            facets: widget.facets,
-            rows: data.rows,
-            columns: data.columns,
-            selection,
-          })
-        : [],
-    [data.state, data.rows, data.columns, widget.facets, selection, chrome],
-  );
-
-  /*
-   * Rows and highlights narrowed together, never separately — they are
-   * index-parallel, and filtering one without the other moves every status
-   * pill onto a different record.
-   */
-  const faceted = useMemo(
-    () => applyFacets(views, data.rows, data.highlights),
-    [views, data.rows, data.highlights],
-  );
-
-  const filtering = views.some((view) => view.selected.length > 0);
-
-  /*
-   * Tell the board what this widget is narrowed to.
-   *
-   * In an effect rather than in the click handler, because the selection that
-   * matters is the one that survived `buildFacets` — a key whose tile no
-   * longer exists is dropped there, and reporting the raw click would tell the
-   * chat about a filter the reader cannot see and the rows do not have.
-   */
-  const summary = useMemo(() => describeFacets(views), [views]);
-  useEffect(() => {
-    reportFacets(widget.id, summary);
-  }, [reportFacets, widget.id, summary]);
-  useEffect(() => () => reportFacets(widget.id, []), [reportFacets, widget.id]);
 
   // Counted after the filter, so the footer describes what is on screen.
   const showFooter = !isSlotHidden(chrome, "footer") && data.state === "ok";
@@ -250,15 +385,22 @@ export const WidgetShell = ({
        * upstream refused us and these numbers are not current. Someone
        * screenshotting a figure needs to have been told which of those it is.
        */}
-      {data.state === "ok" && data.fetchMeta?.staleReason && (
-        <p className="dash-widget__stale" role="status">
-          <span aria-hidden="true">⚠</span>
-          <span>
-            {data.fetchMeta.staleReason} Showing data from{" "}
-            {formatValue(data.lastFetchedAt, { semantic: "relative_time" }, { now })}.
-          </span>
-        </p>
-      )}
+      {/*
+       * Not only on `ok`. Stale rows that happen to filter down to nothing
+       * still need to say why they are old — "no results" and "no *current*
+       * results" are different answers, and the banner is the only thing that
+       * distinguishes them.
+       */}
+      {(data.state === "ok" || data.state === "empty" || data.state === "invalid") &&
+        data.fetchMeta?.staleReason && (
+          <p className="dash-widget__stale" role="status">
+            <span aria-hidden="true">⚠</span>
+            <span>
+              {data.fetchMeta.staleReason} Showing data from{" "}
+              {formatValue(data.lastFetchedAt, { semantic: "relative_time" }, { now })}.
+            </span>
+          </p>
+        )}
 
       <div className="dash-widget__body">
         {/*
@@ -270,18 +412,6 @@ export const WidgetShell = ({
          * badges and the actions, so the message has something to belong to
          * and Refresh is still reachable.
          */}
-        {/*
-         * Above the component rather than inside it, so every renderer gets
-         * this without learning what a facet is — the same reason highlights
-         * are read off `data` here and not threaded through each one.
-         */}
-        <FacetBar
-          views={views}
-          variant={settingString(chrome, "facetVariant", "tiles")}
-          showCounts={settingBool(chrome, "facetCounts", true)}
-          onToggle={(view, key) => setSelection((previous) => toggleFacet(previous, view, key))}
-          onClear={() => setSelection({})}
-        />
         <WidgetErrorBoundary widgetTitle={widget.title}>
           <WidgetBody
             data={data}
@@ -293,7 +423,12 @@ export const WidgetShell = ({
             timeZone={timeZone}
             now={now}
             presentation={look}
-            {...(widget.drilldown ? { onSelectRow: setOpenRow } : {})}
+            {...(opensPage
+              ? { onSelectRow: (row: Row) => onOpenPage?.(widget.id, row) }
+              : widget.drilldown
+                ? { onSelectRow: setOpenRow }
+                : {})}
+            {...(openReference ? { onOpenReference: openReference } : {})}
           />
         </WidgetErrorBoundary>
         {openRow && widget.drilldown && (
@@ -302,6 +437,7 @@ export const WidgetShell = ({
             row={openRow}
             onClose={() => setOpenRow(null)}
             {...(onOpenPage ? { onOpenPage } : {})}
+            {...(onOpenReference ? { onOpenReference } : {})}
           />
         )}
       </div>
@@ -368,11 +504,35 @@ const WidgetFooter = ({
  * or not this particular account can read them, which is only honest if the
  * tile explains itself when one of them cannot be.
  */
+/**
+ * A wait, phrased for somebody watching a tile rather than reading a log.
+ *
+ * Deliberately coarse above a minute. "Trying again in about 2 minutes" is
+ * something to act on; a second-by-second countdown from 14:59 invites
+ * somebody to sit and watch it, which is the behaviour this is meant to stop.
+ */
+const retryPhrase = (retryAt: number, now: number): string | null => {
+  const seconds = Math.ceil((retryAt - now) / 1000);
+  if (seconds <= 0) return null;
+  if (seconds < 60) return `${seconds} second${seconds === 1 ? "" : "s"}`;
+  const minutes = Math.ceil(seconds / 60);
+  return `about ${minutes} minute${minutes === 1 ? "" : "s"}`;
+};
+
 export const describeFailure = (
   status: number | null,
   userMessage: string | null,
+  /**
+   * When a retry could work, and the clock to measure it against.
+   *
+   * Given together because a countdown needs both, and because a retry button
+   * offered inside a cooldown is guaranteed to meet that cooldown — the one
+   * action a person will obviously take, and the one that cannot work.
+   */
+  retry?: { at: number | null; now: number },
 ): { message: string; detail?: string; retryable: boolean } => {
   const fallback = "That request did not come back.";
+  const waiting = retry?.at ? retryPhrase(retry.at, retry.now) : null;
 
   switch (status) {
     case 401:
@@ -392,8 +552,11 @@ export const describeFailure = (
     case 429:
       return {
         message: userMessage ?? "The API asked for fewer requests.",
-        detail: "This is temporary — a rate limit, not a failure.",
-        retryable: true,
+        detail: waiting
+          ? `This is temporary — a rate limit, not a failure. Trying again in ${waiting}.`
+          : "This is temporary — a rate limit, not a failure.",
+        // Offered only once the wait is over. Before then it cannot succeed.
+        retryable: !waiting,
       };
     default:
       /*
@@ -419,6 +582,7 @@ const WidgetBody = ({
   now,
   presentation,
   onSelectRow,
+  onOpenReference,
 }: {
   data: WidgetData;
   /**
@@ -437,6 +601,7 @@ const WidgetBody = ({
   now: number;
   presentation?: Presentation;
   onSelectRow?: (row: Row) => void;
+  onOpenReference?: (target: { entity: string; id: string | number }) => void;
 }): JSX.Element => {
   switch (data.state) {
     case "loading":
@@ -445,7 +610,10 @@ const WidgetBody = ({
       return <Skeleton shape={skeletonShapeFor(data.widget.component)} />;
 
     case "error": {
-      const failure = describeFailure(data.errorStatus, data.userMessage);
+      const failure = describeFailure(data.errorStatus, data.userMessage, {
+        at: data.retryAt,
+        now,
+      });
       return (
         <ErrorState
           message={failure.message}
@@ -519,9 +687,9 @@ const WidgetBody = ({
         return <Message>No component named “{data.widget.component}” is available here.</Message>;
       }
       const Component = registered.render;
-      // Highlights are read off `data` rather than threaded down as a prop:
-      // this is the only place that renders the component, and one fewer hop
-      // is one fewer place to forget.
+      // Highlights and resolved reference names are read off `data` rather
+      // than threaded down as props: this is the only place that renders the
+      // component, and one fewer hop is one fewer place to forget.
       return (
         <Component
           rows={rows}
@@ -534,6 +702,10 @@ const WidgetBody = ({
           timeZone={timeZone}
           {...(hero ? { hero } : {})}
           {...(onSelectRow ? { onSelectRow } : {})}
+          {...(onOpenReference ? { onOpenReference } : {})}
+          {...(Object.keys(data.referenceNames).length > 0
+            ? { referenceNames: data.referenceNames }
+            : {})}
           {...(highlights ? { highlights } : {})}
           {...(presentation ? { presentation } : {})}
         />

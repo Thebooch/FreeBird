@@ -583,6 +583,29 @@ ${seriesVars(SERIES_LIGHT)}
   border-radius: 0 0 7px 7px;
 }
 .dash-menu__icon { width: 13px; text-align: center; color: var(--dash-muted); flex: none; }
+/* The label takes the slack so a trailing figure sits on the right edge, and
+   a long value is cut rather than widening the whole menu to fit it. */
+.dash-menu__label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dash-menu__meta {
+  flex: none; font-size: var(--dash-text-xs); color: var(--dash-muted);
+  font-variant-numeric: tabular-nums; padding-left: 10px;
+}
+.dash-menu__group { display: contents; }
+.dash-menu__section {
+  padding: 8px 9px 3px; font-size: var(--dash-text-xs); color: var(--dash-muted);
+  letter-spacing: 0.02em;
+}
+/* A menu long enough to need it scrolls rather than running off the viewport:
+   a field can have thirty values and every one of them is reachable. */
+.dash-menu__list { max-height: min(60vh, 420px); overflow-y: auto; max-width: 280px; }
+/* How many filters are on, readable without opening the menu. */
+.dash-menu__badge {
+  position: absolute; top: -3px; right: -3px; min-width: 14px; height: 14px; padding: 0 3px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 999px; background: var(--dash-accent); color: var(--dash-on-accent, #fff);
+  font-size: 10px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums;
+}
+.dash-menu > .dash-iconbtn { position: relative; overflow: visible; }
 
 .dash-tabs {
   display: flex; align-items: center; gap: 2px;
@@ -603,67 +626,6 @@ ${seriesVars(SERIES_LIGHT)}
 }
 .dash-tabs__tab:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: -2px; }
 .dash-tabs__meta { margin-left: 6px; font-size: var(--dash-text-xs); font-weight: 400; color: var(--dash-muted); }
-
-/* == facets =============================================================
- * A row of counts that is also the filter. Tiles are toggle buttons, so the
- * selected look has to survive forced-colours mode: the border and the ring
- * carry it, not the tint alone.
- */
-.dash-facets {
-  display: flex; align-items: center; gap: var(--dash-space-3); flex-wrap: wrap;
-  padding-bottom: var(--dash-space-3);
-}
-.dash-facets__group { display: flex; align-items: center; gap: var(--dash-space-1); min-width: 0; flex-wrap: wrap; }
-.dash-facets__label {
-  font-size: var(--dash-text-xs); color: var(--dash-muted); margin-right: 2px; white-space: nowrap;
-}
-.dash-facets__tile {
-  font: inherit; display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
-  border: 1px solid var(--dash-border); border-radius: var(--dash-radius-sm);
-  background: var(--dash-surface); color: var(--dash-ink-secondary);
-  padding: 5px 9px; white-space: nowrap;
-  transition: border-color var(--dash-dur-base) var(--dash-ease), background var(--dash-dur-base) var(--dash-ease);
-}
-.dash-facets__tile:hover { border-color: var(--dash-border-strong); color: var(--dash-ink); }
-.dash-facets__tile:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 1px; }
-.dash-facets__tile[data-selected="true"] {
-  border-color: var(--dash-accent-line); background: var(--dash-accent-wash); color: var(--dash-ink);
-  /* A second ring rather than a thicker border, so the tile does not resize
-     when it is picked and shove its neighbours along the row. */
-  box-shadow: inset 0 0 0 1px var(--dash-accent-line);
-}
-.dash-facets__icon { font-size: var(--dash-text-xs); flex: none; }
-.dash-facets__name { font-size: var(--dash-text-sm); }
-.dash-facets__count { font-size: var(--dash-text-sm); font-weight: 650; font-variant-numeric: tabular-nums; }
-.dash-facets__clear {
-  font: inherit; font-size: var(--dash-text-xs); cursor: pointer; margin-left: auto;
-  border: none; background: transparent; color: var(--dash-muted); padding: 4px 6px;
-  border-radius: var(--dash-radius-xs);
-}
-.dash-facets__clear:hover { color: var(--dash-ink); }
-.dash-facets__clear:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 1px; }
-
-/* The tile variant stacks the count over the label, which reads as a figure
-   worth looking at rather than as a control with a number stuck to it. */
-.dash-facets[data-variant="tiles"] .dash-facets__tile {
-  flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 11px; min-width: 68px;
-}
-.dash-facets[data-variant="tiles"] .dash-facets__count {
-  font-size: var(--dash-text-lg); font-weight: 600; line-height: 1.15; order: -1;
-}
-.dash-facets[data-variant="tiles"] .dash-facets__name {
-  font-size: var(--dash-text-xs); color: var(--dash-muted);
-}
-.dash-facets[data-variant="tiles"] .dash-facets__tile[data-selected="true"] .dash-facets__name {
-  color: var(--dash-ink-secondary);
-}
-/* The icon would break the two-line stack, so it is a corner mark instead. */
-.dash-facets[data-variant="tiles"] .dash-facets__icon { position: absolute; top: 4px; right: 6px; }
-.dash-facets[data-variant="tiles"] .dash-facets__tile { position: relative; padding-right: 18px; }
-
-@media (prefers-reduced-motion: reduce) {
-  .dash-facets__tile { transition: none; }
-}
 
 .dash-toolbar {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -744,6 +706,17 @@ ${seriesVars(SERIES_LIGHT)}
   padding: var(--dash-cell-y, var(--dash-space-2)) 8px;
 }
 .dash-table__partial { color: var(--dash-serious); }
+
+/* A value that names another record rather than being one. Only ever a button
+   when the host can route to that record, so the underline never promises an
+   interaction that will not happen. */
+.dash-ref {
+  font: inherit; color: var(--dash-accent); text-align: inherit;
+  border: none; background: none; padding: 0; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.dash-ref:hover { color: var(--dash-accent-strong); }
+.dash-ref:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 2px; }
 
 /* == metric row ========================================================
  * Tiles laid out by available width rather than by a fixed count: the same
@@ -1421,6 +1394,19 @@ ${seriesVars(SERIES_LIGHT)}
   font-weight: var(--dash-weight-medium);
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* What the field means, under its name. Dimmer and lighter than the label, so
+   a record with a sentence on every row still scans as a list of labels and
+   values rather than as prose. It wraps, where the label above it clips. */
+.dash-record__hint {
+  display: block;
+  margin-top: 2px;
+  color: var(--dash-axis);
+  font-size: var(--dash-text-2xs);
+  font-weight: var(--dash-weight-normal);
+  line-height: var(--dash-leading-tight);
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .dash-record__pair dd {
   margin: 0;

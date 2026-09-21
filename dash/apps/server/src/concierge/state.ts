@@ -192,6 +192,15 @@ export const conciergeState = (input: StateInput) => {
      * endpoints, so the model never adds to this list, only picks from it.
      */
     arrangements: feasibleArrangements(draft, context),
+    /**
+     * The other reading of the same words, as a phrase to click.
+     *
+     * Null on almost every setup. The brief stays on the draft rather than
+     * travelling here: the card needs something to say and somewhere to post
+     * it, and a request body carrying a brief the server already holds is a
+     * chance for the two to disagree.
+     */
+    alternative: draft.alternative ? { label: draft.alternative.label } : null,
     summary:
       built && built.authored.length > 0
         ? {

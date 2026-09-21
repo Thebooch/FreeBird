@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 import { ConciergeCard } from "./ConciergeCard";
 import { writeStoredSession } from "./ChatSession.jsx";
-import { Citations, DigDeeper } from "./MessageExtras.jsx";
+import { Citations, DigDeeper, OfferWidget } from "./MessageExtras.jsx";
 import { showWidget } from "./showWidget.js";
 
 /**
@@ -46,7 +46,7 @@ export interface ChatColumnProps {
   /** Move to another tab, when the assistant is asked to. */
   readonly onSwitchDashboard?: (id: string) => void;
   /** Open a panel the assistant cannot fill in on the user's behalf. */
-  readonly onOpenPanel?: (panel: "connections" | "add-widget") => void;
+  readonly onOpenPanel?: (panel: "connections") => void;
   /**
    * Whether a widget is being built right now.
    *
@@ -54,6 +54,22 @@ export interface ChatColumnProps {
    * so it has to travel up rather than being decided in here.
    */
   readonly onBuildingChange?: (building: boolean) => void;
+  /**
+   * Something to say on the user's behalf, the moment the column opens.
+   *
+   * "Add a widget" is a button on the nav, and what it does is start the
+   * conversation that builds one — so it arrives here as an ordinary message
+   * rather than as a second way in that would have to be kept in step with
+   * the first. `DigDeeper` sends its own the same way.
+   *
+   * `pending` only says there is something to say; `takePending` claims it,
+   * and only the first claim gets the text. Clearing it on a later render was
+   * not enough — the chat store re-renders the column synchronously, so the
+   * sentence was still set when the effect ran again and one click became a
+   * stream of chat turns.
+   */
+  readonly pending?: string | null | undefined;
+  readonly takePending?: (() => string | null) | undefined;
 }
 
 /**
@@ -158,6 +174,8 @@ const ChatBody = ({
   onSwitchDashboard,
   onOpenPanel,
   onBuildingChange,
+  pending,
+  takePending,
 }: Omit<ChatColumnProps, "open">): JSX.Element => {
   const { sessionId, createSession } = useSession({ autoCreate: true, topic: "dashboard" });
   const freeBird = useFreeBird();
@@ -284,6 +302,30 @@ const ChatBody = ({
   const unavailable = chatAvailable === false;
   const keyless = hasModel === false;
   const chat = useChat();
+  const { send, streaming } = chat;
+
+  /*
+   * Said once, on the user's behalf, and then forgotten.
+   *
+   * Claimed from the shell rather than tracked with a local flag: the column
+   * is unmounted whenever the drawer closes, so a flag in here would let the
+   * same sentence be sent again the next time it opened. The claim empties the
+   * slot synchronously, so an effect run that still sees `pending` set sends
+   * nothing — which is what the previous version got wrong.
+   *
+   * Keyed on `send` and `streaming` rather than the whole `chat` object, which
+   * is a new object on every render and re-ran this constantly.
+   */
+  useEffect(() => {
+    /*
+     * Not before there is a conversation to say it in. The column mounts the
+     * moment the drawer opens and the session is created asynchronously, so
+     * sending on mount posts into nothing and the sentence is simply lost.
+     */
+    if (!pending || !sessionId || streaming) return;
+    const text = takePending?.() ?? null;
+    if (text) void send(text);
+  }, [pending, sessionId, streaming, send, takePending]);
   const actions = useActionState();
   /*
    * When a board is open the column renders inside its provider — via the
@@ -320,6 +362,8 @@ const ChatBody = ({
   const [startedHere, setStartedHere] = useState(false);
   /** The action the server is carrying out right now, if any. */
   const [running, setRunning] = useState<{ actionId: string; label?: string } | null>(null);
+  /** A different reading of the request, in the user's own words. */
+  const [otherReading, setOtherReading] = useState<string | null>(null);
 
   // Keep the newest message in view, including while a reply streams in.
   useEffect(() => {
@@ -352,13 +396,27 @@ const ChatBody = ({
 
         if (SETUP_ACTIONS.has(actionId)) {
           setSetupRevision((current) => current + 1);
-          if (actionId === "start_setup") setStartedHere(true);
+          if (actionId === "start_setup") {
+            setStartedHere(true);
+            /*
+             * The other reading of the same words, offered beside what was
+             * built rather than asked about first. Absent on almost every
+             * request, and it has to stay that way — an alternative on
+             * everything is a question on everything wearing different
+             * clothes.
+             */
+            const other = (event.result as { otherReading?: unknown } | null)?.otherReading;
+            setOtherReading(typeof other === "string" && other.trim() ? other.trim() : null);
+          }
           // The setup is over, so the next draft to appear is a different one
           // and has to earn its own answer to this question.
           if (actionId === "confirm_setup") {
             setStartedHere(false);
+            setOtherReading(null);
             onDashboardChanged();
           }
+          // Any other change to the setup has moved past what was first built.
+          if (actionId === "revise_setup") setOtherReading(null);
           return;
         }
         if (SPEC_ACTIONS.has(actionId)) {
@@ -402,9 +460,6 @@ const ChatBody = ({
         }
         if (actionId === "open_connections" || actionId === "read_connection") {
           onOpenPanel?.("connections");
-        }
-        if (actionId === "open_add_widget") {
-          onOpenPanel?.("add-widget");
         }
       },
       [setPreset, onDashboardChanged, onSwitchDashboard, onOpenPanel, dashboardId],
@@ -478,6 +533,7 @@ const ChatBody = ({
              */}
             <Citations message={message} />
             <DigDeeper message={message} onAsk={(text) => void chat.send(text)} />
+            <OfferWidget message={message} onAsk={(text) => void chat.send(text)} />
           </div>
         ))}
 
@@ -493,6 +549,57 @@ const ChatBody = ({
          * screen together saying different things.
          */}
         {chat.streaming && !chat.streamingText && <Thinking what={working} />}
+
+        {/*
+         * A question with the answers already written down.
+         *
+         * The turn has genuinely ended — nothing is streaming — so this is the
+         * last thing in the log and typing still works if none of the options
+         * fit. Without it the assistant's question still arrives as text, but
+         * the choices it had in mind do not, which is most of the point of
+         * asking a structured question rather than a prose one.
+         */}
+        {chat.pendingQuestion && !chat.streaming && (
+          <div className="dash-chat__msg" data-role="assistant" data-testid="chat-question">
+            {chat.pendingQuestion.question}
+            <div className="dash-row" style={{ flexWrap: "wrap", marginTop: 8 }}>
+              {chat.pendingQuestion.options.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className="dash-control"
+                  title={option.description ?? undefined}
+                  onClick={() => void chat.answerQuestion([option.value])}
+                  data-testid={`chat-answer-${option.value}`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/*
+         * The reading that was not chosen, as one click rather than a
+         * question. It sends an ordinary message, so switching goes through
+         * the same path as any other change of mind.
+         */}
+        {otherReading && !chat.streaming && (
+          <div className="dash-chat__coverage" data-testid="chat-other-reading">
+            <span className="dash-chat__coverage-note">or</span>
+            <button
+              type="button"
+              className="dash-chat__deeper"
+              data-testid="chat-switch-reading"
+              onClick={() => {
+                setOtherReading(null);
+                void chat.send(`Actually, show me ${otherReading} instead.`);
+              }}
+            >
+              {otherReading}
+            </button>
+          </div>
+        )}
 
         {/*
          * The guided setup, when one is running. It renders itself away when

@@ -140,7 +140,6 @@ const patchFor = (stepId: string, values: string[]): ConciergePatch => {
    * one option is what the widget already has. Keeping is a no-op, and
    * removing arrives as a skip, which the machine reads as "take it off".
    */
-  if (stepId === "choice") return { choice: values[0] ?? "" };
   if (stepId === "offer") return { offer: values[0] === "include" ? "include" : "skip" };
   if (stepId === "filter" || stepId.startsWith("series:")) return {};
   const single = values[0] ?? "";
@@ -161,6 +160,8 @@ const patchFor = (stepId: string, values: string[]): ConciergePatch => {
       return { drilldownFields: values };
     case "extras":
       return { extras: values };
+    case "filters":
+      return { filters: values };
     case "highlights":
       return { highlights: values };
     case "title":
@@ -176,7 +177,6 @@ const CONTROL_LABELS: Readonly<Record<string, string>> = {
   endpoint: "Data",
   join: "Joined with",
   component: "View",
-  choice: "Which one",
   measure: "Measuring",
   groupBy: "Grouped by",
   filter: "Only",
@@ -185,8 +185,19 @@ const CONTROL_LABELS: Readonly<Record<string, string>> = {
   drilldown: "On click",
   drilldownFields: "Record shows",
   extras: "Also showing",
+  filters: "Filter by",
   highlights: "Marks",
   title: "Name",
+  /*
+   * The brief's own controls, which name the same decisions the setup's do and
+   * are worded from the record type rather than from the endpoint.
+   */
+  view: "Shown as",
+  columns: "Showing",
+  sort: "Ordered by",
+  sortDir: "Direction",
+  linked: "Also reading",
+  alongside: "Beside",
 };
 
 /** The step's own id, with any part scope stripped off. */
@@ -215,7 +226,14 @@ const partSuffix = (stepId: string): string => {
 };
 
 const controlLabel = (control: ConciergeControl): string => {
-  const known = CONTROL_LABELS[bareStep(control.stepId)];
+  const bareId = bareStep(control.stepId);
+  const known =
+    CONTROL_LABELS[bareId] ??
+    /*
+     * A strip's starting values are one control per field, so the field is
+     * part of the name and no fixed map can hold them.
+     */
+    (bareId.startsWith("narrow:") ? `Starting on` : undefined);
   if (known) return known + partSuffix(control.stepId);
   // Every measurement drawn beside the first gets a row of its own, so one can
   // be taken off without starting the widget again.
@@ -252,20 +270,34 @@ const controlValue = (control: ConciergeControl): string => {
  * selection state below is per-question and carrying it across would tick a
  * field somebody never saw offered.
  */
-const Question = ({
+export const Question = ({
   step,
+  value,
   busy,
   onAnswer,
   onCancel,
 }: {
   step: ConciergeStep;
+  /**
+   * What this is already set to, when it is being changed rather than asked.
+   *
+   * Without it, re-opening a settled decision starts from the suggestion — so
+   * pressing Save having touched nothing would replace four chosen columns
+   * with the one the record type would have picked. A control that quietly
+   * discards what it was showing is worse than one that cannot be opened.
+   */
+  value?: readonly string[] | undefined;
   busy: boolean;
   onAnswer: (values: string[], skip: boolean) => void;
   onCancel?: (() => void) | undefined;
 }): JSX.Element => {
   const suggested = step.options.find((option) => option.recommended);
-  const [chosen, setChosen] = useState<string[]>(suggested ? [suggested.value] : []);
-  const [typed, setTyped] = useState(step.freeText ? (suggested?.value ?? "") : "");
+  const [chosen, setChosen] = useState<string[]>(() =>
+    value && value.length > 0 ? [...value] : suggested ? [suggested.value] : [],
+  );
+  const [typed, setTyped] = useState(
+    step.freeText ? (value?.[0] ?? suggested?.value ?? "") : "",
+  );
   const [filter, setFilter] = useState("");
   const [showAll, setShowAll] = useState(false);
   /*
@@ -462,7 +494,7 @@ const Question = ({
  * was would be a second place deciding which fields can be one, and the two
  * would drift; every option and its label came from the server.
  */
-const SettingsPanel = ({
+export const SettingsPanel = ({
   controls,
   busy,
   open,
@@ -596,7 +628,7 @@ const MOCKS: Record<string, JSX.Element> = {
  * putting them behind the same fold as eleven bindings made the common
  * adjustment the hardest one to find.
  */
-const ProminentSettings = ({
+export const ProminentSettings = ({
   controls,
   busy,
   onEdit,
@@ -678,6 +710,51 @@ const ArrangementChips = ({
     </section>
   );
 };
+
+/**
+ * The reading nobody took, offered back.
+ *
+ * "My tasks" can mean the records or a count of them, and both answer the one
+ * thing somebody said. Asking which would make every request an interrogation
+ * for a fork that is usually plain — so the assistant picks, builds, and puts
+ * the other reading here. Both came out of the same call that read the
+ * request, so taking this costs no second model call and no second wait.
+ *
+ * A chip rather than a question for the same reason the arrangements are
+ * chips: it is an offer, and an offer that is ignored should cost nothing.
+ */
+const ReadingChip = ({
+  label,
+  busy,
+  onTake,
+}: {
+  readonly label: string;
+  readonly busy: boolean;
+  readonly onTake: () => void;
+}): JSX.Element => (
+  <section className="dash-arrange" data-testid="concierge-reading">
+    <span className="dash-arrange__label">or did you mean</span>
+    <ul className="dash-arrange__list">
+      <li>
+        <button
+          type="button"
+          className="dash-arrange__chip"
+          disabled={busy}
+          data-testid="concierge-reading-take"
+          onClick={onTake}
+        >
+          <span className="dash-arrange__name">{label}</span>
+          {/*
+           * Said on the offer rather than discovered afterwards, the same rule
+           * the arrangements follow: this rebuilds the widget from the other
+           * reading, and it reads nothing new to do it.
+           */}
+          <span className="dash-arrange__cost">no extra requests</span>
+        </button>
+      </li>
+    </ul>
+  </section>
+);
 
 const CheckedPreview = ({
   dashboardId,
@@ -787,6 +864,26 @@ export const ConciergeCard = ({
     },
     [dashboardId],
   );
+
+  /**
+   * Take the other reading of the same request.
+   *
+   * Nothing is sent: the server holds the reading it offered. A body echoing
+   * it back would let a card left open through a reload apply a reading the
+   * draft has since replaced, which is the stale click the arrangement route
+   * refuses for the same reason.
+   */
+  const takeReading = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setState(await api.takeReading(dashboardId));
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }, [dashboardId]);
 
   const load = useCallback(async () => {
     try {
@@ -1001,13 +1098,23 @@ export const ConciergeCard = ({
        * The alternates, beside the thing itself.
        *
        * Never a question and never a gate: what is on screen is what happens
-       * if nobody touches these, which is the same rule `choiceBetween`
-       * follows. They appear only when there is genuinely more than one way to
-       * show what was asked for, so an ordinary one-widget build never sees
-       * them.
+       * if nobody touches these, which is the same rule the reading chip
+       * below follows. They appear only when there is genuinely more than one
+       * way to show what was asked for, so an ordinary one-widget build never
+       * sees them.
        */}
       {state.widget && (
         <ArrangementChips options={state.arrangements} busy={busy} onPick={pickArrangement} />
+      )}
+
+      {/*
+       * Under the preview, because it is about the thing being looked at:
+       * "this is what I built, and here is the other thing your words could
+       * have meant". Above the settings, because it replaces the widget rather
+       * than adjusting it.
+       */}
+      {state.widget && state.alternative && (
+        <ReadingChip label={state.alternative.label} busy={busy} onTake={takeReading} />
       )}
 
       {/*
@@ -1048,6 +1155,7 @@ export const ConciergeCard = ({
             // Anything not required can be turned off from its own control,
             // whether or not the wizard would have offered to skip it.
             step={openControl.required ? openControl : { ...openControl, skippable: true }}
+            value={openControl.value}
             busy={busy}
             onAnswer={(values, skip) => editControl(openControl.stepId, values, skip)}
             onCancel={() => setEditing(null)}

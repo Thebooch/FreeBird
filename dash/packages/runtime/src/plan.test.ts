@@ -1,4 +1,10 @@
-import { parseWidget } from "@freebirdai/dash-spec";
+import {
+  compileBrief,
+  entitySchema,
+  parseWidget,
+  resourceSchema,
+  type EntitySpec,
+} from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import { executeWidget } from "./execute.js";
 import { joinRows } from "./plan.js";
@@ -239,5 +245,133 @@ describe("an open component id", () => {
     expect(result.errors.join(" ")).toMatch(/no component named "piechart" is available/);
     // The rows survived — this is a rendering gap, not a data failure.
     expect(result.rows).toHaveLength(1);
+  });
+});
+
+/**
+ * The same two endpoints, written as a sentence instead of a plan.
+ *
+ * `compileBrief` is the only thing above this that emits a multi-source
+ * widget, and a spec that parses is not the same as one that runs: the join
+ * prefixes the far side's *top-level* keys, so a source that flattens its
+ * nested fields too late produces one prefixed column holding a record and a
+ * table of blanks. Executing it here is what catches that, and it is the same
+ * check the live pass does with real rows.
+ */
+describe("a join compiled from a brief", () => {
+  const task: EntitySpec = entitySchema.parse({
+    id: "task",
+    resource: "task",
+    name: { one: "Task", many: "Tasks" },
+    kind: "work",
+    identity: { field: "Id", observed: true },
+    display: { title: ["Title"] },
+    fields: [
+      { path: "Id", visibility: "hidden" },
+      { path: "Title", label: "Summary", visibility: "primary" },
+      { path: "VendorId", label: "Vendor", visibility: "detail", reference: { entity: "vendor" } },
+    ],
+  });
+
+  const vendor: EntitySpec = entitySchema.parse({
+    id: "vendor",
+    resource: "vendor",
+    name: { one: "Vendor", many: "Vendors" },
+    kind: "party",
+    identity: { field: "Id", observed: true },
+    display: { title: ["Name"] },
+    fields: [
+      { path: "Id", visibility: "hidden" },
+      { path: "Name", label: "Name", visibility: "primary" },
+      { path: "Phone", label: "Phone", visibility: "primary" },
+    ],
+  });
+
+  const resources = [
+    resourceSchema.parse({ id: "task", title: "Tasks", listOp: "tasks_list" }),
+    resourceSchema.parse({ id: "vendor", title: "Vendors", listOp: "vendors_list" }),
+  ];
+
+  const compiled = compileBrief({
+    brief: { entity: "task", intent: "records", alongside: { entity: "vendor" } },
+    entity: task,
+    resource: resources[0]!,
+    connection: "pm",
+    id: "tasks_with_vendor",
+    related: {
+      entities: [task, vendor],
+      resources,
+      ops: [
+        { id: "tasks_list", path: "/tasks" },
+        { id: "vendors_list", path: "/vendors" },
+      ],
+    },
+  });
+
+  it("runs, and puts the far record's fields on the row", () => {
+    const result = executeWidget(
+      compiled.widget!,
+      {
+        task: [
+          { Id: 1, Title: "Fix the boiler", VendorId: 9 },
+          { Id: 2, Title: "Repaint 2B", VendorId: 7 },
+        ],
+        vendor: [
+          { Id: 9, Name: "Acme Plumbing", Phone: "555-0101" },
+          { Id: 7, Name: "Bright Painters", Phone: "555-0102" },
+        ],
+      },
+      ctx(),
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.rows).toEqual([
+      {
+        Id: 1,
+        Title: "Fix the boiler",
+        VendorId: 9,
+        vendor_Id: 9,
+        vendor_Name: "Acme Plumbing",
+        vendor_Phone: "555-0101",
+      },
+      {
+        Id: 2,
+        Title: "Repaint 2B",
+        VendorId: 7,
+        vendor_Id: 7,
+        vendor_Name: "Bright Painters",
+        vendor_Phone: "555-0102",
+      },
+    ]);
+  });
+
+  it("binds every column it named, so the widget renders rather than warning", () => {
+    const result = executeWidget(
+      compiled.widget!,
+      {
+        task: [{ Id: 1, Title: "Fix the boiler", VendorId: 9 }],
+        vendor: [{ Id: 9, Name: "Acme Plumbing", Phone: "555-0101" }],
+      },
+      ctx(),
+    );
+    expect(result.binding?.errors ?? []).toEqual([]);
+    expect(result.binding?.warnings ?? []).toEqual([]);
+  });
+
+  it("keeps a row whose match is missing, rather than quietly dropping it", () => {
+    // A left join, deliberately: an inner one deletes the rows that matched
+    // nothing, and a widget quietly short of half its records says nothing
+    // about why.
+    const result = executeWidget(
+      compiled.widget!,
+      {
+        task: [{ Id: 3, Title: "Clear the gutters", VendorId: null }],
+        vendor: [{ Id: 9, Name: "Acme Plumbing", Phone: "555-0101" }],
+      },
+      ctx(),
+    );
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]).toMatchObject({ Title: "Clear the gutters", vendor_Name: null });
   });
 });

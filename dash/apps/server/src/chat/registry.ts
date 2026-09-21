@@ -1,4 +1,3 @@
-import type { AuthoredWidget } from "@freebirdai/dash-agent";
 import { conciergeActions, conciergeKnowledge, type ConciergeOps } from "./concierge-actions.js";
 import type {
   CapabilityReport,
@@ -91,8 +90,6 @@ export interface BuildChatRegistryInput {
    */
   readonly records?: string;
   readonly board: BoardOps;
-  /** Offers the chat may pick from when asked to add something. */
-  readonly suggestions?: readonly AuthoredWidget[];
   /** Every board, so "what tabs do I have?" is answerable. */
   readonly allDashboards?: ReadonlyArray<{ id: string; title: string }>;
   /** Every connection, so "what am I connected to?" is answerable. */
@@ -108,13 +105,6 @@ export interface BuildChatRegistryInput {
 }
 
 /* ── actions ──────────────────────────────────────────────────────────── */
-
-const addWidgetSchema = z.object({
-  widgetId: z
-    .string()
-    .min(1)
-    .describe("Id of a suggested widget to add. Must be one you were shown."),
-});
 
 const removeWidgetSchema = z.object({
   widgetId: z
@@ -243,13 +233,6 @@ const viewActions = (
     requiresConfirmation: "none",
     handler: async () => ({ opened: "connections" }),
   },
-  {
-    id: "open_add_widget",
-    description: "Open the Add-a-widget panel so the user can build one from a connection.",
-    schema: z.object({}),
-    requiresConfirmation: "none",
-    handler: async () => ({ opened: "add-widget" }),
-  },
 ];
 
 /**
@@ -264,52 +247,7 @@ const boardActions = (
   input: BuildChatRegistryInput,
   handles: readonly WidgetHandle[],
 ): ComponentDefinition["actions"] => {
-  const suggestionById = new Map(
-    (input.suggestions ?? []).map((offer) => [offer.id, offer]),
-  );
-
   return [
-    {
-      id: "add_widget",
-      description:
-        "Add one of the suggested widgets to the dashboard. Only ids you were shown are valid.",
-      schema: addWidgetSchema,
-      requiresConfirmation: "preview",
-      authorize: (args: { widgetId: string }) =>
-        suggestionById.has(args.widgetId) || {
-          ok: false as const,
-          reason: `"${args.widgetId}" is not one of the widgets offered for this dashboard.`,
-          status: 403,
-        },
-      readCurrent: () => ({
-        widgetCount: input.board.getDashboard()?.widgets.length ?? 0,
-      }),
-      handler: async (args: { widgetId: string }) => {
-        const offer = suggestionById.get(args.widgetId);
-        const current = input.board.getDashboard();
-        if (!offer || !current) throw new Error("that widget is no longer available");
-
-        /*
-         * Re-parse rather than trust the offer. It was built server-side and
-         * validated once, but this is the step that writes a file — a spec
-         * that cannot execute must never reach disk.
-         */
-        const parsed = parseWidget(offer.widget);
-        if (!parsed.ok || !parsed.value) {
-          throw new Error(
-            `that widget no longer validates: ${parsed.errors.join("; ") || "unknown"}`,
-          );
-        }
-        const widget: WidgetSpec = parsed.value;
-        if (current.widgets.some((existing) => existing.id === widget.id)) {
-          return { added: false, reason: "already on the dashboard", widgetId: widget.id };
-        }
-
-        input.board.putDashboard({ ...current, widgets: [...current.widgets, widget] });
-        input.board.onChanged?.();
-        return { added: true, widgetId: widget.id, title: widget.title };
-      },
-    },
     {
       /*
        * Also handle-addressed, and deliberately so: refusing to remove a
@@ -722,13 +660,11 @@ const knowledgeFor = (
  * Left implicit, this goes wrong in a specific way: per-widget knowledge tells
  * the model about a widget it is *already looking at*, but never gives it the
  * roster — so asked "what is on this dashboard?" it hedges, and asked for a
- * widget by title it cannot match one. And suggestions were reachable only as
- * an authorization allowlist, meaning the model could be told "no" for naming
- * an id it was never shown in the first place.
+ * widget by title it cannot match one.
  *
- * So both are stated outright:
- *   - what exists on the board right now, addressable by id and by title
- *   - what does not exist yet but can be created, with the id `add_widget` wants
+ * So what exists is stated outright, addressable by id and by title — and so
+ * is the fact that nothing else is waiting to be added, because an assistant
+ * left to guess at that invents ids.
  */
 const inventoryKnowledge = (
   input: BuildChatRegistryInput,
@@ -784,71 +720,17 @@ const inventoryKnowledge = (
   }
 
   /*
-   * Only what is not already on the board. Offering to create a widget the
-   * user is looking at is the kind of answer that destroys trust in the rest.
+   * There is no roster of ready-made widgets any more, and saying so is the
+   * point: an assistant that has been shown a board of pre-authored widgets
+   * reaches for the nearest one instead of answering what was asked. Now the
+   * only way to make one is to build exactly what the user described.
    */
-  const present = new Set(widgets.map((widget) => widget.id));
-  const creatable = (input.suggestions ?? []).filter((offer) => !present.has(offer.id));
-
-  if (creatable.length === 0) {
-    facts.push({
-      text:
-        "NOT YET CREATED — there are no ready-made widgets to add right now. " +
-        "If the user wants something new, say what it would need (usually reading " +
-        "the connection first) rather than inventing an id.",
-    });
-    return facts;
-  }
-
-  /*
-   * Which connection each offer draws on, and this board's own connections
-   * first.
-   *
-   * Suggestions are generated from every connection that has been read, so a
-   * property-management dashboard was being offered widgets about blog posts
-   * from an unrelated API. Mixing sources on one board is a thing to want
-   * eventually, but an offer whose origin is unstated just reads as nonsense.
-   */
-  const connectionOf = (offer: AuthoredWidget): string =>
-    widgetSources(offer.widget)[0]?.connection ?? "unknown";
-
-  const own = new Set(
-    widgets.flatMap((widget) => widgetSources(widget).map((source) => source.connection)),
-  );
-  const ranked = [...creatable].sort(
-    (a, b) => Number(own.has(connectionOf(b))) - Number(own.has(connectionOf(a))),
-  );
-  const shown = ranked.slice(0, 20);
-  const fromOwn = ranked.filter((offer) => own.has(connectionOf(offer)));
-
   facts.push({
     text:
-      `NOT YET CREATED — ${creatable.length} widget(s) can be added. These do NOT exist ` +
-      "yet; adding one uses `add_widget` with the id given here, and the user sees a " +
-      "confirmation card before anything changes. Each is labelled with the connection " +
-      "it reads from — prefer ones matching this dashboard's own connections " +
-      `(${own.size > 0 ? [...own].join(", ") : "none yet"}): ` +
-      shown
-        .map((offer) => `id: ${offer.id} [${connectionOf(offer)}] — ${offer.headline}`)
-        .join(" | ") +
-      (creatable.length > shown.length ? ` (and ${creatable.length - shown.length} more)` : ""),
-  });
-
-  if (fromOwn.length === 0 && own.size > 0) {
-    facts.push({
-      text:
-        `None of those come from this dashboard's own connection(s) (${[...own].join(", ")}). ` +
-        "To get suggestions for those, the connection needs reading first — that is the " +
-        '"Read" step in Connections, and it makes real requests to the API.',
-    });
-  }
-
-  facts.push({
-    text:
-      "Never pass an id to `add_widget` that is not in the NOT YET CREATED list, and " +
-      "never claim a widget exists unless it is in the WIDGETS list. " +
-      "And do not stretch one of these to fit a request it does not match — when the user " +
-      "described what they want, `start_setup` builds exactly that and shows it to them.",
+      "There are no ready-made widgets to add. Never claim a widget exists unless it is " +
+      "in the WIDGETS list. When the user describes something they want, `start_setup` " +
+      "builds exactly that from the record types and shows it to them before anything " +
+      "is saved.",
   });
   return facts;
 };
@@ -909,11 +791,12 @@ const workspaceKnowledge = (input: BuildChatRegistryInput): Array<{ text: string
   if (unread.length > 0) {
     facts.push({
       text:
-        `Reading is what produces widget suggestions, so ${unread
+        `Nothing has been read from ${unread
           .map((connection) => `"${connection.title}"`)
-          .join(", ")} ` +
-        "has nothing to offer yet. That is the reason, and it is worth saying rather than " +
-        "guessing around — `read_connection` starts it, and the user approves the cost first.",
+          .join(", ")} yet, ` +
+        "so what its records are is still unknown. That is the reason, and it is worth " +
+        "saying rather than guessing around — `read_connection` starts it, and the user " +
+        "approves the cost first.",
     });
   }
   return facts;

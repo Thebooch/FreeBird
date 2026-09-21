@@ -10,7 +10,13 @@ import {
   truncateToBucket,
 } from "@freebirdai/dash-expr";
 import type { Aggregation, GroupStep, PipelineStep, ResolvedParams } from "@freebirdai/dash-spec";
-import { applyCoercion, interpolate, parseAggregation, resolveGrain } from "@freebirdai/dash-spec";
+import {
+  ALL_ROWS,
+  applyCoercion,
+  interpolate,
+  parseAggregation,
+  resolveGrain,
+} from "@freebirdai/dash-spec";
 import { inferColumns } from "./columns.js";
 import type {
   CompiledExpression,
@@ -196,7 +202,28 @@ const runGroup = (
     return out;
   };
 
-  let result = [...groups.values()].map((group) => build(group.key, group.rows));
+  /*
+   * Totalling everything over nothing is a row of zeros, not no row.
+   *
+   * "All of them" is expressed as grouping on the constant `ALL_ROWS`, so a
+   * total looks like any other grouping — and with no rows there is no
+   * constant to group on and the answer disappeared entirely. With a *real*
+   * key that is correct: no rows honestly means no groups, and inventing one
+   * would put a region on screen the data never mentioned. Here the question
+   * is only "how many are there?", and over an empty collection that is zero,
+   * which is a number somebody can read. `SELECT COUNT(*)` on an empty table
+   * returns one row for the same reason.
+   *
+   * It mattered on a record page: the tile counting a vendor's notes read
+   * "Nothing here." instead of "0" — less informative than the number, and it
+   * reads like a failure to load rather than a count that came back empty.
+   */
+  const emptyTotals =
+    groups.size === 0 && keyDefs.length === 1 && keyDefs[0]?.field === ALL_ROWS;
+
+  let result = emptyTotals
+    ? [build([], [])]
+    : [...groups.values()].map((group) => build(group.key, group.rows));
 
   // Grouped output is always ordered by its key. A time series that comes back
   // in hash order looks like a bug even when the numbers are right; an

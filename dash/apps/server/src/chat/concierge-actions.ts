@@ -139,6 +139,20 @@ export interface ConciergeOps {
   readonly propose?: (intent: string) => Promise<{
     readonly patch: DraftPatch;
     readonly reason: string;
+    /**
+     * A genuinely different reading of the same words, in the user's language.
+     *
+     * Offered rather than asked about: blocking on "did you mean the records
+     * or a count of them?" makes every request an interrogation, and the
+     * answer is usually plain. The other reading travels as a phrase the user
+     * can click, which is faster than a question and costs nothing when it is
+     * ignored.
+     *
+     * The brief travels with the phrase. A label alone reaches the assistant's
+     * reply and nothing else — the reading it names has to be rebuildable, or
+     * "one click" is a sentence rather than a click.
+     */
+    readonly alternative?: ConciergeDraft["alternative"];
     readonly notes: readonly string[];
     readonly ambiguities: readonly {
       readonly field: string;
@@ -223,6 +237,16 @@ const proposalFields = {
         "separate setting.",
     ),
   extras: z.array(z.string()).optional().describe("Extra field names to show alongside."),
+  filters: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Fields the reader can filter the finished widget by — a strip of values above the " +
+        'rows, which is what somebody means by "tasks I can filter by category". Use a ' +
+        "category, status or type field from that endpoint's FIELDS list, at most three. " +
+        "This shows the records themselves and does not group or count anything, so it is " +
+        "never a substitute for a chart and a chart is never a substitute for it.",
+    ),
   controls: z
     .array(z.string())
     .optional()
@@ -278,13 +302,25 @@ const proposalFields = {
  * is in the knowledge whether or not a setup is running. Everything after is
  * `revise_setup`, by which point the richer per-endpoint material is there.
  */
+/**
+ * Starting a widget: what was asked for, and nothing about how to build it.
+ *
+ * Deliberately narrower than `revise_setup`. Which records, which view and
+ * which field fills which role are worked out from the record types — so
+ * offering them here would be offering the model a second way to decide them,
+ * from an endpoint list, which is the thing this path exists to replace.
+ * Adjusting any of it afterwards is an ordinary revision.
+ */
 const startSetupSchema = z.object({
   intent: z
     .string()
     .min(1)
     .max(2_000)
     .describe("What the user said they want to see, in their own words."),
-  ...proposalFields,
+  connection: proposalFields.connection,
+  inputs: proposalFields.inputs,
+  narrowTo: proposalFields.narrowTo,
+  interleave: proposalFields.interleave,
 });
 
 const answerStepSchema = z.object({
@@ -335,6 +371,7 @@ const patchFrom = (args: {
   groupBy?: string;
   roles?: Array<{ role: string; fields: string[] }>;
   extras?: string[];
+  filters?: string[];
   controls?: string[];
   highlights?: string[];
   drilldown?: string;
@@ -370,6 +407,7 @@ const patchFrom = (args: {
     ? { roles: Object.fromEntries(args.roles.map((entry) => [entry.role, entry.fields])) }
     : {}),
   ...(args.controls ? { controls: args.controls } : {}),
+  ...(args.filters ? { filters: args.filters } : {}),
   ...(args.drilldown ? { drilldown: args.drilldown } : {}),
   ...(args.extras ? { extras: args.extras } : {}),
   ...(args.highlights ? { highlights: args.highlights } : {}),
@@ -601,16 +639,35 @@ export const conciergeActions = (ops: ConciergeOps): ComponentDefinition["action
       const fresh = newDraft(draftId(), intent, "assisted");
 
       /*
-       * The model's own proposal wins where it made one.
+       * The brief decides, always.
        *
-       * It no longer has the catalogue to propose *from*, so in practice this
-       * is the older path and the offline tests — but a model that names an
-       * endpoint it is sure of should not have that thrown away and re-decided
-       * at the cost of two more calls.
+       * This used to hand the decision to the chat model whenever it named an
+       * endpoint — on the reasoning that a model sure of one should not pay
+       * for it to be re-decided. What that actually bought was the model
+       * designing widgets from a list of endpoint titles again, which is the
+       * job this whole path replaced. Asked for "tasks alongside the property
+       * each one is at", it supplied an endpoint and its own columns, the
+       * brief never ran, no join was built, and the reply said the table
+       * joined them.
+       *
+       * So `start_setup` no longer takes an endpoint, a view or a role. What
+       * it takes is what somebody said, and everything else is worked out from
+       * the record types.
        */
       const explicit = patchFrom(args);
-      const derived = !explicit.endpoint && ops.propose ? await ops.propose(intent) : null;
-      const patch = derived ? { ...derived.patch, ...explicit } : explicit;
+      const derived = ops.propose ? await ops.propose(intent) : null;
+      const patch = derived
+        ? {
+            ...derived.patch,
+            ...explicit,
+            /*
+             * Onto the draft, not only into the reply. The label was reaching
+             * the assistant and stopping there, so the reading nobody took was
+             * something the reply could mention and nothing could act on.
+             */
+            ...(derived.alternative ? { alternative: derived.alternative } : {}),
+          }
+        : explicit;
 
       const result = revise(fresh, patch, ops.context);
 
@@ -629,6 +686,7 @@ export const conciergeActions = (ops: ConciergeOps): ComponentDefinition["action
         rejected: rejectionsFor(result.rejected),
         ...(narrowed?.found ? { narrowing: narrowed.found } : {}),
         ...(derived?.reason ? { picked: derived.reason } : {}),
+        ...(derived?.alternative ? { otherReading: derived.alternative.label } : {}),
         ...(derived && derived.notes.length > 0
           ? {
               notes: derived.notes,

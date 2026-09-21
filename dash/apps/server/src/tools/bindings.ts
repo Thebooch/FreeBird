@@ -43,20 +43,34 @@ export interface BindingsInput {
  */
 const handles = (
   entries: readonly { resource: string; connection: string }[],
+  records?: ConciergeContext["records"],
 ): Map<string, string> => {
+  /*
+   * The record type's own name where one exists, and the resource id only
+   * where nothing has been described.
+   *
+   * A resource id is read off a URL, so an API serving properties at
+   * `/v1/rentals` gets `rental` and its second units collection gets `unit-2`.
+   * Those are honest internal handles and poor names, and the assistant
+   * addresses records by them — which is how asking about "properties" came to
+   * be answered with "there is no handle named property" on an API that
+   * plainly has them.
+   */
+  const nameOf = (entry: { resource: string; connection: string }): string =>
+    records?.[entry.connection]?.[entry.resource]?.id ?? entry.resource;
+
   const seen = new Map<string, Set<string>>();
   for (const entry of entries) {
-    const owners = seen.get(entry.resource) ?? new Set<string>();
+    const name = nameOf(entry);
+    const owners = seen.get(name) ?? new Set<string>();
     owners.add(entry.connection);
-    seen.set(entry.resource, owners);
+    seen.set(name, owners);
   }
   const out = new Map<string, string>();
   for (const entry of entries) {
-    const shared = (seen.get(entry.resource)?.size ?? 0) > 1;
-    out.set(
-      `${entry.connection}|${entry.resource}`,
-      shared ? `${entry.resource}--${entry.connection}` : entry.resource,
-    );
+    const name = nameOf(entry);
+    const shared = (seen.get(name)?.size ?? 0) > 1;
+    out.set(`${entry.connection}|${entry.resource}`, shared ? `${name}--${entry.connection}` : name);
   }
   return out;
 };
@@ -101,6 +115,7 @@ export const readBindings = (input: BindingsInput): ToolBinding[] => {
 
   const named = handles(
     offers.map((entry) => ({ resource: entry.offer.resource, connection: entry.list.connection })),
+    context.records,
   );
 
   const seen = new Set<string>();
@@ -121,7 +136,11 @@ export const readBindings = (input: BindingsInput): ToolBinding[] => {
       resource: offer.resource,
       title: offer.title,
       op: offer.detailOp,
-      describes: list.description ?? list.path ?? "",
+      describes:
+        context.records?.[list.connection]?.[offer.resource]?.description ??
+        list.description ??
+        list.path ??
+        "",
       idParam: offer.detailParam,
       idField: offer.idField,
       listOp: offer.listOp,
@@ -172,6 +191,7 @@ export const queryBindings = (input: BindingsInput): ToolBinding[] => {
 
   const named = handles(
     usable.map((op) => ({ resource: resourceOf.get(op.id) ?? op.id, connection: op.connection })),
+    context.records,
   );
 
   const seen = new Set<string>();
@@ -211,7 +231,11 @@ export const queryBindings = (input: BindingsInput): ToolBinding[] => {
       resource,
       title: op.title,
       op: op.id,
-      describes: op.description ?? op.path ?? "",
+      describes:
+        context.records?.[op.connection]?.[resourceOf.get(op.id) ?? ""]?.description ??
+        op.description ??
+        op.path ??
+        "",
       ...(search ? { search: search.name } : {}),
       ...(start ? { range: { start: start.name, ...(end ? { end: end.name } : {}) } } : {}),
       ...(sort ? { sort: sort.name } : {}),
@@ -232,6 +256,9 @@ export const bindingsFor = (input: BindingsInput): ToolBinding[] => {
     ]);
   const names = handles(
     bindings.map((binding) => ({ connection: binding.connection, resource: binding.resource })),
+    // The top-level context holds the naming for every connection; the
+    // per-connection ones below were split off an op index and do not.
+    input.context.records,
   );
   return bindings.map((binding) => ({
     ...binding,

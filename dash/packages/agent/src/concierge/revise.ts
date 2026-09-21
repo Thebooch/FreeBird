@@ -1,10 +1,11 @@
 import type { WidgetShape, Coercion, FormatSpec } from "@freebirdai/dash-spec";
 import { shapeProblems } from "@freebirdai/dash-spec";
-import type { ChoiceDraft, ConciergeDraft } from "./draft.js";
+import type { ConciergeDraft } from "./draft.js";
 import {
   MAX_PARTS,
   ROLE_STEP,
   addPart,
+  newDraft,
   partCount,
   partStep,
   partView,
@@ -45,12 +46,41 @@ export interface DraftPatch {
   readonly coercions?: Readonly<Record<string, Coercion>> | undefined;
   readonly format?: Readonly<Record<string, FormatSpec>> | undefined;
   readonly connection?: string | undefined;
+  /** The record type this widget is about, where it was decided from one. */
+  readonly entity?: string | undefined;
+  /**
+   * The request it was compiled from, for a patch that came from one.
+   *
+   * Carried through to the widget so it stays editable afterwards. Absent on a
+   * patch written by hand or by the chat's own tool, and its absence is what
+   * tells `revise` to drop whatever brief the draft was holding.
+   *
+   * Typed as the draft holds it — the parsed shape rather than the compiler's
+   * readonly view of it, since this is on its way *into* storage.
+   */
+  readonly brief?: ConciergeDraft["brief"] | undefined;
+  /**
+   * The other reading of the same words, offered rather than asked about.
+   *
+   * Written once, by the pass that wrote the brief — the two readings come out
+   * of one model call, which is what lets the question go unasked without the
+   * reading nobody took becoming unreachable.
+   */
+  readonly alternative?: ConciergeDraft["alternative"] | undefined;
   readonly endpoint?: string | undefined;
   readonly join?: string | undefined;
   readonly component?: string | undefined;
   /** role name → the field(s) bound to it. */
   readonly roles?: Readonly<Record<string, readonly string[]>> | undefined;
   readonly controls?: readonly string[] | undefined;
+  /**
+   * Fields the reader can filter the finished widget by.
+   *
+   * A strip of values above the rows, never a pipeline filter: this narrows
+   * what somebody is looking at and can be put back, where `shape.filter`
+   * narrows what the widget is. "Tasks I can filter by category" is this one.
+   */
+  readonly filters?: readonly string[] | undefined;
   /**
    * What the widget counts, as the answer the machine offers: `count:` for the
    * records themselves, or `<aggregation>:<field>` for anything else.
@@ -72,24 +102,6 @@ export interface DraftPatch {
    * That guard is right; this is simply not that kind of question.
    */
   readonly offer?: string | undefined;
-  /**
-   * Which of two readings of the request was meant, as an endpoint id.
-   *
-   * Answered through a patch like everything else on the card, rather than
-   * through the answer route — by the time somebody reads the two options the
-   * widget usually already builds, and that route only accepts an answer to
-   * the question currently blocking.
-   */
-  readonly choice?: string | undefined;
-  /**
-   * Two readings of the request, to be put to the user.
-   *
-   * The same distinction `offerSeries` draws against `offer`: one proposes
-   * something for somebody to decide, the other is the decision. Collapsing
-   * them into one field would make "here are two options" and "I pick this
-   * one" the same message.
-   */
-  readonly choiceBetween?: ChoiceDraft | undefined;
   readonly drilldown?: string | undefined;
   readonly drilldownFields?: readonly string[] | undefined;
   readonly extras?: readonly string[] | undefined;
@@ -296,12 +308,12 @@ const ORDER = [
   "inputs",
   "join",
   "component",
-  "choice",
   "measure",
   "groupBy",
   "offer",
   "roles",
   "controls",
+  "filters",
   "drilldown",
   "drilldownFields",
   "extras",
@@ -334,8 +346,6 @@ const answersFor = (
       return patch.groupBy ? [{ stepId: "groupBy", values: [patch.groupBy] }] : [];
     case "offer":
       return patch.offer ? [{ stepId: "offer", values: [patch.offer] }] : [];
-    case "choice":
-      return patch.choice ? [{ stepId: "choice", values: [patch.choice] }] : [];
     case "roles":
       return Object.entries(patch.roles ?? {}).map(([role, fields]) => ({
         stepId: `${ROLE_STEP}${role}`,
@@ -343,6 +353,8 @@ const answersFor = (
       }));
     case "controls":
       return patch.controls ? [{ stepId: "options", values: patch.controls }] : [];
+    case "filters":
+      return patch.filters ? [{ stepId: "filters", values: patch.filters }] : [];
     case "drilldown":
       return patch.drilldown ? [{ stepId: "drilldown", values: [patch.drilldown] }] : [];
     case "drilldownFields":
@@ -376,6 +388,51 @@ const reviseOne = (
   // Recorded before anything can be rejected: who proposed this is true even
   // if half of what they proposed turns out not to fit.
   if (patch.model) draft = { ...draft, model: patch.model };
+
+  /*
+   * Set directly rather than answered as a step, because it is not a question.
+   * Nobody picks a record type from a list here — it was already decided, by
+   * the brief, before this patch was written — and the step machine exists to
+   * ask things.
+   */
+  if (patch.entity) draft = { ...draft, entity: patch.entity };
+  if (patch.brief) draft = { ...draft, brief: patch.brief };
+  /*
+   * The other reading, kept until somebody takes it or the request changes.
+   *
+   * Set only when a patch carries one, so an ordinary revise — a column, a
+   * sort — leaves it where it is: those adjust the reading that was taken and
+   * say nothing about the one that was not.
+   */
+  if (patch.alternative) draft = { ...draft, alternative: patch.alternative };
+
+  /*
+   * A brief that no longer describes the widget beside it is dropped.
+   *
+   * The brief is what the settings panel reads, changes and compiles again —
+   * so one left standing after an answer changed a column, a view or a filter
+   * would make the next edit quietly undo that answer. Keeping a stale brief
+   * is the silent wrongness; dropping it costs the panel's richer controls and
+   * falls back to the ones that describe how a widget looks, which is exactly
+   * what a widget built before briefs existed already gets.
+   *
+   * A patch carrying its own brief has just said what the widget is, so it is
+   * applied above and this cannot fire for it.
+   */
+  const REDESCRIBES = [
+    "component",
+    "roles",
+    "groupBy",
+    "measure",
+    "filters",
+    "extras",
+    "title",
+    "endpoint",
+    "connection",
+  ] as const;
+  if (!patch.brief && REDESCRIBES.some((key) => patch[key] !== undefined)) {
+    draft = { ...draft, brief: undefined };
+  }
 
   /*
    * The measurement lands first, and that ordering is load-bearing.
@@ -545,15 +602,6 @@ const reviseOne = (
     const outcome = applyNarrow(draft, patch.narrowWith, context);
     if (outcome.rejection) rejected.push(outcome.rejection);
     else draft = outcome.draft;
-  }
-
-  if (patch.choiceBetween) {
-    /*
-     * Held rather than applied. Every option was prepared by the caller, which
-     * has the shapes; nothing here has to re-derive one, and nothing is
-     * decided until somebody answers.
-     */
-    draft = { ...draft, choice: patch.choiceBetween };
   }
 
   if (patch.offerSeries) {
@@ -1050,4 +1098,49 @@ const applyOpenJoin = (
       ),
     },
   };
+};
+
+/**
+ * Take the other reading of the same request.
+ *
+ * A reading is not an adjustment. "My tasks" read as a count of them by status
+ * shares no endpoint binding, no view and no role with the same words read as a
+ * list — so this rebuilds rather than merges: merging would leave the columns
+ * of a table bound inside a chart, which is the shape `revise` rejects field by
+ * field and reports as eight rejections rather than one swap.
+ *
+ * The sitting survives. `id`, `intent`, `mode` and `startedAt` carry over for
+ * the reason answering the connection step carries them: this is one decision
+ * inside a setup somebody is already in, and treating it as a new setup would
+ * ambush them with the resume question mid-conversation.
+ *
+ * The reading being left becomes the one on offer, so the chip goes both ways.
+ * When nothing recorded what the current widget was asked for — a brief dropped
+ * because an answer redescribed the widget — there is no way back, and saying
+ * so by leaving the offer off is better than a chip that rebuilds something
+ * nobody asked for.
+ */
+export const takeReading = (
+  draft: ConciergeDraft,
+  reading: { readonly label: string; readonly patch: DraftPatch },
+  context: ConciergeContext,
+): ReviseResult => {
+  const previous = draft.brief
+    ? {
+        label: draft.brief.title ?? draft.intent ?? "the first reading",
+        brief: draft.brief,
+      }
+    : undefined;
+
+  const fresh: ConciergeDraft = {
+    ...newDraft(draft.id, draft.intent, draft.mode),
+    ...(draft.startedAt ? { startedAt: draft.startedAt } : {}),
+    ...(draft.model ? { model: draft.model } : {}),
+    ...(draft.connection ? { connection: draft.connection } : {}),
+    // The endpoint may well change; what somebody typed into a required input
+    // is theirs either way, and asking for it twice is asking it twice.
+    inputs: draft.inputs,
+  };
+
+  return revise(fresh, { ...reading.patch, ...(previous ? { alternative: previous } : {}) }, context);
 };

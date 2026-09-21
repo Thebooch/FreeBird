@@ -102,6 +102,12 @@ describe("the tool schema stays flat", () => {
     expect(SYSTEM_PROMPT).toMatch(/DO NOT GUESS/);
     expect(SYSTEM_PROMPT).toMatch(/100x/);
   });
+
+  it("tells the model that a reader's filter is not a grouping", () => {
+    // The distinction the bar-chart-instead-of-a-list failure turned on.
+    expect(SYSTEM_PROMPT).toMatch(/Grouping is\s+for counting/);
+    expect(proposalSchema.shape.filters).toBeDefined();
+  });
 });
 
 const revenueProposal = {
@@ -324,6 +330,71 @@ describe("mapProposal", () => {
     });
     expect(widget).toBeNull();
     expect(errors[0]).toMatch(/needs a time field/);
+  });
+
+  /*
+   * The reader's own filter, which had no vocabulary at all.
+   *
+   * Asked for "tasks with a filter by category", the only thing a proposal
+   * could do with a field was group by it — so the answer came back as a chart
+   * of counts, with the records nobody could see.
+   */
+  it("gives the reader a filter strip when one was asked for", () => {
+    const { widget, errors } = map({
+      title: "Charges",
+      component: "table",
+      rowsPath: "$.data",
+      columns: ["id", "amount", "status"],
+      filters: ["status", "plan"],
+    });
+    expect(errors).toEqual([]);
+    expect(widget?.facets.map((facet) => facet.field)).toEqual(["status", "plan"]);
+    // The rows stay rows. A strip narrows what is shown; it does not aggregate.
+    expect(widget?.pipeline.some((step) => step.op === "group")).toBe(false);
+  });
+
+  it("flattens a nested filter into the column its derive produces", () => {
+    // `customer.email` is not a column until a derive step makes one, and a
+    // facet naming the dotted path would bind to nothing and draw no strip.
+    // Its cardinality is the renderer's problem, not this function's.
+    const { widget } = map({
+      title: "Charges",
+      component: "table",
+      rowsPath: "$.data",
+      columns: ["id"],
+      filters: ["customer.email"],
+    });
+    expect(widget?.facets.map((facet) => facet.field)).toEqual(["customer_email"]);
+    const derive = widget?.pipeline.find((step) => step.op === "derive");
+    expect(derive && "fields" in derive ? derive.fields : {}).toMatchObject({
+      customer_email: "customer.email",
+    });
+  });
+
+  it("refuses a filter strip over a chart, where there are no records to narrow", () => {
+    const { widget } = map({
+      title: "By status",
+      component: "bar",
+      rowsPath: "$.data",
+      categoryField: "status",
+      aggregation: "count",
+      filters: ["plan"],
+    });
+    expect(widget?.facets).toEqual([]);
+  });
+
+  it("drops a filter on a field the rows do not carry", () => {
+    const { widget, errors } = map({
+      title: "Charges",
+      component: "table",
+      rowsPath: "$.data",
+      columns: ["id"],
+      filters: ["invented"],
+    });
+    // Chrome, so it costs the strip and nothing else: the widget is exactly
+    // what it would have been without the filter.
+    expect(errors).toEqual([]);
+    expect(widget?.facets).toEqual([]);
   });
 
   it("totals many rows for a stat by grouping on a constant", () => {

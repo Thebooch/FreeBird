@@ -117,6 +117,28 @@ export class AdapterError extends Error {
   }
 }
 
+/**
+ * `Retry-After` as milliseconds from now, or null when there is nothing to go on.
+ *
+ * Beside `AdapterError.retryAfter` because that is where the verbatim header
+ * is defined, and every layer that wants to *act* on it needs this same
+ * reading: the server to set a cooldown, the browser to count a tile down.
+ * Two implementations would disagree on the date form — and a date parsed as a
+ * number comes out `NaN`, which silently disables the back-off rather than
+ * failing loudly.
+ */
+export const parseRetryAfter = (value: string | undefined, now: number): number | null => {
+  if (!value) return null;
+
+  const seconds = Number(value.trim());
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+
+  // The other legal form is an HTTP date.
+  const at = Date.parse(value);
+  if (Number.isNaN(at)) return null;
+  return Math.max(0, at - now);
+};
+
 export const emptyMeta = (url: string, now: number): FetchMeta => ({
   url,
   status: 200,

@@ -1,4 +1,10 @@
-import { widgetShapeSchema, coercionSchema, formatSchema } from "@freebirdai/dash-spec";
+import {
+  FACET_MAX_PER_WIDGET,
+  widgetBriefSchema,
+  widgetShapeSchema,
+  coercionSchema,
+  formatSchema,
+} from "@freebirdai/dash-spec";
 import { z } from "zod";
 
 /**
@@ -136,54 +142,6 @@ export const seriesDraftSchema = z.object({
 export type SeriesDraft = z.infer<typeof seriesDraftSchema>;
 
 /**
- * Two readings of the same request, put to the person who made it.
- *
- * The pick is a single required id, so a model looking at two defensible
- * readings had to commit to one and had no way to say the other was there.
- * That is right when both would produce the same answer and wrong when they
- * would not: counting the things somebody submitted and counting the people
- * who submitted them are different numbers, and "they can change it in the
- * settings" only helps somebody who already noticed it was wrong.
- *
- * Deliberately rare. A question asked on every build is the endpoint list this
- * whole flow exists to replace, so the model is told to commit unless the two
- * readings genuinely answer different questions — and one option is always the
- * one already applied, so the widget on screen is what happens if nobody
- * answers.
- *
- * Each option is prepared in full at proposal time, while the shapes are in
- * hand. Answering then swaps in something ready rather than re-deriving a time
- * field for an endpoint the machine would have to go and look up.
- */
-export const choiceDraftSchema = z.object({
-  /** Which pick this is a choice about. */
-  role: z.enum(["primary", "secondary"]),
-  options: z
-    .array(
-      z.object({
-        op: z.string().min(1),
-        connection: z.string().min(1).optional(),
-        value: z.string().min(1).optional(),
-        /** The endpoint's own title, for the option's heading. */
-        label: z.string().min(1).max(120),
-        /**
-         * What these records are, in the model's words.
-         *
-         * The one thing no schema can derive: only the model can say "the
-         * applications people submitted" against "the people who applied".
-         */
-        whatItIs: z.string().min(1).max(200),
-        /** Prepared side, for a choice about the second endpoint. */
-        series: seriesDraftSchema.optional(),
-      }),
-    )
-    .min(2)
-    .max(3),
-});
-
-export type ChoiceDraft = z.infer<typeof choiceDraftSchema>;
-
-/**
  * A narrowing to a set of values a person confirmed.
  *
  * Held on the draft rather than applied straight to a widget so it shows up as
@@ -318,6 +276,35 @@ export const MAX_PARTS = 4;
  * nothing about what the properties still need.
  */
 export const draftPartSchema = z.object({
+  /**
+   * The request this widget was compiled from, where one was.
+   *
+   * A part, not a setup: two widgets in one setup answer two different
+   * sentences, and carrying one brief for both would make the second claim to
+   * have been asked for something it was not. `PART_KEYS` is read off this
+   * schema, so putting it here is the whole of what makes `partView` and
+   * `withPart` carry it correctly.
+   *
+   * Dropped by `revise` whenever an answer changes something the brief also
+   * describes. A brief that no longer matches the widget beside it is worse
+   * than none: the settings panel would recompile from it and silently undo
+   * the change somebody just made.
+   */
+  brief: widgetBriefSchema.optional(),
+  /**
+   * The record type this widget is about — a fact about *this* widget.
+   *
+   * It lived only on the setup, which was harmless while a setup meant one
+   * widget and wrong the moment it did not: `PART_KEYS` is read off this
+   * schema, so a field missing from it is never cleared by `partView` and
+   * every part inherits the first one's value. Two record types in one setup
+   * would both have been stamped with the first — the wrong record page on a
+   * row click, and the wrong record resolved behind every reference.
+   *
+   * Mirrored at the setup level like every other part field, where it is
+   * part zero's.
+   */
+  entity: z.string().min(1).max(64).optional(),
   inputs: z.record(z.string().max(500)).default({}),
   coercions: z.record(coercionSchema).default({}),
   format: z.record(formatSchema).default({}),
@@ -327,7 +314,6 @@ export const draftPartSchema = z.object({
   join: joinDraftSchema.optional(),
   series: z.array(seriesDraftSchema).max(3).default([]),
   offer: seriesDraftSchema.optional(),
-  choice: choiceDraftSchema.optional(),
   narrow: narrowDraftSchema.optional(),
   shape: widgetShapeSchema.optional(),
   component: z.string().min(1).optional(),
@@ -335,6 +321,7 @@ export const draftPartSchema = z.object({
   options: z.array(z.string().max(64)).max(20).default([]),
   drilldown: drilldownDraftSchema.optional(),
   extras: z.array(fieldName).max(40).default([]),
+  filters: z.array(fieldName).max(FACET_MAX_PER_WIDGET).default([]),
   highlights: z.array(fieldName).max(8).default([]),
   title: z.string().max(120).optional(),
   answered: z.array(z.string().max(64)).max(60).default([]),
@@ -391,6 +378,44 @@ export const conciergeDraftSchema = z.object({
    */
   model: z.string().min(1).max(120).optional(),
   connection: z.string().min(1).optional(),
+  /**
+   * The record type this widget is about, where it was decided from one.
+   *
+   * Carried through to the finished widget, and it is what lets a row open the
+   * *shared* page for that record type. Without it every widget had to be
+   * given a private record view, planned by its own model call on confirm and
+   * frozen as it was the day it was written — so improving how a record reads
+   * meant doing it again for every widget that opened one.
+   *
+   * Absent for a widget built endpoint-first against an API nobody has
+   * described, which still gets the private view exactly as before.
+   */
+  entity: z.string().min(1).max(64).optional(),
+  /** Part zero's, mirrored here like every other per-widget field. */
+  brief: widgetBriefSchema.optional(),
+  /**
+   * The other reading of the same words, ready to swap to.
+   *
+   * A property of the *request*, not of a widget, which is why it sits here
+   * and is not a part key: "my tasks" can mean the records or a count of them,
+   * and both readings answer the one thing somebody said.
+   *
+   * Carried as a brief because a brief is what a widget is. It is compiled
+   * when somebody clicks, not before — the alternative is ignored on almost
+   * every setup, and compiling it eagerly would spend the compile every time
+   * to save it once.
+   *
+   * The entity is the catalog's own id, resolved when the brief was written.
+   * Storing the model's handle would leave a swap looking up a name that is
+   * qualified on collision and means nothing to the compiler.
+   */
+  alternative: z
+    .object({
+      /** The reading in the user's own language, for the chip. */
+      label: z.string().min(1).max(160),
+      brief: widgetBriefSchema,
+    })
+    .optional(),
   op: z.string().min(1).optional(),
   rowsPath: z.string().default("$"),
   join: joinDraftSchema.optional(),
@@ -416,13 +441,6 @@ export const conciergeDraftSchema = z.object({
    * answer rather than a dead end.
    */
   offer: seriesDraftSchema.optional(),
-  /**
-   * A reading of the request the model was genuinely torn about.
-   *
-   * Present only when two endpoints would answer different questions; absent
-   * on almost every build, which is the point.
-   */
-  choice: choiceDraftSchema.optional(),
   narrow: narrowDraftSchema.optional(),
   /**
    * What this widget measures, over what buckets, filtered how.
@@ -446,6 +464,15 @@ export const conciergeDraftSchema = z.object({
   drilldown: drilldownDraftSchema.optional(),
   /** Columns accepted from the "these look related" step. */
   extras: z.array(fieldName).max(40).default([]),
+  /**
+   * Fields the reader can filter the finished widget by.
+   *
+   * A strip of values with a count beside each, above the rows. Deliberately
+   * not a pipeline filter: this narrows what somebody is looking at and can be
+   * put back, where a filter step narrows what the widget *is*. Asking for
+   * "tasks I can filter by category" means this one.
+   */
+  filters: z.array(fieldName).max(FACET_MAX_PER_WIDGET).default([]),
   /** Columns accepted for status marking. */
   highlights: z.array(fieldName).max(8).default([]),
   title: z.string().max(120).optional(),
@@ -673,7 +700,6 @@ export const applyAnswer = (
             shape: undefined,
             series: [],
             offer: undefined,
-            choice: undefined,
             join: undefined,
             compare: undefined,
             narrow: undefined,
@@ -700,6 +726,9 @@ export const applyAnswer = (
 
     case "extras":
       return { ...next, extras: [...values] };
+
+    case "filters":
+      return { ...next, filters: [...values] };
 
     case "highlights":
       return { ...next, highlights: [...values] };
@@ -740,6 +769,7 @@ export const skipStep = (draft: ConciergeDraft, stepId: string): ConciergeDraft 
   if (stepId === "groupBy" && marked.shape) {
     return { ...marked, shape: { ...marked.shape, groupBy: [] } };
   }
+  if (stepId === "filters") return { ...marked, filters: [] };
   if (stepId === "offer") return { ...marked, offer: undefined };
   /*
    * An optional role is one of these too. Its control only exists *because*

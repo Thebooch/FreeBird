@@ -127,6 +127,49 @@ describe("readBindings", () => {
    * reads as a thing and "task--acme" reads as configuration, so the second is
    * worth paying only where the first is ambiguous.
    */
+  it("addresses records by what they are called, not by what the URL said", () => {
+    /*
+     * The gap this closes. A resource id is read off a path, so an API serving
+     * properties at `/v2/sites` gets `site` — a fine internal handle and a
+     * poor name. The assistant addresses records by these, so somebody asking
+     * about a noun the API plainly has was told there is no such handle.
+     */
+    const bindings = readBindings({
+      context: context({
+        records: {
+          "field-ops": {
+            site: { id: "property", one: "Property", many: "Properties", description: "A place." },
+          },
+        },
+      }),
+    });
+
+    const named = bindings.find((binding) => binding.resource === "site");
+    expect(named?.id).toBe("property");
+    // And the record type's own words, rather than the endpoint's.
+    expect(named?.describes).toBe("A place.");
+    // Anything undescribed is untouched, so a half-described API still works.
+    expect(bindings.find((binding) => binding.resource === "job")?.id).toBe("job");
+  });
+
+  it("qualifies by connection on a collision between record type names", () => {
+    // The same rule as before, now applied to the name somebody would type
+    // rather than to the id a URL produced.
+    const bindings = readBindings({
+      context: context({
+        records: {
+          "field-ops": { job: { id: "request", one: "Request", many: "Requests" } },
+          helpdesk: { conversation: { id: "request", one: "Request", many: "Requests" } },
+        },
+      }),
+    });
+    expect(bindings.map((binding) => binding.id).sort()).toEqual([
+      "request--field-ops",
+      "request--helpdesk",
+      "site",
+    ]);
+  });
+
   it("qualifies a noun only when two connections both have it", () => {
     const shared = context({
       drillDowns: [

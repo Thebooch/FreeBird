@@ -388,16 +388,11 @@ const CHROME_MANIFEST: PresentationManifest = {
       type: "boolean",
     },
     {
-      id: "facetVariant",
-      label: "Filter strip style",
-      description: "Tiles lead with the number; chips stay on one line and take less room.",
-      type: "enum",
-      values: ["tiles", "chips"],
-    },
-    {
       id: "facetCounts",
       label: "Filter counts",
-      description: "Show how many rows are in each category. Off leaves the labels alone.",
+      description:
+        "Show how many rows are behind each choice in the filter menu. Off leaves the " +
+        "labels alone.",
       type: "boolean",
     },
   ],
@@ -775,7 +770,7 @@ export const PRESENTATION_DEFAULTS: Readonly<
     density: "cozy",
     slots: {},
     tokens: {},
-    settings: { border: true, facetVariant: "tiles", facetCounts: true },
+    settings: { border: true, facetCounts: true },
   },
   table: {
     density: "cozy",

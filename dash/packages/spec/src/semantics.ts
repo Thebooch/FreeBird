@@ -325,6 +325,75 @@ export const formatValue = (
 };
 
 /**
+ * `PropertyId`, `unit_id`, `id` — a reference, not a measure or a category.
+ *
+ * Lives here because three unrelated callers need the same reading and a
+ * second copy would drift: ranking a field for a numeric role (summing a
+ * column of ids gives a number that is wrong in a way nobody notices), and
+ * deciding whether a field can carry a filter strip (an identifier tiles once
+ * per row, which is not a filter).
+ *
+ * The guard list is the point. Plenty of ordinary words end in the same three
+ * letters — a bid, a grid, an amount that was paid — and reading those as
+ * references would hide real columns.
+ */
+export const looksLikeIdentifier = (name: string): boolean =>
+  /(^|[a-z0-9_-])(Id|id|ID)$/.test(name) && !/(bid|paid|valid|grid|rapid|solid)$/i.test(name);
+
+/**
+ * A field name with its convention removed, for comparing one to another.
+ *
+ * `first_name`, `firstName`, `First-Name` and `FIRSTNAME` are one name spelled
+ * four ways, and which spelling an API chose says nothing about what the field
+ * means. Every rule that matches a name against a *known* name has to go
+ * through this or it silently only works on APIs that happen to share the
+ * fixture's convention — which is how a snake_case API came to lose the
+ * embedded names sitting right there on its rows.
+ *
+ * Deliberately not for matching a name against a *pattern*: a suffix test like
+ * `looksLikeIdentifier` reads the raw name, because stripping separators first
+ * would make `is_paid` end in `id`.
+ */
+export const normaliseName = (name: string): string =>
+  name.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+/** The last segment of a dotted path, which is where the meaning sits. */
+const leafOf = (name: string): string => name.split(".").pop() ?? name;
+
+/**
+ * A link the API publishes to itself — `Href`, `Url`, `Uri`.
+ *
+ * Deliberately only those exact words. `RentalApplicationUrl` is a link
+ * somebody follows and belongs on screen; `Href` is how the API refers to its
+ * own resource and means nothing to a reader. Matching every name containing
+ * "url" would hide the first to remove the second.
+ */
+export const looksLikeApiLink = (name: string): boolean => /^(href|url|uri)$/i.test(leafOf(name));
+
+/**
+ * A field that exists for the API rather than for the person reading it.
+ *
+ * Used for the *fallbacks* — the columns nobody picked and the record view
+ * nobody arranged — where the alternative is showing everything an endpoint
+ * returns. On a real API that means ids of other records and links back to
+ * itself, which is how a record comes to open on `VendorId: 4711` beside forty
+ * of its neighbours.
+ *
+ * The record's own bare `Id` is kept, and that exception is the useful half of
+ * the rule: it is the one identifier a reader does use — to quote in a ticket,
+ * or to hand to somebody else — and on an endpoint with no name field it is
+ * the only thing telling two rows apart. Every *other* id points at a record
+ * this one is not.
+ *
+ * Never applied to a field somebody chose. A deliberate pick outranks this.
+ */
+export const isFieldNoise = (name: string): boolean => {
+  if (looksLikeApiLink(name)) return true;
+  if (!name.includes(".") && /^id$/i.test(name)) return false;
+  return looksLikeIdentifier(leafOf(name));
+};
+
+/**
  * Best-effort semantic guess from a column name and a sample value. Used to
  * pre-fill the agent's proposal and to give hand-written specs a sane
  * default — never to override anything a user confirmed.

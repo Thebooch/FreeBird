@@ -4,6 +4,8 @@ import type {
   Presentation,
   PresentationManifest,
   ResourceSpec,
+  SemanticType,
+  WidgetBrief,
   WidgetSpec,
 } from "@freebirdai/dash-spec";
 
@@ -217,51 +219,6 @@ export interface JoinOffer {
   needsFanOut: boolean;
 }
 
-export interface AuthoredWidget {
-  id: string;
-  source: "model" | "rule" | "chat";
-  widget: unknown;
-  headline: string;
-  why: string[];
-  confirm: Array<{ field: string; question: string; options: string[] }>;
-  confidence: "declared" | "inferred";
-  cost: { requests: number; onOpen: number };
-  score: number;
-}
-
-export interface SuggestionsResult {
-  /** Written by rule. Same input, same list, every time. */
-  suggestions: AuthoredWidget[];
-  /** A model's second opinion, kept separate so the two can be compared. */
-  reviewed: AuthoredWidget[];
-  /** Which model reviewed, or null when none was available. */
-  reviewModel: string | null;
-  reviewError: string | null;
-  notes: string[];
-  /** How the read ended — the difference between "empty" and "refused". */
-  outcome: "complete" | "budget" | "rateLimited" | "authRejected";
-  retryAfter?: string;
-  /** Endpoints understood structurally. */
-  resourceCount: number;
-  /** Endpoints that actually returned rows. Zero with a high resourceCount
-   *  means the shape is known but the API would not answer. */
-  sampledCount: number;
-  /**
-   * Pairings this pass checked against real rows, confirmed and rejected both.
-   *
-   * The rejections are the useful half: without them a link the model found
-   * but could not stand behind is indistinguishable from one it never saw, and
-   * the engine reads as having missed something obvious.
-   */
-  relationships: Array<{
-    parent: string;
-    child: string;
-    linkField: string;
-    ok: boolean;
-    reason?: string;
-  }>;
-}
-
 /** The relationship graph as it currently stands, read at no request cost. */
 export interface RelationsResult {
   connection: string;
@@ -270,6 +227,38 @@ export interface RelationsResult {
   /** Where the answer came from — a current report, a stale one, or the URLs alone. */
   source: "report" | "stale" | "endpoints";
   lastRead: string | null;
+}
+
+/**
+ * Every link between record types, and what it would take to correct one.
+ *
+ * Distinct from `RelationsResult`, which describes the endpoint-level model:
+ * these are the links on the *record types*, which are what a widget is
+ * compiled from and what a record page follows.
+ */
+export interface ReferencesResult {
+  described: boolean;
+  entities: { id: string; title: string }[];
+  links: {
+    entity: string;
+    from: string;
+    field: string;
+    label: string;
+    target: string;
+    to: string;
+    cost: "free" | "cheap" | "partial";
+    /** False for a link nothing here can follow — it renders as a bare id. */
+    openable: boolean;
+    verified: boolean;
+  }[];
+  /**
+   * Fields that look like a link and are not recorded as one.
+   *
+   * What lets a missed link be added — and what keeps a field somebody has
+   * just called "not a link" on the screen that could put it back.
+   */
+  candidates: { entity: string; from: string; field: string; label: string }[];
+  unreachable: { from: string; field: string; reason: string }[];
 }
 
 export interface UnknownResource {
@@ -352,6 +341,20 @@ export interface ConciergeControl extends ConciergeStep {
 }
 
 /** One way several widgets could be shown together. */
+/**
+ * A widget's own settings, as the server derives them.
+ *
+ * `brief` is null for a widget that was not built from a request — everything
+ * made before briefs existed, and anything the setup card re-answered
+ * afterwards. Those keep the settings they always had, which is how they look,
+ * and `unavailable` says so when the reason is worth a sentence.
+ */
+export interface WidgetSettings {
+  brief: WidgetBrief | null;
+  controls: ConciergeControl[];
+  unavailable?: string;
+}
+
 export interface ArrangementOption {
   id: "tabs" | "row" | "stack" | "list" | "merged";
   label: string;
@@ -428,6 +431,15 @@ export interface ConciergeActive {
    * built — the picker never shows a possibility that turns out not to be one.
    */
   arrangements: ArrangementOption[];
+  /**
+   * The other reading of the same request, as a phrase to click.
+   *
+   * Null on almost every setup. It is what the assistant did *not* build from
+   * the same words — the records rather than a count of them, usually — and it
+   * was written by the call that wrote the brief, so taking it costs no second
+   * model call and no second wait.
+   */
+  alternative: { label: string } | null;
   summary: ConciergeSummary | null;
   warnings: string[];
   errors: string[];
@@ -472,6 +484,56 @@ export interface MapState {
   readonly wouldSample: number;
   /** False when there is no model configured to run the pass. */
   readonly canRun: boolean;
+  /** False when no model is configured for the describing pass. */
+  readonly canRunRecords?: boolean;
+  /** The record types built on those endpoints — the half a person sees. */
+  readonly records?: RecordsState;
+  /** When a live account last checked the descriptions. */
+  readonly entitiesVerifiedAt?: string | null;
+}
+
+/**
+ * How far the record types have got, in the four numbers that matter.
+ *
+ * Deliberately not one "ready" flag: a record type with no identity cannot
+ * open a page, one with no name shows a number where a name belongs, and an
+ * API with no references between its records is a set of unrelated lists. A
+ * low number here is a specific, fixable thing rather than a verdict.
+ */
+export interface RecordsState {
+  readonly described: boolean;
+  readonly stale: boolean;
+  readonly entities: number;
+  readonly withIdentity: number;
+  readonly withName: number;
+  readonly references: number;
+  readonly fieldsDescribed: number;
+  /** Record types a live account has confirmed. Never a model's opinion. */
+  readonly verified: number;
+  readonly referencesVerified: number;
+}
+
+/** What the describing pass did, and what it declined to do. */
+export interface DescribeRunResult extends RecordsState {
+  readonly ranPass: boolean;
+  readonly note?: string;
+  /** Fields offered as possible links, against how many became one. */
+  readonly considered?: number;
+  readonly linked?: number;
+  readonly errors?: readonly string[];
+  /** Readings the pass refused. Not errors — it worked and declined to guess. */
+  readonly skipped?: readonly string[];
+}
+
+/** What checking the descriptions against a live account settled. */
+export interface RecordCheckResult {
+  readonly checked: number;
+  readonly identitiesConfirmed: number;
+  readonly referencesResolved: number;
+  /** What it actually cost, in requests against the user's own API. */
+  readonly requests: number;
+  readonly stopped: "budget" | "refused" | "rejected" | null;
+  readonly notes: readonly string[];
 }
 
 export interface MapRunResult extends MapState {
@@ -535,6 +597,15 @@ export const api = {
     arrangement: ArrangementOption["id"],
   ): Promise<ConciergeState & { notes?: string[] }> =>
     request(`/api/concierge/${encodeURIComponent(dashboardId)}/arrangement`, json({ arrangement })),
+
+  /**
+   * Take the other reading of the same request.
+   *
+   * No body: the server holds the reading it offered, and sending it back
+   * would give the two a chance to disagree about what was on the chip.
+   */
+  takeReading: (dashboardId: string): Promise<ConciergeState & { rejected: ConciergeRejection[] }> =>
+    request(`/api/concierge/${encodeURIComponent(dashboardId)}/reading`, json({})),
 
   /**
    * Record one answer and get the next question.
@@ -621,6 +692,70 @@ export const api = {
    */
   mapApi: (catalogId: string, force = false): Promise<MapRunResult> =>
     request(`/api/catalog/${catalogId}/map`, json({ force })),
+
+  /**
+   * Check the descriptions against the real account.
+   *
+   * The only thing in the record layer that spends the user's API quota, which
+   * is why it is never called on their behalf: a description can be
+   * confidently wrong in ways no amount of re-reading would reveal, and the
+   * two claims that matter — this field identifies a record, this field points
+   * at that record type — can only be settled by asking.
+   */
+  /**
+   * Change how a record type's page is laid out, for everybody who opens one.
+   *
+   * The record type's own answer rather than one widget's: every route into a
+   * record — a link from another record, a shared URL, any widget's row —
+   * arrives at the same page, so this improves all of them at once.
+   */
+  putRecordLayout: (
+    connectionId: string,
+    entity: string,
+    layout: { facts: readonly string[]; groups: readonly { title: string; fields: readonly string[] }[] },
+  ): Promise<{ facts: readonly string[]; groups: readonly { title: string; fields: readonly string[] }[] }> =>
+    request(`/api/connections/${connectionId}/entities/${entity}/layout`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(layout),
+    }),
+
+  /**
+   * Describe what this API's records are: their names, fields and links.
+   *
+   * The pass everything entity-first rests on, and the one thing that had no
+   * way to be started — it existed as a route and nothing ever called it, so
+   * in practice an API was connected, mapped, and left with no record types at
+   * all. Costs model tokens and **no requests against anybody's account**,
+   * which is what makes the result worth sharing.
+   */
+  describeRecords: (catalogId: string, force = false): Promise<DescribeRunResult> =>
+    request(`/api/catalog/${catalogId}/entities`, json({ force })),
+
+  checkRecords: (connectionId: string, budget?: number): Promise<RecordCheckResult> =>
+    request(`/api/connections/${connectionId}/verify`, json(budget ? { budget } : {})),
+
+  references: (connectionId: string): Promise<ReferencesResult> =>
+    request(`/api/connections/${connectionId}/references`),
+
+  /**
+   * Correct where one field points, or say it points nowhere.
+   *
+   * One field at a time and `PUT`, because a reference is replaced whole —
+   * and `null` is a real answer: a field that resembles a link and is not one
+   * is worth saying so about.
+   */
+  setReference: (
+    connectionId: string,
+    entity: string,
+    field: string,
+    target: string | null,
+  ): Promise<{ field: string; reference: unknown }> =>
+    request(`/api/connections/${connectionId}/entities/${encodeURIComponent(entity)}/reference`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ field, target }),
+    }),
 
   presentation: (): Promise<PresentationResult> => request("/api/presentation"),
 
@@ -732,14 +867,25 @@ export const api = {
     request(`/api/connections/${id}/sample`, json({ op })),
 
   /**
-   * What is worth building here, phrased as sentences.
+   * What a widget on a board could be changed to, and changing it.
    *
-   * Deterministic — no model involved — and it returns real widget specs, so
-   * an offer can be previewed and saved through the same path a model's
-   * proposal takes.
+   * Derived on the server because it needs the record type, the reach graph
+   * and the compiler — none of which the browser has — and because answering a
+   * control must have exactly one implementation.
    */
-  suggestions: (id: string, refresh = false): Promise<SuggestionsResult> =>
-    request(`/api/connections/${id}/suggestions`, json({ refresh })),
+  widgetSettings: (dashboardId: string, widgetId: string): Promise<WidgetSettings> =>
+    request(`/api/dashboards/${dashboardId}/widgets/${widgetId}/settings`),
+
+  answerWidget: (
+    dashboardId: string,
+    widgetId: string,
+    stepId: string,
+    values: readonly string[],
+  ): Promise<{ widget: WidgetSpec; notes: string[]; controls: ConciergeControl[] }> =>
+    request(`/api/dashboards/${dashboardId}/widgets/${widgetId}/brief`, {
+      ...json({ stepId, values }),
+      method: "PUT",
+    }),
 
   /** A POST because it samples the API for real. Changes nothing. */
   capabilities: (id: string, refresh = false, deep = false): Promise<Capabilities> =>

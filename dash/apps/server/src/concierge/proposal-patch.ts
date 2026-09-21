@@ -32,6 +32,18 @@ export const proposalPatch = (proposal: ProposalResult): DraftPatch => {
     format: Object.fromEntries(
       Object.entries(widget.format).map(([name, value]) => [source(name), value]),
     ),
+    /*
+     * Named back in the endpoint's own vocabulary, like the roles above.
+     *
+     * The widget carries the flattened column (`Category_Name`); the step that
+     * validates this answer offers the field the API declares
+     * (`Category.Name`). Handing the column straight over would have every
+     * filter refused as an invented field — the same one-layer-later rejection
+     * that swallowed nested role bindings before `source()` existed.
+     */
+    ...(widget.facets.length > 0
+      ? { filters: widget.facets.map((facet) => source(facet.field)) }
+      : {}),
     ...(proposal.measurement && !isEmptyShape(proposal.measurement)
       ? {
           shape: {

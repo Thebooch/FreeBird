@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from "react";
 import { useFreeBird } from "../provider.js";
-import type { ChatMessage, Reference } from "@freebirdai/core";
+import type { ChatMessage, PendingQuestion, Reference } from "@freebirdai/core";
 
 export interface UseChatOptions {
   /** If true (default), automatically loads messages when sessionId changes. */
@@ -22,6 +22,19 @@ export interface UseChatReturn {
   explain: (componentId: string) => Promise<void>;
   /** Aborts any active stream. */
   abort: () => void;
+  /**
+   * A question the assistant is waiting on, or null.
+   *
+   * State rather than a callback because the turn genuinely ended: nothing is
+   * streaming and no request is open, so a reload can render the card again.
+   */
+  pendingQuestion: PendingQuestion | null;
+  /**
+   * Answer it. The chosen labels are sent as the visible message — what a
+   * person would have typed — while the option values travel separately, so
+   * the model gets exact ids instead of re-matching prose.
+   */
+  answerQuestion: (values: readonly string[]) => Promise<void>;
 }
 
 /**
@@ -50,6 +63,10 @@ export const useChat = (opts: UseChatOptions = {}): UseChatReturn => {
     [fb.store],
   );
   const abort = useCallback(() => fb.store.abort(), [fb.store]);
+  const answerQuestion = useCallback(
+    (values: readonly string[]) => fb.store.answerQuestion(values),
+    [fb.store],
+  );
 
   // Wire up InfoTrigger broadcasts.
   useEffect(() => {
@@ -66,5 +83,7 @@ export const useChat = (opts: UseChatOptions = {}): UseChatReturn => {
     send,
     explain,
     abort,
+    pendingQuestion: fb.pendingQuestion,
+    answerQuestion,
   };
 };
