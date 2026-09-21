@@ -121,6 +121,11 @@ export interface DashboardProps {
    */
   readonly entityLinks?: Readonly<Record<string, readonly EntityLinkView[]>>;
   /**
+   * connection id → its `credentialsRevision`, so a key change drops that
+   * connection's cached rows instead of leaving the old account's on screen.
+   */
+  readonly credentialRevisions?: Readonly<Record<string, number>>;
+  /**
    * Whether the board can be rearranged right now.
    *
    * Owned by the host because the toggle lives in the app's own nav, and
@@ -187,6 +192,7 @@ export const Dashboard = ({
   presentation,
   labels,
   entityLinks,
+  credentialRevisions,
   editing,
   onEditingChange,
   onAutoArrange,
@@ -209,6 +215,7 @@ export const Dashboard = ({
       {...(presentation ? { presentation } : {})}
       {...(labels ? { labels } : {})}
       {...(entityLinks ? { entityLinks } : {})}
+      {...(credentialRevisions ? { credentialRevisions } : {})}
     >
       <DashStyleSheet />
       <div className="dash-root dash-page">

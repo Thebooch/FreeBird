@@ -61,17 +61,53 @@ export class ProxyAdapter implements SourceAdapter {
     }
 
     const payload = (await response.json().catch(() => null)) as
-      | { body?: unknown; meta?: FetchResult["meta"]; error?: string; detail?: unknown }
+      | {
+          body?: unknown;
+          meta?: FetchResult["meta"];
+          error?: string;
+          userMessage?: string;
+          /** The *upstream's* status, where the server flattened its own. */
+          status?: number;
+          retryAfter?: string;
+          detail?: unknown;
+        }
       | null;
 
     if (!response.ok) {
+      /*
+       * Two fields, two jobs, and they are not interchangeable.
+       *
+       * `error` is the technical one — "rate limited by api.example.com",
+       * "cooling down for buildium" — and belongs on the Error for a
+       * developer. `userMessage` is the sentence the server wrote for a
+       * person, and on a 429 it is the only place the wait is stated. Reading
+       * `error` into both, as this did, meant `describeFailure`'s careful
+       * 401/403/429 copy was always overridden by the technical string and the
+       * countdown never reached anybody. Older routes send only `error`, so it
+       * stays the fallback.
+       */
       throw new AdapterError(
         typeof payload?.detail === "string" ? payload.detail : (payload?.error ?? `HTTP ${response.status}`),
         {
-          status: response.status,
-          // The server already phrased this for a person; pass it through
-          // rather than replacing it with something more generic.
-          userMessage: payload?.error ?? "That request could not be completed.",
+          /*
+           * The upstream's status when the server sent one, not ours.
+           *
+           * `/api/query` answers 502 for everything except a rate limit, so
+           * reading `response.status` alone turned every 401 and 403 into an
+           * anonymous failure — and `describeFailure`'s copy for those, which
+           * says a 403 proves the key works and offers no pointless retry,
+           * could never be reached.
+           */
+          status: typeof payload?.status === "number" ? payload.status : response.status,
+          userMessage:
+            payload?.userMessage ?? payload?.error ?? "That request could not be completed.",
+          ...(payload?.retryAfter
+            ? { retryAfter: payload.retryAfter }
+            : (() => {
+                // The header is the standard spelling; the body field is ours.
+                const header = response.headers.get("retry-after");
+                return header ? { retryAfter: header } : {};
+              })()),
         },
       );
     }

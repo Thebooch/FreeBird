@@ -385,15 +385,22 @@ export const WidgetShell = ({
        * upstream refused us and these numbers are not current. Someone
        * screenshotting a figure needs to have been told which of those it is.
        */}
-      {data.state === "ok" && data.fetchMeta?.staleReason && (
-        <p className="dash-widget__stale" role="status">
-          <span aria-hidden="true">⚠</span>
-          <span>
-            {data.fetchMeta.staleReason} Showing data from{" "}
-            {formatValue(data.lastFetchedAt, { semantic: "relative_time" }, { now })}.
-          </span>
-        </p>
-      )}
+      {/*
+       * Not only on `ok`. Stale rows that happen to filter down to nothing
+       * still need to say why they are old — "no results" and "no *current*
+       * results" are different answers, and the banner is the only thing that
+       * distinguishes them.
+       */}
+      {(data.state === "ok" || data.state === "empty" || data.state === "invalid") &&
+        data.fetchMeta?.staleReason && (
+          <p className="dash-widget__stale" role="status">
+            <span aria-hidden="true">⚠</span>
+            <span>
+              {data.fetchMeta.staleReason} Showing data from{" "}
+              {formatValue(data.lastFetchedAt, { semantic: "relative_time" }, { now })}.
+            </span>
+          </p>
+        )}
 
       <div className="dash-widget__body">
         {/*
@@ -497,11 +504,35 @@ const WidgetFooter = ({
  * or not this particular account can read them, which is only honest if the
  * tile explains itself when one of them cannot be.
  */
+/**
+ * A wait, phrased for somebody watching a tile rather than reading a log.
+ *
+ * Deliberately coarse above a minute. "Trying again in about 2 minutes" is
+ * something to act on; a second-by-second countdown from 14:59 invites
+ * somebody to sit and watch it, which is the behaviour this is meant to stop.
+ */
+const retryPhrase = (retryAt: number, now: number): string | null => {
+  const seconds = Math.ceil((retryAt - now) / 1000);
+  if (seconds <= 0) return null;
+  if (seconds < 60) return `${seconds} second${seconds === 1 ? "" : "s"}`;
+  const minutes = Math.ceil(seconds / 60);
+  return `about ${minutes} minute${minutes === 1 ? "" : "s"}`;
+};
+
 export const describeFailure = (
   status: number | null,
   userMessage: string | null,
+  /**
+   * When a retry could work, and the clock to measure it against.
+   *
+   * Given together because a countdown needs both, and because a retry button
+   * offered inside a cooldown is guaranteed to meet that cooldown — the one
+   * action a person will obviously take, and the one that cannot work.
+   */
+  retry?: { at: number | null; now: number },
 ): { message: string; detail?: string; retryable: boolean } => {
   const fallback = "That request did not come back.";
+  const waiting = retry?.at ? retryPhrase(retry.at, retry.now) : null;
 
   switch (status) {
     case 401:
@@ -521,8 +552,11 @@ export const describeFailure = (
     case 429:
       return {
         message: userMessage ?? "The API asked for fewer requests.",
-        detail: "This is temporary — a rate limit, not a failure.",
-        retryable: true,
+        detail: waiting
+          ? `This is temporary — a rate limit, not a failure. Trying again in ${waiting}.`
+          : "This is temporary — a rate limit, not a failure.",
+        // Offered only once the wait is over. Before then it cannot succeed.
+        retryable: !waiting,
       };
     default:
       /*
@@ -576,7 +610,10 @@ const WidgetBody = ({
       return <Skeleton shape={skeletonShapeFor(data.widget.component)} />;
 
     case "error": {
-      const failure = describeFailure(data.errorStatus, data.userMessage);
+      const failure = describeFailure(data.errorStatus, data.userMessage, {
+        at: data.retryAt,
+        now,
+      });
       return (
         <ErrorState
           message={failure.message}

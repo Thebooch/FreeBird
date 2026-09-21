@@ -117,6 +117,69 @@ describe("entityPageView", () => {
     expect(pageOf([SUPPLIER], "nothing")).toBeNull();
   });
 
+  /*
+   * A nested field arrives both as the object and as each of its leaves. Shown
+   * together on a record page, the object row reads
+   * `{Provider, PolicyNumber, …}` directly above the rows spelling out the
+   * provider and the policy number — noise wearing a field's clothes.
+   */
+  it("leaves out a container whose parts are listed separately", () => {
+    const nested = entity({
+      id: "vendor",
+      resource: "vendor",
+      name: { one: "Vendor", many: "Vendors" },
+      kind: "party",
+      fields: [
+        { path: "Id", visibility: "hidden" },
+        { path: "CompanyName", visibility: "primary" },
+        { path: "VendorInsurance" },
+        { path: "VendorInsurance.Provider" },
+        { path: "VendorInsurance.PolicyNumber" },
+        // Two levels deep: the middle is a leaf of one container and the
+        // container of another, and both rules have to hold at once.
+        { path: "TaxInformation" },
+        { path: "TaxInformation.Address" },
+        { path: "TaxInformation.Address.City" },
+      ],
+      identity: { field: "Id", observed: true },
+      display: { title: ["CompanyName"] },
+    });
+
+    expect(pageOf([nested], "vendor")?.fields.map((field) => field.path)).toEqual([
+      "CompanyName",
+      "VendorInsurance.Provider",
+      "VendorInsurance.PolicyNumber",
+      "TaxInformation.Address.City",
+    ]);
+  });
+
+  /*
+   * The other half of the rule: a container whose parts are all hidden is the
+   * only evidence that data exists at all, so removing it there would hide the
+   * information rather than tidy it.
+   */
+  it("keeps a container whose parts were all dropped as noise", () => {
+    const opaque = entity({
+      id: "vendor",
+      resource: "vendor",
+      name: { one: "Vendor", many: "Vendors" },
+      kind: "party",
+      fields: [
+        { path: "Id", visibility: "hidden" },
+        { path: "CompanyName", visibility: "primary" },
+        { path: "VendorInsurance" },
+        { path: "VendorInsurance.Provider", visibility: "hidden" },
+      ],
+      identity: { field: "Id", observed: true },
+      display: { title: ["CompanyName"] },
+    });
+
+    expect(pageOf([opaque], "vendor")?.fields.map((field) => field.path)).toEqual([
+      "CompanyName",
+      "VendorInsurance",
+    ]);
+  });
+
   it("leaves out the fields the pass called noise", () => {
     // Self-links and internal keys are what this layer exists to remove, so
     // carrying them for a client to re-filter would defeat the point.
@@ -744,11 +807,18 @@ describe("entityLinkViews", () => {
      * entry per bare field name, which gives `Title` a single meaning for
      * every record type that has one. Kept honest by carrying only the labels
      * that differ from what is already readable off the path — see below.
+     *
+     * `list` is one op id per record type — a few kilobytes across a whole
+     * API — and it buys the browser the choice between fetching twenty
+     * records one at a time and fetching the type once. On the measured
+     * Buildium map that is the difference between twenty requests and one,
+     * so it earns its bytes many times over.
      */
     expect(Object.keys(task).sort()).toEqual([
       "entity",
       "identity",
       "labels",
+      "list",
       "name",
       "ops",
       "references",

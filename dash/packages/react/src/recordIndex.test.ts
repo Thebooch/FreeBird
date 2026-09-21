@@ -243,7 +243,7 @@ describe("withLinkedValues", () => {
     const bodies: Record<string, unknown> = {
       [lookups[0]!.key]: { Id: 41, Phone: "0117 496 0123" },
     };
-    expect(withLinkedValues({ rows, linked, lookups, bodyOf: (key) => bodies[key] })).toEqual([
+    expect(withLinkedValues({ rows, linked, lookups, recordOf: (lookup) => bodies[lookup.key] })).toEqual([
       { VendorId: 41, VendorId_Phone: "0117 496 0123" },
       // Not landed, so no value is invented for it.
       { VendorId: 77 },
@@ -257,18 +257,18 @@ describe("withLinkedValues", () => {
     };
     const nested = [{ through: "VendorId", field: "Contact.Phone", as: "VendorId_Contact_Phone" }];
     expect(
-      withLinkedValues({ rows: [{ VendorId: 41 }], linked: nested, lookups, bodyOf: (k) => bodies[k] })[0],
+      withLinkedValues({ rows: [{ VendorId: 41 }], linked: nested, lookups, recordOf: (lookup) => bodies[lookup.key] })[0],
     ).toEqual({ VendorId: 41, VendorId_Contact_Phone: "0117 496 0123" });
   });
 
   it("leaves rows exactly as they were when nothing is linked", () => {
-    expect(withLinkedValues({ rows, linked: [], lookups: [], bodyOf: () => undefined })).toBe(rows);
+    expect(withLinkedValues({ rows, linked: [], lookups: [], recordOf: () => undefined })).toBe(rows);
   });
 
   it("skips a row whose reference is empty", () => {
     const lookups = lookupsFor([{ VendorId: null }], columns);
     expect(
-      withLinkedValues({ rows: [{ VendorId: null }], linked, lookups, bodyOf: () => ({ Phone: "x" }) }),
+      withLinkedValues({ rows: [{ VendorId: null }], linked, lookups, recordOf: () => ({ Phone: "x" }) }),
     ).toEqual([{ VendorId: null }]);
   });
 });
@@ -282,7 +282,7 @@ describe("referenceNames", () => {
       [lookups[0]!.key]: { CompanyName: "Acme Plumbing" },
       [lookups[1]!.key]: { CompanyName: "Borden Electrical" },
     };
-    expect(referenceNames(lookups, (key) => bodies[key], columns)).toEqual({
+    expect(referenceNames(lookups, (lookup) => bodies[lookup.key], columns)).toEqual({
       VendorId: { "41": "Acme Plumbing", "77": "Borden Electrical" },
     });
   });
@@ -292,5 +292,42 @@ describe("referenceNames", () => {
     // fallback has to read well on its own.
     const lookups = lookupsFor([{ VendorId: 41 }], columns);
     expect(referenceNames(lookups, () => undefined, columns)).toEqual({});
+  });
+});
+
+describe("records already held cost nothing and are not capped", () => {
+  const columns = [column("VendorId", reference())];
+  const rows = Array.from({ length: 40 }, (_, i) => ({ VendorId: i + 1 }));
+
+  it("spends the budget only on records it does not already hold", () => {
+    // The first thirty are known from something else that already fetched them.
+    const known = ({ id }: { id: string | number }) => Number(id) <= 30;
+    const lookups = referenceLookups({
+      rows,
+      columns,
+      connection: "api",
+      params,
+      known,
+    });
+
+    const held = lookups.filter((lookup) => lookup.held);
+    const payable = lookups.filter((lookup) => !lookup.held);
+
+    // Every known record still resolves — that is how its name reaches a cell.
+    expect(held).toHaveLength(30);
+    // And the cap applies only to the ones that would cost a request.
+    expect(payable).toHaveLength(10);
+    expect(payable.every((lookup) => Number(lookup.id) > 30)).toBe(true);
+  });
+
+  it("caps payable lookups exactly as before when nothing is held", () => {
+    const lookups = referenceLookups({ rows, columns, connection: "api", params });
+    expect(lookups).toHaveLength(25);
+    expect(lookups.every((lookup) => !lookup.held)).toBe(true);
+  });
+
+  it("marks nothing as held when no index is offered", () => {
+    const lookups = referenceLookups({ rows: rows.slice(0, 3), columns, connection: "api", params });
+    expect(lookups.every((lookup) => lookup.held === undefined)).toBe(true);
   });
 });

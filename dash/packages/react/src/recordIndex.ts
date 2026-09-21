@@ -52,6 +52,13 @@ export interface ReferenceLookup {
   readonly column: string;
   /** The cache key this lookup will occupy. */
   readonly key: string;
+  /**
+   * Already in the record index, so resolving it costs nothing.
+   *
+   * These are skipped when fetching and kept when naming — the whole point of
+   * the index is that a record fetched once names itself everywhere after.
+   */
+  readonly held?: true;
 }
 
 export interface LookupInput {
@@ -69,6 +76,15 @@ export interface LookupInput {
    * the vendor.
    */
   readonly alsoFetch?: ReadonlySet<string>;
+  /**
+   * Records already held, which therefore cost nothing and are not capped.
+   *
+   * The cap exists to bound **requests**, so a record something else already
+   * fetched must not consume a slot — otherwise a board that had just drawn a
+   * vendors table would still stop naming vendors after twenty-five of them.
+   * Known records are always resolved; the limit applies to the rest.
+   */
+  readonly known?: (lookup: { readonly target: string; readonly id: string | number }) => boolean;
 }
 
 /**
@@ -82,6 +98,8 @@ export const referenceLookups = (input: LookupInput): readonly ReferenceLookup[]
   const limit = input.limit ?? MAX_LOOKUPS;
   const wanted: ReferenceLookup[] = [];
   const seen = new Set<string>();
+  /** How many of `wanted` would actually cost a request. */
+  let spend = 0;
 
   const linked = input.columns.filter(
     (column): column is ColumnMeta & { reference: ColumnReference } =>
@@ -106,7 +124,16 @@ export const referenceLookups = (input: LookupInput): readonly ReferenceLookup[]
         const key = queryKey(input.connection, lookup.op, { [lookup.param]: id }, input.params);
         if (seen.has(key)) continue;
         seen.add(key);
-        if (wanted.length >= limit) return wanted;
+        const free = input.known?.({ target: reference.target, id }) ?? false;
+        /*
+         * Counted against the budget only when it would cost a request. A
+         * free one still has to be *returned* — it is how its name reaches
+         * the cell — it just must not push a payable one off the list.
+         */
+        if (!free) {
+          if (spend >= limit) continue;
+          spend++;
+        }
         wanted.push({
           connection: input.connection,
           op: lookup.op,
@@ -115,6 +142,7 @@ export const referenceLookups = (input: LookupInput): readonly ReferenceLookup[]
           target: reference.target,
           column: column.name,
           key,
+          ...(free ? { held: true as const } : {}),
         });
       }
     }
@@ -252,7 +280,7 @@ export const withLinkedValues = (input: {
   readonly rows: readonly Row[];
   readonly linked: readonly LinkedField[];
   readonly lookups: readonly ReferenceLookup[];
-  readonly bodyOf: (key: string) => unknown;
+  readonly recordOf: (lookup: ReferenceLookup) => unknown;
 }): readonly Row[] => {
   if (input.linked.length === 0 || input.rows.length === 0) return input.rows;
 
@@ -260,7 +288,7 @@ export const withLinkedValues = (input: {
   // and a plain join could collide between two different pairs.
   const keyed = new Map(
     input.lookups.map(
-      (lookup) => [`${lookup.column} ${String(lookup.id)}`, lookup.key] as const,
+      (lookup) => [`${lookup.column} ${String(lookup.id)}`, lookup] as const,
     ),
   );
 
@@ -269,9 +297,9 @@ export const withLinkedValues = (input: {
     for (const one of input.linked) {
       const id = row[one.through];
       if (id === null || id === undefined || id === "") continue;
-      const key = keyed.get(`${one.through} ${String(id)}`);
-      if (key === undefined) continue;
-      const value = valueAtPath(input.bodyOf(key), one.field);
+      const lookup = keyed.get(`${one.through} ${String(id)}`);
+      if (lookup === undefined) continue;
+      const value = valueAtPath(input.recordOf(lookup), one.field);
       if (value !== undefined) extra[one.as] = value;
     }
     return Object.keys(extra).length > 0 ? { ...row, ...extra } : row;
@@ -290,7 +318,14 @@ export type ReferenceNames = Readonly<Record<string, Readonly<Record<string, str
  */
 export const referenceNames = (
   lookups: readonly ReferenceLookup[],
-  bodyOf: (key: string) => unknown,
+  /**
+   * The record behind one lookup, from wherever the caller has it.
+   *
+   * Takes the lookup rather than its cache key, because a record may be held
+   * under a record-type index that knows nothing about request keys — which is
+   * the whole point of that index.
+   */
+  recordOf: (lookup: ReferenceLookup) => unknown,
   columns: readonly ColumnMeta[],
 ): ReferenceNames => {
   const byColumn: Record<string, Record<string, string>> = {};
@@ -312,7 +347,7 @@ export const referenceNames = (
 
   for (const lookup of lookups) {
     const title = titleOf.get(lookup.column);
-    const name = nameOfRecord(bodyOf(lookup.key), title?.fields ?? [], title?.mode ?? "join");
+    const name = nameOfRecord(recordOf(lookup), title?.fields ?? [], title?.mode ?? "join");
     if (name === null) continue;
     const held = byColumn[lookup.column] ?? {};
     held[String(lookup.id)] = name;

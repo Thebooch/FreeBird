@@ -287,6 +287,7 @@ export {
   parseTokens,
   quantiseEnd,
   queryKey,
+  queryKeyPrefix,
   rangePresetSchema,
   resolveGrain,
   resolveRange,

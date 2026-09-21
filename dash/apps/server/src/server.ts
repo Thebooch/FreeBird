@@ -150,7 +150,8 @@ import {
 } from "./context/onscreen.js";
 import { LOOK_UP_WIDGET_TOOL, lookUpWidget, lookUpWidgetSchema } from "./chat/lookUpWidget.js";
 import type { CacheStore } from "./cache/store.js";
-import { waitPhrase } from "./cache/cooldown.js";
+import { coolingMessage, retryAfterSeconds, waitPhrase } from "./cache/cooldown.js";
+import { ConnectionGate, Priority } from "./cache/gate.js";
 import { SpecStore } from "./store.js";
 import { GrantStore, approveWidget, dashboardApprovals, widgetGrantSubject } from "./grants.js";
 import { KeyStore } from "./vault.js";
@@ -389,6 +390,20 @@ const querySchema = z.object({
   maxAgeMs: z.number().optional(),
 });
 
+/**
+ * A pacing number from the environment, or the default.
+ *
+ * Non-numeric and negative values fall back rather than throwing: a typo in a
+ * deployment's environment should not stop the server, and every value here
+ * has a sane answer without it. Zero is legal and means "no limit".
+ */
+const pacingEnv = (name: string, fallback: number): number => {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+};
+
 export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   const { store, keys } = options;
   migrateCredentialRefs(store, keys);
@@ -426,7 +441,73 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * what makes "we read your API, we do not keep it" true for a self-hoster.
    * `options.cache` is how a hosted deployment supplies something shared.
    */
-  const queries = new QueryCache(options.cache ? { store: options.cache } : {});
+  /**
+   * How hard this server is willing to lean on somebody else's API.
+   *
+   * The defaults are deliberately modest. Nothing limited concurrency before,
+   * so opening a board fired every widget at once — each up to `maxPages`
+   * requests, plus a fan-out of up to a hundred more — and the rate limit that
+   * came back was one this server had provoked. Three at a time with a fifth
+   * of a second between starts is slower on an idle API and dramatically
+   * better on a metered one, because a refusal costs the whole board.
+   *
+   * Environment-overridable so a deployment with a generous quota is not stuck
+   * with a limit chosen for a strict one.
+   */
+  const gate = new ConnectionGate({
+    maxConcurrent: pacingEnv("DASH_MAX_CONCURRENCY", 3),
+    minGapMs: pacingEnv("DASH_MIN_GAP_MS", 200),
+  });
+
+  const queries = new QueryCache({
+    gate,
+    ...(options.cache ? { store: options.cache } : {}),
+  });
+
+  /**
+   * Every upstream call that is not a widget query.
+   *
+   * Verify, validate, sample, enumerate and the narrowing pass all called
+   * `registry.fetch` directly, so none of them checked the cooldown, fed it,
+   * or waited their turn. A verify run could therefore provoke a 429 that went
+   * on to empty every tile on the board, and a connection that had just asked
+   * us to stop could still be enumerated at full speed.
+   *
+   * Not routed through `queries.read`: these must not be cached. Sampling is
+   * fresh by definition and enumeration keeps its own three-tier cache. What
+   * they share with a widget query is the *connection*, which is what a rate
+   * limit is a property of — so they share the gate and the breaker, and
+   * nothing else.
+   */
+  const upstream = async <T>(connection: string, run: () => Promise<T>): Promise<T> => {
+    const cooling = queries.cooldown.check(connection, Date.now());
+    if (cooling)
+      throw new AdapterError(`cooling down for ${connection}`, {
+        status: cooling.status,
+        userMessage: coolingMessage(cooling, Date.now()),
+        retryAfter: retryAfterSeconds(cooling.until, Date.now()),
+      });
+
+    return gate.run(connection, Priority.Background, async () => {
+      try {
+        const result = await run();
+        queries.cooldown.succeeded(connection);
+        return result;
+      } catch (error) {
+        if (error instanceof AdapterError && error.status === 429) {
+          queries.accounting.refused(connection);
+          queries.cooldown.refused({
+            connection,
+            status: 429,
+            retryAfter: error.retryAfter,
+            reason: error.userMessage,
+            now: Date.now(),
+          });
+        }
+        throw error;
+      }
+    });
+  };
   const previews = new SetupPreviews(queries.store, (id) => store.getConnection(id));
   const queryVersions = new Map(
     store.listConnections().map((connection) => [connection.id, fingerprintConnection(connection)]),
@@ -434,7 +515,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   const refreshQueryIdentity = (connection: ConnectionSpec) => {
     const current = fingerprintConnection(connection);
     if (queryVersions.get(connection.id) !== current) {
-      queries.invalidate();
+      queries.invalidate(connection.id);
       queryVersions.set(connection.id, current);
     }
   };
@@ -537,11 +618,13 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         else query[name] = value;
       }
 
-      const result = await registry.fetch(connection.id, op.id, query, {
-        params: { range: resolveRange({ preset: "30d", now: Date.now() }), filters },
-        now: Date.now(),
-        resolveSecret: async (keyRef) => keys.get(keyRef),
-      });
+      const result = await upstream(connection.id, () =>
+        registry.fetch(connection.id, op.id, query, {
+          params: { range: resolveRange({ preset: "30d", now: Date.now() }), filters },
+          now: Date.now(),
+          resolveSecret: async (keyRef) => keys.get(keyRef),
+        }),
+      );
       const shape = inferShape(result.body, op.rowsPath ? { rowsPath: op.rowsPath } : {});
       // A 200 with nothing in it is a fact about the account, not a failure.
       if (shape.fields.length === 0) return { kind: "empty" };
@@ -1525,14 +1608,16 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
              * filters, while an override would only ever become a query
              * parameter the endpoint never asked for.
              */
-            const fetched = await registry.fetch(connection.id, op, {}, {
-              params: {
-                range: resolveRange({ preset: "30d", now: Date.now() }),
-                filters: params,
-              },
-              now: Date.now(),
-              resolveSecret: async (keyRef) => keys.get(keyRef),
-            });
+            const fetched = await upstream(connection.id, () =>
+              registry.fetch(connection.id, op, {}, {
+                params: {
+                  range: resolveRange({ preset: "30d", now: Date.now() }),
+                  filters: params,
+                },
+                now: Date.now(),
+                resolveSecret: async (keyRef) => keys.get(keyRef),
+              }),
+            );
             return { ok: true, body: fetched.body };
           } catch (error) {
             /*
@@ -1729,7 +1814,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         return reply.status(400).send({ error: "invalid connection", detail: parsed.error.issues });
       }
       store.putConnection(parsed.data);
-      queries.invalidate();
+      queries.invalidate(parsed.data.id);
       ensureBoardFor(parsed.data);
       registry.addConnection(parsed.data);
       return publicConnection(parsed.data);
@@ -1780,7 +1865,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         ...connection,
         credentialsRevision: (connection.credentialsRevision ?? 0) + 1,
       });
-      queries.invalidate();
+      queries.invalidate(connection.id);
       // Echo only the fact that it worked. Never the key, not even truncated.
       return { ok: true, hasKey: true };
     },
@@ -1794,7 +1879,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       ...connection,
       credentialsRevision: (connection.credentialsRevision ?? 0) + 1,
     });
-    queries.invalidate();
+    queries.invalidate(connection.id);
     return { ok: true, hasKey: false };
   });
 
@@ -1840,15 +1925,17 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
 
     for (const opId of candidates) {
       try {
-        const result = await registry.fetch(
-          connection.id,
-          opId,
-          {},
-          {
-            params,
-            now: Date.now(),
-            resolveSecret: async (keyRef) => keys.get(keyRef),
-          },
+        const result = await upstream(connection.id, () =>
+          registry.fetch(
+            connection.id,
+            opId,
+            {},
+            {
+              params,
+              now: Date.now(),
+              resolveSecret: async (keyRef) => keys.get(keyRef),
+            },
+          ),
         );
 
         const summary = Array.isArray(result.body)
@@ -2028,9 +2115,31 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       // The cache re-throws the adapter's own error, which is already phrased
       // for a person; the generic handler below would flatten it to a 500.
       if (error instanceof AdapterError) {
-        return reply
-          .status(error.status === 429 ? 429 : 502)
-          .send({ error: error.message, userMessage: error.userMessage });
+        /*
+         * `retryAfter` both ways: as the standard header, and in the body
+         * because the browser reads this through `fetch` and the tile needs
+         * the number to count down with. Sending only the header would leave
+         * the retry button enabled during a wait it cannot win.
+         */
+        if (error.retryAfter) reply.header("retry-after", error.retryAfter);
+        return reply.status(error.status === 429 ? 429 : 502).send({
+          error: error.message,
+          userMessage: error.userMessage,
+          /*
+           * The upstream's status, separately from ours.
+           *
+           * The HTTP status above is about *this* request: everything but a
+           * rate limit becomes 502, because a 401 from the browser to its own
+           * origin would mean something else entirely. But that flattening
+           * also lost the distinction the tile needs — a 401, a 403 and a
+           * generic failure are three different sentences and only one of them
+           * is worth a Retry button. `describeFailure` has always had that copy
+           * and could never reach it, so a permission error offered a retry
+           * that could not possibly succeed.
+           */
+          status: error.status,
+          ...(error.retryAfter ? { retryAfter: error.retryAfter } : {}),
+        });
       }
       throw error;
     }
@@ -2072,7 +2181,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         validateOpId: connection.validateOpId ?? parsed.data.id,
       });
       store.putConnection(next);
-      queries.invalidate();
+      queries.invalidate(next.id);
       ensureBoardFor(next);
       registry.addConnection(next);
       return withKeyFlag(next);
@@ -2097,7 +2206,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           : ops[0]?.id,
       });
       store.putConnection(next);
-      queries.invalidate();
+      queries.invalidate(next.id);
       ensureBoardFor(next);
       registry.addConnection(next);
       return withKeyFlag(next);
@@ -2257,7 +2366,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
 
       const next = { ...connection, resources: parsed.data.resources };
       store.putConnection(next);
-      queries.invalidate();
+      queries.invalidate(next.id);
       ensureBoardFor(next);
       registry.addConnection(next);
       return publicConnection(next);
@@ -2276,15 +2385,17 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       if (!op) return reply.status(404).send({ error: "no such operation" });
       registry.addConnection(connection);
 
-      const result = await registry.fetch(
-        connection.id,
-        op.id,
-        {},
-        {
-          params: { range: resolveRange({ preset: "30d", now: Date.now() }), filters: {} },
-          now: Date.now(),
-          resolveSecret: async (keyRef) => keys.get(keyRef),
-        },
+      const result = await upstream(connection.id, () =>
+        registry.fetch(
+          connection.id,
+          op.id,
+          {},
+          {
+            params: { range: resolveRange({ preset: "30d", now: Date.now() }), filters: {} },
+            now: Date.now(),
+            resolveSecret: async (keyRef) => keys.get(keyRef),
+          },
+        ),
       );
 
       const shape = inferShape(result.body, op.rowsPath ? { rowsPath: op.rowsPath } : {});
@@ -2500,8 +2611,11 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           if (connection.catalog !== previous.id) continue;
           store.putConnection(refreshCatalogConnection(connection, previous, fresh));
           enumerated.delete(connection.id);
+          // Inside the loop: a catalog refresh only reaches connections that
+          // imported that catalog, and the rest of the board has no reason to
+          // refetch.
+          queries.invalidate(connection.id);
         }
-        queries.invalidate();
       },
       catalog,
       llm: (task) => resolveLlm(task),
@@ -2833,8 +2947,21 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         return reply.status(409).send({ error: "That change does not produce a usable board.", detail: valid.errors });
       }
 
+      /*
+       * Deliberately no cache invalidation.
+       *
+       * The cache is keyed on connection + op + params + range + filters. A
+       * widget spec cannot change the identity of an upstream response — only
+       * the pipeline the browser runs over it. If this edit changed the source
+       * params then `queryKey` changed with them and the old entry simply goes
+       * unused. Wiping here used to blank every tile on the board, on every
+       * connection, each time somebody tweaked one widget in chat: the whole
+       * board then refetched cold and collected its own rate limit, with
+       * nothing left to fall back on. It also destroyed the cached responses
+       * `SetupPreviews` checks drafts against, which is the evidence the
+       * preview check exists to read.
+       */
       store.putDashboard(valid.value);
-      queries.invalidate();
       return {
         widget,
         notes: compiled.notes,
@@ -3045,6 +3172,9 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
               body: cached.body,
               requests: 0,
               truncated: cached.meta.truncated,
+              // Nothing here checks an age, on purpose — but a reply that says
+              // "as of forty minutes ago" is honest where a bare number is not.
+              ageMs: Math.max(0, Date.now() - cached.storedAt),
             }
           : null;
       }
@@ -3058,6 +3188,12 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           // refreshing it. Forcing a fetch here would spend a request on data
           // the user is already looking at.
           maxAgeMs: 60 * 60_000,
+          /*
+           * Behind the widgets. A chat turn takes seconds to compose and reads
+           * up to eight sources; a tile the reader is staring at must not queue
+           * behind that.
+           */
+          priority: Priority.Background,
           fetcher: (validators) =>
             registry.fetch(input.connection, input.op, overrides, {
               params: scoped,
@@ -3071,6 +3207,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           body: outcome.body,
           requests: outcome.outcome === "hit" || outcome.outcome === "stale" ? 0 : 1,
           truncated: outcome.meta.truncated,
+          ...(outcome.outcome === "miss" ? {} : { ageMs: Math.max(0, outcome.ageMs) }),
         };
       } catch (error) {
         /*
@@ -3617,18 +3754,20 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
                       fetchRows: async (opId) => {
                         const target = getOp(connection, opId);
                         if (!target) throw new Error(`no endpoint named "${opId}"`);
-                        const result = await registry.fetch(
-                          connection.id,
-                          opId,
-                          {},
-                          {
-                            params: {
-                              range: resolveRange({ preset: "30d", now: Date.now() }),
-                              filters: {},
+                        const result = await upstream(connection.id, () =>
+                          registry.fetch(
+                            connection.id,
+                            opId,
+                            {},
+                            {
+                              params: {
+                                range: resolveRange({ preset: "30d", now: Date.now() }),
+                                filters: {},
+                              },
+                              now: Date.now(),
+                              resolveSecret: async (keyRef) => keys.get(keyRef),
                             },
-                            now: Date.now(),
-                            resolveSecret: async (keyRef) => keys.get(keyRef),
-                          },
+                          ),
                         );
                         return result.body;
                       },

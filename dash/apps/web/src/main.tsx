@@ -515,6 +515,23 @@ const App = (): JSX.Element => {
   );
 
   /**
+   * Which account each connection's cached rows belong to.
+   *
+   * Read off the specs we already hold rather than fetched: the server bumps
+   * `credentialsRevision` whenever a key is set or cleared, so a change here
+   * means the rows in the browser's cache came from an account we have stopped
+   * using. The provider drops them on that signal, which matters now that a
+   * refused refresh leaves the previous body in place.
+   */
+  const credentialRevisions = useMemo(
+    () =>
+      Object.fromEntries(
+        live.connections.map((connection) => [connection.id, connection.credentialsRevision ?? 0]),
+      ),
+    [live.connections],
+  );
+
+  /**
    * The result of a tidy-up, held until the server catches up.
    *
    * The board renders from `live.dashboard`, so re-packing without this would
@@ -1191,6 +1208,7 @@ const App = (): JSX.Element => {
           presentation={presentationSources}
           labels={live.labels}
           entityLinks={live.entityLinks}
+          credentialRevisions={credentialRevisions}
           editing={arranging}
           onEditingChange={setArranging}
           onAutoArrange={tidyUp}

@@ -226,6 +226,16 @@ export type ReadOutcome =
       readonly body: unknown;
       readonly requests: number;
       readonly truncated: boolean;
+      /**
+       * How old this copy is, when it came from the cache.
+       *
+       * There is deliberately no ceiling on serving an old answer — old rows
+       * with a date on them beat an empty widget at any age — which makes
+       * stating the age the thing that keeps it honest. Without it a reply
+       * could present a copy from hours ago as current, and nothing in the
+       * answer would give the reader a way to tell. Absent on a fresh read.
+       */
+      readonly ageMs?: number;
     }
   | { readonly ok: false; readonly reason: string };
 

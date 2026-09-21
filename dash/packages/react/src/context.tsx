@@ -15,11 +15,13 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import type { PresentationSources } from "./presentation.js";
 import type { ApprovalVerdict } from "./useWidgetData.js";
 import { QueryClient } from "./store.js";
+import { RecordIndex, indexPlan } from "./recordStore.js";
 
 export interface DashboardControls {
   readonly preset: RangePreset;
@@ -41,6 +43,15 @@ export interface DashboardContextValue {
   readonly dashboard: DashboardSpec;
   readonly registry: AdapterRegistry;
   readonly client: QueryClient;
+  /**
+   * Every record seen this session, by record type and id.
+   *
+   * Beside the query cache rather than inside it because they answer different
+   * questions: that one knows whether to repeat a request, this one knows
+   * whether we already hold a record whatever request brought it. Reference
+   * names and a record page opened from a row on screen both read it.
+   */
+  readonly records: RecordIndex;
   readonly params: ResolvedParams;
   readonly controls: DashboardControls;
   readonly now: number;
@@ -120,6 +131,15 @@ export interface DashboardProviderProps {
   readonly entityLinks?: Readonly<Record<string, readonly EntityLinkView[]>>;
   /** widget id → approval verdict, from `GET /api/dashboards/:id`. */
   readonly approvals?: Readonly<Record<string, ApprovalVerdict>>;
+  /**
+   * connection id → its `credentialsRevision`, from `GET /api/connections`.
+   *
+   * Watched rather than stored: when one changes, that connection's cached
+   * rows belong to an account we are no longer using and are dropped. The
+   * server does the same on its side; this is the half that stops the browser
+   * displaying them afterwards.
+   */
+  readonly credentialRevisions?: Readonly<Record<string, number>>;
   readonly children: ReactNode;
 }
 
@@ -135,9 +155,66 @@ export const DashboardProvider = ({
   labels,
   entityLinks,
   approvals,
+  credentialRevisions,
   children,
 }: DashboardProviderProps): JSX.Element => {
   const [client] = useState(() => new QueryClient(registry));
+  const [records] = useState(() => new RecordIndex());
+
+  /*
+   * Which endpoints' rows are which record type.
+   *
+   * Derived from `entityLinks`, which already carries `ops` for exactly this —
+   * so indexing costs no extra request and no extra payload.
+   */
+  const plan = useMemo(() => indexPlan(entityLinks), [entityLinks]);
+
+  useEffect(() => {
+    client.onFetched = ({ connection, op, body }) => {
+      records.ingest({ connection, op, body, plan });
+    };
+    return () => {
+      client.onFetched = undefined;
+    };
+  }, [client, records, plan]);
+
+  /*
+   * The client outlives any one registry.
+   *
+   * It is created once so the cache survives a board re-render, but the host
+   * builds a fresh `AdapterRegistry` whenever a connection spec changes. The
+   * initialiser above captures only the first one, so without this an edited
+   * connection never reached the fetch path at all.
+   */
+  useEffect(() => {
+    client.setRegistry(registry);
+  }, [client, registry]);
+
+  /*
+   * Rows belonging to an account whose credentials changed must go.
+   *
+   * The server drops them from its own cache on the same signal. This side
+   * became load-bearing the moment a failed refresh started leaving the
+   * previous body in place: without it the server correctly forgets the old
+   * account's data and the browser goes on drawing it. Scoped by connection,
+   * so one key change does not blank every other board.
+   */
+  const revisions = credentialRevisions;
+  const previousRevisions = useRef(revisions);
+  useEffect(() => {
+    const before = previousRevisions.current;
+    previousRevisions.current = revisions;
+    if (!revisions || !before) return;
+    for (const [connection, revision] of Object.entries(revisions)) {
+      if (before[connection] !== undefined && before[connection] !== revision) {
+        client.invalidateConnection(connection);
+        // The index holds the same rows under a different key, so forgetting
+        // one without the other would leave the old account's names on screen.
+        records.forget(connection);
+      }
+    }
+  }, [client, records, revisions]);
+
   const [tick, setTick] = useState(() => pinnedNow ?? Date.now());
 
   useEffect(() => {
@@ -194,7 +271,15 @@ export const DashboardProvider = ({
 
   const refreshAll = useCallback(() => {
     setControls((previous) => ({ ...previous, anchor: freshAnchor() }));
-    client.invalidate();
+    /*
+     * Re-run everything, keeping the rows on screen while it happens.
+     *
+     * This used to `invalidate()` first, which emptied the cache and blanked
+     * the whole board — and then, when the refresh was refused, left it blank.
+     * Refreshing is a request for newer numbers, not a request to stop showing
+     * the ones already there.
+     */
+    client.refreshAll(freshAnchor());
   }, [client, freshAnchor]);
 
   const [facetSummaries, setFacetSummaries] = useState<Readonly<Record<string, readonly string[]>>>(
@@ -231,6 +316,7 @@ export const DashboardProvider = ({
       dashboard,
       registry,
       client,
+      records,
       params,
       controls,
       now,
@@ -251,6 +337,7 @@ export const DashboardProvider = ({
       dashboard,
       registry,
       client,
+      records,
       params,
       controls,
       now,

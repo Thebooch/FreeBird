@@ -820,6 +820,26 @@ export const DASH_REACT_STYLES = `
   border: 1px solid var(--dash-border); border-radius: var(--dash-radius-sm);
   background: var(--dash-surface);
 }
+/* Above the figure, quieter than it: the number is what gets read, the label
+   is what makes it mean anything. */
+.dash-record-page__stat-label {
+  margin: 0 0 var(--dash-space-1);
+  font-size: var(--dash-text-xs);
+  color: var(--dash-muted);
+}
+/* A tile is too small for a paragraph. A collection this account cannot read
+   still has to say which collection it is, so the label above carries that and
+   the message inside is allowed to clamp. */
+.dash-record-page__stat .dash-state {
+  padding: 0;
+  gap: var(--dash-space-1);
+}
+.dash-record-page__stat .dash-state__title {
+  font-size: var(--dash-text-xs);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.dash-record-page__stat .dash-state__detail { display: none; }
 
 /* Tabs and their panel are one card, so the panel reads as belonging to the
    selected tab rather than floating under a detached strip. */

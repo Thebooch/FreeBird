@@ -180,6 +180,21 @@ export interface EntityLinkView {
    * holds one of them; the join is a lookup rather than a derivation.
    */
   readonly ops: readonly string[];
+  /**
+   * The endpoint listing these records, when one can be called on its own.
+   *
+   * Carried so a browser can resolve many of this type at once instead of one
+   * at a time. Measured on the real Buildium map: 80 of 121 reference links
+   * cost a request each and point at only 24 record types, so a column with
+   * twenty distinct vendors is twenty requests that one call to the vendors
+   * list would answer — and that one answer then names vendors everywhere
+   * else on the board too.
+   *
+   * Absent when the list endpoint needs a path parameter nobody can supply
+   * from a reference alone, because an offer that cannot be executed would
+   * spend a request to discover it.
+   */
+  readonly list?: string | undefined;
   readonly references: readonly EntityReferenceView[];
   /**
    * What this record type calls its own fields, by the API's own path.
@@ -222,6 +237,7 @@ export const entityLinkViews = (input: EntityGraphInput): EntityLinkView[] => {
   const graph = entityGraph(input);
   const byId = new Map(input.entities.map((entity) => [entity.id, entity]));
   const resourceById = new Map(input.resources.map((resource) => [resource.id, resource]));
+  const opById = new Map(input.ops.map((op) => [op.id, op]));
 
   return input.entities.map((entity) => {
     const references = graph.referencesOf(entity.id).flatMap((reference) => {
@@ -254,6 +270,9 @@ export const entityLinkViews = (input: EntityGraphInput): EntityLinkView[] => {
       ops: [resource?.listOp, resource?.detailOp].filter(
         (op): op is string => typeof op === "string",
       ),
+      ...(resource?.listOp && bare(opById.get(resource.listOp))
+        ? { list: resource.listOp }
+        : {}),
       references,
       /*
        * Only what a reader could not work out for themselves. A label equal to
@@ -594,11 +613,39 @@ export const entityPageView = (
       .map((reference) => reference.field),
   );
 
-  const fields: EntityPageField[] = entity.fields
+  const kept = entity.fields.filter(
     // Everything else `hidden` covers — internal keys and fields that are null
     // on every record — stays dropped. Carrying those for a client to
     // re-filter would be shipping the noise this layer exists to remove.
-    .filter((field) => field.visibility !== "hidden" || linkable.has(field.path))
+    (field) => field.visibility !== "hidden" || linkable.has(field.path),
+  );
+
+  /*
+   * Containers whose parts are listed separately.
+   *
+   * A nested field arrives both as the object and as each of its leaves, and
+   * showing both puts a row on a record page that reads
+   * `{Provider, PolicyNumber, …}` directly above the rows spelling out the
+   * provider and the policy number. The summary form is right in a table cell,
+   * where a row has to stay one line — on a record page, where every leaf is
+   * already given its own labelled row, it is noise wearing a field's clothes.
+   *
+   * Dropped only when a leaf actually survived the filter above: a container
+   * whose parts are all hidden is the only evidence that data exists at all,
+   * and removing it there would hide the information rather than tidy it.
+   */
+  const spelledOut = new Set<string>();
+  for (const field of kept) {
+    const parts = field.path.split(".");
+    for (let depth = 1; depth < parts.length; depth++) {
+      spelledOut.add(parts.slice(0, depth).join("."));
+    }
+  }
+
+  const fields: EntityPageField[] = kept
+    // A reference recorded against the object rather than the id inside it is
+    // kept regardless: it carries the link, which no leaf of it does.
+    .filter((field) => !spelledOut.has(field.path) || linkable.has(field.path))
     .map((field) => ({
       path: field.path,
       label: field.label ?? humanLabel(field.path),

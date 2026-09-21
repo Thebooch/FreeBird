@@ -32,11 +32,28 @@ export interface CacheStore {
   get(key: string): CacheEntry | undefined;
   set(entry: CacheEntry): void;
   delete(key: string): void;
-  /** Drop anything older than `maxAgeMs`. Called on a timer, not per request. */
+  /**
+   * Drop anything older than `maxAgeMs`.
+   *
+   * Available, and deliberately not scheduled. Nothing calls this: an age
+   * sweep would delete exactly the copies that keep a tile populated when the
+   * upstream refuses us, and serving an old answer with a banner saying how
+   * old it is beats serving an empty widget at any age. The real bound is the
+   * store's own size budget, which is a memory limit rather than a freshness
+   * one — freshness is stated per request via `maxAgeMs`, never here.
+   */
   sweep(maxAgeMs: number, now: number): number;
   /** For the accounting panel and for tests. */
   stats(): { entries: number; bytes: number };
-  clear(): void;
+  /**
+   * Drop everything, or only the keys beginning with `prefix`.
+   *
+   * The prefix is always `queryKeyPrefix(connection)`. An implementation that
+   * cannot scope its delete must clear everything and not silently keep the
+   * rest: over-clearing costs requests, under-clearing serves one account's
+   * rows after its credentials changed.
+   */
+  clear(prefix?: string): void;
 }
 
 /**

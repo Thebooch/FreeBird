@@ -1226,3 +1226,199 @@ describe("a board per connection", () => {
     });
   });
 });
+
+/**
+ * The user-visible story this whole area exists for.
+ *
+ * Widgets used to show a "rate limit hit" message with nothing behind it,
+ * often enough that people stopped trusting the board. Three things had to be
+ * true at once to fix that, and this pins all three together so none can be
+ * undone on its own.
+ */
+describe("a rate-limited board keeps its numbers", () => {
+  const twoOps = connectionSchema.parse({
+    ...restConnection,
+    ops: [
+      { id: "items", title: "Items", path: "/items", rowsPath: "$.data" },
+      { id: "totals", title: "Totals", path: "/totals", rowsPath: "$.data" },
+    ],
+  });
+
+  const query = (app: ReturnType<typeof makeApp>, op: string, maxAgeMs = 0) =>
+    app.inject({
+      method: "POST",
+      url: "/api/query",
+      payload: {
+        connection: "api",
+        op,
+        params: {},
+        range: { preset: "30d", start: 0, end: 1_000, grain: "1d" },
+        filters: {},
+        maxAgeMs,
+      },
+    });
+
+  it("serves labelled older rows when the API starts refusing, instead of emptying", async () => {
+    let refusing = false;
+    let upstreamCalls = 0;
+    const http: HttpFetch = async (url) => {
+      upstreamCalls++;
+      if (refusing) {
+        return { status: 429, text: "slow down", url, header: (name) =>
+          name.toLowerCase() === "retry-after" ? "120" : null };
+      }
+      return { status: 200, text: JSON.stringify({ data: [{ id: 1 }] }), url, header: () => null };
+    };
+
+    const app = buildServer({ store, keys, http });
+    store.putConnection(twoOps);
+    keys.set("api-key", "k");
+
+    // Warm both widgets while the API is healthy.
+    expect((await query(app, "items")).statusCode).toBe(200);
+    expect((await query(app, "totals")).statusCode).toBe(200);
+    const warmCalls = upstreamCalls;
+    expect(warmCalls).toBe(2);
+
+    refusing = true;
+    const [items, totals] = await Promise.all([query(app, "items"), query(app, "totals")]);
+
+    /*
+     * Both tiles still answer, with rows, saying why they are old.
+     *
+     * The two sentences differ on purpose: whichever read actually went
+     * upstream carries the API's own words, and whichever met the cooldown
+     * carries ours. Both state the wait, which is the part that matters.
+     */
+    for (const response of [items, totals]) {
+      expect(response.statusCode).toBe(200);
+      const payload = response.json();
+      expect(payload.body).toEqual({ data: [{ id: 1 }] });
+      expect(payload.meta.cache).toBe("stale");
+      expect(payload.meta.staleReason).toMatch(/try again|Waiting .* before trying again/);
+    }
+
+    /*
+     * One refusal between them. The second read found the cooldown the first
+     * had just recorded and never went upstream — which is the difference
+     * between one rate limit and a board's worth of them.
+     */
+    expect(upstreamCalls - warmCalls).toBe(1);
+  });
+
+  it("tells the browser how long to wait, in words and as a number", async () => {
+    const http: HttpFetch = async (url) => ({
+      status: 429,
+      text: "slow down",
+      url,
+      header: (name) => (name.toLowerCase() === "retry-after" ? "90" : null),
+    });
+
+    const app = buildServer({ store, keys, http });
+    store.putConnection(twoOps);
+    keys.set("api-key", "k");
+
+    // Nothing cached, so there is genuinely nothing to show and it must say so.
+    const first = await query(app, "items");
+    expect(first.statusCode).toBe(429);
+
+    const second = await query(app, "totals");
+    expect(second.statusCode).toBe(429);
+    const payload = second.json();
+    // The sentence a person reads — not the technical one, which used to win.
+    expect(payload.userMessage).toMatch(/Waiting/);
+    expect(payload.error).toBeDefined();
+    expect(payload.error).not.toBe(payload.userMessage);
+    // And the number the tile counts down with, both ways.
+    expect(Number(payload.retryAfter)).toBeGreaterThan(0);
+    expect(second.headers["retry-after"]).toBeDefined();
+  });
+
+  it("leaves the cache warm when a widget is edited", async () => {
+    let upstreamCalls = 0;
+    const http: HttpFetch = async (url) => {
+      upstreamCalls++;
+      return { status: 200, text: JSON.stringify({ data: [{ id: 1 }] }), url, header: () => null };
+    };
+
+    const app = buildServer({ store, keys, http });
+    store.putConnection(twoOps);
+    keys.set("api-key", "k");
+
+    await query(app, "items");
+    expect(upstreamCalls).toBe(1);
+
+    /*
+     * Saving a dashboard used to wipe every connection's cached responses, so
+     * tweaking one widget in chat left the whole board to refetch cold and
+     * collect its own rate limit. A widget spec cannot change what an endpoint
+     * returns, so it must not invalidate anything.
+     */
+    const board = store.listDashboards()[0];
+    if (board) store.putDashboard(board);
+
+    const again = await query(app, "items", 60_000);
+    expect(again.statusCode).toBe(200);
+    expect(again.json().meta.cache).toBe("hit");
+    expect(upstreamCalls).toBe(1);
+  });
+
+  /*
+   * `/api/query` answers 502 for everything but a rate limit, which is right
+   * for this request but lost the only thing the tile needs to pick its words.
+   */
+  it("passes the upstream's own status through, so a 403 is not shown as a retryable blip", async () => {
+    const http: HttpFetch = async (url) => ({
+      status: 403,
+      text: "forbidden",
+      url,
+      header: () => null,
+    });
+
+    const app = buildServer({ store, keys, http });
+    store.putConnection(twoOps);
+    keys.set("api-key", "k");
+
+    const response = await query(app, "items");
+    // Our status stays 502 — a 403 from the browser to its own origin would
+    // mean something else entirely.
+    expect(response.statusCode).toBe(502);
+    // The upstream's travels separately, so the tile can say the key works and
+    // offer no retry that could not possibly succeed.
+    expect(response.json().status).toBe(403);
+    expect(response.json().userMessage).toMatch(/denied access|not allowed|permission/i);
+  });
+
+  it("does not let a sample run hammer a connection that just refused us", async () => {
+    let refusing = false;
+    let upstreamCalls = 0;
+    const http: HttpFetch = async (url) => {
+      upstreamCalls++;
+      if (refusing) {
+        return { status: 429, text: "slow down", url, header: () => null };
+      }
+      return { status: 200, text: JSON.stringify({ data: [{ id: 1 }] }), url, header: () => null };
+    };
+
+    const app = buildServer({ store, keys, http });
+    store.putConnection(twoOps);
+    keys.set("api-key", "k");
+
+    refusing = true;
+    expect((await query(app, "items")).statusCode).toBe(429);
+    const afterRefusal = upstreamCalls;
+
+    /*
+     * Sampling used to call the adapter directly — no cooldown check, no
+     * pacing — so a setup step could go on hammering an API that had just
+     * asked the board to stop.
+     */
+    const sample = await app.inject({
+      method: "POST",
+      url: "/api/connections/api/sample",
+      payload: { op: "totals" },
+    });
+    expect(sample.statusCode).toBeGreaterThanOrEqual(400);
+    expect(upstreamCalls).toBe(afterRefusal);
+  });
+});

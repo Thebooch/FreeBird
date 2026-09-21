@@ -3,6 +3,7 @@ import { quantiseEnd, queryKey, resolveRange } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import { RequestAccounting, savedShare } from "./accounting.js";
 import { ConnectionCooldown, parseRetryAfter, waitPhrase } from "./cooldown.js";
+import { ConnectionGate } from "./gate.js";
 import { MemoryCacheStore } from "./memory.js";
 import { QueryCache, clampMaxAge } from "./queryCache.js";
 import { estimateBytes } from "./store.js";
@@ -450,5 +451,132 @@ describe("savedShare", () => {
     accounting.hit("c");
     accounting.stale("c");
     expect(savedShare(accounting.get("c"))).toBe(0.75);
+  });
+});
+
+/**
+ * The behaviour this whole area exists for: one API refusing us must cost one
+ * refusal, not a board full of empty tiles.
+ */
+describe("a rate limit costs one request, not a boardful", () => {
+  const meta = emptyMeta("https://x/y", 0);
+
+  const refusal = () =>
+    new AdapterError("rate limited by demo", {
+      status: 429,
+      userMessage: "The API asked for fewer requests.",
+      retryAfter: "120",
+    });
+
+  it("tells the browser how long to wait when it has nothing to show", async () => {
+    const cache = new QueryCache({ now: () => 1_000 });
+    await expect(
+      cache.read({
+        key: "demo.rows|{}",
+        connection: "demo",
+        maxAgeMs: 0,
+        fetcher: () => Promise.reject(refusal()),
+      }),
+    ).rejects.toMatchObject({ status: 429 });
+
+    // Second read: the cooldown is in force and there is still nothing cached.
+    const second = cache
+      .read({
+        key: "demo.other|{}",
+        connection: "demo",
+        maxAgeMs: 0,
+        fetcher: () => Promise.reject(new Error("must not be called")),
+      })
+      .catch((error: unknown) => error);
+
+    const error = (await second) as AdapterError;
+    expect(error.status).toBe(429);
+    // The sentence a person reads, and the number the tile counts down with.
+    expect(error.userMessage).toContain("Waiting");
+    expect(error.retryAfter).toBeDefined();
+    expect(Number(error.retryAfter)).toBeGreaterThan(0);
+  });
+
+  it("serves the cached copy, labelled, once a connection is cooling", async () => {
+    let clock = 1_000;
+    const cache = new QueryCache({ now: () => clock });
+
+    await cache.read({
+      key: "demo.rows|{}",
+      connection: "demo",
+      maxAgeMs: 0,
+      fetcher: async () => ({ body: [{ id: 1 }], meta }),
+    });
+
+    clock += 10;
+    await expect(
+      cache.read({
+        key: "demo.other|{}",
+        connection: "demo",
+        maxAgeMs: 0,
+        fetcher: () => Promise.reject(refusal()),
+      }),
+    ).rejects.toMatchObject({ status: 429 });
+
+    clock += 10;
+    const outcome = await cache.read({
+      key: "demo.rows|{}",
+      connection: "demo",
+      maxAgeMs: 0,
+      fetcher: () => Promise.reject(new Error("must not be called")),
+    });
+
+    // Old rows with a banner beat an empty tile — that is the whole contract.
+    expect(outcome.outcome).toBe("stale");
+    expect(outcome.body).toEqual([{ id: 1 }]);
+    expect(outcome.staleReason).toContain("Waiting");
+  });
+
+  /*
+   * The point of re-checking the cooldown *after* the queue slot rather than
+   * only before the queue. Without it, everything already queued when the
+   * first 429 lands goes on to collect a refusal of its own.
+   */
+  it("stops queued reads the moment one of them is refused", async () => {
+    let clock = 1_000;
+    let upstreamCalls = 0;
+    const cache = new QueryCache({
+      now: () => clock,
+      gate: new ConnectionGate({ maxConcurrent: 1 }),
+    });
+
+    // Warm each key, so every one of them has something to fall back on.
+    for (const key of ["a", "b", "c", "d"]) {
+      await cache.read({
+        key: `demo.${key}|{}`,
+        connection: "demo",
+        maxAgeMs: 0,
+        fetcher: async () => ({ body: [{ key }], meta }),
+      });
+    }
+
+    clock += 10;
+    const reads = ["a", "b", "c", "d"].map((key) =>
+      cache.read({
+        key: `demo.${key}|{}`,
+        connection: "demo",
+        maxAgeMs: 0,
+        fetcher: () => {
+          upstreamCalls++;
+          return Promise.reject(refusal());
+        },
+      }),
+    );
+
+    const outcomes = await Promise.all(reads);
+
+    // One request was refused; the other three found the cooldown at the front
+    // of the queue and never went upstream at all.
+    expect(upstreamCalls).toBe(1);
+    // And every tile still has rows, each saying why they are old.
+    for (const outcome of outcomes) {
+      expect(outcome.outcome).toBe("stale");
+      expect(outcome.staleReason).toBeDefined();
+    }
   });
 });

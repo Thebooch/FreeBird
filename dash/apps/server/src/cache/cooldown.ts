@@ -1,3 +1,5 @@
+import { parseRetryAfter } from "@freebirdai/dash-adapters";
+
 /**
  * Not calling an API that has just told us to stop.
  *
@@ -74,17 +76,27 @@ export class ConnectionCooldown {
   }
 }
 
-export const parseRetryAfter = (value: string | undefined, now: number): number | null => {
-  if (!value) return null;
+/*
+ * Re-exported, not re-implemented. The browser needs the identical reading to
+ * count a tile down, and it cannot import from this server — so the one copy
+ * lives beside `AdapterError.retryAfter`, which is the field it parses.
+ */
+export { parseRetryAfter } from "@freebirdai/dash-adapters";
 
-  const seconds = Number(value.trim());
-  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+/**
+ * What to tell the reader while a connection is cooling off.
+ *
+ * One function because the same sentence has to reach them down two different
+ * paths — attached to the rows we still hold, and attached to the error when
+ * we hold nothing — and two copies would drift into saying different things
+ * about the same wait.
+ */
+export const coolingMessage = (cooling: Cooling, now: number): string =>
+  `${cooling.reason} Waiting ${waitPhrase(cooling.until, now)} before trying again.`;
 
-  // The other legal form is an HTTP date.
-  const at = Date.parse(value);
-  if (Number.isNaN(at)) return null;
-  return Math.max(0, at - now);
-};
+/** The wait as a `Retry-After` value: whole seconds, never below one. */
+export const retryAfterSeconds = (untilMs: number, now: number): string =>
+  String(Math.max(1, Math.ceil((untilMs - now) / 1000)));
 
 /** How long to wait, phrased for a person rather than in milliseconds. */
 export const waitPhrase = (untilMs: number, now: number): string => {
