@@ -955,6 +955,7 @@ const App = (): JSX.Element => {
       />
       {connectionsOpen && (
         <ConnectionManager
+          onOpenDashboard={(id) => { setConnectionsOpen(false); reload(); navigate({ kind: "board", dashboardId: id }); }}
           onClose={() => setConnectionsOpen(false)}
           onChanged={reload}
           // One click from "this endpoint can be clicked into" to a widget

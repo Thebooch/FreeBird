@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { integrationOnboardingSchema } from "./onboarding.js";
 import { fieldFormatSchema } from "./coercion.js";
 import { entitySchema } from "./entity.js";
 import { authSchema, paginationSchema, paramDefSchema, queryValueSchema } from "./primitives.js";
@@ -170,6 +171,7 @@ export const MAP_VERSION = 1;
 
 /** A dialect plus the metadata needed to publish it in a catalog. */
 export const catalogEntrySchema = z.object({
+  onboarding: integrationOnboardingSchema.optional(),
   specVersion: z.literal(1).default(1),
   id: z
     .string()

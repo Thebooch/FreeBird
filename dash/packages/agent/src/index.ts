@@ -164,3 +164,5 @@ export { SYSTEM_PROMPT, buildUserPrompt, proposalSchema, proposeWidgetTool } fro
 export type { Proposal } from "./tool.js";
 
 export { draftPatchSchema } from "./concierge/patch.js";
+export { analyzeOnboarding, designOnboardingCategory, onboardingFingerprint, onboardingMetadata, fallbackOnboardingLayout, validateOnboardingLayout } from "./onboarding.js";
+export type { OnboardingMetadata } from "./onboarding.js";

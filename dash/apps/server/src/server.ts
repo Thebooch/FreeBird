@@ -124,6 +124,7 @@ import {
   widgetBriefSchema,
 } from "@freebirdai/dash-spec";
 import { mapRoutes, mergeDescribedEntities } from "./routes/map.js";
+import { onboardingRoutes } from "./routes/onboarding.js";
 import { VERIFY_BUDGET_DEFAULT, VERIFY_BUDGET_MAX, verifyRecords } from "./routes/verify.js";
 import type { Settings, SettingsStore } from "./settings.js";
 import { QueryCache, clampMaxAge } from "./cache/queryCache.js";
@@ -532,6 +533,31 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   const resolveSearch = (): SearchProvider | null =>
     typeof options.search === "function" ? options.search() : (options.search ?? null);
 
+  const entitiesFor = (connection: ConnectionSpec | null | undefined): EntitySpec[] =>
+    (connection?.catalog ? options.catalog?.get(connection.catalog)?.entities : undefined) ??
+    connection?.onboarding?.localEntities ?? [];
+
+  onboardingRoutes(app, {
+    store, catalog: options.catalog, llm: () => resolveLlm("onboarding"),
+    read: async (connection, opId, values, params) => {
+      registry.addConnection(connection);
+      refreshQueryIdentity(connection);
+      const op = getOp(connection, opId)!;
+      const { overrides, inputs } = splitOpInputs(op, values, params.filters);
+      const resolved = { ...params, filters: inputs };
+      const outcome = await queries.read({
+        key: queryKey(connection.id, opId, overrides, resolved), connection: connection.id,
+        maxAgeMs: 60_000,
+        fetcher: (validators) => registry.fetch(connection.id, opId, overrides, {
+          params: resolved, now: Date.now(), resolveSecret: async (keyRef) => keys.get(keyRef),
+          ...(validators ? { validators } : {}),
+        }),
+      });
+      if (outcome.staleReason) throw new AdapterError("Verification needs a current response", { status: 503, userMessage: "Retry verification when the API is available." });
+      return { body: outcome.body, meta: outcome.meta };
+    },
+  });
+
   /**
    * Every connection gets a board of its own, named after it.
    *
@@ -735,7 +761,10 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     return parsed.data;
   };
 
-  const ensureBoardFor = (connection: { id: string; title: string }): void => {
+  const ensureBoardFor = (connection: Pick<ConnectionSpec, "id" | "title" | "onboarding">): void => {
+    // Guided connections create exactly the tabs selected during onboarding.
+    // Legacy/API callers retain the original empty-board behavior.
+    if (connection.onboarding) return;
     if (store.getDashboard(connection.id)) return;
     const board = dashboardSchema.safeParse({
       id: connection.id,
@@ -986,7 +1015,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    */
   const compileReading = (brief: WidgetBrief): { patch: DraftPatch; error?: string } => {
     for (const entry of store.listConnections()) {
-      const entities = entry.catalog ? (options.catalog?.get(entry.catalog)?.entities ?? []) : [];
+      const entities = entitiesFor(entry);
       const entity = entityById(entities, brief.entity);
       const resource = entity
         ? entry.resources.find((one) => one.id === entity.resource)
@@ -1101,9 +1130,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
      * Empty for a connection to an API nobody has described, which every
      * renderer already handles by falling back to the mechanical label.
      */
-    const labels = connection.catalog
-      ? fieldLexicon(options.catalog?.get(connection.catalog)?.entities ?? [])
-      : {};
+    const labels = fieldLexicon(entitiesFor(connection));
     /*
      * Which of this API's fields point at other records, resolved the same way
      * and for the same reason — a property of the API, kept once on the
@@ -1120,9 +1147,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
      * that names an endpoint this connection does not carry is a link nothing
      * here could follow.
      */
-    const entities = connection.catalog
-      ? (options.catalog?.get(connection.catalog)?.entities ?? [])
-      : [];
+    const entities = entitiesFor(connection);
     const entityLinks =
       entities.length > 0
         ? entityLinkViews({
@@ -1160,9 +1185,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     const connection = store.getConnection(request.params.id);
     if (!connection) return reply.status(404).send({ error: "no such connection" });
 
-    const entities = connection.catalog
-      ? (options.catalog?.get(connection.catalog)?.entities ?? [])
-      : [];
+    const entities = entitiesFor(connection);
 
     /*
      * The endpoints *this connection* carries, which is not the same as the
@@ -1216,9 +1239,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       const connection = store.getConnection(request.params.id);
       if (!connection) return reply.status(404).send({ error: "no such connection" });
 
-      const entities = connection.catalog
-        ? (options.catalog?.get(connection.catalog)?.entities ?? [])
-        : [];
+      const entities = entitiesFor(connection);
       const entity = entityById(entities, parsed.data.brief.entity);
       const resource = entity
         ? connection.resources.find((one) => one.id === entity.resource)
@@ -1276,9 +1297,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       const connection = store.getConnection(request.params.id);
       if (!connection) return reply.status(404).send({ error: "no such connection" });
 
-      const entities = connection.catalog
-        ? (options.catalog?.get(connection.catalog)?.entities ?? [])
-        : [];
+      const entities = entitiesFor(connection);
       const page = entityPageView(
         {
           entities,
@@ -1399,9 +1418,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     async (request, reply) => {
       const connection = store.getConnection(request.params.id);
       if (!connection) return reply.status(404).send({ error: "no such connection" });
-      const entities = connection.catalog
-        ? (options.catalog?.get(connection.catalog)?.entities ?? [])
-        : [];
+      const entities = entitiesFor(connection);
       if (entities.length === 0) return { described: false, entities: [], links: [] };
 
       const graph = entityGraph(relatedFor(connection, entities));
@@ -1692,9 +1709,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       const connection = store.getConnection(request.params.id);
       if (!connection) return reply.status(404).send({ error: "no such connection" });
 
-      const entities = connection.catalog
-        ? (options.catalog?.get(connection.catalog)?.entities ?? [])
-        : [];
+      const entities = entitiesFor(connection);
       if (entities.length === 0) {
         return reply.status(409).send({
           error:
@@ -2658,6 +2673,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     const parsed = z
       .object({
         catalogId: z.string().min(1),
+        onboarding: z.boolean().optional(),
         id: z.string().min(1).optional(),
         opIds: z.array(z.string()).optional(),
       })
@@ -2684,6 +2700,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       id,
       ...(parsed.data.opIds ? { opIds: parsed.data.opIds } : {}),
     });
+    if (parsed.data.onboarding) connection.onboarding = { status: "pending", dashboardIds: [] };
     store.putConnection(connection);
     ensureBoardFor(connection);
     registry.addConnection(connection);
@@ -2836,9 +2853,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     const connection = store.getConnection(
       widget.source?.connection ?? widget.sources[0]?.connection ?? "",
     );
-    const entities = connection?.catalog
-      ? (options.catalog?.get(connection.catalog)?.entities ?? [])
-      : [];
+    const entities = entitiesFor(connection);
     const entity = entityById(entities, brief.entity);
     /*
      * The record type is gone — re-described, renamed, or the connection
@@ -3249,9 +3264,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     const entityDetailFor = (connectionId: string, entityId: string) => {
       const connection = store.getConnection(connectionId);
       if (!connection) return null;
-      const entities = connection.catalog
-        ? (options.catalog?.get(connection.catalog)?.entities ?? [])
-        : [];
+      const entities = entitiesFor(connection);
       const entity = entityById(entities, entityId);
       if (!entity) return null;
       const resource = connection.resources.find((one) => one.id === entity.resource);
@@ -3816,9 +3829,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
                      * useless rather than merely harder.
                      */
                     const described = store.listConnections().flatMap((entry) => {
-                      const records = entry.catalog
-                        ? (options.catalog?.get(entry.catalog)?.entities ?? [])
-                        : [];
+                      const records = entitiesFor(entry);
                       return records.length > 0
                         ? [{ connection: entry.id, title: entry.title, entities: records, entry }]
                         : [];

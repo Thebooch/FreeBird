@@ -55,6 +55,52 @@ Two things worth knowing before you file a bug:
 - **Dashboards and connections are read from the working directory**, so `pnpm --filter` puts them in `apps/server/`. Launching the server another way (`tsx apps/server/src/index.ts` from the repo root, say) reads a different directory and looks like your connections vanished. Set `DASH_ROOT` to pin it.
 - **`apps/web` imports the packages' built output**, so after editing anything under `packages/` you need `pnpm build` or the browser keeps showing the old code.
 
+## Connection onboarding
+
+New connections finish with **Set up your dashboards**. After mapping and reading
+the API, Dash infers its purpose and natural categories, then prepares a reusable
+widget set and layout for every category. Choose the categories you want and
+whether they share a connection-named tab or have separate category tabs. Review
+the preview and click **Create dashboards**. Each resulting tab is a normal,
+editable dashboard.
+
+Preparation uses endpoint descriptions, record schemas, relationships, and the
+existing widget compiler. It uses the capable model task `onboarding` (override
+with `DASH_MODEL_ONBOARDING` or the model picker). It never runs at render time.
+Generated categories, briefs, compiled widgets, and layouts live in the
+integration catalog. Account access checks, choices, previews, and created tab
+IDs live on the connection. Manually defined connections without a catalog keep
+their templates locally. Shared templates never contain credentials or sampled
+account records.
+
+Templates are reused without generation calls while their metadata and contract
+fingerprint matches. Preparation checkpoints each category; a failed category can
+be retried without repeating completed work. Updated integration metadata requires
+a fresh template revision, but never changes existing dashboards. Templates can
+be used without an AI key once prepared. The existing `IntegrationStore` interface
+is the storage boundary for a future database-backed catalog.
+
+Before previewing, Dash checks selected widgets through the normal query cache
+and rate-limit gate, including dependencies of multi-source widgets. Empty
+successful collections are allowed. Denied, unavailable, incompatible, or
+unverifiable widgets are explained and excluded; no empty tab is created. Fan-out
+access is checked using an available parent record and does not claim that every
+record in the account has been checked. Each verification pass is bounded to 40
+distinct endpoint/input reads and shares the existing pagination limits.
+
+**Skip for now** leaves the connection usable. Open **Connections → Dashboards**
+to resume. Refreshes preserve saved choices and previews; creation retries finish
+the same reserved tab IDs without replacing user edits. A completed setup offers
+its dashboards and an explicit **Create another set** action.
+
+The connection-scoped API is `/api/connections/:id/onboarding`: `GET` reads status;
+`POST /prepare` prepares one pending category (repeat until complete); `PUT
+/choices` saves `{ categoryIds, organization: "combined" | "separate" }`; `POST
+/preview` verifies and saves a preview; and `POST /commit` takes `{ previewId }`.
+`POST /skip` and `/restart` support deferring setup and explicitly creating another
+set. Outdated previews return 409. `POST /api/connections/from-catalog` accepts
+`onboarding: true` to defer the legacy empty tab until the user chooses dashboards.
+
 ## Principles
 
 **The LLM runs at configuration time, never at render time.** The authoring agent reads sample payloads and emits a deterministic, versioned artifact. That artifact is compiled once and executed by boring code forever after. An LLM in the request path means nondeterministic dashboards, unbounded cost, and no way to debug why a number changed.

@@ -224,6 +224,7 @@ export const capabilitiesFor = (id: string): { supportsTemperature: boolean } =>
  * forever is the whole shape of this.
  */
 export type LlmTask =
+  | "onboarding"
   | "widget"
   | "discover"
   | "map"
@@ -256,6 +257,7 @@ export interface TaskInfo {
 }
 
 export const TASKS: readonly TaskInfo[] = [
+  { id: "onboarding", label: "Preparing starting dashboards", tier: "capable", note: "Discovers categories and prepares reusable dashboards once per integration." },
   {
     id: "widget",
     label: "Building a widget",

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { connectionOnboardingSchema } from "./onboarding.js";
 import {
   ARCHETYPES,
   archetypeSchema,
@@ -85,6 +86,7 @@ export const opSchema = z.object({
 export type OpSpec = z.infer<typeof opSchema>;
 
 export const connectionSchema = z.object({
+  onboarding: connectionOnboardingSchema.optional(),
   credentialsRevision: z.number().int().min(0).optional(),
   paginationPending: z.boolean().optional(),
   specVersion: z.literal(1).default(1),

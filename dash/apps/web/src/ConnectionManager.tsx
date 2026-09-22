@@ -6,6 +6,7 @@ import {
   connectionNeedsAuthSetup,
 } from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useState } from "react";
+import { ConnectionOnboarding } from "./ConnectionOnboarding.js";
 import {
   ApiError,
   type Capabilities,
@@ -38,6 +39,7 @@ type View =
   | "verify"
   | "endpoints"
   | "read"
+  | "onboarding"
   | "manage"
   | "records";
 
@@ -47,6 +49,7 @@ const STEPS: ReadonlyArray<{ id: View; label: string }> = [
   { id: "verify", label: "Verify" },
   { id: "endpoints", label: "Endpoints" },
   { id: "read", label: "Read" },
+  { id: "onboarding", label: "Dashboards" },
 ];
 
 const StepRail = ({ current }: { current: View }): JSX.Element => {
@@ -98,9 +101,11 @@ export const ConnectionManager = ({
   onClose,
   onChanged,
   onCreateWidget,
+  onOpenDashboard,
 }: {
   onClose: () => void;
   onChanged: () => void;
+  onOpenDashboard: (id: string) => void;
   /** Absent when there is no dashboard to add to — the offers still show. */
   onCreateWidget?: (widget: WidgetSpec) => Promise<void>;
 }): JSX.Element => {
@@ -267,6 +272,7 @@ export const ConnectionManager = ({
               : { kind: "none" };
 
       const created = await api.saveConnection(id, {
+        onboarding: { status: "pending", dashboardIds: [] },
         id,
         title: manual.title || id,
         kind: "rest",
@@ -540,9 +546,11 @@ export const ConnectionManager = ({
       });
       await refresh();
       onChanged();
-      setPlan(await api.enumerationPlan(draftId).catch(() => null));
-      setMapInfo(await api.mapState(draft.catalog ?? draftId).catch(() => null));
-      setView("read");
+      const readPlan = await api.enumerationPlan(draftId).catch(() => null);
+      const mapped = await api.mapState(draft.catalog ?? draftId).catch(() => null);
+      setPlan(readPlan);
+      setMapInfo(mapped);
+      setView(mapped?.mapped && readPlan?.alreadyRead ? "onboarding" : "read");
     });
 
   /** Leave the wizard. The connection is already saved and usable. */
@@ -591,6 +599,7 @@ export const ConnectionManager = ({
           async () => api.mapState(id).catch(() => result),
           () => result,
         ));
+        if (readResult || plan?.alreadyRead) setView("onboarding");
       } finally {
         setMapping(false);
       }
@@ -618,6 +627,8 @@ export const ConnectionManager = ({
         const capabilities = await api.capabilities(draftId, true);
         setReadProgress(1);
         setReadResult(capabilities);
+        const currentMap = await api.mapState(draft?.catalog ?? draftId).catch(() => null);
+        if (currentMap?.mapped) setView("onboarding");
       } finally {
         window.clearInterval(tick);
       }
@@ -994,6 +1005,7 @@ export const ConnectionManager = ({
                     >
                       Records
                     </button>
+                    <button className="dash-iconbtn" data-testid={`onboarding-${connection.id}`} onClick={() => { setDraftId(connection.id); setDraft(connection); setView("onboarding"); }}>Dashboards</button>
                     <button
                       className="dash-iconbtn"
                       data-testid={`manage-${connection.id}`}
@@ -2227,6 +2239,9 @@ export const ConnectionManager = ({
           </>
         );
 
+      case "onboarding":
+        return draft ? <><StepRail current={view} /><ConnectionOnboarding connection={draft} onSkip={closeWizard} onOpen={(id) => { onChanged(); onOpenDashboard(id); }} /></> : <p>Choose a connection first.</p>;
+
       case "read":
         return (
           <>
@@ -2401,8 +2416,8 @@ export const ConnectionManager = ({
 
             <div className="dash-row dash-row--end" style={{ marginTop: 12 }}>
               {readResult || plan?.alreadyRead || plan?.estimatedRequests === 0 ? (
-                <button className="dash-control" data-testid="read-close" onClick={closeWizard}>
-                  Done
+                <button className="dash-control" data-testid="read-close" onClick={() => setView("onboarding")}>
+                  Set up dashboards
                 </button>
               ) : (
                 <>
@@ -2430,7 +2445,7 @@ export const ConnectionManager = ({
       className="dash-inspector-backdrop"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="dash-inspector" role="dialog" aria-modal="true" aria-label="Connections">
+      <div className="dash-inspector" style={view === "onboarding" ? { width: "min(1280px, 100%)" } : undefined} role="dialog" aria-modal="true" aria-label="Connections">
         <div className="dash-inspector__head">
           <h3 className="dash-inspector__title">Connections</h3>
           <button

@@ -394,3 +394,4 @@ export type { NamedSource } from "./dashboard.js";
 export type { BuiltinComponentId } from "./contracts.js";
 export { findNarrowing, narrowingFileSchema, narrowingSchema } from "./narrowing.js";
 export type { Narrowing, NarrowingFile } from "./narrowing.js";
+export * from "./onboarding.js";

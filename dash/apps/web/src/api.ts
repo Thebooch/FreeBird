@@ -1,4 +1,7 @@
 import type {
+  OnboardingChoices,
+  OnboardingPreview,
+  OnboardingStatus,
   CatalogEntry,
   ConnectionSpec,
   Presentation,
@@ -546,6 +549,13 @@ export interface MapRunResult extends MapState {
 }
 
 export const api = {
+  onboarding: (id: string): Promise<OnboardingStatus> => request(`/api/connections/${id}/onboarding`),
+  prepareOnboarding: (id: string): Promise<OnboardingStatus> => request(`/api/connections/${id}/onboarding/prepare`, json({})),
+  chooseOnboarding: (id: string, choices: OnboardingChoices): Promise<OnboardingStatus> => request(`/api/connections/${id}/onboarding/choices`, { ...json(choices), method: "PUT" }),
+  previewOnboarding: (id: string): Promise<OnboardingPreview> => request(`/api/connections/${id}/onboarding/preview`, json({})),
+  skipOnboarding: (id: string): Promise<OnboardingStatus> => request(`/api/connections/${id}/onboarding/skip`, json({})),
+  restartOnboarding: (id: string): Promise<OnboardingStatus> => request(`/api/connections/${id}/onboarding/restart`, json({})),
+  commitOnboarding: (id: string, previewId: string): Promise<{ dashboardIds: string[] }> => request(`/api/connections/${id}/onboarding/commit`, json({ previewId })),
   checkSetupPreview: (
     dashboardId: string,
     widget: WidgetSpec,
@@ -800,7 +810,7 @@ export const api = {
     id?: string;
     opIds?: string[];
   }): Promise<ConnectionSummary & { needsKey: boolean }> =>
-    request("/api/connections/from-catalog", json(input)),
+    request("/api/connections/from-catalog", json({ ...input, onboarding: true })),
 
   saveConnection: (id: string, spec: unknown): Promise<ConnectionSummary> =>
     request(`/api/connections/${id}`, {
