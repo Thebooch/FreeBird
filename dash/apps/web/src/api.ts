@@ -1,4 +1,5 @@
 import type {
+  ApiProfile,
   CatalogEntry,
   ConnectionSpec,
   Presentation,
@@ -473,6 +474,90 @@ export interface ConciergeRejection {
 /** Any part of the widget, set in one go. */
 export type ConciergePatch = import("@freebirdai/dash-agent").DraftPatch;
 
+/**
+ * How an API divides up, and what each part opens with.
+ *
+ * Read off the stored integration, so opening the panel costs nothing. The
+ * counts are separate on purpose: an API can be divided into parts before
+ * every part has a starting dashboard, and that half-finished state is a real
+ * one the screen has to be able to describe.
+ */
+export interface CategoryState {
+  readonly divided: boolean;
+  /** Divided by an older pass than the current one. Worth re-running. */
+  readonly stale: boolean;
+  readonly categories: number;
+  /** Parts that have a widget set. The composing pass may not have finished. */
+  readonly composed: number;
+  readonly starters: number;
+  readonly entities: number;
+  readonly categoriesAt: string | null;
+  /** False when there is no model configured to run the passes. */
+  readonly canRun: boolean;
+  readonly profile?: ApiProfile;
+}
+
+export interface CategoryRunResult extends CategoryState {
+  readonly ranPass: boolean;
+  readonly note?: string;
+  /** Widgets proposed against widgets kept. The difference is the honest part. */
+  readonly proposed?: number;
+  readonly kept?: number;
+  /** Record types no part claimed. Not an error — they open no dashboard. */
+  readonly uncategorised?: readonly string[];
+  readonly errors?: readonly string[];
+  readonly skipped?: readonly string[];
+}
+
+/** One part of an API, as it applies to one connection. */
+export interface CategoryOffer {
+  readonly id: string;
+  readonly title: string;
+  readonly description?: string;
+  readonly recordTypes: number;
+  readonly endpoints: number;
+  readonly widgets: number;
+  /** What it opens with, so the choice is not made blind. */
+  readonly opensWith: readonly string[];
+  readonly available: boolean;
+  readonly unavailable?: string;
+}
+
+export interface OnboardingState {
+  readonly connection: string;
+  readonly title: string;
+  readonly catalog: string | null;
+  readonly profile?: ApiProfile;
+  readonly state: CategoryState | null;
+  readonly categories: readonly CategoryOffer[];
+  /** Present once somebody has set this connection up. */
+  readonly already?: {
+    readonly chose: readonly string[];
+    readonly layout: "single" | "per-category";
+    readonly at: string | null;
+    readonly notes: readonly string[];
+    readonly boards: ReadonlyArray<{
+      readonly category?: string;
+      readonly dashboard: string;
+      readonly title: string;
+      readonly widgets: number;
+    }>;
+  };
+}
+
+export interface OnboardingResult {
+  readonly boards: ReadonlyArray<{
+    readonly category?: string;
+    readonly dashboard: string;
+    readonly title: string;
+    readonly widgets: number;
+  }>;
+  readonly layout: "single" | "per-category";
+  /** Where the boards differ from what was designed, in a reader's words. */
+  readonly notes: readonly string[];
+  readonly errors: readonly string[];
+}
+
 export interface MapState {
   readonly mapped: boolean;
   /** Mapped by an older pass than the current one. Worth re-running. */
@@ -731,6 +816,32 @@ export const api = {
    */
   describeRecords: (catalogId: string, force = false): Promise<DescribeRunResult> =>
     request(`/api/catalog/${catalogId}/entities`, json({ force })),
+
+  /** How this API divides up. Free — it reads the stored integration. */
+  categoryState: (catalogId: string): Promise<CategoryState> =>
+    request(`/api/catalog/${catalogId}/categories`),
+
+  /**
+   * Work out what this API is for, how it divides up, and what each part
+   * opens with.
+   *
+   * Model tokens and zero requests against anybody's account, paid once per
+   * API: the answer describes the API rather than this account, so everybody
+   * who connects it afterwards inherits it.
+   */
+  divideApi: (catalogId: string, force = false): Promise<CategoryRunResult> =>
+    request(`/api/catalog/${catalogId}/categories`, json({ force })),
+
+  /** The parts of this API that this connection can actually be given. */
+  onboarding: (connectionId: string): Promise<OnboardingState> =>
+    request(`/api/connections/${connectionId}/onboarding`),
+
+  /** Build the boards. Deterministic — no model, and no upstream request. */
+  setUpDashboards: (
+    connectionId: string,
+    input: { categories: readonly string[]; layout: "single" | "per-category" },
+  ): Promise<OnboardingResult> =>
+    request(`/api/connections/${connectionId}/onboarding`, json(input)),
 
   checkRecords: (connectionId: string, budget?: number): Promise<RecordCheckResult> =>
     request(`/api/connections/${connectionId}/verify`, json(budget ? { budget } : {})),

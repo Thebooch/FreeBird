@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { fieldFormatSchema } from "./coercion.js";
 import { entitySchema } from "./entity.js";
+import { CATEGORIES_MAX, categorySchema, profileSchema } from "./category.js";
 import { authSchema, paginationSchema, paramDefSchema, queryValueSchema } from "./primitives.js";
 import { resourceSchema } from "./resource.js";
 
@@ -253,6 +254,43 @@ export const catalogEntrySchema = z.object({
    * worth re-running when somebody wants it and never worth nagging about.
    */
   viewProgress: z.object({ batches: z.array(z.string()).max(2000) }).optional(),
+
+  /**
+   * What this API is for, in a sentence.
+   *
+   * Shown while somebody is deciding which parts of it they want, because the
+   * questions only read as questions with it: "these are the parts of a
+   * property management system" is answerable and "these are eight groups of
+   * endpoints" is not.
+   */
+  profile: profileSchema.optional(),
+  /**
+   * How this API's records divide up, and where to start with each division.
+   *
+   * The layer that makes a new connection open with something rather than
+   * nothing. Leasing, maintenance and accounting are one API's own divisions;
+   * no rule here could name them, because they are facts about the domain
+   * rather than about the schema — and they are facts about the *API* rather
+   * than about an account, which is what puts them in this entry alongside the
+   * relations and the record types. Each carries the widget set it opens with,
+   * as briefs rather than widgets. See `category.ts` for why that distinction
+   * is load-bearing.
+   */
+  categories: z.array(categorySchema).max(CATEGORIES_MAX).default([]),
+  /** When the categorising pass last ran, and against which version of it. */
+  categoriesAt: z.string().optional(),
+  categoryVersion: z.number().int().min(1).optional(),
+  /**
+   * Which starter sets have already been written.
+   *
+   * One batch per category, so a run that lost a call keeps the categories it
+   * finished and picks up the rest — the same bargain the map and entity
+   * passes strike, and for the same reason: re-running costs what the first
+   * run cost.
+   */
+  categoryProgress: z
+    .object({ version: z.number().int(), batches: z.array(z.string()).max(2000) })
+    .optional(),
   /**
    * When the descriptions were last checked against a live account.
    *

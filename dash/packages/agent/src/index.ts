@@ -129,6 +129,7 @@ export type { ReferenceCandidate, ReferenceInput, ReferenceResult } from "./refe
 export {
   BRIEF_SYSTEM_PROMPT,
   briefCandidates,
+  briefFromParts,
   resolveCandidate,
   briefSchema,
   buildBriefPrompt,
@@ -138,6 +139,7 @@ export { patchFromBrief } from "./concierge/from-brief.js";
 export type {
   BriefCandidate,
   BriefField,
+  BriefParts,
   WriteBriefInput,
   WriteBriefResult,
 } from "./brief.js";
@@ -157,6 +159,27 @@ export type { FieldPick, ValueMatch } from "./narrow-llm.js";
 export { proposeWidget } from "./propose.js";
 export type { Ambiguity, ProposalResult, ProposeInput } from "./propose.js";
 export { highlightCandidates, nounFromTitle } from "./authoring.js";
+export {
+  CATEGORY_SYSTEM_PROMPT,
+  buildCategoryPrompt,
+  categoriesFromProposal,
+  categoriseApi,
+  categoryId,
+} from "./categories.js";
+export type { CategoryInput, CategoryProposal, CategoryResult } from "./categories.js";
+export {
+  STARTER_SYSTEM_PROMPT,
+  buildStarterPrompt,
+  composeStarters,
+  starterBatchKey,
+  startersFromProposal,
+} from "./starters.js";
+export type {
+  StarterCheck,
+  StarterInput,
+  StarterProposal,
+  StarterResult,
+} from "./starters.js";
 export { VIEWS_SYSTEM_PROMPT, chooseViews } from "./views.js";
 export type { ViewProposal, ViewsInput, ViewsResult } from "./views.js";
 export type { AuthoredWidget } from "./authoring.js";

@@ -16,6 +16,7 @@ import {
   queryValueSchema,
 } from "./primitives.js";
 import { resourceSchema } from "./resource.js";
+import { onboardingSchema } from "./category.js";
 
 export { authSchema, paginationSchema } from "./primitives.js";
 export type { AuthSpec, PaginationSpec } from "./primitives.js";
@@ -113,6 +114,15 @@ export const connectionSchema = z.object({
   authRequired: z.boolean().default(false),
   /** Set when an MCP tool returns prose rather than a declared outputSchema. */
   brittle: z.boolean().optional(),
+  /**
+   * Which parts of this API somebody wanted, and the boards that came of it.
+   *
+   * The personal half of onboarding. The categories themselves describe the
+   * API and live in the catalog entry, shared with everybody who connects it;
+   * what one person picked out of them, and whether they wanted it on one tab
+   * or several, is theirs. Recorded so the question is asked once.
+   */
+  onboarding: onboardingSchema.optional(),
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
 });

@@ -15,6 +15,9 @@ import {
   type EnumerationPlan,
   type MapRunResult,
   type MapState,
+  type CategoryRunResult,
+  type OnboardingResult,
+  type OnboardingState,
   type DescribeRunResult,
   type RecordCheckResult,
   type ReferencesResult,
@@ -38,6 +41,7 @@ type View =
   | "verify"
   | "endpoints"
   | "read"
+  | "dashboards"
   | "manage"
   | "records";
 
@@ -47,7 +51,18 @@ const STEPS: ReadonlyArray<{ id: View; label: string }> = [
   { id: "verify", label: "Verify" },
   { id: "endpoints", label: "Endpoints" },
   { id: "read", label: "Read" },
+  /*
+   * The step the wizard used to end without.
+   *
+   * Everything before it leaves a connection that works and a board that is
+   * empty. This is where somebody says what they actually want from the API
+   * they have just connected, and gets it.
+   */
+  { id: "dashboards", label: "Dashboards" },
 ];
+
+/** How many parts the wizard starts with ticked. */
+const PRECHECKED = 3;
 
 const StepRail = ({ current }: { current: View }): JSX.Element => {
   const index = STEPS.findIndex(
@@ -142,6 +157,20 @@ export const ConnectionManager = ({
   const [mapRun, setMapRun] = useState<MapRunResult | null>(null);
   const [mapping, setMapping] = useState(false);
   const [chosenOps, setChosenOps] = useState<string[]>([]);
+
+  /**
+   * What this connection could be set up with, and what it already was.
+   *
+   * Its own state rather than `mapInfo`'s: the parts of an API are read per
+   * connection — a part whose endpoints this connection does not carry is not
+   * on offer — so this cannot be derived from anything about the API alone.
+   */
+  const [onboarding, setOnboarding] = useState<OnboardingState | null>(null);
+  const [chosenCategories, setChosenCategories] = useState<string[]>([]);
+  const [tabLayout, setTabLayout] = useState<"single" | "per-category">("per-category");
+  const [dividing, setDividing] = useState(false);
+  const [divideRun, setDivideRun] = useState<CategoryRunResult | null>(null);
+  const [built, setBuilt] = useState<OnboardingResult | null>(null);
 
   const [discoverUrl, setDiscoverUrl] = useState("");
   const [discovery, setDiscovery] = useState<DiscoveryResult | null>(null);
@@ -554,6 +583,10 @@ export const ConnectionManager = ({
     setReadProgress(null);
     setMapInfo(null);
     setMapRun(null);
+    setOnboarding(null);
+    setDivideRun(null);
+    setBuilt(null);
+    setChosenCategories([]);
   };
 
   /**
@@ -621,6 +654,81 @@ export const ConnectionManager = ({
       } finally {
         window.clearInterval(tick);
       }
+    });
+
+  /**
+   * Open the last step: what this connection could be set up with.
+   *
+   * Costs nothing — every number is read off the stored integration and this
+   * connection's own endpoints. The one thing here that spends anything is
+   * dividing the API, and that is a button.
+   */
+  const openOnboarding = (connectionId: string): Promise<void> =>
+    run(async () => {
+      setDivideRun(null);
+      setBuilt(null);
+      const state = await api.onboarding(connectionId);
+      setOnboarding(state);
+      /*
+       * The parts the pass ranked highest, ticked.
+       *
+       * Ticking everything on an API that divides into eight parts offers
+       * somebody eight tabs by default, which is not a starting point; ticking
+       * nothing makes the first thing they see a form they have to fill in.
+       * The pass orders its answer most-wanted first, so the top of that order
+       * is the defensible default.
+       */
+      setChosenCategories(
+        state.categories
+          .filter((category) => category.available)
+          .slice(0, PRECHECKED)
+          .map((category) => category.id),
+      );
+      setView("dashboards");
+    });
+
+  /**
+   * Work out what this API is for and what each part of it opens with.
+   *
+   * The shared half: it describes the API rather than this account, so it is
+   * paid for once and every later connection to the same API inherits it.
+   */
+  const runDivide = (): Promise<void> =>
+    run(async () => {
+      const catalogId = onboarding?.catalog ?? draft?.catalog ?? draftId;
+      const connectionId = onboarding?.connection ?? draftId;
+      if (!catalogId || !connectionId) return;
+      setDividing(true);
+      try {
+        setDivideRun(await api.divideApi(catalogId));
+        /* Re-read rather than patched: what is on screen is what the
+         * integration now says, for this connection's endpoints. */
+        const state = await api.onboarding(connectionId);
+        setOnboarding(state);
+        setChosenCategories(
+          state.categories
+            .filter((category) => category.available)
+            .slice(0, PRECHECKED)
+            .map((category) => category.id),
+        );
+      } finally {
+        setDividing(false);
+      }
+    });
+
+  /** Build the boards. Deterministic, and it makes no request to the API. */
+  const buildBoards = (): Promise<void> =>
+    run(async () => {
+      const connectionId = onboarding?.connection ?? draftId;
+      if (!connectionId || chosenCategories.length === 0) return;
+      const result = await api.setUpDashboards(connectionId, {
+        categories: chosenCategories,
+        layout: chosenCategories.length > 1 ? tabLayout : "per-category",
+      });
+      setBuilt(result);
+      setOnboarding(await api.onboarding(connectionId).catch(() => onboarding));
+      /* The nav reads its tabs from the boards, so it has to be told. */
+      onChanged();
     });
 
   /**
@@ -1317,6 +1425,22 @@ export const ConnectionManager = ({
               <button className="dash-control" onClick={() => setView("list")}>
                 Back
               </button>
+              {/*
+               * The same step the wizard ends on, reachable for a connection
+               * that already exists. Without it, onboarding would only ever
+               * be offered on the way in — and every connection anybody
+               * already has would be permanently past the offer.
+               */}
+              {records?.described && managed && (
+                <button
+                  className="dash-control dash-control--primary"
+                  data-testid="records-onboarding"
+                  disabled={busy}
+                  onClick={() => managed && void openOnboarding(managed.id)}
+                >
+                  Set up dashboards
+                </button>
+              )}
             </div>
           </>
         );
@@ -2227,6 +2351,260 @@ export const ConnectionManager = ({
           </>
         );
 
+      case "dashboards": {
+        const offers = onboarding?.categories ?? [];
+        const available = offers.filter((offer) => offer.available);
+        const state = onboarding?.state;
+        const picked = offers.filter((offer) => chosenCategories.includes(offer.id));
+        const already = onboarding?.already;
+
+        return (
+          <>
+            {/* Only a step when it is one: reached from Records, this is a
+             * screen of its own rather than the tail of a wizard. */}
+            {draftId && <StepRail current={view} />}
+            <h4>What do you want from {onboarding?.title ?? draft?.title ?? "this connection"}?</h4>
+
+            {onboarding?.profile && (
+              <p className="dash-page__description" data-testid="onboarding-profile">
+                {onboarding.profile.summary}
+              </p>
+            )}
+
+            {/*
+             * The gate, in the same shape as the map gate below: what it buys,
+             * what it costs, and that it is paid once. The question it asks is
+             * about the API rather than about this account, which is exactly
+             * why the answer is worth sharing.
+             */}
+            {state && !state.divided && !divideRun && (
+              <div className="dash-callout" data-testid="onboarding-gate">
+                <p>
+                  <strong>Nobody has worked out what this API is for yet.</strong>
+                </p>
+                <p className="dash-hint">
+                  {onboarding?.title ?? "This API"} has {state.entities} kind(s) of record.
+                  Working it out reads them once and answers two things: what this software is,
+                  and which parts it divides into &mdash; leasing, maintenance, accounting,
+                  whatever this one&rsquo;s own are. Then, for each part, which widgets a
+                  dashboard of it should open with.
+                </p>
+                <p className="dash-hint">
+                  It makes <strong>no requests against your API</strong>. The cost is AI usage,
+                  and it is paid once &mdash; the answer describes the API rather than your
+                  account, so everybody who connects this API afterwards starts where you
+                  finished.
+                </p>
+                {!state.canRun && (
+                  <p className="dash-hint">
+                    This needs an AI key on the server. Without one you can still add widgets by
+                    describing them yourself.
+                  </p>
+                )}
+                <div className="dash-row dash-row--end" style={{ marginTop: 8 }}>
+                  <button
+                    className="dash-control dash-control--primary"
+                    data-testid="onboarding-divide"
+                    disabled={busy || dividing || !state.canRun}
+                    onClick={() => void runDivide()}
+                  >
+                    {dividing ? "Working it out…" : "Work out what this API is for"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {divideRun && (
+              <div
+                className={`dash-callout ${(divideRun.errors ?? []).length > 0 ? "" : "dash-callout--good"}`}
+                data-testid="onboarding-divided"
+              >
+                {divideRun.ranPass
+                  ? `Divided into ${divideRun.categories} part(s), with ${divideRun.starters} widget(s) composed across them.`
+                  : (divideRun.note ?? "Nothing to work out.")}
+                {/*
+                 * Proposed against kept. A widget the compiler refused is one
+                 * that would not have worked, and saying so beats a board that
+                 * is quietly shorter than the number above it.
+                 */}
+                {divideRun.proposed !== undefined &&
+                  divideRun.kept !== undefined &&
+                  divideRun.proposed > divideRun.kept && (
+                    <>
+                      {" "}
+                      {divideRun.proposed - divideRun.kept} proposed widget(s) could not be built
+                      from what this API offers and were left out.
+                    </>
+                  )}
+                {(divideRun.errors ?? []).length > 0 && (
+                  <>
+                    {" "}
+                    {divideRun.errors!.length} part(s) did not finish; running it again picks up
+                    where it stopped.
+                  </>
+                )}
+              </div>
+            )}
+
+            {already && already.boards.length > 0 && !built && (
+              <div className="dash-callout" data-testid="onboarding-already">
+                <p>
+                  <strong>This connection is already set up.</strong>{" "}
+                  {already.boards.map((board) => board.title).join(", ")} &mdash;{" "}
+                  {already.boards.reduce((sum, board) => sum + board.widgets, 0)} widget(s) in
+                  all.
+                </p>
+                <p className="dash-hint">
+                  Setting it up again makes new tabs and leaves those alone, so nothing you have
+                  arranged since is lost.
+                </p>
+              </div>
+            )}
+
+            {available.length > 0 && !built && (
+              <>
+                <p className="dash-page__description">
+                  Tick the parts you want. Each one becomes a dashboard of its own, already
+                  filled in.
+                </p>
+                <ul className="dash-checklist" data-testid="onboarding-categories">
+                  {offers.map((offer) => (
+                    <li key={offer.id}>
+                      <label>
+                        <input
+                          type="checkbox"
+                          data-testid={`category-${offer.id}`}
+                          disabled={!offer.available}
+                          checked={chosenCategories.includes(offer.id)}
+                          onChange={(event) =>
+                            setChosenCategories((previous) =>
+                              event.target.checked
+                                ? [...previous, offer.id]
+                                : previous.filter((id) => id !== offer.id),
+                            )
+                          }
+                        />
+                        <span>
+                          <span className="dash-checklist__name">{offer.title}</span>
+                          <div className="dash-checklist__meta">
+                            {offer.description ? `${offer.description} ` : ""}
+                            {offer.available
+                              ? `${offer.recordTypes} record type(s) · ${offer.endpoints} endpoint(s) · opens with ${offer.widgets} widget(s): ${offer.opensWith.join(", ")}`
+                              : (offer.unavailable ?? "Nothing could be built for this part.")}
+                          </div>
+                        </span>
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+
+                {/*
+                 * Only worth asking with two or more parts ticked. With one
+                 * there is nothing to combine, and the question would be a
+                 * step somebody has to click through to reach their board.
+                 */}
+                {chosenCategories.length > 1 && (
+                  <div className="dash-callout" data-testid="onboarding-layout">
+                    <p>
+                      <strong>One {onboarding?.title ?? "combined"} tab, or a tab each?</strong>
+                    </p>
+                    <label style={{ display: "block", marginTop: 6 }}>
+                      <input
+                        type="radio"
+                        name="dash-tab-layout"
+                        data-testid="layout-per-category"
+                        checked={tabLayout === "per-category"}
+                        onChange={() => setTabLayout("per-category")}
+                      />{" "}
+                      A tab each &mdash; {picked.map((offer) => offer.title).join(", ")}
+                    </label>
+                    <label style={{ display: "block", marginTop: 4 }}>
+                      <input
+                        type="radio"
+                        name="dash-tab-layout"
+                        data-testid="layout-single"
+                        checked={tabLayout === "single"}
+                        onChange={() => setTabLayout("single")}
+                      />{" "}
+                      One tab called {onboarding?.title ?? draft?.title ?? "this connection"}, with
+                      the most important widgets from each
+                    </label>
+                  </div>
+                )}
+              </>
+            )}
+
+            {state?.divided && available.length === 0 && !built && (
+              <div className="dash-callout" data-testid="onboarding-nothing">
+                None of this API&rsquo;s parts can be built from the endpoints this connection
+                carries. Adding more endpoints in Manage would change that; in the meantime you
+                can still ask for widgets one at a time.
+              </div>
+            )}
+
+            {built && (
+              <div
+                className={`dash-callout ${built.errors.length > 0 ? "" : "dash-callout--good"}`}
+                data-testid="onboarding-built"
+              >
+                <p>
+                  Built {built.boards.length === 1 ? "one tab" : `${built.boards.length} tabs`}{" "}
+                  &mdash;{" "}
+                  {built.boards
+                    .map((board) => `${board.title} (${board.widgets} widget(s))`)
+                    .join(", ")}
+                  .
+                </p>
+                {/*
+                 * Where the boards differ from what was designed. A board
+                 * quietly shorter than its starter set is the failure mode
+                 * here, and nothing on screen would otherwise say so.
+                 */}
+                {built.notes.length > 0 && (
+                  <ul className="dash-hint" data-testid="onboarding-notes">
+                    {built.notes.slice(0, 5).map((note) => (
+                      <li key={note}>{note}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            <div className="dash-row dash-row--end" style={{ marginTop: 12 }}>
+              {built ? (
+                <button
+                  className="dash-control dash-control--primary"
+                  data-testid="onboarding-close"
+                  onClick={closeWizard}
+                >
+                  Done
+                </button>
+              ) : (
+                <>
+                  <button
+                    className="dash-control"
+                    data-testid="onboarding-skip"
+                    onClick={closeWizard}
+                  >
+                    Skip for now
+                  </button>
+                  <button
+                    className="dash-control dash-control--primary"
+                    data-testid="onboarding-build"
+                    disabled={busy || chosenCategories.length === 0}
+                    onClick={() => void buildBoards()}
+                  >
+                    {chosenCategories.length > 1 && tabLayout === "per-category"
+                      ? `Make ${chosenCategories.length} tabs`
+                      : "Make my dashboard"}
+                  </button>
+                </>
+              )}
+            </div>
+          </>
+        );
+      }
+
       case "read":
         return (
           <>
@@ -2401,12 +2779,22 @@ export const ConnectionManager = ({
 
             <div className="dash-row dash-row--end" style={{ marginTop: 12 }}>
               {readResult || plan?.alreadyRead || plan?.estimatedRequests === 0 ? (
-                <button className="dash-control" data-testid="read-close" onClick={closeWizard}>
-                  Done
+                <button
+                  className="dash-control dash-control--primary"
+                  data-testid="read-close"
+                  disabled={busy || !draftId}
+                  onClick={() => draftId && void openOnboarding(draftId)}
+                >
+                  Next
                 </button>
               ) : (
                 <>
-                  <button className="dash-control" data-testid="read-skip" onClick={closeWizard}>
+                  <button
+                    className="dash-control"
+                    data-testid="read-skip"
+                    disabled={busy || !draftId}
+                    onClick={() => draftId && void openOnboarding(draftId)}
+                  >
                     Skip for now
                   </button>
                   <button

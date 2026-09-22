@@ -124,6 +124,7 @@ import {
   widgetBriefSchema,
 } from "@freebirdai/dash-spec";
 import { mapRoutes, mergeDescribedEntities } from "./routes/map.js";
+import { onboardingRoutes } from "./routes/onboarding.js";
 import { VERIFY_BUDGET_DEFAULT, VERIFY_BUDGET_MAX, verifyRecords } from "./routes/verify.js";
 import type { Settings, SettingsStore } from "./settings.js";
 import { QueryCache, clampMaxAge } from "./cache/queryCache.js";
@@ -2622,6 +2623,26 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       // The same SSRF-guarded, allowlist-free entry point discovery uses. A
       // spec is a public document and there is no connection to pin it to.
       fetchDocument: fetchPublicDocument,
+    }),
+  );
+
+  /*
+   * What somebody wants from a connection, and the boards that answer it.
+   *
+   * Two routes on the catalog and two on the connection, because onboarding
+   * has two halves with two lifetimes: how an API divides up describes the API
+   * and is shared with everybody who connects it, and which parts one person
+   * picked is theirs. See `routes/onboarding.ts`.
+   */
+  void app.register(
+    onboardingRoutes({
+      catalog,
+      llm: (task) => resolveLlm(task),
+      getConnection: (id) => store.getConnection(id),
+      putConnection: (spec) => store.putConnection(spec),
+      getDashboard: (id) => store.getDashboard(id),
+      putDashboard: (spec) => store.putDashboard(spec),
+      createDashboard: (title) => createDashboardSpec(title),
     }),
   );
 

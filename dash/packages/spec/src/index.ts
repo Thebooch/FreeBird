@@ -129,6 +129,21 @@ export type {
   ReferenceSpec,
 } from "./entity.js";
 
+export {
+  CATEGORIES_MAX,
+  CATEGORY_VERSION,
+  STARTERS_PER_CATEGORY_MAX,
+  categorySchema,
+  onboardingSchema,
+  profileSchema,
+  starterSchema,
+  starterSizeSchema,
+} from "./category.js";
+export type { ApiProfile, CategorySpec, OnboardingSpec, StarterSpec } from "./category.js";
+
+export { clampCell, completeLayout, solveLayout } from "./layout.js";
+export type { PlacementRequest, SolveLayoutOptions, SolveLayoutResult } from "./layout.js";
+
 export { RECIPES, facetsFromRecipe, recipeFor } from "./recipes.js";
 export type { EntityRecipe } from "./recipes.js";
 

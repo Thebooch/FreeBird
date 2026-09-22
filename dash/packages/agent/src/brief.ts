@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { EntityKind, EntitySpec, WidgetBrief } from "@freebirdai/dash-spec";
+import type { EntityKind, EntitySpec, WidgetBrief, WidgetIntent } from "@freebirdai/dash-spec";
 import { facetsFromRecipe, recipeFor } from "@freebirdai/dash-spec";
 import type { LlmAdapter, LlmTool } from "./llm.js";
 
@@ -197,6 +197,63 @@ export const briefCandidates = (sources: readonly BriefSource[]): BriefCandidate
     }),
   );
 };
+
+/**
+ * The fields of a brief as a model states them, flat.
+ *
+ * A tool schema has to stay flat — the JSON Schema converter refuses unions
+ * and records — so a brief arrives as `measureAgg` and `measureField` rather
+ * than the nested `measure` the compiler wants. This is that mapping, in one
+ * place, because three callers now need it: the primary brief, the extra
+ * widgets a request asks for beside it, and the starter sets written for a
+ * category. Three spellings of it would disagree the day any one changed.
+ */
+export interface BriefParts {
+  readonly entity: string;
+  readonly intent: WidgetIntent;
+  readonly title?: string | undefined;
+  readonly filters?: ReadonlyArray<{ field: string; values?: string[] | undefined }> | undefined;
+  readonly columns?: readonly string[] | undefined;
+  readonly groupBy?: string | undefined;
+  readonly measureAgg?: "count" | "sum" | undefined;
+  readonly measureField?: string | undefined;
+  readonly sortField?: string | undefined;
+  readonly sortDir?: "asc" | "desc" | undefined;
+  readonly limit?: number | undefined;
+}
+
+export const briefFromParts = (parts: BriefParts): WidgetBrief => ({
+  entity: parts.entity,
+  intent: parts.intent,
+  ...(parts.title?.trim() ? { title: parts.title.trim() } : {}),
+  ...(parts.columns && parts.columns.length > 0 ? { columns: [...parts.columns] } : {}),
+  ...(parts.filters && parts.filters.length > 0
+    ? {
+        filters: parts.filters.map((one) => ({
+          field: one.field,
+          ...(one.values && one.values.length > 0 ? { values: [...one.values] } : {}),
+        })),
+      }
+    : {}),
+  ...(parts.groupBy ? { groupBy: parts.groupBy } : {}),
+  ...(parts.sortField
+    ? { sort: { field: parts.sortField, ...(parts.sortDir ? { dir: parts.sortDir } : {}) } }
+    : {}),
+  /*
+   * A measure is only carried where it means something. A count is the default
+   * for every intent, and naming one on a plain list of records would turn a
+   * list into a number nobody asked for.
+   */
+  ...(parts.intent !== "records" && (parts.measureAgg || parts.measureField)
+    ? {
+        measure: {
+          agg: parts.measureAgg ?? "count",
+          ...(parts.measureField ? { field: parts.measureField } : {}),
+        },
+      }
+    : {}),
+  ...(parts.limit !== undefined ? { limit: parts.limit } : {}),
+});
 
 /**
  * The record type a brief named, and which API it belongs to.
@@ -681,28 +738,7 @@ export const writeBrief = async (
     const match = input.candidates.find((candidate) => candidate.entity === extra.entity);
     if (!match) continue;
     if (match.entity === found.entity && extra.intent === args.intent) continue;
-    plus.push({
-      entity: match.entity,
-      intent: extra.intent,
-      ...(extra.title?.trim() ? { title: extra.title.trim() } : {}),
-      ...(extra.filters && extra.filters.length > 0
-        ? {
-            filters: extra.filters.map((one) => ({
-              field: one.field,
-              ...(one.values && one.values.length > 0 ? { values: one.values } : {}),
-            })),
-          }
-        : {}),
-      ...(extra.groupBy ? { groupBy: extra.groupBy } : {}),
-      ...(extra.intent !== "records" && (extra.measureAgg || extra.measureField)
-        ? {
-            measure: {
-              agg: extra.measureAgg ?? "count",
-              ...(extra.measureField ? { field: extra.measureField } : {}),
-            },
-          }
-        : {}),
-    });
+    plus.push(briefFromParts({ ...extra, entity: match.entity }));
   }
 
   return { brief, reason: args.reason.trim(), alternative, plus, error: null };

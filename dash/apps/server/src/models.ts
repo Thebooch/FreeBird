@@ -228,6 +228,7 @@ export type LlmTask =
   | "discover"
   | "map"
   | "entity"
+  | "onboarding"
   | "record"
   | "label"
   | "chat"
@@ -285,6 +286,20 @@ export const TASKS: readonly TaskInfo[] = [
     label: "Describing record types",
     tier: "capable",
     note: "Names an API's records and their fields, and works out which point at each other. Once per API.",
+  },
+  {
+    /*
+     * Dividing an API into the parts its users think in, and composing what
+     * each part opens with. Setup-time judgement about a whole domain, run
+     * once per API and then inherited by everybody who connects it — the same
+     * standing as `map` and `entity`, and wrong for the same reason a cheap
+     * reading of those would be: it is not one person's mistake, it is
+     * everyone's.
+     */
+    id: "onboarding",
+    label: "Planning a connection's dashboards",
+    tier: "capable",
+    note: "Works out what an API is for and what each part of it should open with. Once per API.",
   },
   {
     id: "record",
