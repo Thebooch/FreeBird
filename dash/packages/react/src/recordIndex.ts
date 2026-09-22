@@ -59,6 +59,15 @@ export interface ReferenceLookup {
    * the index is that a record fetched once names itself everywhere after.
    */
   readonly held?: true;
+  /**
+   * This record type has already been refused outright — see `isDenied`.
+   *
+   * Kept in the list rather than dropped from it, so the cell can still say
+   * *why* it is showing an id. Never fetched and never counted against the
+   * budget: asking again is guaranteed to fail, and the budget belongs to the
+   * record types that can still answer.
+   */
+  readonly denied?: true;
 }
 
 export interface LookupInput {
@@ -85,6 +94,28 @@ export interface LookupInput {
    * Known records are always resolved; the limit applies to the rest.
    */
   readonly known?: (lookup: { readonly target: string; readonly id: string | number }) => boolean;
+  /**
+   * Record types this account has been refused outright.
+   *
+   * Their lookups are still returned, so a cell can explain itself, and are
+   * marked `denied` so nothing fetches them or spends budget on them.
+   */
+  readonly denied?: (target: string) => boolean;
+  /**
+   * The columns the component actually draws, where the caller knows them.
+   *
+   * A widget's rows carry every column its endpoint returned; the component
+   * draws the handful its roles name. Measured on a real board: a work order
+   * table drawing six columns carried nineteen, one of which — a list of bill
+   * ids — was a reference to a record type the account is not licensed for.
+   * Every refresh spent the whole per-record budget fetching names for a
+   * column nobody could see, and the names that budget was meant for went
+   * unresolved behind it.
+   *
+   * Absent means every reference column counts, which is right for a caller
+   * that does not know what is drawn.
+   */
+  readonly shown?: ReadonlySet<string>;
 }
 
 /**
@@ -105,6 +136,7 @@ export const referenceLookups = (input: LookupInput): readonly ReferenceLookup[]
     (column): column is ColumnMeta & { reference: ColumnReference } =>
       column.reference !== undefined &&
       column.reference.lookup !== undefined &&
+      (input.shown?.has(column.name) ?? true) &&
       // Already on the row, so nothing has to be asked for — unless something
       // reads a *different* field off the far record.
       (column.reference.embedded.length === 0 || (input.alsoFetch?.has(column.name) ?? false)),
@@ -124,6 +156,20 @@ export const referenceLookups = (input: LookupInput): readonly ReferenceLookup[]
         const key = queryKey(input.connection, lookup.op, { [lookup.param]: id }, input.params);
         if (seen.has(key)) continue;
         seen.add(key);
+        const refused = input.denied?.(reference.target) ?? false;
+        if (refused) {
+          wanted.push({
+            connection: input.connection,
+            op: lookup.op,
+            param: lookup.param,
+            id,
+            target: reference.target,
+            column: column.name,
+            key,
+            denied: true as const,
+          });
+          continue;
+        }
         const free = input.known?.({ target: reference.target, id }) ?? false;
         /*
          * Counted against the budget only when it would cost a request. A
@@ -160,6 +206,30 @@ export const referenceLookups = (input: LookupInput): readonly ReferenceLookup[]
  */
 export const REFUSAL_STATUS = 429;
 
+/**
+ * Statuses that say this record type cannot be read at all, ever.
+ *
+ * Different from a refusal in the one way that matters: waiting does not help.
+ * A 429 is "not now" and a 403 is "not with this credential" — Buildium
+ * returns exactly that for an account without the accounting module, on every
+ * call, forever.
+ *
+ * Which made it the expensive one. A refusal ends the pass, so it costs one
+ * request; a denial ended nothing, so a table linking to a denied record type
+ * spent its whole per-record budget on calls that could not succeed — and the
+ * names that budget was meant for, on record types the account *can* read,
+ * went unresolved behind it. Measured on a real board: 25 lookups, all 403,
+ * repeated on every refresh.
+ *
+ * **404 is deliberately not here.** It says this *record* is gone — a deleted
+ * vendor, an id left behind on a row — and says nothing at all about the next
+ * one, so it must not stop a type's other names from resolving.
+ */
+export const DENIED_STATUSES: readonly number[] = [401, 403];
+
+export const isDenied = (status: number | undefined): boolean =>
+  status !== undefined && DENIED_STATUSES.includes(status);
+
 export interface SerialFetch {
   readonly lookups: readonly ReferenceLookup[];
   /** Run one lookup through the cache. Resolves whether or not it worked. */
@@ -174,6 +244,8 @@ export interface SerialResult {
   readonly fetched: number;
   /** Set when the API refused and the pass gave up rather than pressing on. */
   readonly refusedWith?: number;
+  /** Record types refused outright, which must not be asked for again. */
+  readonly denied?: readonly string[];
 }
 
 /**
@@ -189,17 +261,30 @@ export interface SerialResult {
  * record, which is what that fallback is for. An *ordinary* failure does not
  * stop anything — a 404 on one id says nothing about the next.
  */
+/** Omitted when nothing was denied, so an ordinary pass reports an ordinary result. */
+const report = (denied: ReadonlySet<string>): { denied?: readonly string[] } =>
+  denied.size > 0 ? { denied: [...denied] } : {};
+
 export const fetchLookupsInOrder = async (input: SerialFetch): Promise<SerialResult> => {
   let fetched = 0;
+  /*
+   * A denial is about the record type, not about the request, so it skips the
+   * rest of *that* type and lets the others carry on. A refusal is about the
+   * account's rate and stops everything.
+   */
+  const denied = new Set<string>();
   for (const lookup of input.lookups) {
-    if (input.stopped?.()) return { fetched };
+    if (input.stopped?.()) return { fetched, ...report(denied) };
+    if (denied.has(lookup.target)) continue;
     await input.fetch(lookup);
     fetched += 1;
-    if (input.statusOf(lookup) === REFUSAL_STATUS) {
-      return { fetched, refusedWith: REFUSAL_STATUS };
+    const status = input.statusOf(lookup);
+    if (status === REFUSAL_STATUS) {
+      return { fetched, refusedWith: REFUSAL_STATUS, ...report(denied) };
     }
+    if (isDenied(status)) denied.add(lookup.target);
   }
-  return { fetched };
+  return { fetched, ...report(denied) };
 };
 
 /**
@@ -316,6 +401,52 @@ export type ReferenceNames = Readonly<Record<string, Readonly<Record<string, str
  * whole thing is checkable without rendering anything: the hook resolves, the
  * cell reads.
  */
+/**
+ * Link cells left showing an id, and why.
+ *
+ * A reference cell names the record behind it, and where it cannot it falls
+ * back to the kind and the id — "Vendor 4711". That fallback is right; being
+ * *silent* about it is not. The rows themselves come from the cache, which
+ * serves stale happily, so a table renders looking perfectly healthy while its
+ * link column quietly turns into numbers — and the only reading available to
+ * somebody watching is that the links stopped working.
+ *
+ * Reported only when a fetch actually failed or was refused. A record that was
+ * read and simply has nothing to call itself is a different problem with a
+ * different answer, and labelling that "could not be loaded" would send
+ * somebody looking for a rate limit that was never there.
+ *
+ * The batches are consulted first: when a whole record type was being fetched
+ * at once, its refusal is the one that cost the most names, and it is the
+ * honest thing to quote.
+ */
+export const unnamedLinks = (input: {
+  readonly lookups: readonly ReferenceLookup[];
+  readonly names: ReferenceNames;
+  /** Keys of any whole-list fetches standing in for per-record lookups. */
+  readonly batchKeys?: readonly string[];
+  /** Why that key failed, or undefined where it did not. */
+  readonly failureOf: (key: string) => string | undefined;
+}): { readonly count: number; readonly reason: string } | null => {
+  if (input.lookups.length === 0) return null;
+
+  let reason: string | undefined;
+  for (const key of [
+    ...(input.batchKeys ?? []),
+    ...input.lookups.map((lookup) => lookup.key),
+  ]) {
+    reason = reason ?? input.failureOf(key);
+    if (reason) break;
+  }
+  if (!reason) return null;
+
+  let count = 0;
+  for (const lookup of input.lookups) {
+    if (input.names[lookup.column]?.[String(lookup.id)] === undefined) count++;
+  }
+  return count > 0 ? { count, reason } : null;
+};
+
 export const referenceNames = (
   lookups: readonly ReferenceLookup[],
   /**

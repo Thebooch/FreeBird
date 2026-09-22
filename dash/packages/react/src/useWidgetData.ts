@@ -9,7 +9,7 @@ import type {
 import { interpolateValue, parseDuration, widgetSources } from "@freebirdai/dash-spec";
 import type { Row, RowHighlight, RunMeta } from "@freebirdai/dash-runtime";
 import { compilePlan, executeWidget, runPipeline } from "@freebirdai/dash-runtime";
-import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useDashboard } from "./context.jsx";
 import { derivedSources, entityFor, referenceColumns } from "./references.js";
 import {
@@ -17,6 +17,8 @@ import {
   type ReferenceNames,
   referenceLookups,
   referenceNames as resolveNames,
+  unnamedLinks,
+  isDenied,
   withLinkedValues,
 } from "./recordIndex.js";
 import { Wave } from "./queue.js";
@@ -271,6 +273,13 @@ export interface WidgetData {
    * described — which is why a cell's fallback has to be legible on its own.
    */
   readonly referenceNames: ReferenceNames;
+  /**
+   * How many link cells are showing an id instead of a name, and why.
+   *
+   * Null when every name resolved, and null when nothing was refused — see
+   * the comment where it is built.
+   */
+  readonly unnamed: { readonly count: number; readonly reason: string } | null;
   refetch(): void;
 }
 
@@ -756,6 +765,46 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
   /** Columns this widget reads *through* a reference, where it declares any. */
   const linkedFields = useMemo(() => widget.linked ?? [], [widget]);
 
+  /**
+   * Record types this account has been refused outright.
+   *
+   * Grows and never shrinks within a session, deliberately: a 403 is a fact
+   * about the credential rather than about the moment, so re-discovering it
+   * every render would mean paying for it every render. It is also what keeps
+   * this from flapping — the evidence is the failed request, and once nothing
+   * asks again there is nothing new to read it from.
+   */
+  /**
+   * The columns this widget's component actually draws.
+   *
+   * Every component draws what its roles name — a table draws `roles.columns`,
+   * a record page `roles.fields` — while the rows underneath carry whatever
+   * the endpoint returned. Only the drawn ones are worth a request: a name
+   * nobody can see is a name nobody needed.
+   */
+  const shown = useMemo(() => {
+    const names = new Set<string>();
+    for (const value of Object.values(widget.roles ?? {})) {
+      for (const name of Array.isArray(value) ? value : [value]) {
+        if (typeof name === "string" && name.length > 0) names.add(name);
+      }
+    }
+    /* A column read *through* a reference needs that reference fetched even
+     * though the id itself may not be drawn. */
+    for (const field of widget.linked ?? []) names.add(field.through);
+    return names;
+  }, [widget]);
+
+  const [denied, setDenied] = useState<ReadonlySet<string>>(() => new Set());
+  const noteDenied = useCallback((targets: readonly string[]) => {
+    if (targets.length === 0) return;
+    setDenied((current) => {
+      const missing = targets.filter((target) => !current.has(target));
+      if (missing.length === 0) return current;
+      return new Set([...current, ...missing]);
+    });
+  }, []);
+
   const lookups = useMemo(
     () =>
       executed && executed.rows.length > 0 && direct[0]
@@ -778,9 +827,16 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
              * where a board stops paying per id for names it fetched earlier.
              */
             known: ({ target, id }) => records.has(direct[0]!.connection, target, id),
+            /*
+             * A record type the account cannot read costs nothing further: no
+             * request, and no slice of a budget that belongs to the types it
+             * can. Its cells still say why.
+             */
+            denied: (target) => denied.has(target),
+            ...(shown.size > 0 ? { shown } : {}),
           })
         : [],
-    [executed, labelled, direct, params, linkedFields, records, recordStamp],
+    [executed, labelled, direct, params, linkedFields, records, recordStamp, denied, shown],
   );
 
   const lookupKeys = useMemo(() => lookups.map((lookup) => lookup.key), [lookups]);
@@ -811,7 +867,7 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
 
     const owed = new Map<string, number>();
     for (const lookup of lookups) {
-      if (lookup.held) continue;
+      if (lookup.held || lookup.denied) continue;
       owed.set(lookup.target, (owed.get(lookup.target) ?? 0) + 1);
     }
 
@@ -854,6 +910,21 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
     return held;
   }, [batches, client, lookupStamp, recordStamp]);
 
+  /*
+   * A list the account is not allowed to read denies its whole record type.
+   *
+   * Caught here as well as in the serial pass because the list is tried first:
+   * without this, a denied type would fail its one list call and then fall
+   * through to twenty-five by-id calls that were always going to fail the same
+   * way.
+   */
+  useEffect(() => {
+    const refused = batches
+      .filter((batch) => isDenied(client.get(batch.key)?.error?.status))
+      .map((batch) => batch.target);
+    noteDenied(refused);
+  }, [batches, client, lookupStamp, noteDenied]);
+
   useEffect(() => {
     if (!approved || lookups.length === 0) return;
     let cancelled = false;
@@ -882,7 +953,7 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
        * which is the mop-up that keeps the saving honest.
        */
       lookups: lookups.filter(
-        (lookup) => !lookup.held && !pending.has(lookup.target),
+        (lookup) => !lookup.held && !lookup.denied && !pending.has(lookup.target),
       ),
       fetch: (lookup) =>
         client.ensure({
@@ -903,13 +974,15 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
         }),
       statusOf: (lookup) => client.get(lookup.key)?.error?.status,
       stopped: () => cancelled,
+    }).then((result) => {
+      if (!cancelled) noteDenied(result.denied ?? []);
     });
 
     return () => {
       cancelled = true;
     };
     // `now` excluded deliberately, as above: the ticking clock must not refetch.
-  }, [client, lookups, pending, params, staleAfterMs, approved]);
+  }, [client, lookups, pending, params, staleAfterMs, approved, noteDenied]);
 
   /**
    * One record, from wherever we already have it.
@@ -932,6 +1005,23 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
   const resolvedNames = useMemo<ReferenceNames>(
     () => (lookups.length === 0 ? {} : resolveNames(lookups, recordOf, labelled)),
     [lookups, recordOf, labelled],
+  );
+
+  /** Link cells left showing an id, and why. See `unnamedLinks`. */
+  const unnamed = useMemo<WidgetData["unnamed"]>(
+    () =>
+      unnamedLinks({
+        lookups,
+        names: resolvedNames,
+        batchKeys: batches.map((batch) => batch.key),
+        failureOf: (key) => {
+          const entry = client.get(key);
+          return entry?.status === "error"
+            ? (entry.error?.userMessage ?? entry.error?.message)
+            : undefined;
+        },
+      }),
+    [lookups, batches, resolvedNames, client, lookupStamp, recordStamp],
   );
 
   /*
@@ -967,6 +1057,7 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
   return {
     widget,
     referenceNames: resolvedNames,
+    unnamed,
     previewReceipts: entries.flatMap(({ request, entry }) =>
       entry?.meta?.receipt ? [{ as: request.as, receipt: entry.meta.receipt }] : [],
     ),

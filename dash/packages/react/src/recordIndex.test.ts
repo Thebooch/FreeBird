@@ -4,9 +4,11 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_LOOKUPS,
   fetchLookupsInOrder,
+  isDenied,
   nameOfRecord,
   referenceLookups,
   referenceNames,
+  unnamedLinks,
   withLinkedValues,
 } from "./recordIndex.js";
 
@@ -329,5 +331,161 @@ describe("records already held cost nothing and are not capped", () => {
   it("marks nothing as held when no index is offered", () => {
     const lookups = referenceLookups({ rows: rows.slice(0, 3), columns, connection: "api", params });
     expect(lookups.every((lookup) => lookup.held === undefined)).toBe(true);
+  });
+});
+
+describe("unnamedLinks", () => {
+  const lookup = (id: number) => ({
+    connection: "acme",
+    op: "vendor_by_id",
+    param: "vendorId",
+    id,
+    target: "vendor",
+    column: "VendorId",
+    key: `k${id}`,
+  });
+
+  const lookups = [lookup(1), lookup(2), lookup(3)];
+
+  it("says nothing when every name resolved", () => {
+    expect(
+      unnamedLinks({
+        lookups,
+        names: { VendorId: { "1": "Acme", "2": "Bolt", "3": "Cole" } },
+        failureOf: () => undefined,
+      }),
+    ).toBeNull();
+  });
+
+  /* A record that was read and has nothing to call itself is a different
+   * problem with a different answer. Blaming a rate limit that was never there
+   * sends somebody looking in the wrong place. */
+  it("says nothing when no fetch failed, however many names are missing", () => {
+    expect(
+      unnamedLinks({ lookups, names: {}, failureOf: () => undefined }),
+    ).toBeNull();
+  });
+
+  it("counts the cells left showing an id, and quotes the refusal", () => {
+    const result = unnamedLinks({
+      lookups,
+      names: { VendorId: { "1": "Acme" } },
+      failureOf: (key) => (key === "k2" ? "Buildium is rate limiting us." : undefined),
+    });
+    expect(result).toEqual({ count: 2, reason: "Buildium is rate limiting us." });
+  });
+
+  /* The list was standing in for every per-record call, so its refusal is the
+   * one that cost the names. */
+  it("prefers the whole-list refusal over a per-record one", () => {
+    const result = unnamedLinks({
+      lookups,
+      names: {},
+      batchKeys: ["vendors-list"],
+      failureOf: (key) =>
+        key === "vendors-list" ? "the vendor list was refused" : "one vendor was refused",
+    });
+    expect(result?.reason).toBe("the vendor list was refused");
+    expect(result?.count).toBe(3);
+  });
+
+  it("says nothing when there was nothing to look up", () => {
+    expect(unnamedLinks({ lookups: [], names: {}, failureOf: () => "refused" })).toBeNull();
+  });
+});
+
+describe("a record type the account cannot read", () => {
+  /* 403 is a fact about the credential and 429 is a fact about the moment.
+   * Buildium answers 403 for an account without the accounting module, on
+   * every call, forever. */
+  it("knows which statuses will not change by asking again", () => {
+    expect(isDenied(403)).toBe(true);
+    expect(isDenied(401)).toBe(true);
+    expect(isDenied(429)).toBe(false);
+    /* A missing record says nothing about the next one. */
+    expect(isDenied(404)).toBe(false);
+    expect(isDenied(undefined)).toBe(false);
+  });
+
+  it("skips the rest of that record type and carries on with the others", async () => {
+    const mixed = [
+      ...lookupsFor([{ BillId: 1 }, { BillId: 2 }, { BillId: 3 }], [
+        column("BillId", reference({ target: "bill", targetName: "Bill" })),
+      ]),
+      ...lookupsFor([{ VendorId: 9 }], [column("VendorId", reference())]),
+    ];
+    const asked: unknown[] = [];
+    const result = await fetchLookupsInOrder({
+      lookups: mixed,
+      fetch: async (lookup) => {
+        asked.push(`${lookup.target}:${lookup.id}`);
+      },
+      statusOf: (lookup) => (lookup.target === "bill" ? 403 : undefined),
+    });
+
+    /* One bill call proves the type is denied; the other two are not made. The
+     * vendor is a different record type and is still asked for. */
+    expect(asked).toEqual(["bill:1", "vendor:9"]);
+    expect(result.denied).toEqual(["bill"]);
+  });
+
+  it("spends no budget on a record type already denied", () => {
+    const rows = Array.from({ length: MAX_LOOKUPS + 10 }, (_, index) => ({
+      BillId: index,
+      VendorId: 1000 + index,
+    }));
+    const found = referenceLookups({
+      rows,
+      columns: [
+        column("BillId", reference({ target: "bill", targetName: "Bill" })),
+        column("VendorId", reference()),
+      ],
+      connection: "api",
+      params,
+      denied: (target) => target === "bill",
+    });
+
+    const bills = found.filter((one) => one.target === "bill");
+    const vendors = found.filter((one) => one.target === "vendor");
+    /* Every bill is still listed, so its cell can say why it shows an id... */
+    expect(bills).toHaveLength(MAX_LOOKUPS + 10);
+    expect(bills.every((one) => one.denied)).toBe(true);
+    /* ...and none of them took a slot from the vendors, which was the bug:
+     * one denied record type used to eat the whole budget. */
+    expect(vendors).toHaveLength(MAX_LOOKUPS);
+  });
+});
+
+describe("columns the component does not draw", () => {
+  /* A widget's rows carry every column its endpoint returned; the component
+   * draws the handful its roles name. Measured on a real board: a six-column
+   * work order table carried nineteen, one of them a list of bill ids the
+   * account is not licensed to read — and every refresh spent the whole
+   * budget naming a column nobody could see. */
+  it("asks for nothing on a reference column that is not drawn", () => {
+    const found = referenceLookups({
+      rows: [{ VendorId: 41, BillTransactionIds: [9, 10] }],
+      columns: [
+        column("VendorId", reference()),
+        column("BillTransactionIds", reference({ target: "bill", targetName: "Bill", holds: "array" })),
+      ],
+      connection: "api",
+      params,
+      shown: new Set(["VendorId"]),
+    });
+    expect(found.map((one) => one.target)).toEqual(["vendor"]);
+  });
+
+  it("asks for every reference column when the caller does not say", () => {
+    const found = referenceLookups({
+      rows: [{ VendorId: 41, BillTransactionIds: [9] }],
+      columns: [
+        column("VendorId", reference()),
+        column("BillTransactionIds", reference({ target: "bill", targetName: "Bill", holds: "array" })),
+      ],
+      connection: "api",
+      params,
+    });
+    expect(new Set(found.map((one) => one.target))).toEqual(new Set(["vendor", "bill"]));
   });
 });
