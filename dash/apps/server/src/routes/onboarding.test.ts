@@ -347,6 +347,23 @@ describe("GET /api/connections/:id/onboarding", () => {
     await app.close();
   });
 
+  /*
+   * Every field of the onboarding record has a default, so something else
+   * stored under the same key parses into an empty one — and the screen then
+   * says "already set up" over no boards. A record with no timestamp was not
+   * written by this route.
+   */
+  it("does not read a foreign record as an empty setup", async () => {
+    store.putConnection({
+      ...connection,
+      onboarding: { chose: [], layout: "per-category", boards: [], notes: [] },
+    });
+    const app = makeApp();
+    const result = await app.inject({ method: "GET", url: "/api/connections/acme/onboarding" });
+    expect((result.json() as { already?: unknown }).already).toBeUndefined();
+    await app.close();
+  });
+
   it("404s a connection that does not exist", async () => {
     const app = makeApp();
     const result = await app.inject({ method: "GET", url: "/api/connections/ghost/onboarding" });

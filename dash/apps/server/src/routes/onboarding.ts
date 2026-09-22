@@ -392,7 +392,19 @@ export const onboardingRoutes =
         if (!connection) return reply.status(404).send({ error: "no such connection" });
 
         const entry = connection.catalog ? deps.catalog?.get(connection.catalog) : undefined;
-        const already = connection.onboarding;
+
+        /*
+         * A record this route actually wrote, rather than one that merely
+         * parsed.
+         *
+         * Every field of `onboardingSchema` has a default, so a foreign object
+         * stored under the same key — an older experiment's, a future
+         * version's — parses cleanly into an empty one, and the screen then
+         * says "already set up" over no boards at all. `at` is stamped on
+         * every write and defaults to nothing, so it is the one field that
+         * distinguishes "somebody set this up" from "something else was here".
+         */
+        const already = connection.onboarding?.at ? connection.onboarding : undefined;
 
         /*
          * A board that was deleted since is not a board. Reported as gone

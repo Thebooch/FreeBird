@@ -167,6 +167,17 @@ export interface StarterInput {
    * a dashboard somebody did not ask for.
    */
   readonly candidates: readonly BriefCandidate[];
+  /**
+   * Record types that only exist underneath another, named so they can be
+   * ruled out rather than picked and then refused.
+   *
+   * `/applicants/{applicantId}/applications` cannot be fetched without an
+   * applicant, and a widget on a board has nowhere to get one — so the
+   * compiler refuses it, correctly. But the model had already spent a pick on
+   * it: measured on a real API, three of Leasing's five widgets went this way
+   * and the part opened with two. Naming them is cheaper than refusing them.
+   */
+  readonly scoped?: readonly string[] | undefined;
 }
 
 /** What a compiled check needs in order to know a brief would build. */
@@ -203,7 +214,10 @@ export const buildStarterPrompt = (input: StarterInput): string => {
     "RECORD TYPES IN THIS PART:",
   ];
 
-  for (const candidate of input.candidates) {
+  const scoped = new Set(input.scoped ?? []);
+  const offerable = input.candidates.filter((candidate) => !scoped.has(candidate.entity));
+
+  for (const candidate of offerable) {
     const summary = (candidate.description ?? "").split("\n")[0]?.slice(0, 160).trim();
     lines.push(`  ${candidate.entity}  ${candidate.many}${summary ? `  — ${summary}` : ""}`);
     const narrow = candidate.fields.filter((field) => field.role === "narrow");
@@ -229,6 +243,22 @@ export const buildStarterPrompt = (input: StarterInput): string => {
           .join(", ")}`,
       );
     }
+  }
+
+  /*
+   * Said out loud rather than silently omitted. These records are genuinely
+   * part of this category, and a model shown a list it cannot account for will
+   * reach for the nearest thing it can — better that it knows they exist and
+   * knows why they are not on offer.
+   */
+  const unavailable = input.candidates.filter((candidate) => scoped.has(candidate.entity));
+  if (unavailable.length > 0) {
+    lines.push(
+      "",
+      "ALSO IN THIS PART, BUT NOT AVAILABLE — these only exist underneath another",
+      "record, so they are shown on that record's page and can never be a widget here:",
+      ...unavailable.map((candidate) => `  ${candidate.many}`),
+    );
   }
 
   return lines.join("\n");
@@ -433,6 +463,24 @@ export const composeStarters = async (
       continue;
     }
 
+    /*
+     * Read off the record types themselves: `scope` is set when the API lists
+     * a collection underneath another, which is a fact from the URL rather
+     * than a judgement. Only meaningful when there is something to read it
+     * from, so a caller with no check simply offers everything and lets the
+     * compiler have the last word, as it did before.
+     */
+    const scoped = (input.check?.entities ?? [])
+      .filter((entity) => entity.scope !== undefined)
+      .map((entity) => entity.id);
+    const scopedHere = new Set(scoped);
+    if (candidates.every((candidate) => scopedHere.has(candidate.entity))) {
+      skipped.push(
+        `${category.title}: every one of its record types only exists underneath another, so it has no dashboard of its own.`,
+      );
+      continue;
+    }
+
     const errorsBefore = errors.length;
     try {
       const result = await llm.generate({
@@ -444,7 +492,12 @@ export const composeStarters = async (
           { role: "system" as const, content: STARTER_SYSTEM_PROMPT },
           {
             role: "user" as const,
-            content: buildStarterPrompt({ apiTitle: input.apiTitle, category, candidates }),
+            content: buildStarterPrompt({
+              apiTitle: input.apiTitle,
+              category,
+              candidates,
+              scoped,
+            }),
           },
         ],
         tools: { compose_dashboard: starterTool },

@@ -105,6 +105,77 @@ describe("buildStarterPrompt", () => {
   });
 });
 
+describe("record types that only exist under a parent", () => {
+  const CHILD: EntitySpec = entitySchema.parse({
+    id: "note",
+    resource: "note",
+    name: { one: "Note", many: "Notes" },
+    kind: "note",
+    scope: { parent: "task", param: "taskId" },
+    fields: [{ path: "Body", label: "Body", visibility: "primary" }],
+  });
+
+  const childCandidate: BriefCandidate = {
+    ...candidate,
+    entity: "note",
+    recordType: "note",
+    many: "Notes",
+    fields: [],
+  };
+
+  /* A pick spent on one of these is refused by the compiler, correctly — but
+   * the pick is already gone. Measured on a real API, three of one part's five
+   * widgets went this way and it opened with two. */
+  it("does not offer them", () => {
+    const prompt = buildStarterPrompt({
+      apiTitle: "Acme",
+      category: category({ entities: ["task", "note"] }),
+      candidates: [candidate, childCandidate],
+      scoped: ["note"],
+    });
+    expect(prompt).toContain("task  Tasks");
+    expect(prompt).not.toContain("note  Notes");
+  });
+
+  /* Named rather than silently dropped: a model shown a list it cannot account
+   * for reaches for the nearest thing it can. */
+  it("says they exist and why they are not available", () => {
+    const prompt = buildStarterPrompt({
+      apiTitle: "Acme",
+      category: category({ entities: ["task", "note"] }),
+      candidates: [candidate, childCandidate],
+      scoped: ["note"],
+    });
+    expect(prompt).toContain("NOT AVAILABLE");
+    expect(prompt).toContain("  Notes");
+  });
+
+  it("rules them out of the call, reading scope off the record types", async () => {
+    const llm = fakeLlm([{ args: PROPOSAL }]);
+    await composeStarters(llm, {
+      apiTitle: "Acme",
+      categories: [category({ entities: ["task", "note"] })],
+      candidates: [candidate, childCandidate],
+      check: { ...CHECK, entities: [TASK, CHILD] },
+    });
+    const sent = llm.calls[0]?.messages.map((one) => one.content).join(" ") ?? "";
+    expect(sent).toContain("NOT AVAILABLE");
+    expect(sent).not.toContain("note  Notes");
+  });
+
+  it("composes no dashboard for a part that is nothing but children", async () => {
+    const llm = fakeLlm([{ args: PROPOSAL }]);
+    const result = await composeStarters(llm, {
+      apiTitle: "Acme",
+      categories: [category({ entities: ["note"] })],
+      candidates: [childCandidate],
+      check: { ...CHECK, entities: [TASK, CHILD] },
+    });
+    expect(llm.calls).toEqual([]);
+    expect(result.skipped.join(" ")).toMatch(/only exists underneath another/);
+  });
+});
+
 describe("startersFromProposal", () => {
   it("keeps widgets that compile, with their importance and size", () => {
     const built = startersFromProposal({
