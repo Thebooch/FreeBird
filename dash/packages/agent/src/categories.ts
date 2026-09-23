@@ -1,8 +1,21 @@
-import type { CategorySpec, ApiProfile } from "@freebirdai/dash-spec";
-import { CATEGORIES_MAX, categorySchema, profileSchema } from "@freebirdai/dash-spec";
+import type {
+  ApiProfile,
+  CategorySpec,
+  EntitySpec,
+  OpDef,
+  ResourceSpec,
+} from "@freebirdai/dash-spec";
+import {
+  CATEGORIES_MAX,
+  CATEGORY_VERSION,
+  categorySchema,
+  fnv1a,
+  profileSchema,
+} from "@freebirdai/dash-spec";
 import { z } from "zod";
 import type { BriefCandidate } from "./brief.js";
 import type { LlmAdapter, LlmTool } from "./llm.js";
+import { UNTRUSTED_METADATA, callTool } from "./retry.js";
 
 /**
  * What an API is for, and how its records divide up.
@@ -119,7 +132,9 @@ Rules:
   own.
 - Leave a record type out entirely if it fits nowhere. Being unplaced is
   reported honestly; being filed under a part it does not belong to is not.
-- Say nothing about widgets, charts or layout. Not this job.`;
+- Say nothing about widgets, charts or layout. Not this job.
+
+${UNTRUSTED_METADATA}`;
 
 export interface CategoryInput {
   readonly apiTitle: string;
@@ -336,32 +351,33 @@ export const categoriseApi = async (
     return none("this API has no record types described yet");
   }
 
-  let result: Awaited<ReturnType<LlmAdapter["generate"]>>;
+  /*
+   * Retried once when nothing usable came back, with the reasons attached:
+   * this call is the whole of onboarding for an API, and a division that
+   * named record types that do not exist has usually misread one rule.
+   */
+  let answer: Awaited<ReturnType<typeof callTool<CategoryProposal>>>;
   try {
-    result = await llm.generate({
-      ...(options.model ? { model: options.model } : {}),
-      ...(options.signal ? { signal: options.signal } : {}),
-      temperature: 0.2,
-      maxOutputTokens: 8_192,
-      messages: [
-        { role: "system" as const, content: CATEGORY_SYSTEM_PROMPT },
-        { role: "user" as const, content: buildCategoryPrompt(input) },
-      ],
-      tools: { divide_api: categoryTool },
-      toolChoice: { name: "divide_api" as const },
+    answer = await callTool(llm, {
+      tool: categoryTool,
+      system: CATEGORY_SYSTEM_PROMPT,
+      user: buildCategoryPrompt(input),
+      model: options.model,
+      signal: options.signal,
+      accept: (proposal) => {
+        const tried = categoriesFromProposal({ proposal, candidates: input.candidates });
+        return tried.categories.length > 0
+          ? null
+          : `none of the parts you proposed could be used. ${tried.skipped.slice(0, 4).join(" ")}`;
+      },
     });
   } catch (cause) {
     return none(cause instanceof Error ? cause.message : String(cause));
   }
-
-  const call = result.toolCalls.find((candidate) => candidate.name === "divide_api");
-  if (!call) return none("the model answered without calling the tool.");
-
-  const parsed = categoryProposalSchema.safeParse(call.args);
-  if (!parsed.success) return none("the division did not parse.");
+  if ("error" in answer) return none(answer.error);
 
   const built = categoriesFromProposal({
-    proposal: parsed.data,
+    proposal: answer.args,
     candidates: input.candidates,
   });
 
@@ -369,4 +385,50 @@ export const categoriseApi = async (
     ...built,
     errors: built.categories.length === 0 ? ["nothing usable was proposed"] : [],
   };
+};
+
+/**
+ * Which reading of an API a division and its starter sets were made against.
+ *
+ * The categories describe record types and the starters name their fields, so
+ * both go stale the moment the API is re-described — a record type renamed, a
+ * field gone, an endpoint added. A version number only notices when *this
+ * code* changes; this notices when the *API* does, and it is what tells the
+ * onboarding screen that a division is worth doing again.
+ *
+ * What goes in is only what the passes read: record types and the fields the
+ * starters can name, the resources that say how each is listed, and the
+ * list endpoints' own shape. Component contracts stay out on purpose —
+ * starters are briefs, compiled when a board is built, so a contract change
+ * reaches them without anything being re-divided.
+ */
+export const categoryFingerprint = (input: {
+  readonly entities: readonly EntitySpec[];
+  readonly resources: readonly ResourceSpec[];
+  readonly ops: readonly Pick<OpDef, "id" | "path" | "params">[];
+}): string => {
+  const listed = new Set(
+    input.resources.flatMap((resource) => (resource.listOp ? [resource.listOp] : [])),
+  );
+  return fnv1a(
+    JSON.stringify({
+      version: CATEGORY_VERSION,
+      entities: input.entities.map((entity) => ({
+        id: entity.id,
+        resource: entity.resource,
+        many: entity.name.many,
+        kind: entity.kind,
+        scope: entity.scope ?? null,
+        fields: entity.fields.map((field) => [field.path, field.kinds, field.semantic ?? null]),
+      })),
+      resources: input.resources.map((resource) => [
+        resource.id,
+        resource.listOp ?? null,
+        resource.detailOp ?? null,
+      ]),
+      ops: input.ops
+        .filter((op) => listed.has(op.id))
+        .map((op) => [op.id, op.path, op.params.map((param) => [param.name, param.in])]),
+    }),
+  );
 };

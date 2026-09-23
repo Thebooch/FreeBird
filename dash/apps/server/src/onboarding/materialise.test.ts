@@ -12,7 +12,12 @@ import {
   entitySchema,
 } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
-import { COMBINED_WIDGET_MAX, interleave, materialise } from "./materialise.js";
+import {
+  COMBINED_WIDGET_MAX,
+  allocateDashboardId,
+  interleave,
+  materialise,
+} from "./materialise.js";
 
 /**
  * A shared starter set, compiled against one account.
@@ -89,25 +94,15 @@ const LEASING = category({
   ],
 });
 
-/** A board maker with the same uniqueness rule the server applies. */
+/** An id reserver with the same uniqueness rule the server applies. */
 const maker = () => {
   const taken = new Set<string>();
-  const made: DashboardSpec[] = [];
   return {
-    made,
-    createBoard: (title: string): DashboardSpec => {
-      const base =
-        title
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-+|-+$/g, "")
-          .slice(0, 40) || "board";
-      let id = base;
-      for (let suffix = 2; taken.has(id); suffix++) id = `${base}-${suffix}`;
+    taken,
+    reserveId: (title: string): string => {
+      const id = allocateDashboardId(title, taken);
       taken.add(id);
-      const board = dashboardSchema.parse({ id, title, widgets: [] });
-      made.push(board);
-      return board;
+      return id;
     },
   };
 };
@@ -125,7 +120,7 @@ const run = (input: {
     },
     categories: input.categories,
     layout: input.layout,
-    createBoard: maker().createBoard,
+    reserveId: maker().reserveId,
   });
 
 describe("materialise, per category", () => {

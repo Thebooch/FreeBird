@@ -1,7 +1,8 @@
-import { mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import type { CapabilityReport, ConnectionSpec, DashboardSpec } from "@freebirdai/dash-spec";
 import { capabilityReportSchema, connectionSchema, dashboardSchema } from "@freebirdai/dash-spec";
+import { writeJsonAtomic } from "./json-file.js";
 
 /**
  * Specs live as files on disk: git-friendly, diffable, reviewable in a pull
@@ -56,11 +57,10 @@ export class SpecStore {
   }
 
   putDashboard(spec: DashboardSpec): void {
-    writeFileSync(
-      join(this.dashboardsDir, `${spec.id}.json`),
-      `${JSON.stringify({ ...spec, updatedAt: new Date().toISOString() }, null, 2)}\n`,
-      "utf8",
-    );
+    writeJsonAtomic(join(this.dashboardsDir, `${spec.id}.json`), {
+      ...spec,
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   deleteDashboard(id: string): void {
@@ -83,11 +83,10 @@ export class SpecStore {
   }
 
   putConnection(spec: ConnectionSpec): void {
-    writeFileSync(
-      join(this.connectionsDir, `${spec.id}.json`),
-      `${JSON.stringify({ ...spec, updatedAt: new Date().toISOString() }, null, 2)}\n`,
-      "utf8",
-    );
+    writeJsonAtomic(join(this.connectionsDir, `${spec.id}.json`), {
+      ...spec,
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   deleteConnection(id: string): void {
@@ -127,11 +126,7 @@ export class SpecStore {
       ...report,
       revision: (previous?.revision ?? 0) + 1,
     };
-    writeFileSync(
-      join(this.reportsDir, `${report.connection}.json`),
-      `${JSON.stringify(next, null, 2)}\n`,
-      "utf8",
-    );
+    writeJsonAtomic(join(this.reportsDir, `${report.connection}.json`), next);
     return next;
   }
 

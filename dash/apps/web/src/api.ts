@@ -2,6 +2,7 @@ import type {
   ApiProfile,
   CatalogEntry,
   ConnectionSpec,
+  DashboardSpec,
   Presentation,
   PresentationManifest,
   ResourceSpec,
@@ -484,36 +485,33 @@ export type ConciergePatch = import("@freebirdai/dash-agent").DraftPatch;
  */
 export interface CategoryState {
   readonly divided: boolean;
-  /** Divided by an older pass than the current one. Worth re-running. */
+  /** Divided against an older reading of the API. Worth preparing again. */
   readonly stale: boolean;
   readonly categories: number;
-  /** Parts that have a widget set. The composing pass may not have finished. */
+  /** Parts that have a widget set. */
   readonly composed: number;
+  readonly pending: number;
+  readonly empty: number;
+  readonly failed: number;
   readonly starters: number;
   readonly entities: number;
+  /** Whether how often records arrive has been read. */
+  readonly rhythm: boolean;
+  /** Steps of preparation left. Zero when everything is ready. */
+  readonly remaining: number;
   readonly categoriesAt: string | null;
   /** False when there is no model configured to run the passes. */
   readonly canRun: boolean;
-  readonly profile?: ApiProfile;
 }
 
-export interface CategoryRunResult extends CategoryState {
-  readonly ranPass: boolean;
-  readonly note?: string;
-  /** Widgets proposed against widgets kept. The difference is the honest part. */
-  readonly proposed?: number;
-  readonly kept?: number;
-  /** Record types no part claimed. Not an error — they open no dashboard. */
-  readonly uncategorised?: readonly string[];
-  readonly errors?: readonly string[];
-  readonly skipped?: readonly string[];
-}
+export type CategoryStatus = "pending" | "ready" | "empty" | "failed";
 
 /** One part of an API, as it applies to one connection. */
 export interface CategoryOffer {
   readonly id: string;
   readonly title: string;
   readonly description?: string;
+  readonly status: CategoryStatus;
   readonly recordTypes: number;
   readonly endpoints: number;
   readonly widgets: number;
@@ -523,39 +521,95 @@ export interface CategoryOffer {
   readonly unavailable?: string;
 }
 
+export type BoardLayout = "single" | "per-category";
+
+/** How one widget fared when it was tried against the account. */
+export interface WidgetCheck {
+  readonly category: string;
+  readonly widget: string;
+  readonly title: string;
+  readonly status: "ready" | "unchecked" | "denied" | "unavailable" | "missingInput" | "schema";
+  readonly message: string;
+}
+
+export interface OnboardingPreview {
+  readonly id: string;
+  readonly boards: ReadonlyArray<{ readonly category?: string; readonly board: DashboardSpec }>;
+  readonly checks: readonly WidgetCheck[];
+  readonly notes: readonly string[];
+}
+
+/** Where one connection's setup stands. */
+export interface OnboardingSetup {
+  readonly status: "pending" | "choosing" | "preview" | "creating" | "complete" | "skipped";
+  readonly choices?: { readonly categories: readonly string[]; readonly layout: BoardLayout };
+  readonly preview?: OnboardingPreview;
+  readonly dashboards: readonly string[];
+  readonly at?: string;
+  readonly notes: readonly string[];
+}
+
+export interface SetupBoard {
+  readonly dashboard: string;
+  readonly title: string;
+  readonly widgets: number;
+  readonly category?: string;
+}
+
 export interface OnboardingState {
   readonly connection: string;
   readonly title: string;
   readonly catalog: string | null;
   readonly profile?: ApiProfile;
   readonly state: CategoryState | null;
+  /** Why setup cannot go further right now, when it cannot. */
+  readonly reason?: string;
   readonly categories: readonly CategoryOffer[];
-  /** Present once somebody has set this connection up. */
-  readonly already?: {
-    readonly chose: readonly string[];
-    readonly layout: "single" | "per-category";
-    readonly at: string | null;
-    readonly notes: readonly string[];
-    readonly boards: ReadonlyArray<{
-      readonly category?: string;
-      readonly dashboard: string;
-      readonly title: string;
-      readonly widgets: number;
-    }>;
-  };
+  readonly setup: OnboardingSetup;
+  /** The boards the latest set made that still exist. */
+  readonly boards: readonly SetupBoard[];
 }
 
-export interface OnboardingResult {
-  readonly boards: ReadonlyArray<{
-    readonly category?: string;
-    readonly dashboard: string;
+/** What one step of preparation did. */
+export interface PrepareStep {
+  readonly step: "divided" | "composed" | "rhythm" | "none";
+  readonly ok: boolean;
+  readonly category?: string;
+  readonly error?: string;
+  readonly skipped: readonly string[];
+  readonly proposed: number;
+  readonly kept: number;
+}
+
+/** One endpoint's refresh cadence, and what decided it. */
+export interface RhythmEndpoint {
+  readonly op: string;
+  readonly title: string;
+  /** What these rows are, in a reader's words. Null where nothing described them. */
+  readonly records: string | null;
+  readonly tier: string;
+  readonly everyMs: number;
+  /** `override` beats `measured` beats `model` beats `default`. */
+  readonly source: "override" | "measured" | "model" | "default";
+  readonly volatility?: "constant" | "daily" | "rare";
+  /** Why it was read that way, for somebody deciding whether to agree. */
+  readonly because?: string;
+  /** On a board somebody opens, so its cadence is one they will feel. */
+  readonly warmed: boolean;
+}
+
+export interface RhythmState {
+  readonly connection: string;
+  readonly title: string;
+  readonly tiers: ReadonlyArray<{
+    readonly id: string;
     readonly title: string;
-    readonly widgets: number;
+    readonly everyMs: number;
   }>;
-  readonly layout: "single" | "per-category";
-  /** Where the boards differ from what was designed, in a reader's words. */
-  readonly notes: readonly string[];
-  readonly errors: readonly string[];
+  /** False when nobody has read this API for rhythm — everything is on the default. */
+  readonly classified: boolean;
+  readonly at: string | null;
+  readonly endpoints: readonly RhythmEndpoint[];
 }
 
 export interface MapState {
@@ -821,27 +875,77 @@ export const api = {
   categoryState: (catalogId: string): Promise<CategoryState> =>
     request(`/api/catalog/${catalogId}/categories`),
 
+  /** Where this connection's setup stands, and what it could be given. Free. */
+  onboarding: (connectionId: string): Promise<OnboardingState> =>
+    request(`/api/connections/${connectionId}/onboarding`),
+
   /**
-   * Work out what this API is for, how it divides up, and what each part
-   * opens with.
+   * One step of preparing the API behind a connection: divide it, compose a
+   * part, or read how often its records arrive. Call until
+   * `state.remaining` is zero.
    *
    * Model tokens and zero requests against anybody's account, paid once per
    * API: the answer describes the API rather than this account, so everybody
    * who connects it afterwards inherits it.
    */
-  divideApi: (catalogId: string, force = false): Promise<CategoryRunResult> =>
-    request(`/api/catalog/${catalogId}/categories`, json({ force })),
-
-  /** The parts of this API that this connection can actually be given. */
-  onboarding: (connectionId: string): Promise<OnboardingState> =>
-    request(`/api/connections/${connectionId}/onboarding`),
-
-  /** Build the boards. Deterministic — no model, and no upstream request. */
-  setUpDashboards: (
+  prepareOnboarding: (
     connectionId: string,
-    input: { categories: readonly string[]; layout: "single" | "per-category" },
-  ): Promise<OnboardingResult> =>
-    request(`/api/connections/${connectionId}/onboarding`, json(input)),
+  ): Promise<OnboardingState & { readonly step: PrepareStep }> =>
+    request(`/api/connections/${connectionId}/onboarding/prepare`, json({})),
+
+  /** Save which parts were picked. Clears any preview. */
+  chooseOnboarding: (
+    connectionId: string,
+    choices: { categories: readonly string[]; layout: BoardLayout },
+  ): Promise<OnboardingState> =>
+    request(`/api/connections/${connectionId}/onboarding/choices`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(choices),
+    }),
+
+  /**
+   * The boards as they would be, each widget tried against the account.
+   * Bounded reads, through the same cache the boards will read.
+   */
+  previewOnboarding: (connectionId: string): Promise<OnboardingState> =>
+    request(`/api/connections/${connectionId}/onboarding/preview`, json({})),
+
+  /** Create exactly what was previewed. Safe to repeat after an interruption. */
+  commitOnboarding: (
+    connectionId: string,
+    previewId: string,
+  ): Promise<OnboardingState & { readonly created: readonly SetupBoard[] }> =>
+    request(`/api/connections/${connectionId}/onboarding/commit`, json({ previewId })),
+
+  /** Not now. The connection gets a plain board to land on. */
+  skipOnboarding: (connectionId: string): Promise<OnboardingState> =>
+    request(`/api/connections/${connectionId}/onboarding/skip`, json({})),
+
+  /** Another set. The boards already made are left alone. */
+  restartOnboarding: (connectionId: string): Promise<OnboardingState> =>
+    request(`/api/connections/${connectionId}/onboarding/restart`, json({})),
+
+  /** How often each endpoint is asked again, and why. Free — nothing is fetched. */
+  rhythm: (connectionId: string): Promise<RhythmState> =>
+    request(`/api/connections/${connectionId}/rhythm`),
+
+  /**
+   * Move endpoints between cadences.
+   *
+   * Saved against this connection only: the reading being disagreed with is
+   * shared with everybody who connects this API, and one person's preference
+   * has no business travelling with it. `null` puts one back.
+   */
+  setRhythm: (
+    connectionId: string,
+    overrides: Readonly<Record<string, string | null>>,
+  ): Promise<{ overrides: Record<string, string>; notes: string[] }> =>
+    request(`/api/connections/${connectionId}/rhythm`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ overrides }),
+    }),
 
   checkRecords: (connectionId: string, budget?: number): Promise<RecordCheckResult> =>
     request(`/api/connections/${connectionId}/verify`, json(budget ? { budget } : {})),
@@ -906,12 +1010,16 @@ export const api = {
 
   connections: (): Promise<ConnectionSummary[]> => request("/api/connections"),
 
+  /**
+   * Connect a catalog API. Marked for onboarding, so it opens with the boards
+   * chosen at the end of the wizard rather than an empty one first.
+   */
   createFromCatalog: (input: {
     catalogId: string;
     id?: string;
     opIds?: string[];
   }): Promise<ConnectionSummary & { needsKey: boolean }> =>
-    request("/api/connections/from-catalog", json(input)),
+    request("/api/connections/from-catalog", json({ ...input, onboarding: true })),
 
   saveConnection: (id: string, spec: unknown): Promise<ConnectionSummary> =>
     request(`/api/connections/${id}`, {

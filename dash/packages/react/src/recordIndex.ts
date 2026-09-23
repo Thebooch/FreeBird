@@ -116,6 +116,12 @@ export interface LookupInput {
    * that does not know what is drawn.
    */
   readonly shown?: ReadonlySet<string>;
+  /**
+   * Whether an endpoint reads the time range, so these keys match the ones the
+   * query route wrote. See `queryKey`; a second spelling of a key here would
+   * fetch a record the cache already holds.
+   */
+  readonly usesRange?: (connection: string, op: string) => boolean;
 }
 
 /**
@@ -153,7 +159,13 @@ export const referenceLookups = (input: LookupInput): readonly ReferenceLookup[]
       if (targetOfRow(row, reference) !== reference.target) continue;
 
       for (const id of referenceIds(row[column.name], reference.holds)) {
-        const key = queryKey(input.connection, lookup.op, { [lookup.param]: id }, input.params);
+        const key = queryKey(
+          input.connection,
+          lookup.op,
+          { [lookup.param]: id },
+          input.params,
+          input.usesRange?.(input.connection, lookup.op) ?? true,
+        );
         if (seen.has(key)) continue;
         seen.add(key);
         const refused = input.denied?.(reference.target) ?? false;

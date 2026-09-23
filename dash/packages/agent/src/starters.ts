@@ -1,15 +1,24 @@
-import type { CategorySpec, EntitySpec, ResourceSpec, StarterSpec } from "@freebirdai/dash-spec";
+import type {
+  CategorySpec,
+  EntitySpec,
+  OpDef,
+  ResourceSpec,
+  StarterSpec,
+} from "@freebirdai/dash-spec";
 import {
   STARTERS_PER_CATEGORY_MAX,
   compileBrief,
   entityById,
   fnv1a,
+  missingInputs,
   starterSchema,
+  widgetSources,
 } from "@freebirdai/dash-spec";
 import type { GraphOp } from "@freebirdai/dash-spec";
 import { z } from "zod";
 import { briefFromParts, type BriefCandidate } from "./brief.js";
 import type { LlmAdapter, LlmTool } from "./llm.js";
+import { UNTRUSTED_METADATA, callTool } from "./retry.js";
 
 /**
  * What one part of an API should open with.
@@ -155,7 +164,9 @@ RULES:
 - Do not build the same widget twice. Two counts of the same records differing
   only by a filter are one widget with a strip.
 - Do not pad. Four widgets that answer real questions is a better dashboard
-  than six where two are filler, and you are allowed to stop.`;
+  than six where two are filler, and you are allowed to stop.
+
+${UNTRUSTED_METADATA}`;
 
 export interface StarterInput {
   readonly apiTitle: string;
@@ -188,6 +199,15 @@ export interface StarterCheck {
   /** The connection the check compiles against. Never stored on the starter. */
   readonly connection: string;
   readonly pathOf?: ((op: string | undefined) => string | undefined) | undefined;
+  /**
+   * The endpoints themselves, for what each one requires.
+   *
+   * A list endpoint that cannot be called without an input a board has no
+   * way to supply — a property id, a date the API insists on — compiles
+   * perfectly and fails on every load. `scope` catches the ones the URL gives
+   * away; this catches the rest.
+   */
+  readonly opDefs?: readonly OpDef[] | undefined;
 }
 
 export interface StarterResult {
@@ -214,8 +234,10 @@ export const buildStarterPrompt = (input: StarterInput): string => {
     "RECORD TYPES IN THIS PART:",
   ];
 
+  /* `scoped` holds record type ids, which is what `recordType` is — `entity`
+   * is the id the model copies, qualified where two APIs share a name. */
   const scoped = new Set(input.scoped ?? []);
-  const offerable = input.candidates.filter((candidate) => !scoped.has(candidate.entity));
+  const offerable = input.candidates.filter((candidate) => !scoped.has(candidate.recordType));
 
   for (const candidate of offerable) {
     const summary = (candidate.description ?? "").split("\n")[0]?.slice(0, 160).trim();
@@ -251,7 +273,7 @@ export const buildStarterPrompt = (input: StarterInput): string => {
    * reach for the nearest thing it can — better that it knows they exist and
    * knows why they are not on offer.
    */
-  const unavailable = input.candidates.filter((candidate) => scoped.has(candidate.entity));
+  const unavailable = input.candidates.filter((candidate) => scoped.has(candidate.recordType));
   if (unavailable.length > 0) {
     lines.push(
       "",
@@ -381,6 +403,26 @@ export const startersFromProposal = (input: {
         );
         continue;
       }
+
+      /*
+       * Built, but can it be fetched? Fan-out sources are exempt: their
+       * inputs come from another source's rows by design.
+       */
+      const needs = input.check.opDefs
+        ? widgetSources(compiled.widget).flatMap((source) => {
+            if (source.fanOut) return [];
+            const def = input.check!.opDefs!.find((one) => one.id === source.op);
+            return def ? missingInputs(def, source.params) : [];
+          })
+        : [];
+      if (needs.length > 0) {
+        skipped.push(
+          `${input.category.title}: ${candidate.many} cannot be listed without ${[
+            ...new Set(needs),
+          ].join(", ")}, which a board has no way to supply.`,
+        );
+        continue;
+      }
     }
 
     const parsed = starterSchema.safeParse({
@@ -407,13 +449,145 @@ export const startersFromProposal = (input: {
   return { starters, skipped, proposed: rows.length };
 };
 
+/** What composing one category came to. */
+export interface ComposedCategory {
+  /**
+   * The category with its set written and its status set: `ready` with
+   * starters, `empty` when it was composed and nothing could be built — so
+   * it is not paid for again until the API changes — or `failed`, which is
+   * retried on the next run.
+   */
+  readonly category: CategorySpec;
+  readonly skipped: readonly string[];
+  readonly proposed: number;
+  /** Set when the call itself failed. The category is `failed`. */
+  readonly error?: string | undefined;
+}
+
+/**
+ * Write one category's starter set.
+ *
+ * One call, retried once with the compiler's own reasons when nothing it
+ * proposed would build. The unit onboarding resumes by: every category is
+ * composed on its own and its status stored straight after, so a run that
+ * loses its fourth call keeps the three before it.
+ */
+export const composeCategory = async (
+  llm: LlmAdapter,
+  input: {
+    readonly apiTitle: string;
+    readonly category: CategorySpec;
+    /** Every record type on the API; this category's own are selected here. */
+    readonly candidates: readonly BriefCandidate[];
+    readonly check?: StarterCheck | undefined;
+  },
+  options: { model?: string | undefined; signal?: AbortSignal | undefined } = {},
+): Promise<ComposedCategory> => {
+  const { category } = input;
+  const byId = new Map(input.candidates.map((candidate) => [candidate.entity, candidate]));
+  const empty = (reason: string): ComposedCategory => ({
+    category: { ...category, starters: [], status: "empty", error: reason },
+    skipped: [reason],
+    proposed: 0,
+  });
+
+  const candidates = category.entities
+    .map((id) => byId.get(id))
+    .filter((candidate): candidate is BriefCandidate => candidate !== undefined);
+  if (candidates.length === 0) {
+    return empty(
+      `${category.title}: none of its record types are described, so nothing could be composed.`,
+    );
+  }
+
+  /*
+   * Read off the record types themselves: `scope` is set when the API lists
+   * a collection underneath another, which is a fact from the URL rather
+   * than a judgement. Only meaningful when there is something to read it
+   * from, so a caller with no check simply offers everything and lets the
+   * compiler have the last word.
+   */
+  const scoped = (input.check?.entities ?? [])
+    .filter((entity) => entity.scope !== undefined)
+    .map((entity) => entity.id);
+  const scopedHere = new Set(scoped);
+  if (candidates.every((candidate) => scopedHere.has(candidate.recordType))) {
+    return empty(
+      `${category.title}: every one of its record types only exists underneath another, so it has no dashboard of its own.`,
+    );
+  }
+
+  let proposed = 0;
+  const attempt = async () =>
+    callTool(llm, {
+      tool: starterTool,
+      system: STARTER_SYSTEM_PROMPT,
+      user: buildStarterPrompt({ apiTitle: input.apiTitle, category, candidates, scoped }),
+      model: options.model,
+      signal: options.signal,
+      accept: (proposal) => {
+        const tried = startersFromProposal({ proposal, candidates, category, check: input.check });
+        return tried.starters.length > 0
+          ? null
+          : `nothing you proposed could be built. ${tried.skipped.slice(0, 4).join(" ")}`;
+      },
+    });
+
+  let answer: Awaited<ReturnType<typeof attempt>>;
+  try {
+    answer = await attempt();
+  } catch (cause) {
+    const error = `${category.title}: ${cause instanceof Error ? cause.message : String(cause)}`;
+    return {
+      category: { ...category, status: "failed", error },
+      skipped: [],
+      proposed,
+      error,
+    };
+  }
+  if ("error" in answer) {
+    const error = `${category.title}: ${answer.error}`;
+    return {
+      category: { ...category, status: "failed", error },
+      skipped: [],
+      proposed,
+      error,
+    };
+  }
+
+  const built = startersFromProposal({
+    proposal: answer.args,
+    candidates,
+    category,
+    ...(input.check ? { check: input.check } : {}),
+  });
+  proposed = built.proposed;
+
+  if (built.starters.length === 0) {
+    const reason = `${category.title}: nothing it proposed could be built.`;
+    return {
+      category: { ...category, starters: [], status: "empty", error: reason },
+      skipped: [...built.skipped, reason],
+      proposed,
+    };
+  }
+
+  const { error: _previous, ...rest } = category;
+  return {
+    category: { ...rest, starters: [...built.starters], status: "ready" },
+    skipped: built.skipped,
+    proposed,
+  };
+};
+
 /**
  * Write a starter set for every category that has not got one.
  *
- * Categories fail independently, exactly as the mapping and describing passes
- * do: a set covering most of an API is worth keeping and worth re-running for
- * the rest, and one that throws away four good calls because the fifth timed
- * out is not.
+ * A loop over `composeCategory`, kept for callers that want the whole API
+ * composed in one go — the evaluation scripts, and the catalog route a script
+ * would call. Categories fail independently, exactly as the mapping and
+ * describing passes do: a set covering most of an API is worth keeping and
+ * worth re-running for the rest.
  */
 export const composeStarters = async (
   llm: LlmAdapter,
@@ -431,7 +605,6 @@ export const composeStarters = async (
     onCheckpoint?: (result: StarterResult) => void;
   } = {},
 ): Promise<StarterResult> => {
-  const byId = new Map(input.candidates.map((candidate) => [candidate.entity, candidate]));
   const previous = new Set(options.completedBatches ?? []);
   const completed = new Set<string>();
   const errors: string[] = [];
@@ -453,98 +626,34 @@ export const composeStarters = async (
       continue;
     }
 
-    const candidates = category.entities
-      .map((id) => byId.get(id))
-      .filter((candidate): candidate is BriefCandidate => candidate !== undefined);
-    if (candidates.length === 0) {
-      skipped.push(
-        `${category.title}: none of its record types are described, so nothing could be composed.`,
-      );
-      continue;
-    }
-
-    /*
-     * Read off the record types themselves: `scope` is set when the API lists
-     * a collection underneath another, which is a fact from the URL rather
-     * than a judgement. Only meaningful when there is something to read it
-     * from, so a caller with no check simply offers everything and lets the
-     * compiler have the last word, as it did before.
-     */
-    const scoped = (input.check?.entities ?? [])
-      .filter((entity) => entity.scope !== undefined)
-      .map((entity) => entity.id);
-    const scopedHere = new Set(scoped);
-    if (candidates.every((candidate) => scopedHere.has(candidate.entity))) {
-      skipped.push(
-        `${category.title}: every one of its record types only exists underneath another, so it has no dashboard of its own.`,
-      );
-      continue;
-    }
-
-    const errorsBefore = errors.length;
-    try {
-      const result = await llm.generate({
-        ...(options.model ? { model: options.model } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        temperature: 0.2,
-        maxOutputTokens: 8_192,
-        messages: [
-          { role: "system" as const, content: STARTER_SYSTEM_PROMPT },
-          {
-            role: "user" as const,
-            content: buildStarterPrompt({
-              apiTitle: input.apiTitle,
-              category,
-              candidates,
-              scoped,
-            }),
-          },
-        ],
-        tools: { compose_dashboard: starterTool },
-        toolChoice: { name: "compose_dashboard" as const },
-      });
-
-      const call = result.toolCalls.find((one) => one.name === "compose_dashboard");
-      if (!call) {
-        errors.push(`${category.title}: the model answered without calling the tool.`);
-        continue;
-      }
-      const parsed = starterProposalSchema.safeParse(call.args);
-      if (!parsed.success) {
-        errors.push(`${category.title}: the composition did not parse.`);
-        continue;
-      }
-
-      const built = startersFromProposal({
-        proposal: parsed.data,
-        candidates,
+    const result = await composeCategory(
+      llm,
+      {
+        apiTitle: input.apiTitle,
         category,
+        candidates: input.candidates,
         ...(input.check ? { check: input.check } : {}),
-      });
-      proposed += built.proposed;
-      kept += built.starters.length;
-      skipped.push(...built.skipped);
+      },
+      { model: options.model, signal: options.signal },
+    );
+    proposed += result.proposed;
+    kept += result.category.starters.length;
+    skipped.push(...result.skipped);
+    written.set(category.id, result.category);
 
-      if (built.starters.length === 0) {
-        skipped.push(`${category.title}: nothing it proposed could be built.`);
-        continue;
-      }
-      written.set(category.id, { ...category, starters: [...built.starters] });
-    } catch (cause) {
-      errors.push(`${category.title}: ${cause instanceof Error ? cause.message : String(cause)}`);
-    } finally {
-      if (errors.length === errorsBefore) {
-        completed.add(batchKey);
-        options.onCheckpoint?.({
-          categories: [...written.values()],
-          completedBatches: [...completed],
-          errors,
-          skipped,
-          proposed,
-          kept,
-        });
-      }
+    if (result.error) {
+      errors.push(result.error);
+      continue;
     }
+    completed.add(batchKey);
+    options.onCheckpoint?.({
+      categories: [...written.values()],
+      completedBatches: [...completed],
+      errors,
+      skipped,
+      proposed,
+      kept,
+    });
   }
 
   return {

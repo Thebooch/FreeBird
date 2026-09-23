@@ -55,6 +55,24 @@ Two things worth knowing before you file a bug:
 - **Dashboards and connections are read from the working directory**, so `pnpm --filter` puts them in `apps/server/`. Launching the server another way (`tsx apps/server/src/index.ts` from the repo root, say) reads a different directory and looks like your connections vanished. Set `DASH_ROOT` to pin it.
 - **`apps/web` imports the packages' built output**, so after editing anything under `packages/` you need `pnpm build` or the browser keeps showing the old code.
 
+## Connection onboarding
+
+A new connection ends with **What do you want from it?** instead of an empty board.
+
+**Preparing the API** happens once per API and is inherited by everybody who connects it afterwards. It reads the described record types and works out what the software is, which parts it divides into (leasing, maintenance, accounting — whatever this API's own are), a starter set for each part, and how often each kind of record arrives. It spends model tokens (the capable `onboarding` task; override with `DASH_MODEL_ONBOARDING` or the model picker) and makes **zero** requests against your API. It runs one step per request and writes each step to the catalog entry as it lands, so closing the screen half way loses nothing and reopening it carries on. A part whose composition failed is retried; a part where nothing could be built is not paid for again until the API is re-described. Starter sets are **briefs, never widgets**: they name record types, not one account's endpoints, and are compiled against each connection when its boards are built.
+
+**Setting up a connection** is a resumable state on the connection itself — `pending → choosing → preview → creating → complete`, or `skipped`:
+
+1. Choose parts, and one tab or a tab each.
+2. **Preview.** The boards are built exactly as they would be and every widget is tried against the account — through the same cache and rate-limit gate as a board, at most 40 distinct reads. A widget the account is refused, or whose endpoint needs an input a board cannot supply, is left off with the reason. One that could not be tried because the API asked us to wait is kept, marked unchecked. Nothing is written yet.
+3. **Create** makes exactly what was previewed. The board ids are recorded before any board is written, so a create that is cut off finishes the same boards and never overwrites one it already made.
+
+**Skip for now** leaves the connection with the plain board it would have had. Any connection reaches this again from its **Dashboards** button in Connections — to finish, to set up one made before onboarding existed, or to **create another set**, which leaves existing boards alone.
+
+The API is `/api/connections/:id/onboarding`: `GET` reads where setup stands; `POST /prepare` takes one preparation step (repeat until `state.remaining` is 0); `PUT /choices` saves `{ categories, layout: "single" | "per-category" }`; `POST /preview` checks and stores a preview; `POST /commit` takes `{ previewId }`; `POST /skip` and `POST /restart`. `POST /api/catalog/:id/categories` prepares a whole API in one call, for scripts. `POST /api/connections/from-catalog` with `onboarding: true` defers the empty board until setup decides.
+
+**Keeping boards current.** A board being looked at reads what the server holds and never calls the API. The keeper refreshes, on each endpoint's cadence, the exact requests boards made — changed filters and picked ranges included — and warms new boards before anybody opens them, only while somebody is using the connection. A 401 or 403 stops a target until the connection's key changes; a 429 pauses the connection until the API allows it. Cadences are set per endpoint from how often its records arrive, and can be moved on the **Refresh** step. `GET /api/keeper` lists what is being kept warm and whether it is cached.
+
 ## Principles
 
 **The LLM runs at configuration time, never at render time.** The authoring agent reads sample payloads and emits a deterministic, versioned artifact. That artifact is compiled once and executed by boring code forever after. An LLM in the request path means nondeterministic dashboards, unbounded cost, and no way to debug why a number changed.

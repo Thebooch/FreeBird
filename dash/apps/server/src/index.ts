@@ -11,6 +11,7 @@ import { TASKS, isTask, providerFor } from "./models.js";
 import { buildPartRegistry } from "./parts.js";
 import { buildServer } from "./server.js";
 import { NarrowingStore } from "./narrowings.js";
+import { RhythmStore } from "./rhythm-store.js";
 import { SettingsStore } from "./settings.js";
 import { SpecStore } from "./store.js";
 import { GrantStore } from "./grants.js";
@@ -53,6 +54,9 @@ const settings = new SettingsStore(join(stateDir, "settings.json"));
  * the catalog is the shareable artifact and these words belong to one account.
  */
 const narrowings = new NarrowingStore(join(stateDir, "narrowings"));
+
+/* How often each endpoint is asked again, and anything the user moved. */
+const rhythms = new RhythmStore(join(stateDir, "rhythm"));
 
 // Self-hosted: code parts come off the operator's own disk. A hosted build
 // sets `allowCode: false` and falls back to the shipped defaults instead.
@@ -139,6 +143,9 @@ try {
 }
 
 const app = buildServer({
+  // The keeper: see `keeper/keeper.ts`. On here, off in tests.
+  keeper: true,
+  rhythms,
   store,
   keys,
   catalog,

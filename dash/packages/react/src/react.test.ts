@@ -350,6 +350,35 @@ describe("QueryClient", () => {
     unsubscribe();
     expect(notifications).toBeGreaterThanOrEqual(2); // loading, then ok
   });
+
+  /* A poll used to be a forced refresh: an upstream call per open tab, on top
+   * of the keeper's own schedule. It re-reads the server now. */
+  it("re-reads the server without asking the API when a poll says view", async () => {
+    const seen: Array<{ mode?: string; maxAgeMs?: number }> = [];
+    const recording = {
+      kind: "inline" as const,
+      transport: "direct" as const,
+      fetch: async (_c: unknown, _o: unknown, _p: unknown, ctx: { mode?: string; maxAgeMs?: number }) => {
+        seen.push({ ...(ctx.mode ? { mode: ctx.mode } : {}), ...(ctx.maxAgeMs !== undefined ? { maxAgeMs: ctx.maxAgeMs } : {}) });
+        return { body: [], meta: { fetchedAt: 0, durationMs: 0, pages: 1, truncated: false, warnings: [] } };
+      },
+    };
+    const registry = new AdapterRegistry()
+      .register(recording as unknown as InlineAdapter)
+      .addConnection(connection);
+    const client = new QueryClient(registry);
+    const base = { key: "k", connection: "demo", op: "rows", params: {}, resolved: params, now: 1 };
+
+    await client.ensure(base);
+    await client.ensure({ ...base, force: true, mode: "view", maxAgeMs: 900_000 });
+    await client.ensure({ ...base, force: true });
+
+    expect(seen).toEqual([
+      { mode: "view", maxAgeMs: 0 },
+      { mode: "view", maxAgeMs: 900_000 },
+      { mode: "refresh", maxAgeMs: 0 },
+    ]);
+  });
 });
 
 describe("a refused refresh keeps what was already there", () => {

@@ -550,6 +550,33 @@ export const widgetSources = (widget: WidgetSpec): NamedSource[] =>
     ? [{ as: "main", ...widget.source, pipeline: [], hidden: false }]
     : widget.sources;
 
+/**
+ * The columns this widget's component actually draws.
+ *
+ * Every component draws what its roles name — a table draws `roles.columns`, a
+ * record page `roles.fields` — while the rows underneath carry whatever the
+ * endpoint returned. Measured on a real board: a six-column work order table
+ * carried nineteen, one of them a reference to a record type the account is
+ * not licensed to read, and every refresh spent its whole per-record lookup
+ * budget naming a column nobody could see.
+ *
+ * Here rather than in the browser because two callers need the same answer:
+ * the view that decides which names to resolve, and the keeper that decides
+ * which lists are worth warming.
+ */
+export const drawnColumns = (widget: WidgetSpec): Set<string> => {
+  const names = new Set<string>();
+  for (const value of Object.values(widget.roles ?? {})) {
+    for (const name of Array.isArray(value) ? value : [value]) {
+      if (typeof name === "string" && name.length > 0) names.add(name);
+    }
+  }
+  /* A column read *through* a reference needs that reference resolved even
+   * when the id itself is not drawn. */
+  for (const field of widget.linked ?? []) names.add(field.through);
+  return names;
+};
+
 export const layoutCellSchema = z.object({
   widgetId: idSchema,
   x: z.number().int().min(0).max(11),

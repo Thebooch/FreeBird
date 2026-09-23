@@ -6,7 +6,12 @@ import type {
   FieldLabels,
   WidgetSpec,
 } from "@freebirdai/dash-spec";
-import { interpolateValue, parseDuration, widgetSources } from "@freebirdai/dash-spec";
+import {
+  drawnColumns,
+  interpolateValue,
+  parseDuration,
+  widgetSources,
+} from "@freebirdai/dash-spec";
 import type { Row, RowHighlight, RunMeta } from "@freebirdai/dash-runtime";
 import { compilePlan, executeWidget, runPipeline } from "@freebirdai/dash-runtime";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -300,6 +305,7 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
     timeZone,
     labels,
     entityLinks,
+    usesRange,
     approvals,
     records,
   } = useDashboard();
@@ -345,10 +351,16 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
             connection: source.connection,
             op: source.op,
             params: resolved,
-            key: queryKey(source.connection, source.op, resolved, params),
+            key: queryKey(
+              source.connection,
+              source.op,
+              resolved,
+              params,
+              usesRange(source.connection, source.op),
+            ),
           };
         }),
-    [sources, params],
+    [sources, params, usesRange],
   );
 
   const subscribe = useCallback((listener: () => void) => client.subscribe(listener), [client]);
@@ -439,7 +451,13 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
         for (const [name, raw] of Object.entries(source.params)) {
           resolved[name] = interpolateValue(raw, params);
         }
-        const key = queryKey(source.connection, source.op, resolved, params);
+        const key = queryKey(
+          source.connection,
+          source.op,
+          resolved,
+          params,
+          usesRange(source.connection, source.op),
+        );
         // Two driver rows pointing at the same record are one request.
         if (seen.has(key)) continue;
         seen.add(key);
@@ -518,6 +536,30 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
     }
   }, [client, allRequests, params]);
 
+  /*
+   * A poll re-reads the server, never the API.
+   *
+   * The keeper keeps the server's copy current on the endpoint's own cadence,
+   * so a poll asking upstream was a second schedule on top of it — one per
+   * open tab. Re-reading in view mode is free, and it is what lets a board
+   * left open pick up what the keeper fetched since.
+   */
+  const reread = useCallback(() => {
+    for (const request of allRequests) {
+      void client.ensure({
+        key: request.key,
+        connection: request.connection,
+        op: request.op,
+        params: request.params,
+        resolved: params,
+        now: Date.now(),
+        force: true,
+        mode: "view",
+        maxAgeMs: staleAfterMs,
+      });
+    }
+  }, [client, allRequests, params, staleAfterMs]);
+
   // Polling is opt-in per widget; without `every` a dashboard is manual-refresh,
   // which is the honest default when every request costs someone's rate limit.
   const everyMs = widget.refresh.every ? parseDuration(widget.refresh.every) : null;
@@ -539,10 +581,10 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
         (entry) => entry?.error?.retryAt !== undefined && entry.error.retryAt > Date.now(),
       );
       if (waiting) return;
-      refetch();
+      reread();
     }, everyMs);
     return () => clearInterval(timer);
-  }, [everyMs, refetch]);
+  }, [everyMs, reread]);
 
   /**
    * One body per source; fan-out responses are concatenated into theirs.
@@ -774,26 +816,8 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
    * this from flapping — the evidence is the failed request, and once nothing
    * asks again there is nothing new to read it from.
    */
-  /**
-   * The columns this widget's component actually draws.
-   *
-   * Every component draws what its roles name — a table draws `roles.columns`,
-   * a record page `roles.fields` — while the rows underneath carry whatever
-   * the endpoint returned. Only the drawn ones are worth a request: a name
-   * nobody can see is a name nobody needed.
-   */
-  const shown = useMemo(() => {
-    const names = new Set<string>();
-    for (const value of Object.values(widget.roles ?? {})) {
-      for (const name of Array.isArray(value) ? value : [value]) {
-        if (typeof name === "string" && name.length > 0) names.add(name);
-      }
-    }
-    /* A column read *through* a reference needs that reference fetched even
-     * though the id itself may not be drawn. */
-    for (const field of widget.linked ?? []) names.add(field.through);
-    return names;
-  }, [widget]);
+  /** The columns this widget's component actually draws. See `drawnColumns`. */
+  const shown = useMemo(() => drawnColumns(widget), [widget]);
 
   const [denied, setDenied] = useState<ReadonlySet<string>>(() => new Set());
   const noteDenied = useCallback((targets: readonly string[]) => {
@@ -833,10 +857,11 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
              * can. Its cells still say why.
              */
             denied: (target) => denied.has(target),
+            usesRange,
             ...(shown.size > 0 ? { shown } : {}),
           })
         : [],
-    [executed, labelled, direct, params, linkedFields, records, recordStamp, denied, shown],
+    [executed, labelled, direct, params, linkedFields, records, recordStamp, denied, shown, usesRange],
   );
 
   const lookupKeys = useMemo(() => lookups.map((lookup) => lookup.key), [lookups]);
@@ -876,10 +901,14 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
       if (count < BATCH_LOOKUPS_ABOVE) continue;
       const list = views.find((view) => view.entity === target)?.list;
       if (!list) continue;
-      plans.push({ target, op: list, key: queryKey(connection, list, {}, params) });
+      plans.push({
+        target,
+        op: list,
+        key: queryKey(connection, list, {}, params, usesRange(connection, list)),
+      });
     }
     return plans;
-  }, [lookups, direct, entityLinks, params]);
+  }, [lookups, direct, entityLinks, params, usesRange]);
 
   useEffect(() => {
     if (!approved || batches.length === 0) return;

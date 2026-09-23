@@ -69,18 +69,38 @@ describe("catalogEntrySchema", () => {
     dialect: {},
   };
 
-  it("carries categories, a profile and its own progress", () => {
+  it("carries categories, a profile and the reading they were made against", () => {
     const parsed = catalogEntrySchema.parse({
       ...entry,
       profile: { summary: "Property management software.", domain: "property management" },
-      categories: [{ id: "leasing", title: "Leasing", entities: ["lease"] }],
+      categories: [{ id: "leasing", title: "Leasing", entities: ["lease"], status: "pending" }],
       categoriesAt: "2026-09-21T00:00:00.000Z",
       categoryVersion: CATEGORY_VERSION,
-      categoryProgress: { version: CATEGORY_VERSION, batches: ["abc"] },
+      categoryFingerprint: "abc",
     });
     expect(parsed.categories).toHaveLength(1);
     expect(parsed.profile?.domain).toBe("property management");
-    expect(parsed.categoryProgress?.batches).toEqual(["abc"]);
+    expect(parsed.categoryFingerprint).toBe("abc");
+  });
+
+  /* Written before a category carried its own status: one with a set was
+   * composed, one without was not. Read that way, so nothing already paid
+   * for is composed twice. */
+  it("reads a status into a category written before it had one", () => {
+    const parsed = catalogEntrySchema.parse({
+      ...entry,
+      categories: [
+        {
+          id: "leasing",
+          title: "Leasing",
+          entities: ["lease"],
+          starters: [{ brief: { entity: "lease", intent: "records" } }],
+        },
+        { id: "maintenance", title: "Maintenance", entities: ["task"] },
+      ],
+      categoryProgress: { version: CATEGORY_VERSION, batches: ["abc"] },
+    });
+    expect(parsed.categories.map((category) => category.status)).toEqual(["ready", "pending"]);
   });
 
   /* Every entry written before this pass existed has to keep parsing: the
@@ -96,30 +116,44 @@ describe("catalogEntrySchema", () => {
 describe("connectionSchema", () => {
   const connection = { id: "buildium", title: "Buildium", kind: "rest" as const };
 
-  it("records what was chosen and the boards it made", () => {
+  it("records where setup stands, what was chosen and the boards it made", () => {
     const parsed = connectionSchema.parse({
       ...connection,
       onboarding: {
-        chose: ["leasing", "maintenance"],
-        layout: "per-category",
-        boards: [
-          { category: "leasing", dashboard: "leasing" },
-          { category: "maintenance", dashboard: "maintenance" },
-        ],
+        status: "complete",
+        choices: { categories: ["leasing", "maintenance"], layout: "per-category" },
+        dashboards: ["leasing", "maintenance"],
         at: "2026-09-21T00:00:00.000Z",
       },
     });
-    expect(parsed.onboarding?.chose).toEqual(["leasing", "maintenance"]);
-    expect(parsed.onboarding?.boards).toHaveLength(2);
+    expect(parsed.onboarding?.status).toBe("complete");
+    expect(parsed.onboarding?.choices?.categories).toEqual(["leasing", "maintenance"]);
+    expect(parsed.onboarding?.dashboards).toHaveLength(2);
   });
 
-  it("leaves a combined board belonging to no category", () => {
+  /* The first version recorded only a finished setup, as `chose`/`boards`. */
+  it("reads a setup recorded by the first version as finished", () => {
     const parsed = onboardingSchema.parse({
       chose: ["leasing", "maintenance"],
       layout: "single",
       boards: [{ dashboard: "buildium" }],
+      at: "2026-09-21T00:00:00.000Z",
+      notes: ["Leasing: one widget could not be built."],
     });
-    expect(parsed.boards[0]?.category).toBeUndefined();
+    expect(parsed).toMatchObject({
+      status: "complete",
+      choices: { categories: ["leasing", "maintenance"], layout: "single" },
+      dashboards: ["buildium"],
+      notes: ["Leasing: one widget could not be built."],
+    });
+  });
+
+  /* Every field defaults, so a record some other experiment left under the
+   * same key would otherwise read as "done" over no boards at all. */
+  it("reads a foreign record as not started", () => {
+    const parsed = onboardingSchema.parse({ dashboardIds: [], templateRevision: "v1-x" });
+    expect(parsed.status).toBe("pending");
+    expect(parsed.dashboards).toEqual([]);
   });
 
   it("parses a connection nobody has onboarded", () => {

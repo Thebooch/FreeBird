@@ -6,6 +6,7 @@ import {
   connectionNeedsAuthSetup,
 } from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useState } from "react";
+import { ConnectionOnboarding } from "./ConnectionOnboarding.js";
 import {
   ApiError,
   type Capabilities,
@@ -15,9 +16,7 @@ import {
   type EnumerationPlan,
   type MapRunResult,
   type MapState,
-  type CategoryRunResult,
-  type OnboardingResult,
-  type OnboardingState,
+  type RhythmState,
   type DescribeRunResult,
   type RecordCheckResult,
   type ReferencesResult,
@@ -42,6 +41,7 @@ type View =
   | "endpoints"
   | "read"
   | "dashboards"
+  | "rhythm"
   | "manage"
   | "records";
 
@@ -59,10 +59,15 @@ const STEPS: ReadonlyArray<{ id: View; label: string }> = [
    * they have just connected, and gets it.
    */
   { id: "dashboards", label: "Dashboards" },
+  /*
+   * Last, and after the boards exist rather than before.
+   *
+   * The question is how often to check each endpoint for new records, and it
+   * is only answerable once somebody can see which endpoints their boards
+   * actually read. Asked before, it would be a list of two hundred URLs.
+   */
+  { id: "rhythm", label: "Refresh" },
 ];
-
-/** How many parts the wizard starts with ticked. */
-const PRECHECKED = 3;
 
 const StepRail = ({ current }: { current: View }): JSX.Element => {
   const index = STEPS.findIndex(
@@ -113,9 +118,12 @@ export const ConnectionManager = ({
   onClose,
   onChanged,
   onCreateWidget,
+  onOpenDashboard,
 }: {
   onClose: () => void;
   onChanged: () => void;
+  /** Go to a board — the one setup just made, most often. */
+  onOpenDashboard?: (dashboardId: string) => void;
   /** Absent when there is no dashboard to add to — the offers still show. */
   onCreateWidget?: (widget: WidgetSpec) => Promise<void>;
 }): JSX.Element => {
@@ -165,12 +173,12 @@ export const ConnectionManager = ({
    * connection — a part whose endpoints this connection does not carry is not
    * on offer — so this cannot be derived from anything about the API alone.
    */
-  const [onboarding, setOnboarding] = useState<OnboardingState | null>(null);
-  const [chosenCategories, setChosenCategories] = useState<string[]>([]);
-  const [tabLayout, setTabLayout] = useState<"single" | "per-category">("per-category");
-  const [dividing, setDividing] = useState(false);
-  const [divideRun, setDivideRun] = useState<CategoryRunResult | null>(null);
-  const [built, setBuilt] = useState<OnboardingResult | null>(null);
+  /* The connection whose dashboards are being set up. Everything else about
+   * setup lives on the server and in `ConnectionOnboarding`. */
+  const [onboardingFor, setOnboardingFor] = useState<ConnectionSummary | null>(null);
+  /** How often each endpoint is checked again, and what decided it. */
+  const [rhythm, setRhythm] = useState<RhythmState | null>(null);
+  const [showAllEndpoints, setShowAllEndpoints] = useState(false);
 
   const [discoverUrl, setDiscoverUrl] = useState("");
   const [discovery, setDiscovery] = useState<DiscoveryResult | null>(null);
@@ -583,10 +591,8 @@ export const ConnectionManager = ({
     setReadProgress(null);
     setMapInfo(null);
     setMapRun(null);
-    setOnboarding(null);
-    setDivideRun(null);
-    setBuilt(null);
-    setChosenCategories([]);
+    setOnboardingFor(null);
+    setRhythm(null);
   };
 
   /**
@@ -665,70 +671,41 @@ export const ConnectionManager = ({
    */
   const openOnboarding = (connectionId: string): Promise<void> =>
     run(async () => {
-      setDivideRun(null);
-      setBuilt(null);
-      const state = await api.onboarding(connectionId);
-      setOnboarding(state);
-      /*
-       * The parts the pass ranked highest, ticked.
-       *
-       * Ticking everything on an API that divides into eight parts offers
-       * somebody eight tabs by default, which is not a starting point; ticking
-       * nothing makes the first thing they see a form they have to fill in.
-       * The pass orders its answer most-wanted first, so the top of that order
-       * is the defensible default.
-       */
-      setChosenCategories(
-        state.categories
-          .filter((category) => category.available)
-          .slice(0, PRECHECKED)
-          .map((category) => category.id),
-      );
+      const found =
+        connections.find((one) => one.id === connectionId) ??
+        (draft?.id === connectionId ? draft : undefined) ??
+        (await api.connections()).find((one) => one.id === connectionId);
+      if (!found) throw new Error("That connection no longer exists.");
+      setOnboardingFor(found);
       setView("dashboards");
     });
 
   /**
-   * Work out what this API is for and what each part of it opens with.
+   * The last question: how often to check each endpoint for new records.
    *
-   * The shared half: it describes the API rather than this account, so it is
-   * paid for once and every later connection to the same API inherits it.
+   * Free to open — the reading is on the integration and the cadences are on
+   * disk, so nothing is fetched and nothing is spent.
    */
-  const runDivide = (): Promise<void> =>
+  const openRhythm = (connectionId: string): Promise<void> =>
     run(async () => {
-      const catalogId = onboarding?.catalog ?? draft?.catalog ?? draftId;
-      const connectionId = onboarding?.connection ?? draftId;
-      if (!catalogId || !connectionId) return;
-      setDividing(true);
-      try {
-        setDivideRun(await api.divideApi(catalogId));
-        /* Re-read rather than patched: what is on screen is what the
-         * integration now says, for this connection's endpoints. */
-        const state = await api.onboarding(connectionId);
-        setOnboarding(state);
-        setChosenCategories(
-          state.categories
-            .filter((category) => category.available)
-            .slice(0, PRECHECKED)
-            .map((category) => category.id),
-        );
-      } finally {
-        setDividing(false);
-      }
+      setShowAllEndpoints(false);
+      setRhythm(await api.rhythm(connectionId));
+      setView("rhythm");
     });
 
-  /** Build the boards. Deterministic, and it makes no request to the API. */
-  const buildBoards = (): Promise<void> =>
+  /**
+   * Move one endpoint to another cadence.
+   *
+   * Saved immediately rather than gathered behind a Save button: there is one
+   * control per row and no way to be half-finished, so a button to confirm
+   * what you already did is a step that only exists to be forgotten.
+   */
+  const moveEndpoint = (op: string, tier: string): Promise<void> =>
     run(async () => {
-      const connectionId = onboarding?.connection ?? draftId;
-      if (!connectionId || chosenCategories.length === 0) return;
-      const result = await api.setUpDashboards(connectionId, {
-        categories: chosenCategories,
-        layout: chosenCategories.length > 1 ? tabLayout : "per-category",
-      });
-      setBuilt(result);
-      setOnboarding(await api.onboarding(connectionId).catch(() => onboarding));
-      /* The nav reads its tabs from the boards, so it has to be told. */
-      onChanged();
+      const connectionId = rhythm?.connection;
+      if (!connectionId) return;
+      await api.setRhythm(connectionId, { [op]: tier });
+      setRhythm(await api.rhythm(connectionId));
     });
 
   /**
@@ -1102,6 +1079,22 @@ export const ConnectionManager = ({
                     >
                       Records
                     </button>
+                    {/*
+                     * The step the wizard ends on, reachable for a connection
+                     * that already exists — to finish a setup left half way,
+                     * to set up one made before onboarding existed, or to make
+                     * another set.
+                     */}
+                    {connection.catalog && (
+                      <button
+                        className="dash-iconbtn"
+                        data-testid={`onboarding-${connection.id}`}
+                        aria-label={`Set up dashboards for ${connection.title}`}
+                        onClick={() => void openOnboarding(connection.id)}
+                      >
+                        Dashboards
+                      </button>
+                    )}
                     <button
                       className="dash-iconbtn"
                       data-testid={`manage-${connection.id}`}
@@ -1425,22 +1418,6 @@ export const ConnectionManager = ({
               <button className="dash-control" onClick={() => setView("list")}>
                 Back
               </button>
-              {/*
-               * The same step the wizard ends on, reachable for a connection
-               * that already exists. Without it, onboarding would only ever
-               * be offered on the way in — and every connection anybody
-               * already has would be permanently past the offer.
-               */}
-              {records?.described && managed && (
-                <button
-                  className="dash-control dash-control--primary"
-                  data-testid="records-onboarding"
-                  disabled={busy}
-                  onClick={() => managed && void openOnboarding(managed.id)}
-                >
-                  Set up dashboards
-                </button>
-              )}
             </div>
           </>
         );
@@ -2352,254 +2329,142 @@ export const ConnectionManager = ({
         );
 
       case "dashboards": {
-        const offers = onboarding?.categories ?? [];
-        const available = offers.filter((offer) => offer.available);
-        const state = onboarding?.state;
-        const picked = offers.filter((offer) => chosenCategories.includes(offer.id));
-        const already = onboarding?.already;
+        if (!onboardingFor) return <p>Choose a connection first.</p>;
+        return (
+          <>
+            {/* Only a step when it is one: reached from a connection's
+             * Dashboards button, this is a screen of its own. */}
+            {draftId && <StepRail current={view} />}
+            <ConnectionOnboarding
+              key={onboardingFor.id}
+              connection={onboardingFor}
+              onChanged={onChanged}
+              onDone={closeWizard}
+              onOpen={(dashboardId) => {
+                onChanged();
+                if (onOpenDashboard) onOpenDashboard(dashboardId);
+                else closeWizard();
+              }}
+              onRhythm={() => void openRhythm(onboardingFor.id)}
+            />
+          </>
+        );
+      }
+
+      case "rhythm": {
+        const endpoints = rhythm?.endpoints ?? [];
+        /*
+         * The ones a board actually reads, first and by default.
+         *
+         * A real API has two hundred endpoints and somebody has boards on
+         * eleven of them. Those eleven are the only ones whose freshness
+         * anybody will ever notice; the rest are read when something asks and
+         * are listed only if somebody goes looking.
+         */
+        const onBoards = endpoints.filter((one) => one.warmed || one.source === "override");
+        const rest = endpoints.filter((one) => !onBoards.includes(one));
+        const listed = showAllEndpoints ? [...onBoards, ...rest] : onBoards;
+
+        const everyPhrase = (ms: number): string => {
+          const minutes = Math.round(ms / 60_000);
+          if (minutes < 60) return `every ${minutes} min`;
+          const hours = Math.round(minutes / 60);
+          return hours < 48 ? `every ${hours} h` : `every ${Math.round(hours / 24)} days`;
+        };
 
         return (
           <>
-            {/* Only a step when it is one: reached from Records, this is a
-             * screen of its own rather than the tail of a wizard. */}
             {draftId && <StepRail current={view} />}
-            <h4>What do you want from {onboarding?.title ?? draft?.title ?? "this connection"}?</h4>
+            <h4>How often should we check for new records?</h4>
+            <p className="dash-page__description">
+              Your boards read from what we have already fetched, so opening one never waits and
+              never spends your API. We top it up in the background instead — and how often is
+              worth asking is different for each kind of record.
+            </p>
 
-            {onboarding?.profile && (
-              <p className="dash-page__description" data-testid="onboarding-profile">
-                {onboarding.profile.summary}
+            {rhythm && !rhythm.classified && (
+              <div className="dash-callout" data-testid="rhythm-unclassified">
+                Nothing has read this API for how often its records change, so everything is on
+                the quickest schedule. That is the safe direction &mdash; it costs a few requests
+                rather than showing you yesterday&rsquo;s numbers &mdash; and you can move
+                anything below.
+              </div>
+            )}
+
+            {listed.length === 0 ? (
+              <div className="dash-callout" data-testid="rhythm-empty">
+                Nothing is being kept warm for this connection yet. Once a board reads an
+                endpoint it will appear here.
+              </div>
+            ) : (
+              <ul className="dash-checklist" data-testid="rhythm-endpoints">
+                {listed.map((endpoint) => (
+                  <li key={endpoint.op}>
+                    <span style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+                      <select
+                        className="dash-control"
+                        data-testid={`rhythm-${endpoint.op}`}
+                        value={endpoint.tier}
+                        disabled={busy}
+                        onChange={(event) => void moveEndpoint(endpoint.op, event.target.value)}
+                      >
+                        {(rhythm?.tiers ?? []).map((tier) => (
+                          <option key={tier.id} value={tier.id}>
+                            {everyPhrase(tier.everyMs)}
+                          </option>
+                        ))}
+                      </select>
+                      <span>
+                        <span className="dash-checklist__name">
+                          {endpoint.records ?? endpoint.title}
+                        </span>
+                        <div className="dash-checklist__meta">
+                          {/*
+                           * Why it landed there, and who said so. A cadence
+                           * with no reason is a setting to shrug at rather
+                           * than a claim somebody can check.
+                           */}
+                          {endpoint.source === "override"
+                            ? "You moved this one."
+                            : endpoint.source === "measured"
+                              ? "Set from what we have seen change on your account."
+                              : (endpoint.because ??
+                                (endpoint.source === "model"
+                                  ? "Read from what this kind of record is."
+                                  : "Nothing has said how often this changes, so it is checked often."))}
+                          {endpoint.warmed ? "" : " · not on a board"}
+                        </div>
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {rest.length > 0 && (
+              <p className="dash-hint">
+                <button
+                  className="dash-control"
+                  data-testid="rhythm-show-all"
+                  onClick={() => setShowAllEndpoints((previous) => !previous)}
+                >
+                  {showAllEndpoints
+                    ? "Show only what my boards read"
+                    : `Show the other ${rest.length} endpoint(s)`}
+                </button>{" "}
+                &mdash; these are only read when something asks for them, so their schedule
+                rarely matters.
               </p>
             )}
 
-            {/*
-             * The gate, in the same shape as the map gate below: what it buys,
-             * what it costs, and that it is paid once. The question it asks is
-             * about the API rather than about this account, which is exactly
-             * why the answer is worth sharing.
-             */}
-            {state && !state.divided && !divideRun && (
-              <div className="dash-callout" data-testid="onboarding-gate">
-                <p>
-                  <strong>Nobody has worked out what this API is for yet.</strong>
-                </p>
-                <p className="dash-hint">
-                  {onboarding?.title ?? "This API"} has {state.entities} kind(s) of record.
-                  Working it out reads them once and answers two things: what this software is,
-                  and which parts it divides into &mdash; leasing, maintenance, accounting,
-                  whatever this one&rsquo;s own are. Then, for each part, which widgets a
-                  dashboard of it should open with.
-                </p>
-                <p className="dash-hint">
-                  It makes <strong>no requests against your API</strong>. The cost is AI usage,
-                  and it is paid once &mdash; the answer describes the API rather than your
-                  account, so everybody who connects this API afterwards starts where you
-                  finished.
-                </p>
-                {!state.canRun && (
-                  <p className="dash-hint">
-                    This needs an AI key on the server. Without one you can still add widgets by
-                    describing them yourself.
-                  </p>
-                )}
-                <div className="dash-row dash-row--end" style={{ marginTop: 8 }}>
-                  <button
-                    className="dash-control dash-control--primary"
-                    data-testid="onboarding-divide"
-                    disabled={busy || dividing || !state.canRun}
-                    onClick={() => void runDivide()}
-                  >
-                    {dividing ? "Working it out…" : "Work out what this API is for"}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {divideRun && (
-              <div
-                className={`dash-callout ${(divideRun.errors ?? []).length > 0 ? "" : "dash-callout--good"}`}
-                data-testid="onboarding-divided"
-              >
-                {divideRun.ranPass
-                  ? `Divided into ${divideRun.categories} part(s), with ${divideRun.starters} widget(s) composed across them.`
-                  : (divideRun.note ?? "Nothing to work out.")}
-                {/*
-                 * Proposed against kept. A widget the compiler refused is one
-                 * that would not have worked, and saying so beats a board that
-                 * is quietly shorter than the number above it.
-                 */}
-                {divideRun.proposed !== undefined &&
-                  divideRun.kept !== undefined &&
-                  divideRun.proposed > divideRun.kept && (
-                    <>
-                      {" "}
-                      {divideRun.proposed - divideRun.kept} proposed widget(s) could not be built
-                      from what this API offers and were left out.
-                    </>
-                  )}
-                {(divideRun.errors ?? []).length > 0 && (
-                  <>
-                    {" "}
-                    {divideRun.errors!.length} part(s) did not finish; running it again picks up
-                    where it stopped.
-                  </>
-                )}
-              </div>
-            )}
-
-            {already && already.boards.length > 0 && !built && (
-              <div className="dash-callout" data-testid="onboarding-already">
-                <p>
-                  <strong>This connection is already set up.</strong>{" "}
-                  {already.boards.map((board) => board.title).join(", ")} &mdash;{" "}
-                  {already.boards.reduce((sum, board) => sum + board.widgets, 0)} widget(s) in
-                  all.
-                </p>
-                <p className="dash-hint">
-                  Setting it up again makes new tabs and leaves those alone, so nothing you have
-                  arranged since is lost.
-                </p>
-              </div>
-            )}
-
-            {available.length > 0 && !built && (
-              <>
-                <p className="dash-page__description">
-                  Tick the parts you want. Each one becomes a dashboard of its own, already
-                  filled in.
-                </p>
-                <ul className="dash-checklist" data-testid="onboarding-categories">
-                  {offers.map((offer) => (
-                    <li key={offer.id}>
-                      <label>
-                        <input
-                          type="checkbox"
-                          data-testid={`category-${offer.id}`}
-                          disabled={!offer.available}
-                          checked={chosenCategories.includes(offer.id)}
-                          onChange={(event) =>
-                            setChosenCategories((previous) =>
-                              event.target.checked
-                                ? [...previous, offer.id]
-                                : previous.filter((id) => id !== offer.id),
-                            )
-                          }
-                        />
-                        <span>
-                          <span className="dash-checklist__name">{offer.title}</span>
-                          <div className="dash-checklist__meta">
-                            {offer.description ? `${offer.description} ` : ""}
-                            {offer.available
-                              ? `${offer.recordTypes} record type(s) · ${offer.endpoints} endpoint(s) · opens with ${offer.widgets} widget(s): ${offer.opensWith.join(", ")}`
-                              : (offer.unavailable ?? "Nothing could be built for this part.")}
-                          </div>
-                        </span>
-                      </label>
-                    </li>
-                  ))}
-                </ul>
-
-                {/*
-                 * Only worth asking with two or more parts ticked. With one
-                 * there is nothing to combine, and the question would be a
-                 * step somebody has to click through to reach their board.
-                 */}
-                {chosenCategories.length > 1 && (
-                  <div className="dash-callout" data-testid="onboarding-layout">
-                    <p>
-                      <strong>One {onboarding?.title ?? "combined"} tab, or a tab each?</strong>
-                    </p>
-                    <label style={{ display: "block", marginTop: 6 }}>
-                      <input
-                        type="radio"
-                        name="dash-tab-layout"
-                        data-testid="layout-per-category"
-                        checked={tabLayout === "per-category"}
-                        onChange={() => setTabLayout("per-category")}
-                      />{" "}
-                      A tab each &mdash; {picked.map((offer) => offer.title).join(", ")}
-                    </label>
-                    <label style={{ display: "block", marginTop: 4 }}>
-                      <input
-                        type="radio"
-                        name="dash-tab-layout"
-                        data-testid="layout-single"
-                        checked={tabLayout === "single"}
-                        onChange={() => setTabLayout("single")}
-                      />{" "}
-                      One tab called {onboarding?.title ?? draft?.title ?? "this connection"}, with
-                      the most important widgets from each
-                    </label>
-                  </div>
-                )}
-              </>
-            )}
-
-            {state?.divided && available.length === 0 && !built && (
-              <div className="dash-callout" data-testid="onboarding-nothing">
-                None of this API&rsquo;s parts can be built from the endpoints this connection
-                carries. Adding more endpoints in Manage would change that; in the meantime you
-                can still ask for widgets one at a time.
-              </div>
-            )}
-
-            {built && (
-              <div
-                className={`dash-callout ${built.errors.length > 0 ? "" : "dash-callout--good"}`}
-                data-testid="onboarding-built"
-              >
-                <p>
-                  Built {built.boards.length === 1 ? "one tab" : `${built.boards.length} tabs`}{" "}
-                  &mdash;{" "}
-                  {built.boards
-                    .map((board) => `${board.title} (${board.widgets} widget(s))`)
-                    .join(", ")}
-                  .
-                </p>
-                {/*
-                 * Where the boards differ from what was designed. A board
-                 * quietly shorter than its starter set is the failure mode
-                 * here, and nothing on screen would otherwise say so.
-                 */}
-                {built.notes.length > 0 && (
-                  <ul className="dash-hint" data-testid="onboarding-notes">
-                    {built.notes.slice(0, 5).map((note) => (
-                      <li key={note}>{note}</li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-
             <div className="dash-row dash-row--end" style={{ marginTop: 12 }}>
-              {built ? (
-                <button
-                  className="dash-control dash-control--primary"
-                  data-testid="onboarding-close"
-                  onClick={closeWizard}
-                >
-                  Done
-                </button>
-              ) : (
-                <>
-                  <button
-                    className="dash-control"
-                    data-testid="onboarding-skip"
-                    onClick={closeWizard}
-                  >
-                    Skip for now
-                  </button>
-                  <button
-                    className="dash-control dash-control--primary"
-                    data-testid="onboarding-build"
-                    disabled={busy || chosenCategories.length === 0}
-                    onClick={() => void buildBoards()}
-                  >
-                    {chosenCategories.length > 1 && tabLayout === "per-category"
-                      ? `Make ${chosenCategories.length} tabs`
-                      : "Make my dashboard"}
-                  </button>
-                </>
-              )}
+              <button
+                className="dash-control dash-control--primary"
+                data-testid="rhythm-done"
+                onClick={closeWizard}
+              >
+                Done
+              </button>
             </div>
           </>
         );
@@ -2818,7 +2683,14 @@ export const ConnectionManager = ({
       className="dash-inspector-backdrop"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="dash-inspector" role="dialog" aria-modal="true" aria-label="Connections">
+      <div
+        className="dash-inspector"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Connections"
+        /* A previewed board needs the width a board has. */
+        style={view === "dashboards" ? { width: "min(1280px, 100%)" } : undefined}
+      >
         <div className="dash-inspector__head">
           <h3 className="dash-inspector__title">Connections</h3>
           <button

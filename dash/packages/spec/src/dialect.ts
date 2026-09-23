@@ -2,6 +2,7 @@ import { z } from "zod";
 import { fieldFormatSchema } from "./coercion.js";
 import { entitySchema } from "./entity.js";
 import { CATEGORIES_MAX, categorySchema, profileSchema } from "./category.js";
+import { apiRhythmSchema } from "./rhythm.js";
 import { authSchema, paginationSchema, paramDefSchema, queryValueSchema } from "./primitives.js";
 import { resourceSchema } from "./resource.js";
 
@@ -281,16 +282,26 @@ export const catalogEntrySchema = z.object({
   categoriesAt: z.string().optional(),
   categoryVersion: z.number().int().min(1).optional(),
   /**
-   * Which starter sets have already been written.
+   * Which reading of the API the categories were made against.
    *
-   * One batch per category, so a run that lost a call keeps the categories it
-   * finished and picks up the rest — the same bargain the map and entity
-   * passes strike, and for the same reason: re-running costs what the first
-   * run cost.
+   * A version only notices when the passes change; this notices when the
+   * *API* does — a record type re-described, a field gone — which is what
+   * makes an old division stale. Absent on an entry divided before it
+   * existed, which is read as current and stamped on the next run rather
+   * than paid for again. See `categoryFingerprint`.
+   *
+   * Progress needs no list of its own: each category carries its status.
    */
-  categoryProgress: z
-    .object({ version: z.number().int(), batches: z.array(z.string()).max(2000) })
-    .optional(),
+  categoryFingerprint: z.string().optional(),
+  /**
+   * How often new records of each kind appear.
+   *
+   * A fact about the API — new applications arrive all day on Buildium
+   * whoever is connected — so it sits here with the categories and the record
+   * types, read once by its own pass during onboarding. What one person did
+   * with it afterwards is theirs and lives on their connection.
+   */
+  rhythm: apiRhythmSchema.optional(),
   /**
    * When the descriptions were last checked against a live account.
    *

@@ -10,6 +10,7 @@ import type {
 } from "@freebirdai/dash-spec";
 import {
   compileBrief,
+  dashboardSchema,
   entityById,
   parseDashboard,
   solveLayout,
@@ -22,7 +23,9 @@ import {
  * store, no clock. Everything interesting has already been decided — which
  * parts of the API somebody wants, and what each part opens with — so this is
  * a compile and a pack, and it is testable without any of the machinery around
- * it.
+ * it. Board ids are *reserved* here, never written: nothing reaches the store
+ * until somebody has looked at the preview and said yes, so a board that
+ * fails validation half way leaves nothing behind.
  *
  * Three things it is responsible for, each of which has a wrong answer worth
  * naming:
@@ -65,19 +68,18 @@ export interface MaterialiseInput {
   readonly categories: readonly CategorySpec[];
   readonly layout: "single" | "per-category";
   /**
-   * Make an empty board with this title and return it, ids and all.
-   *
-   * Injected because board ids are unique across the whole instance and only
-   * the store knows what is taken — and because a materialise that created
-   * nothing would be much harder to test than one that is handed a maker.
+   * An id for a board with this title, unique against the store and against
+   * everything reserved so far in this run. Reserved, not written.
    */
-  readonly createBoard: (title: string) => DashboardSpec;
+  readonly reserveId: (title: string) => string;
 }
 
 export interface MaterialisedBoard {
   readonly category?: string | undefined;
   readonly board: DashboardSpec;
   readonly widgets: readonly WidgetSpec[];
+  /** The compiled starters on it, still carrying their sizing and category. */
+  readonly built: readonly Built[];
 }
 
 export interface MaterialiseResult {
@@ -87,8 +89,27 @@ export interface MaterialiseResult {
   readonly errors: readonly string[];
 }
 
+/**
+ * A board id from its title, on the server's own slug rule.
+ *
+ * Shared by `createDashboardSpec` and onboarding's reservations, so a board
+ * made by hand and one made by setup can never disagree about what "taken"
+ * means.
+ */
+export const allocateDashboardId = (title: string, taken: ReadonlySet<string>): string => {
+  const base =
+    title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40) || "board";
+  let id = base;
+  for (let suffix = 2; taken.has(id); suffix++) id = `${base}-${suffix}`;
+  return id;
+};
+
 /** One compiled starter, still attached to the sizing it asked for. */
-interface Built {
+export interface Built {
   readonly widget: WidgetSpec;
   readonly starter: StarterSpec;
   readonly category: string;
@@ -237,27 +258,50 @@ export const interleave = (
   return taken;
 };
 
-const withWidgets = (
+/**
+ * Lay a board out and validate it.
+ *
+ * A widget the packer could not place — no room, or a component it does not
+ * know — is left off the board *and said so*. Kept in `widgets` without a
+ * cell it would be placed by the browser somewhere nobody designed; dropped
+ * quietly it would be a board shorter than the one on offer.
+ */
+export const withWidgets = (
   board: DashboardSpec,
   built: readonly Built[],
-): { board: DashboardSpec | null; error?: string } => {
-  const cells: LayoutCell[] = solveLayout(placementsFor(built), {
-    gridCols: board.layout.gridCols,
-  }).cells;
+): { board: DashboardSpec | null; placed: readonly Built[]; notes: string[]; error?: string } => {
+  const solved = solveLayout(placementsFor(built), { gridCols: board.layout.gridCols });
+  const cells: LayoutCell[] = solved.cells;
+  const dropped = new Map(solved.dropped.map((one) => [one.widgetId, one.reason]));
+  const placed = built.filter((one) => !dropped.has(one.widget.id));
+  const notes = built
+    .filter((one) => dropped.has(one.widget.id))
+    .map(
+      (one) =>
+        `“${one.widget.title ?? one.widget.id}” was left off ${board.title}: ${dropped.get(one.widget.id)}.`,
+    );
 
   const parsed = parseDashboard({
     ...board,
-    widgets: built.map((one) => one.widget),
+    widgets: placed.map((one) => one.widget),
     layout: { ...board.layout, cells },
   });
   return parsed.ok && parsed.value
-    ? { board: parsed.value }
-    : { board: null, error: parsed.errors.join("; ") || "the board did not validate" };
+    ? { board: parsed.value, placed, notes }
+    : {
+        board: null,
+        placed,
+        notes,
+        error: parsed.errors.join("; ") || "the board did not validate",
+      };
 };
+
+/** An empty board under a reserved id. Nothing is written. */
+const emptyBoard = (id: string, title: string): DashboardSpec =>
+  dashboardSchema.parse({ id, title, widgets: [] });
 
 export const materialise = (input: MaterialiseInput): MaterialiseResult => {
   const notes: string[] = [];
-  const errors: string[] = [];
 
   if (input.categories.length === 0) {
     return { boards: [], notes, errors: ["nothing was chosen"] };
@@ -276,6 +320,35 @@ export const materialise = (input: MaterialiseInput): MaterialiseResult => {
     return { category, built: result.built };
   });
 
+  const packed = packBoards({
+    source: input.source,
+    perCategory,
+    layout: input.layout,
+    reserveId: input.reserveId,
+  });
+  return {
+    boards: packed.boards,
+    notes: [...notes, ...packed.notes],
+    errors: packed.errors,
+  };
+};
+
+/**
+ * Put compiled widgets onto boards: one per category, or one for everything.
+ *
+ * Separate from compiling so onboarding can try each widget against the
+ * account in between and pack only the ones that answered.
+ */
+export const packBoards = (input: {
+  readonly source: MaterialiseSource;
+  readonly perCategory: ReadonlyArray<{ category: CategorySpec; built: readonly Built[] }>;
+  readonly layout: "single" | "per-category";
+  readonly reserveId: (title: string) => string;
+}): MaterialiseResult => {
+  const notes: string[] = [];
+  const errors: string[] = [];
+  const { perCategory } = input;
+
   if (input.layout === "single") {
     const built = interleave(perCategory.flatMap((one) => one.built));
     const dropped = perCategory.reduce((sum, one) => sum + one.built.length, 0) - built.length;
@@ -288,13 +361,14 @@ export const materialise = (input: MaterialiseInput): MaterialiseResult => {
       return { boards: [], notes, errors: ["none of the widgets could be built"] };
     }
 
-    const empty = input.createBoard(input.source.connection.title);
-    const filled = withWidgets(empty, built);
+    const title = input.source.connection.title;
+    const filled = withWidgets(emptyBoard(input.reserveId(title), title), built);
+    notes.push(...filled.notes);
     if (!filled.board) {
       return { boards: [], notes, errors: [filled.error ?? "the board did not validate"] };
     }
     return {
-      boards: [{ board: filled.board, widgets: filled.board.widgets }],
+      boards: [{ board: filled.board, widgets: filled.board.widgets, built: filled.placed }],
       notes,
       errors,
     };
@@ -308,8 +382,11 @@ export const materialise = (input: MaterialiseInput): MaterialiseResult => {
       );
       continue;
     }
-    const empty = input.createBoard(category.title);
-    const filled = withWidgets(empty, built);
+    const filled = withWidgets(
+      emptyBoard(input.reserveId(category.title), category.title),
+      built,
+    );
+    notes.push(...filled.notes);
     if (!filled.board) {
       errors.push(`${category.title}: ${filled.error ?? "the board did not validate"}`);
       continue;
@@ -318,6 +395,7 @@ export const materialise = (input: MaterialiseInput): MaterialiseResult => {
       category: category.id,
       board: filled.board,
       widgets: filled.board.widgets,
+      built: filled.placed,
     });
   }
 

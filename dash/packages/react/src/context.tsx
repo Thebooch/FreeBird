@@ -87,6 +87,11 @@ export interface DashboardContextValue {
    */
   readonly entityLinks: Readonly<Record<string, readonly EntityLinkView[]>> | undefined;
   /**
+   * Whether an endpoint reads the time range, and so whether the resolved
+   * window belongs in its cache key. See `DashboardProviderProps.rangeOps`.
+   */
+  usesRange(connection: string, op: string): boolean;
+  /**
    * Whether each widget is still covered by the approval it was given, keyed
    * by widget id, from `GET /api/dashboards/:id`.
    *
@@ -129,6 +134,16 @@ export interface DashboardProviderProps {
   readonly labels?: Readonly<Record<string, FieldLabels>>;
   /** connection id → its record links, from `GET /api/connections`. */
   readonly entityLinks?: Readonly<Record<string, readonly EntityLinkView[]>>;
+  /**
+   * connection id → the endpoints that read the time range, from
+   * `GET /api/connections`.
+   *
+   * Published by the server rather than worked out here, because both sides
+   * build the same cache key and `queryKey` says plainly what two spellings of
+   * one key cost. Absent means "assume every endpoint reads it", which is the
+   * behaviour before this existed.
+   */
+  readonly rangeOps?: Readonly<Record<string, readonly string[]>>;
   /** widget id → approval verdict, from `GET /api/dashboards/:id`. */
   readonly approvals?: Readonly<Record<string, ApprovalVerdict>>;
   /**
@@ -154,6 +169,7 @@ export const DashboardProvider = ({
   presentation,
   labels,
   entityLinks,
+  rangeOps,
   approvals,
   credentialRevisions,
   children,
@@ -311,6 +327,31 @@ export const DashboardProvider = ({
     });
   }, []);
 
+  /**
+   * Whether an endpoint reads the time range.
+   *
+   * A set per connection rather than a scan of an array: this is asked once
+   * per source, per fan-out row and per reference lookup on every render of
+   * every widget, and a board of a dozen tables asks it thousands of times.
+   */
+  const rangeSets = useMemo(
+    () =>
+      new Map(
+        Object.entries(rangeOps ?? {}).map(([connection, ops]) => [connection, new Set(ops)]),
+      ),
+    [rangeOps],
+  );
+  const usesRange = useCallback(
+    (connection: string, op: string): boolean => {
+      const known = rangeSets.get(connection);
+      /* Nothing published for this connection means nothing is known about
+       * it, and assuming the range matters is the answer that cannot serve
+       * one window's rows under another window's key. */
+      return known ? known.has(op) : true;
+    },
+    [rangeSets],
+  );
+
   const value = useMemo<DashboardContextValue>(
     () => ({
       dashboard,
@@ -325,6 +366,7 @@ export const DashboardProvider = ({
       presentation,
       labels,
       entityLinks,
+      usesRange,
       approvals,
       facetSummaries,
       setPreset,
@@ -343,6 +385,7 @@ export const DashboardProvider = ({
       now,
       locale,
       presentation,
+      usesRange,
       labels,
       entityLinks,
       approvals,
