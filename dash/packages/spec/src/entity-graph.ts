@@ -8,6 +8,7 @@ import type { GraphOp } from "./relations.js";
 import { declaredFilterParam } from "./relations.js";
 import type { ResourceSpec } from "./resource.js";
 import { pathParamNames } from "./primitives.js";
+import { readField } from "./field-path.js";
 
 /**
  * The relationships between record types, read in both directions, once.
@@ -709,7 +710,12 @@ export const entityPageView = (
     titleMode: titleModeOf(entity),
     ...(entity.display?.subtitle ? { subtitle: entity.display.subtitle } : {}),
     ...(entity.display?.status ? { status: entity.display.status } : {}),
-    ...(resource?.detailOp && resource.detailParam
+    ...(resource?.detailOp &&
+    resource.detailParam &&
+    byOwnId(
+      input.ops.find((op) => op.id === resource.detailOp),
+      resource.detailParam,
+    )
       ? { detail: { op: resource.detailOp, param: resource.detailParam } }
       : {}),
     fields,
@@ -763,13 +769,28 @@ export const targetFor = (
 ): string => {
   const selector = reference.typeField;
   if (!selector) return reference.entity;
-  const raw = row[selector.field] ?? row[selector.field.replace(/\./g, "_")];
+  const raw = readField(row, selector.field);
   if (raw === null || raw === undefined) return reference.entity;
   return selector.map[String(raw)] ?? reference.entity;
 };
 
 const bare = (op: GraphOp | undefined): boolean =>
   op !== undefined && pathParamNames(op.path).length === 0;
+
+/**
+ * Whether one record can be fetched knowing only its own id.
+ *
+ * A record that lives under a parent — `/properties/{propertyID}/units/{unitID}`
+ * — is fetched with the parent's id as well, and a link or a page address
+ * holds only the record's own. Offered anyway, every lookup went out with a
+ * hole in its path and came back an error: on Rentvine, one failed request per
+ * unit named on a page, on every load, for a name that could never arrive.
+ *
+ * An endpoint this connection does not list is given the benefit of the doubt,
+ * as before: there is nothing to judge it by.
+ */
+const byOwnId = (op: GraphOp | undefined, param: string): boolean =>
+  op === undefined || pathParamNames(op.path).every((name) => name === param);
 
 /**
  * The field on a reference that actually holds a comparable id.
@@ -820,7 +841,9 @@ export const entityGraph = (input: EntityGraphInput): EntityGraph => {
 
       const targetResource = resourceOf(target);
       const reach: ReachPlan | null =
-        targetResource?.detailOp && targetResource.detailParam
+        targetResource?.detailOp &&
+        targetResource.detailParam &&
+        byOwnId(opById.get(targetResource.detailOp), targetResource.detailParam)
           ? { mode: "record", op: targetResource.detailOp, param: targetResource.detailParam }
           : null;
 
@@ -834,7 +857,9 @@ export const entityGraph = (input: EntityGraphInput): EntityGraph => {
         unreachable.push({
           from: entity.id,
           field: field.path,
-          reason: `${target.name.one} has no by-id endpoint and the row carries no name for it`,
+          reason: targetResource?.detailOp
+            ? `${target.name.one} can only be fetched through the record it belongs to, and the row carries no name for it`
+            : `${target.name.one} has no by-id endpoint and the row carries no name for it`,
         });
       }
 

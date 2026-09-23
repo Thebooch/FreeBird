@@ -1,5 +1,6 @@
 import { extractRows, parsePath } from "@freebirdai/dash-expr";
 import type { EntitySpec, ResourceSpec } from "@freebirdai/dash-spec";
+import { readField } from "@freebirdai/dash-spec";
 // The budgets live in the spec package: the screen that offers this check
 // has to state its cost before it is agreed to, and must quote the same
 // number this spends.
@@ -65,18 +66,7 @@ export interface VerifyResult {
 }
 
 /** One value off a row, by the path the API spells for it. */
-const valueAt = (row: unknown, path: string): unknown => {
-  if (!row || typeof row !== "object") return undefined;
-  const record = row as Record<string, unknown>;
-  const direct = record[path] ?? record[path.replace(/\./g, "_")];
-  if (direct !== undefined) return direct;
-  let current: unknown = record;
-  for (const part of path.split(".")) {
-    if (current === null || typeof current !== "object") return undefined;
-    current = (current as Record<string, unknown>)[part];
-  }
-  return current;
-};
+const valueAt = readField;
 
 const present = (value: unknown): boolean =>
   value !== null && value !== undefined && value !== "";

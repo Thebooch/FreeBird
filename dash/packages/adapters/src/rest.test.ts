@@ -201,6 +201,22 @@ describe("RestAdapter", () => {
       expect(call.headers.authorization).toBe(`Basic ${btoa("user:sk_test_secret")}`);
     });
 
+    /* Rentvine: "the access key as the username and secret as the password".
+     * Both halves are the person's, and neither is "the first secret". */
+    it("sends basic auth whose username is a stored credential too", async () => {
+      const { http, calls } = stub([{ body: { data: [] } }]);
+      const conn = connection({
+        auth: { type: "basic", usernameRef: "access", keyRef: "secret" },
+      });
+      await new RestAdapter(http).fetch(
+        conn,
+        op(conn),
+        {},
+        ctx({ resolveSecret: async (ref) => (ref === "access" ? "AK123" : "shh") }),
+      );
+      expect(calls[0]?.headers.authorization).toBe(`Basic ${btoa("AK123:shh")}`);
+    });
+
     it("puts a query key on the wire but never in the reported URL", async () => {
       const { call, result } = await run({ type: "query", param: "api_key", keyRef: "k" });
       expect(call.url).toContain("api_key=sk_test_secret");
@@ -223,6 +239,52 @@ describe("RestAdapter", () => {
       expect(error.message).toMatch(/no key stored for "missing"/);
       expect(error.userMessage).toMatch(/needs an API key/);
       expect(error.status).toBe(401);
+    });
+  });
+
+  /*
+   * An unconfirmed address is the host the docs were served from, or a
+   * template filled with its placeholder. A key sent there is a key sent to
+   * somebody else, so nothing is sent at all.
+   */
+  describe("address", () => {
+    it("sends nothing while the address is unconfirmed", async () => {
+      const { http, calls } = stub([{ body: { data: [] } }]);
+      const conn = connection({ auth: { type: "bearer", keyRef: "k" }, addressPending: true });
+      await expect(new RestAdapter(http).fetch(conn, op(conn), {}, ctx())).rejects.toMatchObject({
+        status: 400,
+        userMessage: expect.stringMatching(/needs its address/),
+      });
+      expect(calls).toEqual([]);
+    });
+
+    it("sends nothing while a per-account blank is empty", async () => {
+      const { http, calls } = stub([{ body: { data: [] } }]);
+      const conn = connection({
+        server: {
+          url: "https://{account}.example.com/v1",
+          variables: [{ name: "account" }],
+          values: {},
+        },
+      });
+      await expect(new RestAdapter(http).fetch(conn, op(conn), {}, ctx())).rejects.toMatchObject({
+        status: 400,
+      });
+      expect(calls).toEqual([]);
+    });
+
+    it("goes to the address once it is filled in", async () => {
+      const { http, calls } = stub([{ body: { data: [] } }]);
+      const conn = connection({
+        baseUrl: "https://acme.example.com/v1",
+        server: {
+          url: "https://{account}.example.com/v1",
+          variables: [{ name: "account" }],
+          values: { account: "acme" },
+        },
+      });
+      await new RestAdapter(http).fetch(conn, op(conn), {}, ctx());
+      expect(calls[0]?.url).toBe("https://acme.example.com/v1/items");
     });
   });
 

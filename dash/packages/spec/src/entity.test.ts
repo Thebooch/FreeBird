@@ -200,6 +200,19 @@ describe("reading an entity", () => {
     expect(displayName(nested, { Contact_Name: "Acme Plumbing" })).toBe("Acme Plumbing");
   });
 
+  it("reads a row still nested the way the API sent it", () => {
+    const property = entity({
+      fields: [field("property.propertyID"), field("property.name")],
+      identity: { field: "property.propertyID" },
+      display: { title: ["property.name"] },
+    });
+    expect(displayName(property, { property: { propertyID: 12, name: "Maple Court" } })).toBe(
+      "Maple Court",
+    );
+    /* And named by its id when the name is missing. */
+    expect(displayName(property, { property: { propertyID: 12 } })).toMatch(/ 12$/);
+  });
+
   it("chooses between alternatives rather than joining them", () => {
     /*
      * Measured on a real API: a supplier carries a company name *or* a

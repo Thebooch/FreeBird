@@ -2,6 +2,7 @@ import { z } from "zod";
 import { componentIdSchema } from "./contracts.js";
 import { FACET_MAX_PER_WIDGET } from "./facet.js";
 import { idSchema } from "./primitives.js";
+import { readField } from "./field-path.js";
 import { coercionSchema, fieldFormatSchema } from "./coercion.js";
 import { aggregationSchema, semanticTypeSchema } from "./semantics.js";
 
@@ -562,7 +563,7 @@ export const displayName = (
   row: Readonly<Record<string, unknown>>,
 ): string | null => {
   const read = (path: string): string => {
-    const value = row[path] ?? row[path.replace(/\./g, "_")];
+    const value = readField(row, path);
     return value === null || value === undefined ? "" : String(value);
   };
 

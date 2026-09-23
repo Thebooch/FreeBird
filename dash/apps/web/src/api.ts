@@ -502,6 +502,8 @@ export interface CategoryState {
   readonly categoriesAt: string | null;
   /** False when there is no model configured to run the passes. */
   readonly canRun: boolean;
+  /** The record types are still being described; setup waits for them. */
+  readonly describing?: boolean;
 }
 
 export type CategoryStatus = "pending" | "ready" | "empty" | "failed";
@@ -629,6 +631,8 @@ export interface MapState {
   readonly records?: RecordsState;
   /** When a live account last checked the descriptions. */
   readonly entitiesVerifiedAt?: string | null;
+  /** The record types are being described at this moment. */
+  readonly describing?: boolean;
 }
 
 /**
@@ -1018,8 +1022,23 @@ export const api = {
     catalogId: string;
     id?: string;
     opIds?: string[];
-  }): Promise<ConnectionSummary & { needsKey: boolean }> =>
+  }): Promise<ConnectionSummary & { needsKey: boolean; needsAddress?: boolean }> =>
     request("/api/connections/from-catalog", json({ ...input, onboarding: true })),
+
+  /**
+   * Say where a connection's API lives: the values for its address's blanks,
+   * or the whole address when the documentation never said. A new address is
+   * treated like a new key — cached rows from the old one are dropped.
+   */
+  setAddress: (
+    connectionId: string,
+    input: { values: Record<string, string> } | { baseUrl: string },
+  ): Promise<ConnectionSummary> =>
+    request(`/api/connections/${connectionId}/address`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    }),
 
   saveConnection: (id: string, spec: unknown): Promise<ConnectionSummary> =>
     request(`/api/connections/${id}`, {

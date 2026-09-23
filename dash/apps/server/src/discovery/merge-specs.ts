@@ -126,6 +126,12 @@ export const mergeSpecDocuments = (fragments: readonly SpecFragment[]): MergedSp
   const schemas: Json = {};
   const security: unknown[] = [];
   const seenSecurity = new Set<string>();
+  /*
+   * Tags by name, first description wins. Kept for what they say rather than
+   * for grouping: a section headed "Authentication" is often the only place a
+   * spec explains which of its values is the username and which the secret.
+   */
+  const tags = new Map<string, Json>();
 
   let servers = Array.isArray(first.servers) ? first.servers : undefined;
   /*
@@ -152,6 +158,14 @@ export const mergeSpecDocuments = (fragments: readonly SpecFragment[]): MergedSp
     }
     if (!version && typeof info.version === "string") version = info.version;
     if (!description && typeof info.description === "string") description = info.description;
+
+    if (Array.isArray(doc.tags)) {
+      for (const tag of doc.tags) {
+        if (isObject(tag) && typeof tag.name === "string" && !tags.has(tag.name)) {
+          tags.set(tag.name, tag);
+        }
+      }
+    }
 
     // ── servers: one base URL survives, so a second host is load-bearing ──
     if (Array.isArray(doc.servers)) {
@@ -236,6 +250,7 @@ export const mergeSpecDocuments = (fragments: readonly SpecFragment[]): MergedSp
     },
     ...(servers ? { servers } : {}),
     ...(security.length > 0 ? { security } : {}),
+    ...(tags.size > 0 ? { tags: [...tags.values()] } : {}),
     paths,
     ...(Object.keys(securitySchemes).length > 0 || Object.keys(schemas).length > 0
       ? {

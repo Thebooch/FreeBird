@@ -562,3 +562,34 @@ describe("search results from another organisation", () => {
     expect(docs.fetched).not.toContain("https://apify.com/openapi.json");
   });
 });
+
+describe("mapDialectProposal: the address and the credentials", () => {
+  const base = {
+    title: "Thing API",
+    baseUrl: "https://{account}.thing.dev/api",
+    baseUrlParts: [{ name: "account", description: "Your company's subdomain", example: "acme" }],
+    authType: "basic",
+    authUsernameLabel: "Account ID",
+    authSecretLabel: "API token",
+    endpoints: [{ id: "things", title: "Things", path: "/things", archetype: "list" }],
+  };
+
+  it("keeps an address with a per-account blank as a template", () => {
+    const { entry } = mapDialectProposal(base);
+    expect(entry?.server).toMatchObject({
+      url: "https://{account}.thing.dev/api",
+      variables: [{ name: "account", description: "Your company's subdomain", default: "acme" }],
+    });
+    expect(entry?.baseUrl).toBe("https://acme.thing.dev/api");
+  });
+
+  it("asks for both halves of a Basic login, by the docs' names", () => {
+    const { entry } = mapDialectProposal(base);
+    expect(entry?.dialect.auth).toMatchObject({
+      type: "basic",
+      usernameRef: expect.any(String),
+      usernameLabel: "Account ID",
+      label: "API token",
+    });
+  });
+});

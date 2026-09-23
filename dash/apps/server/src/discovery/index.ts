@@ -3,6 +3,7 @@ import type { CatalogEntry } from "@freebirdai/dash-spec";
 import type { z } from "zod";
 import type { CatalogStore } from "../catalog.js";
 import { analysePage, rankContext } from "./docs.js";
+import { refreshOutdatedConnectDetails } from "./connect-details.js";
 import { extractInlineSpec } from "./inline-spec.js";
 import {
   WELL_KNOWN_SPEC_PATHS,
@@ -488,12 +489,24 @@ export const discover = async (input: string, deps: DiscoveryDeps): Promise<Disc
     ctx.index ? { ...result, index: ctx.index } : result;
 
   // ── Rung 1: someone already worked this out ────────────────────────────
-  const known = catalogMatch(deps.catalog, input);
-  if (known) {
+  const match = catalogMatch(deps.catalog, input);
+  if (match) {
+    /*
+     * An entry written by an older importer has its address and auth read
+     * again from its spec before it is offered — only those, so nothing
+     * described or mapped since is lost. Offering it as it was would repeat
+     * whatever the old importer got wrong about how to connect.
+     */
+    const { entry: known, refreshed } = await refreshOutdatedConnectDetails(
+      match,
+      deps.fetchDocument,
+    );
     return withIndex({
       source: "catalog",
       entry: known,
-      note: `${known.title} is already in the catalog${known.verified ? " and has been verified" : ""}.`,
+      note: `${known.title} is already in the catalog${known.verified ? " and has been verified" : ""}.${
+        refreshed ? " How to connect to it was read again from its documentation." : ""
+      }`,
       warnings: known.verified
         ? []
         : ["This catalog entry has not been proven against a live key yet."],

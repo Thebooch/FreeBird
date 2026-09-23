@@ -7,6 +7,9 @@ import {
   connectionKeyRef,
   authKeyRefs,
   fnv1a,
+  looksLikePlaceholder,
+  rekeyAuth,
+  resolveServerUrl,
 } from "@freebirdai/dash-spec";
 import { writeJsonAtomic } from "./json-file.js";
 
@@ -181,19 +184,37 @@ export const connectionFromCatalog = (
   const id = options.id ?? entry.id;
   const keyRef = options.keyRef ?? connectionKeyRef(id);
 
-  const auth = entry.dialect.auth
-    ? entry.dialect.auth.type === "none"
-      ? entry.dialect.auth
-      : entry.dialect.auth.type === "headers"
-        ? {
-            ...entry.dialect.auth,
-            parts: entry.dialect.auth.parts.map((part, index) => ({
-              ...part,
-              keyRef: connectionKeyRef(id, index + 1),
-            })),
-          }
-        : { ...entry.dialect.auth, keyRef }
-    : { type: "none" as const };
+  /*
+   * Every secret gets a vault name of this connection's own: one secret keeps
+   * the plain name, several are numbered in the order they are asked for.
+   * Through `rekeyAuth` so a secret living somewhere other than `keyRef` —
+   * a Basic username — cannot keep the catalog's placeholder name and end up
+   * shared between two connections to the same API.
+   */
+  const auth: AuthSpec = entry.dialect.auth
+    ? rekeyAuth(entry.dialect.auth, (_previous, index, count) =>
+        count === 1 ? keyRef : connectionKeyRef(id, index + 1),
+      )
+    : { type: "none" };
+
+  /*
+   * An address with a per-account part starts with only the values the
+   * documentation really gave. A default like "example" is a placeholder —
+   * filling it in would point the first request at a host nobody's account
+   * lives on — so it is left for the person, and the connection says it
+   * needs an address until they give one.
+   */
+  const server = entry.server
+    ? {
+        ...entry.server,
+        values: Object.fromEntries(
+          entry.server.variables
+            .filter((variable) => variable.default && !looksLikePlaceholder(variable))
+            .map((variable) => [variable.name, variable.default!]),
+        ),
+      }
+    : undefined;
+  const resolvedAddress = server ? resolveServerUrl(server, server.values).url : undefined;
 
   const chosen = options.opIds
     ? entry.ops.filter((op) => options.opIds!.includes(op.id))
@@ -204,15 +225,11 @@ export const connectionFromCatalog = (
       authKeyRefs(auth)[index]!,
     ]),
   );
-  const scopeAuth = (value: AuthSpec): AuthSpec => {
-    const ref = (old: string) =>
-      refs.get(old) ?? `${connectionKeyRef(id).slice(0, 45)}-${fnv1a(old)}`;
-    return value.type === "none"
-      ? value
-      : value.type === "headers"
-        ? { ...value, parts: value.parts.map((part) => ({ ...part, keyRef: ref(part.keyRef) })) }
-        : { ...value, keyRef: ref(value.keyRef) };
-  };
+  const scopeAuth = (value: AuthSpec): AuthSpec =>
+    rekeyAuth(
+      value,
+      (old) => refs.get(old) ?? `${connectionKeyRef(id).slice(0, 45)}-${fnv1a(old)}`,
+    );
 
   return connectionSchema.parse({
     id,
@@ -221,7 +238,9 @@ export const connectionFromCatalog = (
     authRequired: entry.authRequired,
     paginationPending: entry.paginationProposal !== undefined,
     resources: entry.resources,
-    baseUrl: entry.baseUrl,
+    baseUrl: resolvedAddress ?? entry.baseUrl,
+    ...(server ? { server } : {}),
+    ...(entry.server || entry.baseUrlGuessed ? { addressPending: true } : {}),
     catalog: entry.id,
     auth,
     dialect: { ...entry.dialect, auth },

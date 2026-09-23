@@ -1,5 +1,5 @@
 import type { EntityLinkView, WidgetSpec } from "@freebirdai/dash-spec";
-import { widgetSources } from "@freebirdai/dash-spec";
+import { readField, widgetSources } from "@freebirdai/dash-spec";
 
 /**
  * Where clicking a row goes.
@@ -62,6 +62,12 @@ export type RecordTarget =
  * Falls back to the widget's own sheet rather than to nothing. A widget over
  * an endpoint nobody has described still has whatever layout was planned for
  * it, and losing that to gain consistency would be a plain regression.
+ *
+ * The identity is read by path, not by key. An API that wraps each record —
+ * Rentvine's `{ property: { propertyID } }` — names its identity
+ * `property.propertyID`, and a plain `row[identity]` found nothing there: the
+ * row was drawn as clickable, the click returned here with null, and nothing
+ * happened. It only ever worked on APIs whose identity is a top-level `Id`.
  */
 export const recordTargetFor = (
   widget: WidgetSpec,
@@ -70,7 +76,7 @@ export const recordTargetFor = (
 ): RecordTarget | null => {
   const view = viewForWidget(widget, links);
   const identity = view?.identity;
-  const value = identity ? row[identity] : undefined;
+  const value = identity ? readField(row, identity) : undefined;
   const primary = widgetSources(widget)[0];
 
   if (view && primary && value !== undefined && value !== null && value !== "") {
@@ -91,6 +97,6 @@ export const recordTargetFor = (
     .flatMap((param) => [...param.matchAll(/\{\{\s*row\.([^}\s|]+)/g)])
     .map((match) => match[1])
     .find((name): name is string => Boolean(name));
-  const own = field ? row[field] : undefined;
+  const own = field ? readField(row, field) : undefined;
   return own === undefined || own === null ? null : { kind: "widget", id: String(own) };
 };

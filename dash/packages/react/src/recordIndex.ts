@@ -1,5 +1,5 @@
 import type { ColumnMeta, ColumnReference, ResolvedParams } from "@freebirdai/dash-spec";
-import { queryKey, referenceIds, targetOfRow } from "@freebirdai/dash-spec";
+import { queryKey, readField, referenceIds, targetOfRow } from "@freebirdai/dash-spec";
 import type { Row } from "@freebirdai/dash-runtime";
 
 /**
@@ -317,20 +317,8 @@ export const fetchLookupsInOrder = async (input: SerialFetch): Promise<SerialRes
  * reference cell shows and the columns read through one, because two would
  * drift on the nested case that is hardest to get right.
  */
-export const valueAtPath = (record: unknown, path: string): unknown => {
-  if (!record || typeof record !== "object") return undefined;
-  const row = (Array.isArray(record) ? record[0] : record) as Record<string, unknown> | undefined;
-  if (!row || typeof row !== "object") return undefined;
-
-  const direct = row[path] ?? row[path.replace(/\./g, "_")];
-  if (direct !== undefined) return direct;
-  let current: unknown = row;
-  for (const part of path.split(".")) {
-    if (current === null || typeof current !== "object") return undefined;
-    current = (current as Record<string, unknown>)[part];
-  }
-  return current;
-};
+export const valueAtPath = (record: unknown, path: string): unknown =>
+  readField(Array.isArray(record) ? record[0] : record, path);
 
 export const nameOfRecord = (
   record: unknown,

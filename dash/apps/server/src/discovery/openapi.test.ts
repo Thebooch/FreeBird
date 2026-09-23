@@ -307,10 +307,15 @@ describe("parseOpenApi", () => {
     expect(parseOpenApi(relative, SPEC_URL)!.entry.baseUrl).toBe("https://api.example.com/v2");
   });
 
-  it("skips a templated server URL it cannot use", () => {
+  /*
+   * It used to fall back to the spec's own origin, which sent every request
+   * to the documentation's host. The blank is kept, and asked for.
+   */
+  it("keeps a templated server as a template rather than guessing another host", () => {
     const templated = spec({ servers: [{ url: "https://{tenant}.example.com" }] });
-    // Falls back to the spec's own origin rather than emitting a broken base.
-    expect(parseOpenApi(templated, SPEC_URL)!.entry.baseUrl).toBe("https://api.example.com");
+    const entry = parseOpenApi(templated, SPEC_URL)!.entry;
+    expect(entry.server?.url).toBe("https://{tenant}.example.com");
+    expect(entry.baseUrl).toBe("https://tenant.example.com");
   });
 
   it("imports a huge spec whole and says how big it is", () => {
@@ -1128,5 +1133,71 @@ describe("a by-id response is one record", () => {
     const op = opsOf().find((one) => one.path.endsWith("/notes"));
     expect(op?.rowsPath).toBe("$.data");
     expect(op?.archetype).toBe("list");
+  });
+});
+
+/*
+ * Rentvine, as its published spec describes itself: every account at its own
+ * subdomain, HTTP Basic with no description on the scheme, and the only word
+ * on which value goes where in a tag headed "Authentication".
+ */
+describe("where the API lives, and what it asks for", () => {
+  const perAccount = spec({
+    servers: [
+      {
+        url: "https://{account}.rentvine.com/api/manager",
+        variables: { account: { description: "Your account subdomain", default: "example" } },
+      },
+    ],
+    components: { securitySchemes: { basicAuth: { type: "http", scheme: "basic" } } },
+    tags: [
+      {
+        name: "Authentication",
+        description:
+          "<p>Requests are authenticated using <a href='x'>HTTP Basic Authentication</a> with the access key as the username and secret as the password.</p><pre># Use the -u flag with {access key}:{secret}\ncurl https://example.rentvine.com/api/manager/properties</pre>",
+      },
+    ],
+  });
+
+  it("keeps a per-account address as a template, with what the spec says of the blank", () => {
+    const entry = parseOpenApi(perAccount, SPEC_URL)!.entry;
+    expect(entry.server).toMatchObject({
+      url: "https://{account}.rentvine.com/api/manager",
+      variables: [{ name: "account", description: "Your account subdomain", default: "example" }],
+    });
+    /* Still an address, so it parses — and nothing trusts it. */
+    expect(entry.baseUrl).toBe("https://example.rentvine.com/api/manager");
+  });
+
+  it("asks for both halves of a Basic login, by the names the docs use", () => {
+    const entry = parseOpenApi(perAccount, SPEC_URL)!.entry;
+    expect(entry.dialect.auth).toMatchObject({
+      type: "basic",
+      usernameRef: expect.any(String),
+      usernameLabel: "Access key",
+      label: "Secret",
+    });
+    expect(entry.keyHelp).toMatch(/access key as the username and secret as the password/);
+    expect(entry.keyHelp).not.toMatch(/curl/);
+  });
+
+  it("says when it had to guess where the API lives", () => {
+    const entry = parseOpenApi(spec({ servers: [] }), SPEC_URL)!.entry;
+    expect(entry.baseUrlGuessed).toBe(true);
+    expect(entry.baseUrl).toBe("https://api.example.com");
+  });
+
+  it("prefers a fixed address, and asks nothing, when the spec gives one", () => {
+    const entry = parseOpenApi(
+      spec({
+        servers: [
+          { url: "https://{region}.api.example.com" },
+          { url: "https://api.example.com/v1" },
+        ],
+      }),
+      SPEC_URL,
+    )!.entry;
+    expect(entry.server).toBeUndefined();
+    expect(entry.baseUrlGuessed).toBeUndefined();
   });
 });

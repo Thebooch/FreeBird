@@ -16,18 +16,51 @@ export const idSchema = z
  * spec file — `keyRef` names an entry in the encrypted vault, and the public
  * API only ever reports whether that entry exists.
  */
+/**
+ * What the API's own documentation calls a credential — "Access key",
+ * "Client secret", "Personal token" — so the person pasting it in is asked
+ * for the thing they are looking at in the vendor's settings page, not for a
+ * generic "API key" that may be one of two values they hold.
+ */
+const credentialLabel = z.string().min(1).max(80).optional();
+
 export const authSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("none") }),
-  z.object({ type: z.literal("bearer"), keyRef: idSchema }),
+  z.object({ type: z.literal("bearer"), keyRef: idSchema, label: credentialLabel }),
   z.object({
     type: z.literal("header"),
     header: z.string().min(1),
     keyRef: idSchema,
     /** e.g. "Token {{key}}" — `{{key}}` is the only token allowed here. */
     template: z.string().optional(),
+    label: credentialLabel,
   }),
-  z.object({ type: z.literal("query"), param: z.string().min(1), keyRef: idSchema }),
-  z.object({ type: z.literal("basic"), username: z.string().min(1), keyRef: idSchema }),
+  z.object({
+    type: z.literal("query"),
+    param: z.string().min(1),
+    keyRef: idSchema,
+    label: credentialLabel,
+  }),
+  /**
+   * HTTP Basic: a username and a password, joined and sent together.
+   *
+   * On most APIs that use it, *both* halves are credentials the person holds
+   * — Rentvine sends "the access key as the username and secret as the
+   * password" — so the username is a vault entry like the password
+   * (`usernameRef`), asked for beside it. `username` is a fixed value for the
+   * rarer API that documents one, and for connections saved before the
+   * username could be a secret; `usernameRef` wins when both are present.
+   */
+  z.object({
+    type: z.literal("basic"),
+    username: z.string().min(1).optional(),
+    usernameRef: idSchema.optional(),
+    keyRef: idSchema,
+    /** What the docs call the username, e.g. "Access key". */
+    usernameLabel: credentialLabel,
+    /** What the docs call the password, e.g. "Secret". */
+    label: credentialLabel,
+  }),
   /**
    * Two or more secret headers sent together.
    *
@@ -80,8 +113,214 @@ export const authKeyRefs = (auth: AuthSpec): string[] => {
       return [];
     case "headers":
       return auth.parts.map((part) => part.keyRef);
+    case "basic":
+      return auth.usernameRef ? [auth.usernameRef, auth.keyRef] : [auth.keyRef];
     default:
       return [auth.keyRef];
+  }
+};
+
+/**
+ * The same auth with every vault name replaced, in `authKeyRefs` order.
+ *
+ * One function for every variant, so code that gives a connection its own
+ * vault names — creating one from the catalog, migrating old ones — cannot
+ * forget a secret that lives somewhere other than `keyRef`. It did, once:
+ * a Basic username became a secret and would have kept the catalog's
+ * placeholder name.
+ */
+export const rekeyAuth = (
+  auth: AuthSpec,
+  name: (previous: string, index: number, count: number) => string,
+): AuthSpec => {
+  const count = authKeyRefs(auth).length;
+  switch (auth.type) {
+    case "none":
+      return auth;
+    case "headers":
+      return {
+        ...auth,
+        parts: auth.parts.map((part, index) => ({ ...part, keyRef: name(part.keyRef, index, count) })),
+      };
+    case "basic":
+      return auth.usernameRef
+        ? {
+            ...auth,
+            usernameRef: name(auth.usernameRef, 0, count),
+            keyRef: name(auth.keyRef, 1, count),
+          }
+        : { ...auth, keyRef: name(auth.keyRef, 0, count) };
+    default:
+      return { ...auth, keyRef: name(auth.keyRef, 0, count) };
+  }
+};
+
+/** One thing the person must paste in, with what to call it. */
+export interface AuthCredential {
+  readonly keyRef: string;
+  readonly label: string;
+  /** Where it goes, for the curious — "Sent as the X-Api-Key header." */
+  readonly hint: string;
+}
+
+/**
+ * Every credential this auth needs, labelled, in the order to ask for them.
+ *
+ * The labels are the documentation's own where the import found them, and a
+ * plain description of the slot where it did not — never just "API key" for
+ * a value that is one half of a pair.
+ */
+export const authCredentials = (auth: AuthSpec): AuthCredential[] => {
+  switch (auth.type) {
+    case "none":
+      return [];
+    case "bearer":
+      return [{ keyRef: auth.keyRef, label: auth.label ?? "API token", hint: "Sent as a bearer token." }];
+    case "header":
+      return [
+        {
+          keyRef: auth.keyRef,
+          label: auth.label ?? "API key",
+          hint: `Sent as the ${auth.header} header.`,
+        },
+      ];
+    case "query":
+      return [
+        {
+          keyRef: auth.keyRef,
+          label: auth.label ?? "API key",
+          hint: `Sent as the ${auth.param} query parameter.`,
+        },
+      ];
+    case "basic":
+      return [
+        ...(auth.usernameRef
+          ? [
+              {
+                keyRef: auth.usernameRef,
+                label: auth.usernameLabel ?? "Username",
+                hint: "Sent as the username in HTTP Basic authentication.",
+              },
+            ]
+          : []),
+        {
+          keyRef: auth.keyRef,
+          label: auth.label ?? "Password",
+          hint: auth.usernameRef
+            ? "Sent as the password in HTTP Basic authentication."
+            : `Sent as the password in HTTP Basic authentication, with the username "${auth.username ?? ""}".`,
+        },
+      ];
+    case "headers":
+      return auth.parts.map((part) => ({
+        keyRef: part.keyRef,
+        label: part.label ?? part.header,
+        hint: `Sent as the ${part.header} header.`,
+      }));
+  }
+};
+
+/* ── where an API lives ───────────────────────────────────────────────── */
+
+/**
+ * A part of an API's address that differs from one account to the next.
+ *
+ * Read from an OpenAPI `servers[].variables` entry, or from documentation that
+ * writes the address with a placeholder — `https://{account}.rentvine.com`.
+ * Many business APIs are hosted per customer, and without this the only
+ * address an import could record was a placeholder host nobody's account
+ * lives on.
+ */
+export const serverVariableSchema = z.object({
+  name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/),
+  /** What to call it when asking, e.g. "Account subdomain". */
+  label: z.string().max(80).optional(),
+  /** The documentation's own explanation. */
+  description: z.string().max(300).optional(),
+  /** The documented default. Often a placeholder like "example" — see `looksLikePlaceholder`. */
+  default: z.string().max(200).optional(),
+  /** When the documentation lists the only values allowed. */
+  options: z.array(z.string().min(1).max(200)).max(50).optional(),
+});
+
+export type ServerVariable = z.infer<typeof serverVariableSchema>;
+
+export const serverTemplateSchema = z.object({
+  /** The address with `{name}` where each account differs. */
+  url: z.string().min(1).max(500),
+  variables: z.array(serverVariableSchema).max(8).default([]),
+});
+
+export type ServerTemplate = z.infer<typeof serverTemplateSchema>;
+
+/**
+ * What one value may contain.
+ *
+ * A subdomain, a region, a version, a tenant id — never a slash, an `@`, a
+ * colon or a space, any of which could move a request to a different host
+ * than the one the template names.
+ */
+export const SERVER_VALUE = /^[A-Za-z0-9._~-]{1,100}$/;
+
+const TEMPLATE_TOKEN = /\{([A-Za-z_][A-Za-z0-9_-]*)\}/g;
+
+/** The `{name}`s in an address template, in order. */
+export const templateVariableNames = (url: string): string[] => [
+  ...new Set([...url.matchAll(TEMPLATE_TOKEN)].map((match) => match[1]!)),
+];
+
+/**
+ * A documented default that is really a placeholder.
+ *
+ * Specs have to put *something* in `default`, and for a per-customer
+ * subdomain they put "example", "your-company", "{subdomain}". Filling that
+ * in would send a new connection's first request to a host nobody's account
+ * lives on — so it is offered as a hint and the value is left for the person.
+ */
+export const looksLikePlaceholder = (variable: ServerVariable): boolean => {
+  const value = variable.default?.trim().toLowerCase();
+  if (!value) return true;
+  if (variable.options && variable.options.length > 0) return false;
+  return (
+    value === variable.name.toLowerCase() ||
+    /^(example|sample|demo|test|your|my|acme|company|account|subdomain|tenant|instance|domain|x{2,}|<|\{)/.test(
+      value,
+    )
+  );
+};
+
+/**
+ * Put values into an address template.
+ *
+ * Reports what is missing and what was refused rather than producing a
+ * half-filled address: a request to `https://.rentvine.com` is not a
+ * slower way of failing, it is a request to somebody else.
+ */
+export const resolveServerUrl = (
+  template: ServerTemplate,
+  values: Readonly<Record<string, string>>,
+): { readonly url?: string; readonly missing: string[]; readonly invalid: string[] } => {
+  const missing: string[] = [];
+  const invalid: string[] = [];
+  const byName = new Map(template.variables.map((variable) => [variable.name, variable]));
+  for (const name of templateVariableNames(template.url)) {
+    const value = values[name]?.trim() ?? "";
+    const variable = byName.get(name);
+    if (value === "") missing.push(name);
+    else if (!SERVER_VALUE.test(value)) invalid.push(name);
+    else if (variable?.options && variable.options.length > 0 && !variable.options.includes(value))
+      invalid.push(name);
+  }
+  if (missing.length > 0 || invalid.length > 0) return { missing, invalid };
+  const url = template.url.replace(TEMPLATE_TOKEN, (_raw, name: string) => values[name]!.trim());
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return { missing, invalid: ["url"] };
+    }
+    return { url: url.replace(/\/+$/, ""), missing, invalid };
+  } catch {
+    return { missing, invalid: ["url"] };
   }
 };
 

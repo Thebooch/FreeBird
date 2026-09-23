@@ -1,6 +1,13 @@
-import type { CatalogEntry, ParamDef } from "@freebirdai/dash-spec";
+import type { CatalogEntry, ParamDef, ServerTemplate, ServerVariable } from "@freebirdai/dash-spec";
 import { fieldsFromSchema } from "./schema-fields.js";
-import { catalogEntrySchema, deriveResourceModel, fnv1a } from "@freebirdai/dash-spec";
+import {
+  IMPORT_VERSION,
+  catalogEntrySchema,
+  deriveResourceModel,
+  fnv1a,
+  serverTemplateSchema,
+  templateVariableNames,
+} from "@freebirdai/dash-spec";
 import { parse as parseYaml } from "yaml";
 import type { z } from "zod";
 
@@ -160,33 +167,212 @@ const deref = (doc: Json, node: unknown, seen = new Set<string>(), depth = 0): u
 
 const specVersionOf = (doc: Json): 2 | 3 => (typeof doc.swagger === "string" ? 2 : 3);
 
-const baseUrlFrom = (doc: Json, specUrl: string): string | undefined => {
+/** Where an API lives, as its specification tells it. */
+export interface ApiAddress {
+  /** A real address to start from. See `server` and `guessed` before trusting it. */
+  readonly baseUrl: string;
+  /** The address with per-account parts, when the spec writes it that way. */
+  readonly server?: ServerTemplate;
+  /** The spec never said; `baseUrl` is where the documentation was served from. */
+  readonly guessed?: true;
+}
+
+/** "account_subdomain" → "Account subdomain". */
+const humanise = (name: string): string => {
+  const words = name.replace(/[_-]+/g, " ").replace(/([a-z])([A-Z])/g, "$1 $2").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1).toLowerCase();
+};
+
+/**
+ * A templated server — `https://{account}.rentvine.com/api/manager` — kept as
+ * a template, with what the spec says about each blank.
+ *
+ * These used to be skipped as "unusable as-is", which sent every request to
+ * the host the docs were served from. A business API hosted per customer is
+ * the ordinary case, not an edge one; the blank is the one thing only the
+ * person connecting can fill in, and now they are asked for it.
+ */
+const templatedServer = (
+  server: Json,
+  specUrl: string,
+): { baseUrl: string; server: ServerTemplate } | undefined => {
+  const raw = str(server.url);
+  if (!raw) return undefined;
+  let url = raw.replace(/\/+$/, "");
+  if (!/^https?:\/\//i.test(url)) {
+    /* A relative template is relative to the spec, like any relative server. */
+    try {
+      const origin = new URL(specUrl).origin;
+      url = `${origin}${url.startsWith("/") ? "" : "/"}${url}`;
+    } catch {
+      return undefined;
+    }
+  }
+  const declared = isObject(server.variables) ? server.variables : {};
+  const variables: ServerVariable[] = templateVariableNames(url).map((name) => {
+    const spec = isObject(declared[name]) ? declared[name] : {};
+    const options = Array.isArray(spec.enum)
+      ? spec.enum.map(String).filter((value) => value.length > 0).slice(0, 50)
+      : [];
+    const description = plainText(str(spec.description))?.slice(0, 300);
+    const fallback = str(spec.default) ?? (spec.default !== undefined ? String(spec.default) : undefined);
+    return {
+      name,
+      label: humanise(name),
+      ...(description ? { description } : {}),
+      ...(fallback ? { default: fallback.slice(0, 200) } : {}),
+      ...(options.length > 0 ? { options } : {}),
+    };
+  });
+  const parsed = serverTemplateSchema.safeParse({ url, variables });
+  if (!parsed.success) return undefined;
+
+  /*
+   * `baseUrl` still has to be an address, so the template is filled with its
+   * defaults — or the blank's own name — and nothing trusts it: a connection
+   * made from this asks for the real values before it sends anything.
+   */
+  const filled = parsed.data.url.replace(/\{([A-Za-z_][A-Za-z0-9_-]*)\}/g, (_raw, name: string) => {
+    const variable = parsed.data.variables.find((one) => one.name === name);
+    return (variable?.default ?? name).replace(/[^A-Za-z0-9._~-]/g, "") || name;
+  });
+  try {
+    return { baseUrl: new URL(filled).toString().replace(/\/+$/, ""), server: parsed.data };
+  } catch {
+    return undefined;
+  }
+};
+
+export const addressFrom = (doc: Json, specUrl: string): ApiAddress | undefined => {
   if (specVersionOf(doc) === 2) {
     const host = str(doc.host);
     const basePath = str(doc.basePath) ?? "";
     const schemes = Array.isArray(doc.schemes) ? doc.schemes.map(String) : [];
     const scheme = schemes.includes("https") ? "https" : (schemes[0] ?? "https");
-    if (host) return `${scheme}://${host}${basePath}`.replace(/\/+$/, "");
+    if (host && !host.includes("{")) {
+      return { baseUrl: `${scheme}://${host}${basePath}`.replace(/\/+$/, "") };
+    }
   } else {
-    const servers = Array.isArray(doc.servers) ? doc.servers : [];
+    const servers = Array.isArray(doc.servers) ? doc.servers.filter(isObject) : [];
+    /* A fixed address wins: nothing to ask. */
     for (const server of servers) {
-      const url = isObject(server) ? str(server.url) : undefined;
-      if (!url || url.includes("{")) continue; // templated server, unusable as-is
-      if (/^https?:\/\//i.test(url)) return url.replace(/\/+$/, "");
+      const url = str(server.url);
+      if (!url || url.includes("{")) continue;
+      if (/^https?:\/\//i.test(url)) return { baseUrl: url.replace(/\/+$/, "") };
       // A relative server URL is relative to where the spec was served from.
       try {
-        return new URL(url, specUrl).toString().replace(/\/+$/, "");
+        return { baseUrl: new URL(url, specUrl).toString().replace(/\/+$/, "") };
       } catch {
         /* keep looking */
       }
     }
+    for (const server of servers) {
+      if (!str(server.url)?.includes("{")) continue;
+      const templated = templatedServer(server, specUrl);
+      if (templated) return templated;
+    }
   }
-  // Last resort: the spec's own origin.
+  // Last resort: the spec's own origin — a guess, and said to be one.
   try {
-    return new URL(specUrl).origin;
+    return { baseUrl: new URL(specUrl).origin, guessed: true };
   } catch {
     return undefined;
   }
+};
+
+/**
+ * What the documentation says about getting in, in a reader's words.
+ *
+ * The security scheme's own description first, then a section headed like
+ * "Authentication", then the sentences of the overview that mention keys. A
+ * spec can say perfectly clearly that the username is an access key and the
+ * password a secret — Rentvine's does, under its Authentication tag — while
+ * its security scheme says only `http/basic`. That sentence is the one the
+ * person connecting needs to read.
+ */
+export const authHelpFrom = (doc: Json): string | undefined => {
+  const schemes =
+    specVersionOf(doc) === 2
+      ? isObject(doc.securityDefinitions)
+        ? doc.securityDefinitions
+        : {}
+      : isObject(doc.components) && isObject(doc.components.securitySchemes)
+        ? doc.components.securitySchemes
+        : {};
+  /*
+   * Prose only. Example requests go first — a `curl` line is an illustration,
+   * not an instruction — and block boundaries become sentence breaks, or
+   * "…the password.</p><pre>#…" reads as one run-on sentence that ends in a
+   * shell command.
+   */
+  const prose = (raw: string | undefined): string | undefined =>
+    plainText(
+      raw
+        ?.replace(/<pre[\s\S]*?<\/pre>/gi, " ")
+        .replace(/<code[\s\S]*?<\/code>/gi, " ")
+        .replace(/```[\s\S]*?```/g, " ")
+        .replace(/<\/(p|li|div|h\d)>|<br\s*\/?>/gi, "\n")
+        .replace(/\n+/g, ". ")
+        .replace(/\.\s*\./g, "."),
+    );
+  const fromSchemes = Object.values(schemes)
+    .map((scheme) => (isObject(scheme) ? prose(str(scheme.description)) : undefined))
+    .filter((text): text is string => Boolean(text));
+  const tags = Array.isArray(doc.tags) ? doc.tags.filter(isObject) : [];
+  const fromTags = tags
+    .filter((tag) => /auth/i.test(str(tag.name) ?? ""))
+    .map((tag) => prose(str(tag.description)))
+    .filter((text): text is string => Boolean(text));
+  const info = isObject(doc.info) ? doc.info : {};
+  const overview = prose(str(info.description));
+
+  const AUTH_WORDS = /authenticat|api[ -]?key|access key|secret|token|username|password|credential/i;
+  const sentences = (text: string): string[] =>
+    text
+      .split(/(?<=[.!?])\s+/)
+      .map((sentence) => sentence.trim())
+      .filter(
+        (sentence) =>
+          sentence.length > 0 &&
+          sentence.length <= 300 &&
+          AUTH_WORDS.test(sentence) &&
+          /* Example requests are not instructions. */
+          !/\bcurl\b|^#|\$ /.test(sentence),
+      );
+
+  const picked = [...fromSchemes, ...fromTags, ...(overview ? [overview] : [])]
+    .flatMap(sentences)
+    .filter((sentence, index, all) => all.indexOf(sentence) === index)
+    .slice(0, 3);
+  const help = picked.join(" ").slice(0, 600).trim();
+  return help.length > 0 ? help : undefined;
+};
+
+/**
+ * What the documentation calls the two halves of a Basic login.
+ *
+ * "…with the access key as the username and secret as the password" gives
+ * "Access key" and "Secret". Read clause by clause, so one half's words never
+ * run into the other's; absent when the text does not say.
+ */
+export const basicLabelsFrom = (
+  text: string | undefined,
+): { usernameLabel?: string; label?: string } => {
+  if (!text) return {};
+  const STOP = /^(?:(?:use|using|with|pass|passing|send|sending|provide|supply|enter|set|your|the|an?|as|and|by)\s+)+/i;
+  const found: { usernameLabel?: string; label?: string } = {};
+  for (const clause of text.split(/[.,;:()]|\band\b/i)) {
+    const match = clause.match(
+      /([a-z][a-z-]*(?:\s+[a-z][a-z-]*){0,3})\s+as\s+(?:the\s+|your\s+)?(username|user name|login|password|secret)\b/i,
+    );
+    if (!match) continue;
+    const words = match[1]!.replace(STOP, "").trim();
+    if (!words || /user\s*name|password/i.test(words) || words.length > 40) continue;
+    const label = words.charAt(0).toUpperCase() + words.slice(1);
+    if (/user|login/i.test(match[2]!)) found.usernameLabel ??= label;
+    else found.label ??= label;
+  }
+  return found;
 };
 
 type DialectAuth = NonNullable<CatalogEntry["dialect"]["auth"]>;
@@ -282,7 +468,11 @@ const authFrom = (doc: Json, keyRef: string): DialectAuth => {
         candidates.push({ rank: 0 - preferred, auth: { type: "bearer", keyRef } });
       }
       if (httpScheme === "basic") {
-        candidates.push({ rank: 3 - preferred, auth: { type: "basic", username: "api", keyRef } });
+        /* Both halves are the person's to enter — see `authSchema`. */
+        candidates.push({
+          rank: 3 - preferred,
+          auth: { type: "basic", usernameRef: `${keyRef}-user`, keyRef },
+        });
       }
     }
     // Swagger 2.0 spells apiKey the same way, so this covers both versions.
@@ -638,12 +828,25 @@ export const parseOpenApi = (
   const info = isObject(doc.info) ? doc.info : {};
   const title = str(info.title) ?? "Imported API";
   const id = slug(title);
-  const baseUrl = baseUrlFrom(doc, specUrl);
-  if (!baseUrl) return null;
+  const address = addressFrom(doc, specUrl);
+  if (!address) return null;
+  const baseUrl = address.baseUrl;
 
   const warnings: string[] = [];
+  if (address.guessed) {
+    warnings.push(
+      "The specification does not say where the API lives, so its address is a guess. It is asked for before connecting.",
+    );
+  }
   const keyRef = `${id}-key`;
-  const auth = authFrom(doc, keyRef);
+  /*
+   * The documentation's own words on getting in: shown beside the key fields,
+   * and read for what it calls the two halves of a Basic login.
+   */
+  const keyHelp = authHelpFrom(doc);
+  const labelled = (value: DialectAuth): DialectAuth =>
+    value.type === "basic" ? { ...value, ...basicLabelsFrom(keyHelp) } : value;
+  const auth = labelled(authFrom(doc, keyRef));
   // A spec that declares no scheme has not told us the API is public — most
   // business APIs omit the block and still require credentials. Record that a
   // key is needed without inventing where it goes.
@@ -739,14 +942,18 @@ export const parseOpenApi = (
      * else to go on.
      */
     const detail = plainText(str(operation.description));
+    /* Labelled like the top-level auth, so an endpoint that simply repeats
+     * the document's own scheme compares equal to it and inherits it. */
     const override = Array.isArray(operation.security)
-      ? authFrom({ ...doc, security: operation.security }, keyRef)
+      ? labelled(authFrom({ ...doc, security: operation.security }, keyRef))
       : undefined;
     const endpointAuth =
       override && JSON.stringify(override) !== JSON.stringify(auth)
-        ? authFrom(
-            { ...doc, security: operation.security },
-            `op-key-${fnv1a(JSON.stringify(operation.security))}`,
+        ? labelled(
+            authFrom(
+              { ...doc, security: operation.security },
+              `op-key-${fnv1a(JSON.stringify(operation.security))}`,
+            ),
           )
         : override;
     const endpointNeedsSetup =
@@ -793,6 +1000,9 @@ export const parseOpenApi = (
     id,
     title,
     baseUrl,
+    ...(address.server ? { server: address.server } : {}),
+    ...(address.guessed ? { baseUrlGuessed: true } : {}),
+    ...(keyHelp ? { keyHelp } : {}),
     dialect: {
       auth,
       pagination: { kind: "none" },
@@ -830,6 +1040,7 @@ export const parseOpenApi = (
     specUrl,
     authRequired,
     origin: "openapi",
+    importVersion: IMPORT_VERSION,
     // A spec is a description, not a proof. Only a real request flips this.
     verified: false,
   });

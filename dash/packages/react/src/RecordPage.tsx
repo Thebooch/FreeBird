@@ -1,4 +1,5 @@
 import { Button, Message } from "@freebirdai/dash-components";
+import { readField } from "@freebirdai/dash-spec";
 import type { Row } from "@freebirdai/dash-runtime";
 import { useMemo, useState } from "react";
 import { RecordView } from "./RecordView.jsx";
@@ -155,7 +156,10 @@ export const missingTokens = (
       if (field) needed.add(field);
     }
   }
-  return [...needed].filter((field) => row[field] === undefined || row[field] === null);
+  return [...needed].filter((field) => {
+    const value = readField(row, field);
+    return value === undefined || value === null;
+  });
 };
 
 /** Step back one level of a record page's own trail. */

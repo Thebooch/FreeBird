@@ -11,6 +11,7 @@ import type { ConnectionSpec, OpSpec, PaginationSpec } from "@freebirdai/dash-sp
 import {
   allowedHost,
   authKeyRefs,
+  connectionNeedsAddress,
   interpolate,
   missingInputs,
   pathParamNames,
@@ -83,6 +84,17 @@ export class RestAdapter implements SourceAdapter {
     if (!connection.baseUrl) {
       throw new AdapterError(`connection "${connection.id}" has no base URL`, { status: 400 });
     }
+    /*
+     * An address nobody has confirmed is a guess — the host the docs were
+     * served from, or a template filled with its documented placeholder.
+     * Sending a key there is sending it to somebody else.
+     */
+    if (connectionNeedsAddress(connection)) {
+      throw new AdapterError(`connection "${connection.id}" has no confirmed address`, {
+        status: 400,
+        userMessage: `${connection.title} needs its address before it can load anything — say which account it is under Connections.`,
+      });
+    }
 
     const auth = op.auth ?? connection.auth;
     if (
@@ -121,8 +133,10 @@ export class RestAdapter implements SourceAdapter {
       }
       secrets.set(keyRef, value);
     }
-    // The single-secret styles all read the same slot.
-    const secret = auth.type === "none" ? null : (secrets.get(authKeyRefs(auth)[0]!) ?? null);
+    // The single-secret styles read their own slot by name, never "the first
+    // one": a Basic username is a secret too, and it comes first.
+    const secret =
+      auth.type === "none" || auth.type === "headers" ? null : (secrets.get(auth.keyRef) ?? null);
 
     const query = new URLSearchParams(firstPageParams(op.pagination));
     for (const [name, value] of Object.entries(op.query)) {
@@ -157,9 +171,13 @@ export class RestAdapter implements SourceAdapter {
           query.set(auth.param, secret);
           redactQueryParam = auth.param;
           break;
-        case "basic":
-          headers.authorization = `Basic ${base64(`${auth.username}:${secret}`)}`;
+        case "basic": {
+          const username = auth.usernameRef
+            ? (secrets.get(auth.usernameRef) ?? "")
+            : (auth.username ?? "");
+          headers.authorization = `Basic ${base64(`${username}:${secret}`)}`;
           break;
+        }
       }
     }
 

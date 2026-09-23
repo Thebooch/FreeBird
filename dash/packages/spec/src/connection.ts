@@ -14,6 +14,8 @@ import {
   paramDefSchema,
   pathParamNames,
   queryValueSchema,
+  resolveServerUrl,
+  serverTemplateSchema,
 } from "./primitives.js";
 import { resourceSchema } from "./resource.js";
 import { onboardingSchema } from "./category.js";
@@ -109,6 +111,22 @@ export const connectionSchema = z.object({
   kind: z.enum(["rest", "mcp", "inline"]),
   /** REST base URL or MCP server URL. Absent for `inline`. */
   baseUrl: z.string().url().optional(),
+  /**
+   * The address template this connection's `baseUrl` was filled in from,
+   * with this account's values — `{ account: "123pm" }`. Kept so the values
+   * can be changed later without retyping the whole address, and so an
+   * address that still has a blank in it is recognised as unfinished.
+   */
+  server: serverTemplateSchema
+    .extend({ values: z.record(z.string(), z.string().max(200)).default({}) })
+    .optional(),
+  /**
+   * The address has not been confirmed by anybody who knows it. Set when the
+   * connection came from a description that had to guess, or that writes the
+   * address with a per-account blank; cleared when somebody saves it. Nothing
+   * is sent while it is set — see `connectionNeedsAddress`.
+   */
+  addressPending: z.boolean().optional(),
   auth: authSchema.default({ type: "none" }),
   /** How this vendor does things, stated once. */
   dialect: dialectSchema.optional(),
@@ -151,6 +169,20 @@ export const connectionAuths = (connection: ConnectionSpec) =>
 export const connectionKeyRefs = (connection: ConnectionSpec): string[] => [
   ...new Set(connectionAuths(connection).flatMap(authKeyRefs)),
 ];
+/**
+ * Whether this connection still needs to be told where the API lives.
+ *
+ * True until somebody confirms an address that was guessed, or fills in every
+ * per-account part of a templated one. Checked before any request is made, so
+ * a connection never calls the placeholder host its description came with.
+ */
+export const connectionNeedsAddress = (connection: ConnectionSpec): boolean => {
+  if (connection.kind !== "rest") return false;
+  if (connection.addressPending) return true;
+  if (!connection.server) return false;
+  return resolveServerUrl(connection.server, connection.server.values).url === undefined;
+};
+
 export const connectionNeedsAuthSetup = (connection: ConnectionSpec): boolean =>
   connection.ops.length
     ? connection.ops.some(

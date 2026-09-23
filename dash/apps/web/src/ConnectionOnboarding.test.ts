@@ -206,6 +206,21 @@ describe("ConnectionOnboarding", () => {
     expect(button("Try again")).toBeDefined();
   });
 
+  /* Dividing an API on half its record types would be paid for twice. */
+  it("waits while the record types are still being described, and says so", async () => {
+    vi.mocked(api.onboarding).mockResolvedValue(
+      status({
+        state: { ...STATE, divided: false, categories: 0, remaining: 2, describing: true },
+        categories: [],
+        reason: "Still working out what this API's record types are — 30 so far.",
+      }),
+    );
+    await mount();
+    expect(api.prepareOnboarding).not.toHaveBeenCalled();
+    expect(element.querySelector('[data-testid="onboarding-gate"]')).toBeNull();
+    expect(element.textContent).toContain("30 so far");
+  });
+
   it("resumes the choices it saved", async () => {
     vi.mocked(api.onboarding).mockResolvedValue(
       status({

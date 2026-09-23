@@ -49,6 +49,7 @@ export {
   getOp,
   connectionAuths,
   connectionKeyRefs,
+  connectionNeedsAddress,
   connectionNeedsAuthSetup,
   getOpDef,
   opDefSchema,
@@ -62,6 +63,7 @@ export type { AuthSpec, ConnectionSpec, OpDef, OpSpec, PaginationSpec } from "./
 export {
   ARCHETYPES,
   ARCHETYPE_IDS,
+  IMPORT_VERSION,
   MAP_VERSION,
   archetypeSchema,
   catalogEntrySchema,
@@ -207,6 +209,8 @@ export type { BriefControl, BriefOption, BriefOptionsInput } from "./brief-optio
 
 export { recompileWidget } from "./recompile.js";
 
+export { readField } from "./field-path.js";
+
 export { referenceIds, targetOfRow } from "./reference.js";
 export type { ReferenceRow } from "./reference.js";
 
@@ -235,7 +239,22 @@ export type {
   UnreachableLink,
 } from "./entity-graph.js";
 
-export { authKeyRefs, fnv1a, idSchema, paramDefSchema, queryValueSchema } from "./primitives.js";
+export {
+  SERVER_VALUE,
+  authCredentials,
+  authKeyRefs,
+  fnv1a,
+  idSchema,
+  looksLikePlaceholder,
+  paramDefSchema,
+  queryValueSchema,
+  rekeyAuth,
+  resolveServerUrl,
+  serverTemplateSchema,
+  serverVariableSchema,
+  templateVariableNames,
+} from "./primitives.js";
+export type { AuthCredential, ServerTemplate, ServerVariable } from "./primitives.js";
 export type { ParamDef } from "./primitives.js";
 
 export {

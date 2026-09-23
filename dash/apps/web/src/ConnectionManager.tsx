@@ -1,11 +1,14 @@
 import type { CatalogEntry, WidgetSpec } from "@freebirdai/dash-spec";
 import {
   VERIFY_BUDGET_DEFAULT,
+  authCredentials,
   parseWidget,
   connectionAuths,
+  connectionNeedsAddress,
   connectionNeedsAuthSetup,
 } from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useState } from "react";
+import { ConnectionAddress } from "./ConnectionAddress.js";
 import { ConnectionOnboarding } from "./ConnectionOnboarding.js";
 import {
   ApiError,
@@ -36,6 +39,7 @@ type View =
   | "list"
   | "choose"
   | "manual"
+  | "address"
   | "key"
   | "verify"
   | "endpoints"
@@ -47,6 +51,11 @@ type View =
 
 const STEPS: ReadonlyArray<{ id: View; label: string }> = [
   { id: "choose", label: "Choose" },
+  /*
+   * Only a step for an API hosted per account, or one whose documentation
+   * never said where it lives. Everywhere else it is skipped.
+   */
+  { id: "address", label: "Address" },
   { id: "key", label: "Key" },
   { id: "verify", label: "Verify" },
   { id: "endpoints", label: "Endpoints" },
@@ -96,8 +105,12 @@ const AUTH_KINDS = [
   { value: "bearer", label: "Bearer token" },
   { value: "header", label: "Custom header" },
   { value: "query", label: "Query parameter" },
-  { value: "headers", label: "Two headers (client id + secret)" },
+  { value: "basic", label: "Username and password (HTTP Basic)" },
+  { value: "headers", label: "Several headers (e.g. client id + secret)" },
 ] as const;
+
+/** How many headers one connection can send its credentials in. */
+const MAX_AUTH_HEADERS = 4;
 
 const PAGINATION_KINDS = [
   { value: "none", label: "Single page only" },
@@ -138,12 +151,33 @@ export const ConnectionManager = ({
   const [draft, setDraft] = useState<ConnectionSummary | null>(null);
   const [entry, setEntry] = useState<CatalogEntry | null>(null);
   const [keyValues, setKeyValues] = useState<Record<string, string>>({});
-  /** Only used when the spec said a key is needed but not how it is sent. */
+  /**
+   * How the key is sent, as somebody describes it here.
+   *
+   * Used when the documentation said a key is needed but not how, and when it
+   * said wrongly and somebody chose to override it. `names` holds the header
+   * or parameter names — one for a single header or parameter, one to four
+   * for several headers — and `prefix` what goes before the key in a single
+   * header's value ("Token", "ApiKey").
+   */
   const [keyAuth, setKeyAuth] = useState({
     type: "bearer" as (typeof AUTH_KINDS)[number]["value"],
-    name1: "X-Api-Key",
-    name2: "X-Api-Secret",
+    names: ["X-Api-Key", "X-Api-Secret"],
+    prefix: "",
   });
+  /**
+   * The record types are being described after the integration was created.
+   *
+   * Tracked on its own rather than through `busy`, because it takes minutes
+   * on a large API and holding `busy` for it disabled every button on the
+   * read step with nothing on screen to say why.
+   */
+  const [recordsPending, setRecordsPending] = useState(false);
+  const [recordsFailed, setRecordsFailed] = useState<string | null>(null);
+  /** Somebody said the documented way of sending the key is not this API's. */
+  const [overridingAuth, setOverridingAuth] = useState(false);
+  /** Where to go once an address is saved: on through the wizard, or back. */
+  const [addressFrom, setAddressFrom] = useState<"wizard" | "list">("wizard");
   const [validation, setValidation] = useState<{ ok: boolean; message: string } | null>(null);
   const [sample, setSample] = useState<SampleResult | null>(null);
   /** What reading this connection would cost. Fetched before it is offered. */
@@ -261,7 +295,9 @@ export const ConnectionManager = ({
       setValidation(null);
       setSample(null);
       setKeyValues({});
-      setView(created.needsKey ? "key" : "verify");
+      setOverridingAuth(false);
+      setAddressFrom("wizard");
+      setView(created.needsAddress ? "address" : created.needsKey ? "key" : "verify");
     });
 
   const saveManual = (): Promise<void> =>
@@ -276,6 +312,8 @@ export const ConnectionManager = ({
             ? { type: "bearer", keyRef: `${id}-key` }
             : manual.authType === "header"
               ? { type: "header", header: manual.authName, keyRef: `${id}-key` }
+              : manual.authType === "basic"
+                ? { type: "basic", usernameRef: `${id}-user`, keyRef: `${id}-key` }
               : manual.authType === "headers"
                 ? {
                     type: "headers",
@@ -387,9 +425,23 @@ export const ConnectionManager = ({
       setSample(null);
       setKeyValues({});
       setDiscovery(null);
+      setOverridingAuth(false);
+      setAddressFrom("wizard");
       await refresh();
-      setView(created.needsKey ? "key" : "verify");
+      setView(created.needsAddress ? "address" : created.needsKey ? "key" : "verify");
     });
+
+  /**
+   * Change where an existing connection's API lives — a new account on the
+   * same service, or an address the import got wrong.
+   */
+  const openAddress = (connection: ConnectionSummary): void => {
+    setEntry(null);
+    setDraftId(connection.id);
+    setDraft(connection);
+    setAddressFrom("list");
+    setView("address");
+  };
 
   /**
    * The fields this connection's auth style needs, in the order to show them.
@@ -401,26 +453,44 @@ export const ConnectionManager = ({
   const authUndeclared =
     Boolean(draft && connectionNeedsAuthSetup(draft)) && draft?.auth.type === "none";
 
+  /** Being described here rather than read off the documentation. */
+  const describingAuth = authUndeclared || overridingAuth;
+
   /** The auth the user just described, ready to be written to the connection. */
   const describedAuth = (): Record<string, unknown> => {
     const id = draftId ?? "conn";
+    const [first = ""] = keyAuth.names;
     switch (keyAuth.type) {
       case "header":
-        return { type: "header", header: keyAuth.name1, keyRef: `${id}-key` };
+        return {
+          type: "header",
+          header: first,
+          keyRef: `${id}-key`,
+          ...(keyAuth.prefix.trim() ? { template: `${keyAuth.prefix.trim()} {{key}}` } : {}),
+        };
       case "query":
-        return { type: "query", param: keyAuth.name1, keyRef: `${id}-key` };
+        return { type: "query", param: first, keyRef: `${id}-key` };
+      case "basic":
+        return { type: "basic", usernameRef: `${id}-user`, keyRef: `${id}-key` };
       case "headers":
         return {
           type: "headers",
-          parts: [
-            { header: keyAuth.name1, keyRef: `${id}-id`, label: keyAuth.name1 },
-            { header: keyAuth.name2, keyRef: `${id}-secret`, label: keyAuth.name2 },
-          ],
+          parts: keyAuth.names.map((name, index) => ({
+            header: name,
+            keyRef: `${id}-key-${index + 1}`,
+            label: name,
+          })),
         };
       default:
         return { type: "bearer", keyRef: `${id}-key` };
     }
   };
+
+  const setAuthName = (index: number, next: string): void =>
+    setKeyAuth((current) => ({
+      ...current,
+      names: current.names.map((name, at) => (at === index ? next : name)),
+    }));
 
   /**
    * One row per credential, each carrying its own name field where the name is
@@ -439,66 +509,51 @@ export const ConnectionManager = ({
   }
 
   const keyRows: KeyRow[] = (() => {
-    if (authUndeclared) {
+    if (describingAuth) {
       const id = draftId ?? "conn";
       if (keyAuth.type === "headers") {
-        return [
-          {
-            keyRef: `${id}-id`,
-            legend: "First header",
-            nameValue: keyAuth.name1,
-            nameLabel: "Header name",
-            onNameChange: (next) => setKeyAuth({ ...keyAuth, name1: next }),
-            valueLabel: "Value for this header",
-          },
-          {
-            keyRef: `${id}-secret`,
-            legend: "Second header",
-            nameValue: keyAuth.name2,
-            nameLabel: "Header name",
-            onNameChange: (next) => setKeyAuth({ ...keyAuth, name2: next }),
-            valueLabel: "Value for this header",
-          },
-        ];
+        return keyAuth.names.map((name, index) => ({
+          keyRef: `${id}-key-${index + 1}`,
+          legend: `Header ${index + 1}`,
+          nameValue: name,
+          nameLabel: "Header name",
+          onNameChange: (next: string) => setAuthName(index, next),
+          valueLabel: "Value for this header",
+        }));
       }
       if (keyAuth.type === "header" || keyAuth.type === "query") {
         return [
           {
             keyRef: `${id}-key`,
-            nameValue: keyAuth.name1,
+            nameValue: keyAuth.names[0] ?? "",
             nameLabel: keyAuth.type === "query" ? "Parameter name" : "Header name",
-            onNameChange: (next) => setKeyAuth({ ...keyAuth, name1: next }),
+            onNameChange: (next: string) => setAuthName(0, next),
             valueLabel: "API key",
           },
+        ];
+      }
+      if (keyAuth.type === "basic") {
+        return [
+          { keyRef: `${id}-user`, nameValue: null, valueLabel: "Username" },
+          { keyRef: `${id}-key`, nameValue: null, valueLabel: "Password" },
         ];
       }
       return [{ keyRef: `${id}-key`, nameValue: null, valueLabel: "API key" }];
     }
 
     if (!draft) return [];
+    /*
+     * The documentation's own names for each credential where the import
+     * found them — "Access key", "Secret" — so nobody is asked for one "API
+     * key" when they hold two values.
+     */
     const rows = connectionAuths(draft).flatMap((auth) =>
-      auth.type === "none"
-        ? []
-        : auth.type === "headers"
-          ? auth.parts.map((part) => ({
-              keyRef: part.keyRef,
-              nameValue: null,
-              valueLabel: part.label ?? part.header,
-              hint: `Sent as the ${part.header} header.`,
-            }))
-          : [
-              {
-                keyRef: auth.keyRef,
-                nameValue: null,
-                valueLabel:
-                  auth.type === "header"
-                    ? auth.header
-                    : auth.type === "query"
-                      ? auth.param
-                      : "API key",
-                hint: `Used for ${auth.type} authentication.`,
-              },
-            ],
+      authCredentials(auth).map((credential) => ({
+        keyRef: credential.keyRef,
+        nameValue: null,
+        valueLabel: credential.label,
+        hint: credential.hint,
+      })),
     );
     return [...new Map(rows.map((row) => [row.keyRef, row])).values()];
   })();
@@ -506,15 +561,29 @@ export const ConnectionManager = ({
   const submitKey = (): Promise<void> =>
     run(async () => {
       if (!draftId) return;
-      // The connection currently says `auth: none`, which would send the key
-      // nowhere. Record where it goes first, then store it.
-      if (authUndeclared && draft) {
+      /*
+       * Record where the key goes before storing it. Either the connection
+       * says `auth: none` and the key would go nowhere, or somebody said the
+       * documented way is wrong. An endpoint that only repeated the old
+       * connection-wide auth follows the new one; one with auth of its own —
+       * a public endpoint, a different scheme — keeps it.
+       */
+      if (describingAuth && draft) {
+        const auth = describedAuth();
+        const previous = JSON.stringify(draft.auth);
         const updated = await api.saveConnection(draftId, {
           ...draft,
-          auth: describedAuth(),
+          auth,
           authRequired: false,
+          ...(draft.dialect ? { dialect: { ...draft.dialect, auth } } : {}),
+          ops: draft.ops.map((op) => {
+            if (!op.auth || JSON.stringify(op.auth) !== previous) return op;
+            const { auth: _inherited, ...rest } = op;
+            return rest;
+          }),
         });
         setDraft(updated);
+        setOverridingAuth(false);
       }
       await api.setKeys(draftId, keyValues);
       setKeyValues({}); // never keep them in component state longer than needed
@@ -609,31 +678,56 @@ export const ConnectionManager = ({
       const id = draft?.catalog ?? draftId;
       if (!id) return;
       setMapping(true);
+      let result: MapRunResult;
       try {
-        const result = await api.mapApi(id);
+        result = await api.mapApi(id);
         setMapRun(result);
         setMapInfo(result);
-
-        /*
-         * And what the records *are*, in the same breath.
-         *
-         * Mapping learns the endpoints; describing learns the record types,
-         * and everything entity-first is built on the second. Splitting them
-         * into two buttons meant only the first ever got pressed — an API
-         * could be connected, mapped, and left with no record types at all,
-         * which is the state the rest of the product has no answer for.
-         *
-         * A failure here is not a failure of the connection: the endpoints are
-         * mapped and usable, and describing can be run again from Records.
-         */
-        setMapInfo(await api.describeRecords(id).then(
-          async () => api.mapState(id).catch(() => result),
-          () => result,
-        ));
       } finally {
         setMapping(false);
       }
+
+      /*
+       * And what the records *are*, in the same breath.
+       *
+       * Mapping learns the endpoints; describing learns the record types, and
+       * everything entity-first is built on the second. Splitting them into
+       * two buttons meant only the first ever got pressed — an API could be
+       * connected, mapped, and left with no record types at all.
+       *
+       * Not awaited here. It takes minutes on a large API, and awaiting it
+       * inside `run` held every button on this step disabled under a message
+       * that said the work was done. It runs in the background with its own
+       * progress line; reading the account can go ahead meanwhile, and the
+       * dashboards step waits for it on its own.
+       */
+      void describeAfterMap(id, result);
     });
+
+  const describeAfterMap = async (id: string, mapped: MapState): Promise<void> => {
+    setRecordsPending(true);
+    setRecordsFailed(null);
+    /* How many are done so far, read off the entry as the pass checkpoints. */
+    const poll = window.setInterval(() => {
+      void api
+        .mapState(id)
+        .then(setMapInfo)
+        .catch(() => undefined);
+    }, 3000);
+    try {
+      await api.describeRecords(id);
+    } catch (caught) {
+      /*
+       * Not a failure of the connection: the endpoints are mapped and usable,
+       * and describing can be run again from Records.
+       */
+      setRecordsFailed(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      window.clearInterval(poll);
+      setRecordsPending(false);
+      setMapInfo(await api.mapState(id).catch(() => mapped));
+    }
+  };
 
   /**
    * Spend the requests, with a bar that reflects the real pace.
@@ -1079,6 +1173,22 @@ export const ConnectionManager = ({
                     >
                       Records
                     </button>
+                    {connection.kind === "rest" && (
+                      <button
+                        className="dash-iconbtn"
+                        {...(connectionNeedsAddress(connection) ? { "data-tone": "attention" } : {})}
+                        data-testid={`address-${connection.id}`}
+                        aria-label={`Where ${connection.title}'s API lives`}
+                        title={
+                          connectionNeedsAddress(connection)
+                            ? "This connection needs its address before it can load anything"
+                            : connection.baseUrl
+                        }
+                        onClick={() => openAddress(connection)}
+                      >
+                        Address
+                      </button>
+                    )}
                     {/*
                      * The step the wizard ends on, reachable for a connection
                      * that already exists — to finish a setup left half way,
@@ -2092,6 +2202,30 @@ export const ConnectionManager = ({
           </>
         );
 
+      case "address":
+        return draft ? (
+          <>
+            {addressFrom === "wizard" && <StepRail current={view} />}
+            <ConnectionAddress
+              key={draft.id}
+              connection={draft}
+              onBack={() => (addressFrom === "wizard" ? setView("choose") : setView("list"))}
+              onSaved={(updated) => {
+                setDraft(updated);
+                onChanged();
+                if (addressFrom === "list") {
+                  void refresh();
+                  setView("list");
+                  return;
+                }
+                setView(updated.hasKey ? "verify" : "key");
+              }}
+            />
+          </>
+        ) : (
+          <p>Choose a connection first.</p>
+        );
+
       case "key":
         return (
           <>
@@ -2110,11 +2244,18 @@ export const ConnectionManager = ({
                 )}
               </div>
             )}
-            {authUndeclared && (
+            {describingAuth && (
               <>
-                <div className="dash-callout dash-callout--info" data-testid="auth-undeclared">
-                  This API needs an API key to function.
-                </div>
+                {authUndeclared ? (
+                  <div className="dash-callout dash-callout--info" data-testid="auth-undeclared">
+                    This API needs an API key to function.
+                  </div>
+                ) : (
+                  <div className="dash-callout dash-callout--info" data-testid="auth-override">
+                    Describe how {draft?.title} expects its key. This replaces what its
+                    documentation said.
+                  </div>
+                )}
                 <div className="dash-field">
                   <label htmlFor="k-authtype">How is the key sent?</label>
                   <select
@@ -2135,10 +2276,27 @@ export const ConnectionManager = ({
                     ))}
                   </select>
                   <span className="dash-hint">
-                    The description did not say, so it has to be filled in here. Bearer is the most
-                    common; check the API docs if you are unsure.
+                    {authUndeclared
+                      ? "The description did not say, so it has to be filled in here. Bearer is the most common; check the API docs if you are unsure."
+                      : "Check the API docs' example requests: they show which header, parameter or login the key goes in."}
                   </span>
                 </div>
+                {keyAuth.type === "header" && (
+                  <div className="dash-field">
+                    <label htmlFor="k-prefix">Before the key (optional)</label>
+                    <input
+                      id="k-prefix"
+                      data-testid="key-prefix"
+                      value={keyAuth.prefix}
+                      placeholder="e.g. Token"
+                      onChange={(e) => setKeyAuth({ ...keyAuth, prefix: e.target.value })}
+                    />
+                    <span className="dash-hint">
+                      Some APIs want a word before the key, like <code>Token abc123</code>. Leave
+                      empty to send the key alone.
+                    </span>
+                  </div>
+                )}
               </>
             )}
 
@@ -2178,18 +2336,71 @@ export const ConnectionManager = ({
                 </div>
               </fieldset>
             ))}
+            {describingAuth && keyAuth.type === "headers" && (
+              <div className="dash-row" style={{ gap: 8 }}>
+                {keyAuth.names.length < MAX_AUTH_HEADERS && (
+                  <button
+                    className="dash-control"
+                    data-testid="key-add-header"
+                    onClick={() =>
+                      setKeyAuth({ ...keyAuth, names: [...keyAuth.names, ""] })
+                    }
+                  >
+                    Add another header
+                  </button>
+                )}
+                {keyAuth.names.length > 1 && (
+                  <button
+                    className="dash-control"
+                    data-testid="key-remove-header"
+                    onClick={() =>
+                      setKeyAuth({ ...keyAuth, names: keyAuth.names.slice(0, -1) })
+                    }
+                  >
+                    Remove the last header
+                  </button>
+                )}
+              </div>
+            )}
             <span className="dash-hint">
               Stored encrypted on your own server. {keyRows.length > 1 ? "They are" : "It is"} never
               written into a dashboard file and never sent back to this page.
             </span>
+            {/*
+             * The documentation can be wrong about how a key is sent, and an
+             * import that trusted it would otherwise leave no way to say so.
+             */}
+            {!authUndeclared && draft?.auth.type !== "none" && (
+              <p className="dash-hint">
+                <button
+                  className="dash-control"
+                  data-testid="key-override"
+                  onClick={() => {
+                    setOverridingAuth((previous) => !previous);
+                    setKeyValues({});
+                  }}
+                >
+                  {overridingAuth
+                    ? "Use what the documentation says"
+                    : `Not how ${draft?.title ?? "this API"} does it? Choose how the key is sent`}
+                </button>
+              </p>
+            )}
             <div className="dash-row dash-row--end">
-              <button className="dash-control" onClick={() => setView("choose")}>
+              <button
+                className="dash-control"
+                onClick={() => setView(draft?.server || draft?.addressPending ? "address" : "choose")}
+              >
                 Back
               </button>
               <button
                 className="dash-control"
                 data-testid="key-save"
-                disabled={busy || keyRows.some((r) => (keyValues[r.keyRef] ?? "").trim() === "")}
+                disabled={
+                  busy ||
+                  keyRows.some((r) => (keyValues[r.keyRef] ?? "").trim() === "") ||
+                  keyRows.some((r) => r.nameValue !== null && r.nameValue.trim() === "")
+                }
                 onClick={() => void submitKey()}
               >
                 {keyRows.length > 1 ? "Save keys" : "Save key"}
@@ -2544,6 +2755,22 @@ export const ConnectionManager = ({
                     it stopped.
                   </>
                 )}
+              </div>
+            )}
+
+            {(recordsPending || mapInfo?.describing) && (
+              <div className="dash-callout dash-callout--info" data-testid="records-pending" role="status">
+                <strong>Still working out what {draft?.title ?? "this API"}&rsquo;s records are</strong>{" "}
+                &mdash; {mapInfo?.records?.entities ?? 0} record type(s) so far. This reads the
+                documentation, not your account, and takes a few minutes on a large API. You can
+                start reading meanwhile; setting up dashboards waits for it and carries on by
+                itself.
+              </div>
+            )}
+            {recordsFailed && !recordsPending && (
+              <div className="dash-callout" data-testid="records-failed">
+                Describing the record types stopped: {recordsFailed} What was done is kept, and it
+                can be run again from Records.
               </div>
             )}
 
