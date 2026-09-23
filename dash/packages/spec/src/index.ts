@@ -52,6 +52,7 @@ export {
   connectionNeedsAuthSetup,
   getOpDef,
   opDefSchema,
+  opUsesRange,
   opSchema,
   paginationSchema,
   resolveOp,
@@ -128,6 +129,60 @@ export type {
   RecordOverride,
   ReferenceSpec,
 } from "./entity.js";
+
+export {
+  CATEGORIES_MAX,
+  CATEGORY_VERSION,
+  STARTERS_PER_CATEGORY_MAX,
+  boardLayoutSchema,
+  categorySchema,
+  categoryStatusSchema,
+  onboardingChoicesSchema,
+  onboardingPreviewSchema,
+  onboardingSchema,
+  onboardingStatusSchema,
+  profileSchema,
+  starterSchema,
+  starterSizeSchema,
+  widgetCheckSchema,
+  widgetCheckStatusSchema,
+} from "./category.js";
+export type {
+  ApiProfile,
+  BoardLayout,
+  CategorySpec,
+  CategoryStatus,
+  OnboardingChoices,
+  OnboardingPreview,
+  OnboardingSpec,
+  OnboardingStatus,
+  StarterSpec,
+  WidgetCheck,
+  WidgetCheckStatus,
+} from "./category.js";
+
+export {
+  DEFAULT_TIERS,
+  DEFAULT_TIER_ID,
+  RHYTHM_VERSION,
+  VOLATILITIES,
+  apiRhythmSchema,
+  connectionRhythmSchema,
+  tierById,
+  tierFor,
+  tierSchema,
+  volatilitySchema,
+} from "./rhythm.js";
+export type {
+  ApiRhythm,
+  ConnectionRhythm,
+  TierDecision,
+  TierSpec,
+  Volatility,
+} from "./rhythm.js";
+
+export { clampCell, completeLayout, solveLayout } from "./layout.js";
+export type { PlacementRequest, SolveLayoutOptions, SolveLayoutResult } from "./layout.js";
 
 export { RECIPES, facetsFromRecipe, recipeFor } from "./recipes.js";
 export type { EntityRecipe } from "./recipes.js";
@@ -224,6 +279,7 @@ export {
   widgetGroupSchema,
   widgetSchema,
   widgetSources,
+  drawnColumns,
   withoutWidget,
   widgetSourceSchema,
   widgetStatesSchema,

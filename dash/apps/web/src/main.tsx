@@ -52,6 +52,8 @@ const useLiveDashboard = (
   labels: Record<string, FieldLabels>;
   /** connection id → which of its fields point at other records. */
   entityLinks: Record<string, EntityLinkView[]>;
+  /** connection id → which of its endpoints read the time range. */
+  rangeOps: Record<string, string[]>;
   available: DashboardSummary[];
   error: string | null;
 } => {
@@ -61,6 +63,7 @@ const useLiveDashboard = (
     connections: ConnectionSpec[];
     labels: Record<string, FieldLabels>;
     entityLinks: Record<string, EntityLinkView[]>;
+    rangeOps: Record<string, string[]>;
     available: DashboardSummary[];
     error: string | null;
   }>({
@@ -69,6 +72,7 @@ const useLiveDashboard = (
     connections: [],
     labels: {},
     entityLinks: {},
+    rangeOps: {},
     available: [],
     error: null,
   });
@@ -96,6 +100,7 @@ const useLiveDashboard = (
               connections: [],
               labels: {},
               entityLinks: {},
+              rangeOps: {},
               available: [],
               error: null,
             });
@@ -128,6 +133,12 @@ const useLiveDashboard = (
          * knowing about it.
          */
         const entityLinks: Record<string, EntityLinkView[]> = {};
+        /*
+         * And again: which endpoints read the time range is derived from the
+         * op's own query and the dialect, and the server publishes it so both
+         * sides build the same cache key. See `queryKey`.
+         */
+        const rangeOps: Record<string, string[]> = {};
         for (const entry of raw) {
           const connection = connectionSchema.safeParse(entry);
           if (connection.success) {
@@ -141,6 +152,13 @@ const useLiveDashboard = (
             if (Array.isArray(links) && links.length > 0) {
               entityLinks[connection.data.id] = links as EntityLinkView[];
             }
+            /* An empty list is meaningful — "none of them read the range" —
+             * so it is recorded, unlike the two above where empty and absent
+             * mean the same thing. */
+            const ranged = (entry as { rangeOps?: unknown }).rangeOps;
+            if (Array.isArray(ranged)) {
+              rangeOps[connection.data.id] = ranged as string[];
+            }
           }
         }
 
@@ -151,6 +169,7 @@ const useLiveDashboard = (
             connections,
             labels,
             entityLinks,
+            rangeOps,
             available,
             error: null,
           });
@@ -163,6 +182,7 @@ const useLiveDashboard = (
             connections: [],
             labels: {},
             entityLinks: {},
+            rangeOps: {},
             available: [],
             error: error instanceof Error ? error.message : String(error),
           });
@@ -957,6 +977,12 @@ const App = (): JSX.Element => {
         <ConnectionManager
           onClose={() => setConnectionsOpen(false)}
           onChanged={reload}
+          /* Straight to a board setup just made. */
+          onOpenDashboard={(id) => {
+            setConnectionsOpen(false);
+            reload();
+            navigate({ kind: "board", dashboardId: id });
+          }}
           // One click from "this endpoint can be clicked into" to a widget
           // that does it. Nothing is confirmed by hand, so `confirmed` is
           // empty — the offer was derived, not guessed at.
@@ -1208,6 +1234,7 @@ const App = (): JSX.Element => {
           presentation={presentationSources}
           labels={live.labels}
           entityLinks={live.entityLinks}
+          rangeOps={live.rangeOps}
           credentialRevisions={credentialRevisions}
           editing={arranging}
           onEditingChange={setArranging}

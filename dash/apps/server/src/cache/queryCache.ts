@@ -28,6 +28,19 @@ export interface QueryOutcome extends FetchResult {
   /** Set whenever the body is older than the caller wanted. */
   readonly staleReason?: string;
   readonly ageMs: number;
+  /**
+   * Why a stale copy was served instead of a fresh one, when something refused.
+   *
+   * A reader is handed the old rows either way, which is right for a person
+   * looking at a board. The keeper is not a person: it has to tell "the API
+   * said no, and will keep saying no" (401, 403) from "the API asked us to
+   * wait" (429) from "nothing refused, the copy was just old". Without this
+   * every one of those read as a successful refresh.
+   */
+  readonly error?: {
+    readonly status?: number | undefined;
+    readonly retryAfter?: string | undefined;
+  };
 }
 
 /** A caller cannot ask us to hold something *fresh* for longer than this. */
@@ -79,6 +92,7 @@ export class QueryCache {
   private readonly inFlight = new Map<string, Promise<FetchResult>>();
   private readonly generations = new Map<string, number>();
   private globalGeneration = 0;
+  private readonly invalidated = new Set<(connection: string | undefined) => void>();
 
   /**
    * What identifies "the era this connection's data belongs to".
@@ -112,15 +126,40 @@ export class QueryCache {
       this.generations.clear();
       this.store.clear();
       this.inFlight.clear();
-      return;
+    } else {
+      this.generations.set(connection, (this.generations.get(connection) ?? 0) + 1);
+      const prefix = queryKeyPrefix(connection);
+      this.store.clear(prefix);
+      for (const key of [...this.inFlight.keys()]) {
+        if (key.startsWith(prefix)) this.inFlight.delete(key);
+      }
     }
+    for (const listener of this.invalidated) listener(connection);
+  }
 
-    this.generations.set(connection, (this.generations.get(connection) ?? 0) + 1);
-    const prefix = queryKeyPrefix(connection);
-    this.store.clear(prefix);
-    for (const key of [...this.inFlight.keys()]) {
-      if (key.startsWith(prefix)) this.inFlight.delete(key);
-    }
+  /**
+   * Be told when a connection's data is dropped.
+   *
+   * Every credential change goes through `invalidate`, which makes it the one
+   * place anything holding a conclusion about an account — "this key is
+   * refused" above all — can learn that the account changed underneath it.
+   * Returns the unsubscribe.
+   */
+  onInvalidate(listener: (connection: string | undefined) => void): () => void {
+    this.invalidated.add(listener);
+    return () => {
+      this.invalidated.delete(listener);
+    };
+  }
+
+  /** When the copy under this key was stored, or null when there is none. */
+  storedAt(key: string): number | null {
+    return this.store.get(key)?.storedAt ?? null;
+  }
+
+  /** When the upstream will take requests again, or null when it will now. */
+  coolingUntil(connection: string): number | null {
+    return this.cooldown.check(connection, this.now())?.until ?? null;
   }
 
   constructor(options: QueryCacheOptions = {}) {
@@ -151,6 +190,35 @@ export class QueryCache {
      */
     priority?: Priority;
     /**
+     * Whether somebody is *looking* or somebody *asked*.
+     *
+     * The distinction this whole caching layer turned out to need. Every
+     * upstream call used to be triggered by a person looking at something —
+     * opening a board, switching tabs, reloading — so traffic was at its
+     * burstiest exactly when somebody was waiting, and on a metered API that
+     * is the shape that gets an account throttled.
+     *
+     * - `view` answers from the cache at **any** age, labelled, and goes
+     *   upstream only when there is nothing at all to show. Freshness is the
+     *   keeper's job, not the reader's.
+     * - `refresh` is today's behaviour, and what the Refresh buttons and the
+     *   keeper send: revalidate, paced.
+     *
+     * Defaults to `refresh` so every existing caller — the chat harness,
+     * setup, the tests — keeps the behaviour it was written against.
+     */
+    mode?: "view" | "refresh";
+    /**
+     * How old a copy may be before a *view* calls it stale.
+     *
+     * Only the label. A view serves what it holds at any age either way; this
+     * decides whether the tile says so. Passed by a caller that knows how often
+     * the keeper refreshes this endpoint — a copy refreshed daily is not stale
+     * at twenty minutes old, and a badge on every such tile teaches people to
+     * ignore the badge. Never shorter than `maxAgeMs`.
+     */
+    freshForMs?: number;
+    /**
      * Called only when this decides an upstream call is warranted, which is
      * what makes the accounting trustworthy. Receives the cached copy's
      * validators so it can ask conditionally.
@@ -160,7 +228,15 @@ export class QueryCache {
       readonly lastModified?: string;
     }) => Promise<FetchResult>;
   }): Promise<QueryOutcome> {
-    const { key, connection, maxAgeMs, fetcher, priority = Priority.Widget } = input;
+    const {
+      key,
+      connection,
+      maxAgeMs,
+      fetcher,
+      priority = Priority.Widget,
+      mode = "refresh",
+    } = input;
+    const freshForMs = Math.max(maxAgeMs, input.freshForMs ?? 0);
     const generation = this.generationOf(connection);
     const now = this.now();
     const cached = this.store.get(key);
@@ -178,10 +254,57 @@ export class QueryCache {
     }
 
     /*
+     * A view never fetches.
+     *
+     * Age is not a reason to call somebody's API while they are reading; it is
+     * a reason to say how old this is. So a view hands back whatever is held,
+     * at any age, with the age attached — and only when there is nothing at
+     * all does it fall through and fetch, which is the first sight of a widget
+     * the keeper has not reached yet.
+     *
+     * Deliberately above the cooldown check: a cooling connection with a
+     * cached copy takes this path too, and reaches the same answer without the
+     * cooldown's message, because nothing was refused — nothing was asked.
+     */
+    if (mode === "view" && cached) {
+      this.accounting.hit(connection);
+      return {
+        body: cached.body,
+        meta: cached.meta,
+        outcome: age <= freshForMs ? "hit" : "stale",
+        ...(age > freshForMs
+          ? { staleReason: "Showing the copy we already have; nothing was asked of the API." }
+          : {}),
+        ageMs: age,
+      };
+    }
+
+    const cooling = this.cooldown.check(connection, now);
+
+    /*
+     * A view of something nothing has warmed yet, while the API is asking us
+     * to wait.
+     *
+     * Reporting the rate limit here is true and useless: the reader has not
+     * been refused anything, because a view asks for nothing. What is actually
+     * happening is that this query has not been warmed yet and the keeper —
+     * which the view itself just marked this connection as wanted for — will
+     * fetch it within a tick. Saying *that* is the difference between "the
+     * product is broken" and "one more moment".
+     */
+    if (mode === "view" && cooling) {
+      throw new AdapterError(`not warmed yet for ${connection}`, {
+        status: cooling.status,
+        userMessage:
+          "This has not been loaded yet, and the API has asked us to wait. It will appear shortly.",
+        retryAfter: retryAfterSeconds(cooling.until, now),
+      });
+    }
+
+    /*
      * The upstream has told us to stop. Serving what we have — clearly
      * labelled — beats both hammering it and showing an empty widget.
      */
-    const cooling = this.cooldown.check(connection, now);
     if (cooling) {
       const reason = coolingMessage(cooling, now);
       if (cached && generation === this.generationOf(connection)) {
@@ -192,6 +315,7 @@ export class QueryCache {
           outcome: "stale",
           staleReason: reason,
           ageMs: age,
+          error: { status: cooling.status, retryAfter: retryAfterSeconds(cooling.until, now) },
         };
       }
       /*
@@ -250,6 +374,10 @@ export class QueryCache {
           outcome: "stale",
           staleReason: reason,
           ageMs: age,
+          error:
+            error instanceof AdapterError
+              ? { status: error.status, retryAfter: error.retryAfter }
+              : {},
         };
       }
       throw error;

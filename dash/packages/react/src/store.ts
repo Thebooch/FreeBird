@@ -199,11 +199,23 @@ export class QueryClient {
      * should ask for. Defaults to `Widget`: something visible is waiting.
      */
     wave?: Wave;
+    /**
+     * Whether a forced ensure asks the API or only the server.
+     *
+     * `refresh` — the default for a forced call — is somebody pressing
+     * Refresh: the server revalidates upstream. `view` re-reads what the
+     * server already holds, which is what a poll wants: the keeper keeps that
+     * current, so reading it costs nobody's API anything, however many tabs
+     * are open. Unforced calls are always `view`.
+     */
+    mode?: "view" | "refresh";
   }): Promise<void> {
     const { key, connection, op, params, resolved, now, force, maxAgeMs } = input;
+    const mode = input.mode ?? (force ? "refresh" : "view");
+    const asking = force === true && mode === "refresh";
     // A forced refresh jumps the queue: somebody pressed a button and is
-    // watching for it to answer.
-    const wave = force ? Wave.Forced : (input.wave ?? Wave.Widget);
+    // watching for it to answer. A re-read does not — nobody pressed anything.
+    const wave = asking ? Wave.Forced : (input.wave ?? Wave.Widget);
     const request: QueryRequest = {
       connection,
       op,
@@ -235,7 +247,17 @@ export class QueryClient {
         this.registry.fetch(connection, op, params, {
           params: resolved,
           now,
-          maxAgeMs: force ? 0 : (maxAgeMs ?? 0),
+          maxAgeMs: asking ? 0 : (maxAgeMs ?? 0),
+          /*
+           * Looking is not asking.
+           *
+           * Everything that is not an explicit refresh is somebody opening a
+           * board, switching a tab or reloading a page — and none of those are
+           * a reason to call an API. The server answers those from what it
+           * holds, however old, and says how old; keeping it fresh is the
+           * keeper's job. This is what makes navigation free.
+           */
+          mode,
         }),
       )
       .then((result) => {

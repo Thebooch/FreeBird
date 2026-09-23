@@ -1,3 +1,4 @@
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -25,6 +26,7 @@ import {
 import type {
   ConnectionSpec,
   DashboardSpec,
+  EntityLinkView,
   EntitySpec,
   RangePreset,
   ResolvedParams,
@@ -32,9 +34,9 @@ import type {
   WidgetBrief,
 } from "@freebirdai/dash-spec";
 import {
+  catalogEntrySchema,
   connectionKeyRefs,
   connectionNeedsAuthSetup,
-  catalogEntrySchema,
   connectionSchema,
   dashboardSchema,
   defaultGrainFor,
@@ -42,8 +44,9 @@ import {
   getOp,
   isStale,
   opDefSchema,
+  onboardingSchema,
+  opUsesRange,
   pathParamNames,
-  queryKey,
   resolveRange,
   resourceSchema,
   statusTone,
@@ -124,12 +127,19 @@ import {
   widgetBriefSchema,
 } from "@freebirdai/dash-spec";
 import { mapRoutes, mergeDescribedEntities } from "./routes/map.js";
+import { onboardingRoutes } from "./routes/onboarding.js";
+import { allocateDashboardId } from "./onboarding/materialise.js";
+import { DEFAULT_EVERY_MS, Keeper, LastSeen } from "./keeper/keeper.js";
+import { decideAll, opsOfResource } from "./keeper/rhythm.js";
+import { RhythmStore } from "./rhythm-store.js";
+import { warmTargets } from "./keeper/targets.js";
+import { ViewedRequests, paramShape } from "./keeper/viewed.js";
 import { VERIFY_BUDGET_DEFAULT, VERIFY_BUDGET_MAX, verifyRecords } from "./routes/verify.js";
 import type { Settings, SettingsStore } from "./settings.js";
 import { QueryCache, clampMaxAge } from "./cache/queryCache.js";
 import { extractRows, parsePath } from "@freebirdai/dash-expr";
 import { catalogEntryToVerify, validationCandidates } from "./verified.js";
-import { splitOpInputs } from "./query.js";
+import { buildQueryRequest, resolveRequestedRange } from "./query.js";
 import { ANSWER_TOOL, answerFromData } from "./context/tool.js";
 import { bindingFor, bindingsFor } from "./tools/bindings.js";
 import { READ_TOOL, READ_TOOL_NAME, readRecords, readToolSchema } from "./tools/read.js";
@@ -174,6 +184,13 @@ export interface BuildServerOptions {
    * the answers are a cache of the user's own confirmations, not a dependency.
    */
   readonly narrowings?: NarrowingStore;
+  /**
+   * How often each endpoint is asked again, per connection.
+   *
+   * Absent means a scratch directory, which is right for a test: the shipped
+   * cadences apply and nothing anybody ticks outlives the run.
+   */
+  readonly rhythms?: RhythmStore;
   /** Test seam: swap the transport without touching the routes. */
   readonly http?: HttpFetch;
   /**
@@ -199,6 +216,15 @@ export interface BuildServerOptions {
    */
   readonly chat?: ChatDb;
   readonly logger?: boolean;
+  /**
+   * Whether the keeper runs. **Off unless asked.**
+   *
+   * The safe direction: this suite builds servers by the hundred, and a
+   * default that gave each one a timer and a background appetite for
+   * somebody's API would mean a test could spend real quota by existing. The
+   * real entry point turns it on deliberately.
+   */
+  readonly keeper?: boolean;
   /**
    * Where cached responses live. Omitted means in this process only, which
    * is the right default for a self-hoster and the wrong one for a fleet.
@@ -388,6 +414,17 @@ const querySchema = z.object({
    * Refresh sends. Clamped before use.
    */
   maxAgeMs: z.number().optional(),
+  /**
+   * Whether somebody is looking, or somebody asked.
+   *
+   * `view` is what a board sends while it is being read: serve what is held,
+   * at any age, and never call the API. `refresh` is what the Refresh buttons
+   * send. See `QueryCache.read`.
+   *
+   * Defaults to `refresh`, so an older browser, a script, or anything else
+   * that does not know about this keeps exactly the behaviour it had.
+   */
+  mode: z.enum(["view", "refresh"]).default("refresh"),
 });
 
 /**
@@ -463,6 +500,85 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     gate,
     ...(options.cache ? { store: options.cache } : {}),
   });
+
+  /*
+   * Who is actually looking. Read by the keeper, which refuses to spend
+   * somebody's rate limit on a connection nobody has opened in a quarter of
+   * an hour. See `LastSeen`.
+   */
+  const seen = new LastSeen();
+
+  /*
+   * What boards have actually asked for. The keeper refreshes these rather
+   * than its own reconstruction of them — see `ViewedRequests`.
+   */
+  const viewed = new ViewedRequests();
+
+  /**
+   * How often each endpoint is asked again, per connection.
+   *
+   * The personal half: the cadences and anything this account moved. The
+   * shared half — how often new records of each kind actually appear — is on
+   * the catalog entry, written by the onboarding pass that reads the API. See
+   * `keeper/rhythm.ts` for how the two meet.
+   *
+   * Absent means a directory of this server's own: shared across runs, a
+   * cadence one test ticked would leak into the next.
+   */
+  const rhythms =
+    options.rhythms ?? new RhythmStore(mkdtempSync(join(tmpdir(), "dash-rhythm-")));
+
+  /** Everything needed to place one of a connection's endpoints in a tier. */
+  const rhythmFor = (connection: ConnectionSpec) => {
+    const entry = connection.catalog ? options.catalog?.get(connection.catalog) : undefined;
+    return {
+      connection,
+      ...(entry?.rhythm ? { api: entry.rhythm } : {}),
+      entities: entry?.entities ?? [],
+      personal: rhythms.get(connection.id),
+    };
+  };
+
+  /*
+   * Tier decisions, remembered for a few seconds.
+   *
+   * Asked once per target on every tick and again for every row of the status
+   * panel, and each answer reads the rhythm file and the catalog entry from
+   * disk — on a synced folder, slow enough to notice. A cadence somebody just
+   * moved is at most this stale, and `forgetTiers` clears it outright.
+   */
+  const TIER_MEMO_MS = 5_000;
+  let tierMemo = { at: 0, byConnection: new Map<string, Map<string, number>>() };
+  const forgetTiers = (): void => {
+    tierMemo = { at: 0, byConnection: new Map() };
+  };
+
+  /**
+   * How often one endpoint is asked again.
+   *
+   * The tier its records were placed in, or the fast one where nothing has an
+   * opinion — a wrong "slow" shows day-old numbers with total confidence while
+   * a wrong "fast" costs a few paced requests. A widget that asked for a
+   * shorter `refresh.every` gets it: that is a stated wish, and the keeper is
+   * the only thing left that asks the API on a schedule.
+   */
+  const everyMsForOp = (connection: string, op: string, widgetEveryMs?: number): number => {
+    const now = Date.now();
+    if (now - tierMemo.at > TIER_MEMO_MS) tierMemo = { at: now, byConnection: new Map() };
+    let ops = tierMemo.byConnection.get(connection);
+    if (!ops) {
+      ops = new Map();
+      const spec = store.getConnection(connection);
+      if (spec) {
+        for (const decision of decideAll({ ...rhythmFor(spec), ops: spec.ops.map((one) => one.id) })) {
+          ops.set(decision.op, decision.everyMs);
+        }
+      }
+      tierMemo.byConnection.set(connection, ops);
+    }
+    const tier = ops.get(op) ?? DEFAULT_EVERY_MS;
+    return widgetEveryMs !== undefined ? Math.min(tier, widgetEveryMs) : tier;
+  };
 
   /**
    * Every upstream call that is not a widget query.
@@ -712,16 +828,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * disagree about what "Finance" is called.
    */
   const createDashboardSpec = (title: string): DashboardSpec => {
-    const base =
-      title
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "")
-        .slice(0, 40) || "board";
-
-    const taken = new Set(store.listDashboards().map((board) => board.id));
-    let id = base;
-    for (let suffix = 2; taken.has(id); suffix++) id = `${base}-${suffix}`;
+    /* The same slug rule onboarding reserves its board ids by. */
+    const id = allocateDashboardId(title, new Set(store.listDashboards().map((board) => board.id)));
 
     const parsed = dashboardSchema.safeParse({ id, title, widgets: [] });
     if (!parsed.success) {
@@ -735,7 +843,18 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     return parsed.data;
   };
 
-  const ensureBoardFor = (connection: { id: string; title: string }): void => {
+  const ensureBoardFor = (
+    connection: Pick<ConnectionSpec, "id" | "title" | "onboarding">,
+    options: { evenWhenOnboarding?: boolean } = {},
+  ): void => {
+    /*
+     * A connection going through onboarding gets exactly the boards chosen
+     * there, and not an empty one beside them. Anything else — a connection
+     * made by hand, over the API, or before onboarding existed — keeps the
+     * empty board it always had. `evenWhenOnboarding` is setup being skipped:
+     * somebody who said "not now" still needs somewhere to land.
+     */
+    if (connection.onboarding && !options.evenWhenOnboarding) return;
     if (store.getDashboard(connection.id)) return;
     const board = dashboardSchema.safeParse({
       id: connection.id,
@@ -1041,6 +1160,110 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     }),
   );
 
+  /**
+   * The keeper: what keeps a board free to look at.
+   *
+   * Views no longer fetch, so something has to keep the answers current, and
+   * it should be something nobody is waiting for. This refreshes each warm
+   * target on a cadence, through the same cache and the same gate as
+   * everything else, at the priority that yields to anything on screen.
+   *
+   * Not started in tests unless asked: a suite that builds a server should not
+   * acquire a timer and a background appetite for somebody's API.
+   */
+  const keeper = new Keeper({
+    targets: () => {
+      const connections = store.listConnections();
+      const entityLinks: Record<string, EntityLinkView[]> = {};
+      for (const connection of connections) {
+        const links = linksFor(connection);
+        if (links.length > 0) entityLinks[connection.id] = [...links];
+      }
+      return warmTargets({
+        dashboards: store.listDashboards(),
+        connections,
+        entityLinks,
+        viewed: viewed.recent(Date.now()),
+        now: () => Date.now(),
+      });
+    },
+    refresh: async (target) => {
+      const spec = store.getConnection(target.connection);
+      if (!spec) return;
+      const op = getOp(spec, target.op);
+      if (!op) return;
+      registry.addConnection(spec);
+      refreshQueryIdentity(spec);
+
+      /*
+       * Exactly the request a board sends: the query string and the resolved
+       * window and inputs were built by `buildQueryRequest`, or recorded from
+       * `/api/query` itself, so the upstream call and the key both match.
+       */
+      return queries.read({
+        key: target.key,
+        connection: target.connection,
+        /* Somebody has to ask the API something, and this is the only thing
+         * that does now. Zero, because a warm copy the keeper hands back to
+         * itself would leave the cache exactly as stale as it found it. */
+        maxAgeMs: 0,
+        mode: "refresh",
+        priority: Priority.Background,
+        fetcher: (validators) =>
+          registry.fetch(target.connection, target.op, { ...target.overrides }, {
+            params: target.resolved,
+            now: Date.now(),
+            resolveSecret: async (keyRef) => keys.get(keyRef),
+            ...(validators ? { validators } : {}),
+          }),
+      });
+    },
+    lastReadAt: (connection) => seen.seenAt(connection),
+    storedAt: (key) => queries.storedAt(key),
+    coolingUntil: (connection) => queries.coolingUntil(connection),
+    everyMsFor: (target) => everyMsForOp(target.connection, target.op, target.everyMs),
+    now: () => Date.now(),
+  });
+
+  /*
+   * A credential change invalidates the connection's data, and it is also the
+   * one event that can turn a 401 or a 403 into a yes. Without this, a key
+   * pasted wrong and then fixed left the keeper refusing to touch the
+   * connection's endpoints until the server restarted.
+   */
+  queries.onInvalidate((connection) => keeper.forget(connection));
+
+  if (options.keeper === true) keeper.start();
+  app.addHook("onClose", async () => keeper.stop());
+
+  /** What the keeper is holding, and when each part of it comes round. */
+  /*
+   * The warm set as it stands now — not only what the keeper has taken stock
+   * of on a tick — with whether the cache already holds each one. `cached`
+   * is what proves the keeper and the boards agree: a target a board has
+   * read is cached under exactly the key listed here, or the two disagree.
+   */
+  app.get("/api/keeper", async () => {
+    const known = new Map(keeper.state().map((entry) => [entry.target.key, entry]));
+    return {
+      running: options.keeper === true,
+      targets: keeper.currentTargets().map((target) => {
+        const entry = known.get(target.key);
+        return {
+          connection: target.connection,
+          op: target.op,
+          key: target.key,
+          because: target.because,
+          ...(target.dashboard ? { dashboard: target.dashboard } : {}),
+          cached: queries.storedAt(target.key) !== null,
+          everyMs: entry?.everyMs ?? everyMsForOp(target.connection, target.op, target.everyMs),
+          ...(entry ? { dueAt: entry.dueAt } : {}),
+          ...(entry?.denied ? { denied: entry.denied } : {}),
+        };
+      }),
+    };
+  });
+
   // ── connections ─────────────────────────────────────────────────────────
   //
   // A connection is public except for its key: responses report `hasKey`,
@@ -1076,6 +1299,29 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     resources: connection.resources,
     ops: connection.ops.map((op) => ({ id: op.id, path: op.path, params: op.params })),
   });
+
+  /**
+   * Which of a connection's fields point at other records.
+   *
+   * Extracted because two callers need the same answer: the public connection
+   * the browser reads, and the keeper deciding which reference lists are worth
+   * warming. Derived on every call rather than stored — it is a property of
+   * the API, read off the catalog, so re-describing one is live everywhere at
+   * once.
+   */
+  const linksFor = (
+    connection: NonNullable<ReturnType<SpecStore["getConnection"]>>,
+  ): readonly EntityLinkView[] => {
+    const entities = connection.catalog
+      ? (options.catalog?.get(connection.catalog)?.entities ?? [])
+      : [];
+    if (entities.length === 0) return [];
+    return entityLinkViews({
+      entities,
+      resources: connection.resources,
+      ops: connection.ops.map((op) => ({ id: op.id, path: op.path, params: op.params })),
+    });
+  };
 
   const publicConnection = (connection: ReturnType<SpecStore["getConnection"]>) => {
     if (!connection) return null;
@@ -1123,19 +1369,20 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     const entities = connection.catalog
       ? (options.catalog?.get(connection.catalog)?.entities ?? [])
       : [];
-    const entityLinks =
-      entities.length > 0
-        ? entityLinkViews({
-            entities,
-            resources: connection.resources,
-            ops: connection.ops.map((op) => ({
-              id: op.id,
-              path: op.path,
-              params: op.params,
-            })),
-          })
-        : [];
-    return { ...connection, hasKey, labels, entityLinks };
+    const entityLinks = linksFor(connection);
+    /*
+     * Which of this connection's endpoints actually read the time range.
+     *
+     * Published rather than re-derived in the browser, because the browser and
+     * this server must build the *same* cache key and `queryKey`'s own
+     * docblock says what two spellings of a key cost. Cheap: it reads the op's
+     * own query and the dialect, with no resolution and no parse.
+     */
+    const rangeOps = connection.ops
+      .filter((op) => opUsesRange(connection, op))
+      .map((op) => op.id);
+
+    return { ...connection, hasKey, labels, entityLinks, rangeOps };
   };
 
   app.get("/api/connections", async () =>
@@ -1806,8 +2053,17 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   app.put<{ Params: { id: string }; Body: unknown }>(
     "/api/connections/:id",
     async (request, reply) => {
+      /*
+       * Setup progress is the server's to keep. A client saving a connection
+       * from its own form does not send it, and must not wipe it by omission.
+       */
+      const existing = store.getConnection(request.params.id);
+      const body = request.body as Record<string, unknown>;
       const parsed = connectionSchema.safeParse({
-        ...(request.body as Record<string, unknown>),
+        ...(existing?.onboarding && !("onboarding" in body)
+          ? { onboarding: existing.onboarding }
+          : {}),
+        ...body,
         id: request.params.id,
       });
       if (!parsed.success) {
@@ -2043,7 +2299,10 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     if (!parsed.success) {
       return reply.status(400).send({ error: "invalid query", detail: parsed.error.issues });
     }
-    const { connection, op, params, range, filters } = parsed.data;
+    const { connection, op, params, range, filters, mode } = parsed.data;
+    /* Somebody is there. Recorded before anything can fail, because a refused
+     * read is still evidence that a board is open. */
+    seen.touch(connection, Date.now());
 
     const spec = store.getConnection(connection);
     if (!spec) return reply.status(404).send({ error: `no connection "${connection}"` });
@@ -2051,47 +2310,41 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     if (!resolvedOp) return reply.status(404).send({ error: `no operation "${op}"` });
     registry.addConnection(spec);
 
-    // Shared with the chat's context harness, so both produce the same cache
-    // key for the same request. See `splitOpInputs`.
-    const { overrides, inputs } = splitOpInputs(resolvedOp, params, filters);
-
     /*
-     * The caller's window wins whenever it sent one.
-     *
-     * `resolveRange` only honours explicit bounds for the "custom" preset; for
-     * "30d" it recomputes `end = now`. The browser has already resolved its
-     * window against `controls.anchor` — an instant that deliberately only
-     * moves when the user acts — so re-resolving here against the server's
-     * clock gave two widgets fetched a second apart two different windows,
-     * defeating the anchor. It also made every cache key unique, since the
-     * window shifted by a millisecond on each request.
-     */
-    const explicit = range.start !== undefined && range.end !== undefined;
-    const resolved: ResolvedParams = {
-      range: explicit
-        ? {
-            start: range.start as number,
-            end: range.end as number,
-            grain: range.grain ?? defaultGrainFor(range.start as number, range.end as number),
-            preset: range.preset,
-          }
-        : resolveRange({ preset: range.preset, now: Date.now(), grain: range.grain }),
-      filters: inputs,
-    };
-
-    /*
-     * One identity for the browser's dedupe cache and this one. `queryKey`
-     * lives in `@freebirdai/dash-spec` precisely so there is no second implementation to
-     * drift — two that disagreed would serve one widget the rows of another.
+     * One spelling of the request, shared with the chat harness, the keeper
+     * and onboarding's checks — every one of them has to land on the key this
+     * writes. See `buildQueryRequest`.
      */
     refreshQueryIdentity(spec);
-    const key = queryKey(connection, op, overrides, resolved);
+    const { key, overrides, resolved } = buildQueryRequest({
+      connection,
+      op: resolvedOp,
+      params,
+      resolved: { range: resolveRequestedRange(range, Date.now()), filters },
+    });
+    /* What was asked, so the keeper refreshes exactly this and not a guess. */
+    viewed.record(
+      { key, connection, op, overrides, resolved, shape: paramShape(params) },
+      Date.now(),
+    );
 
     try {
       const outcome = await queries.read({
         key,
         connection,
+        mode,
         maxAgeMs: clampMaxAge(parsed.data.maxAgeMs),
+        /*
+         * Old is measured against how often this endpoint is refreshed, not
+         * only against what the widget asked for. A daily endpoint read at
+         * noon is not stale; labelling it so on every tile would teach people
+         * to ignore the label. Only a label — a view serves what it holds
+         * either way — and only while the keeper is running, since without
+         * it nothing refreshes on that cadence.
+         */
+        ...(options.keeper === true
+          ? { freshForMs: Math.round(1.5 * everyMsForOp(connection, op)) }
+          : {}),
         fetcher: (validators) =>
           registry.fetch(connection, op, overrides, {
             params: resolved,
@@ -2625,6 +2878,181 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     }),
   );
 
+  /*
+   * What somebody wants from a connection, and the boards that answer it.
+   *
+   * Two routes on the catalog and two on the connection, because onboarding
+   * has two halves with two lifetimes: how an API divides up describes the API
+   * and is shared with everybody who connects it, and which parts one person
+   * picked is theirs. See `routes/onboarding.ts`.
+   */
+  void app.register(
+    onboardingRoutes({
+      catalog,
+      llm: () => resolveLlm("onboarding"),
+      getConnection: (id) => store.getConnection(id),
+      putConnection: (spec) => store.putConnection(spec),
+      getDashboard: (id) => store.getDashboard(id),
+      putDashboard: (spec) => store.putDashboard(spec),
+      dashboardIds: () => store.listDashboards().map((board) => board.id),
+      /*
+       * A widget checked during setup is read exactly as its board will read
+       * it: the same request, the same key, through the same cache and gate.
+       * So the check is also the board's first warm-up. A cached copy served
+       * in place of a refusal is reported as the refusal — a check asks
+       * whether the widget works now.
+       */
+      read: async ({ connection, op, params, resolved }) => {
+        const resolvedOp = getOp(connection, op);
+        if (!resolvedOp) throw new AdapterError(`no operation "${op}"`, { status: 404 });
+        registry.addConnection(connection);
+        refreshQueryIdentity(connection);
+        const request = buildQueryRequest({
+          connection: connection.id,
+          op: resolvedOp,
+          params,
+          resolved,
+        });
+        const outcome = await queries.read({
+          key: request.key,
+          connection: connection.id,
+          maxAgeMs: 5 * 60_000,
+          fetcher: (validators) =>
+            registry.fetch(connection.id, op, request.overrides, {
+              params: request.resolved,
+              now: Date.now(),
+              resolveSecret: async (keyRef) => keys.get(keyRef),
+              ...(validators ? { validators } : {}),
+            }),
+        });
+        if (outcome.outcome === "stale" && outcome.error) {
+          throw new AdapterError(outcome.staleReason ?? "refused", {
+            status: outcome.error.status ?? 502,
+            ...(outcome.error.retryAfter ? { retryAfter: outcome.error.retryAfter } : {}),
+          });
+        }
+        return outcome.body;
+      },
+      ensureDefaultBoard: (connection) => ensureBoardFor(connection, { evenWhenOnboarding: true }),
+    }),
+  );
+
+  /**
+   * How often each of this connection's endpoints is asked again, and why.
+   *
+   * Free: the classification is on the catalog entry, the cadences are on
+   * disk, and the whole answer is a projection of the two. Ordered so the
+   * endpoints a board actually reads come first — those are the ones whose
+   * freshness anybody notices, and a list of two hundred is unreadable
+   * otherwise.
+   */
+  app.get<{ Params: { id: string } }>("/api/connections/:id/rhythm", async (request, reply) => {
+    const connection = store.getConnection(request.params.id);
+    if (!connection) return reply.status(404).send({ error: "no such connection" });
+
+    const personal = rhythms.get(connection.id);
+    /*
+     * Read from the warm set as it stands now, not from what the keeper has
+     * taken stock of: that only happens on a tick, and somebody arriving here
+     * seconds after building their boards would be told nothing is kept warm.
+     */
+    const warmed = new Set(
+      keeper
+        .currentTargets()
+        .filter((target) => target.connection === connection.id)
+        .map((target) => target.op),
+    );
+
+    const entities = connection.catalog
+      ? (options.catalog?.get(connection.catalog)?.entities ?? [])
+      : [];
+    const nameOf = new Map<string, string>();
+    for (const entity of entities) {
+      for (const op of opsOfResource(connection, entity.resource)) {
+        nameOf.set(op, entity.name.many);
+      }
+    }
+
+    const decided = decideAll({
+      ...rhythmFor(connection),
+      ops: connection.ops.map((op) => op.id),
+    });
+
+    return {
+      connection: connection.id,
+      title: connection.title,
+      tiers: personal.tiers,
+      at: personal.at ?? null,
+      /* Whether anybody has ever read this API for rhythm. Absent means every
+       * endpoint is sitting on the default rather than on a judgement. */
+      classified: Boolean(connection.catalog && options.catalog?.get(connection.catalog)?.rhythm),
+      endpoints: decided
+        .map((decision) => ({
+          ...decision,
+          title: connection.ops.find((op) => op.id === decision.op)?.title ?? decision.op,
+          records: nameOf.get(decision.op) ?? null,
+          /* On a board somebody opens, so its cadence is one they will feel. */
+          warmed: warmed.has(decision.op),
+        }))
+        .sort((a, b) => Number(b.warmed) - Number(a.warmed) || a.op.localeCompare(b.op)),
+    };
+  });
+
+  /**
+   * Move one endpoint to another cadence, or put it back.
+   *
+   * Stored as an override on *this* connection and nowhere else: the reading
+   * it disagrees with is shared with everybody who connects this API, and one
+   * person's preference has no business travelling with it.
+   */
+  app.put<{ Params: { id: string }; Body: unknown }>(
+    "/api/connections/:id/rhythm",
+    async (request, reply) => {
+      const parsed = z
+        .object({
+          /** Endpoint id → tier id, or null to go back to the classification. */
+          overrides: z.record(z.string().min(1), z.string().min(1).nullable()),
+        })
+        .safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({ error: "an endpoint and a cadence are needed" });
+      }
+
+      const connection = store.getConnection(request.params.id);
+      if (!connection) return reply.status(404).send({ error: "no such connection" });
+
+      const personal = rhythms.get(connection.id);
+      const known = new Set(personal.tiers.map((tier) => tier.id));
+      const refused: string[] = [];
+
+      let current = personal;
+      for (const [op, tier] of Object.entries(parsed.data.overrides)) {
+        if (!connection.ops.some((one) => one.id === op)) {
+          refused.push(`"${op}" is not an endpoint this connection carries.`);
+          continue;
+        }
+        if (tier !== null && !known.has(tier)) {
+          refused.push(`"${tier}" is not one of the cadences on offer.`);
+          continue;
+        }
+        current = rhythms.override(connection.id, op, tier);
+      }
+
+      /* Written even when nothing moved, so "answered" is recorded and the
+       * question is not asked again on the next visit. */
+      if (current === personal) current = rhythms.put(connection.id, personal);
+      /* A moved cadence applies at the keeper's next tick, not a few seconds on. */
+      forgetTiers();
+
+      return {
+        tiers: current.tiers,
+        overrides: current.overrides,
+        at: current.at ?? null,
+        notes: refused,
+      };
+    },
+  );
+
   app.get("/api/catalog", async () => (catalog ? catalog.list() : []));
 
   app.get<{ Params: { id: string } }>("/api/catalog/:id", async (request, reply) => {
@@ -2660,6 +3088,12 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         catalogId: z.string().min(1),
         id: z.string().min(1).optional(),
         opIds: z.array(z.string()).optional(),
+        /*
+         * The wizard sets this: the connection is about to be offered a set
+         * of starting boards, so it does not get an empty one first. Absent
+         * for a script or an older client, which keep the empty board.
+         */
+        onboarding: z.boolean().optional(),
       })
       .safeParse(request.body);
     if (!parsed.success) {
@@ -2680,10 +3114,13 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       while (store.getConnection(id)) id = `${entry.id}-${suffix++}`;
     }
 
-    const connection = connectionFromCatalog(entry, {
+    const made = connectionFromCatalog(entry, {
       id,
       ...(parsed.data.opIds ? { opIds: parsed.data.opIds } : {}),
     });
+    const connection: ConnectionSpec = parsed.data.onboarding
+      ? { ...made, onboarding: onboardingSchema.parse({ status: "pending" }) }
+      : made;
     store.putConnection(connection);
     ensureBoardFor(connection);
     registry.addConnection(connection);
@@ -3159,10 +3596,17 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       const resolvedOp = getOp(spec, input.op);
       if (!resolvedOp) return null;
 
-      const { overrides, inputs } = splitOpInputs(resolvedOp, input.params, input.resolved.filters);
-      const scoped: ResolvedParams = { ...input.resolved, filters: inputs };
-      const key = queryKey(input.connection, input.op, overrides, scoped);
       refreshQueryIdentity(spec);
+      const {
+        key,
+        overrides,
+        resolved: scoped,
+      } = buildQueryRequest({
+        connection: input.connection,
+        op: resolvedOp,
+        params: input.params,
+        resolved: input.resolved,
+      });
 
       if (input.cacheOnly) {
         const cached = queries.store.get(key);
@@ -3610,6 +4054,15 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             read: readForChat,
             // `CacheStore.get` answers a miss with `undefined`, not null.
             isCached: (key) => queries.store.get(key) !== undefined,
+            /*
+             * The endpoint the query route resolves, so the keys this builds
+             * match the ones it wrote. Without it the ranker would report a
+             * widget's cached rows as absent and pay for them again.
+             */
+            opFor: (connection: string, op: string) => {
+              const spec = store.getConnection(connection);
+              return spec ? getOp(spec, op) : undefined;
+            },
             rowsOf: rowsForOp,
             rowsPathFor: (op, connection) =>
               contextForConnection(context, connection).shapes[op]?.rowsPath ?? "$",

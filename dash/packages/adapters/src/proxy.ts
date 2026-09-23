@@ -51,6 +51,12 @@ export class ProxyAdapter implements SourceAdapter {
            * Zero is what Refresh sends: revalidate and wait.
            */
           ...(ctx.maxAgeMs !== undefined ? { maxAgeMs: ctx.maxAgeMs } : {}),
+          /*
+           * Whether this is a read or a request. A board being looked at sends
+           * `view`, which the server answers from its cache without calling
+           * anybody's API; Refresh sends `refresh`.
+           */
+          ...(ctx.mode ? { mode: ctx.mode } : {}),
         }),
       });
     } catch {

@@ -120,6 +120,8 @@ export interface DashboardProps {
    * renders as the plain thing it is.
    */
   readonly entityLinks?: Readonly<Record<string, readonly EntityLinkView[]>>;
+  /** connection id → endpoints that read the time range. See the provider. */
+  readonly rangeOps?: Readonly<Record<string, readonly string[]>>;
   /**
    * connection id → its `credentialsRevision`, so a key change drops that
    * connection's cached rows instead of leaving the old account's on screen.
@@ -192,6 +194,7 @@ export const Dashboard = ({
   presentation,
   labels,
   entityLinks,
+  rangeOps,
   credentialRevisions,
   editing,
   onEditingChange,
@@ -215,6 +218,7 @@ export const Dashboard = ({
       {...(presentation ? { presentation } : {})}
       {...(labels ? { labels } : {})}
       {...(entityLinks ? { entityLinks } : {})}
+      {...(rangeOps ? { rangeOps } : {})}
       {...(credentialRevisions ? { credentialRevisions } : {})}
     >
       <DashStyleSheet />

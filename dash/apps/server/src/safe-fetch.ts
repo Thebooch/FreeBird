@@ -201,7 +201,19 @@ const fetchGuarded = async (
         },
       });
 
-      if (response.status >= 300 && response.status < 400) {
+      /*
+       * 304 is in the 3xx range and is not a redirect.
+       *
+       * It is the answer to a conditional request — "what you have is still
+       * current" — and it carries no `location`, so the redirect branch threw
+       * `redirect without a location (304)` on every successful
+       * revalidation. The cache then caught a non-adapter error, served the
+       * copy it already had and labelled it stale, which is why a refresh
+       * could appear to do nothing and why the `notModified` counter had
+       * never once been above zero. The cheapest possible answer an API can
+       * give was the one thing this could not accept.
+       */
+      if (response.status !== 304 && response.status >= 300 && response.status < 400) {
         const location = response.headers.get("location");
         if (!location) throw new BlockedUrlError(`redirect without a location (${response.status})`);
         if (hop === MAX_REDIRECTS) throw new BlockedUrlError("too many redirects");

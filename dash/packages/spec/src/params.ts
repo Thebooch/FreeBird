@@ -273,12 +273,30 @@ export const queryKey = (
   op: string,
   params: QueryParams,
   resolved?: ResolvedParams,
+  /**
+   * Whether the resolved window belongs in this key.
+   *
+   * A relative range is re-resolved into a new bucket every few minutes, so
+   * scoping a key by it means an endpoint that never reads the range gets a
+   * fresh key — and a fresh upstream call — for data identical by
+   * construction. Measured on two real connections: none of their 243
+   * endpoints read it, and the entire cache was being discarded every fifteen
+   * minutes for nothing.
+   *
+   * The filters stay in the key either way: those are `{{param.x}}` values the
+   * endpoint really does send, and two widgets filtering the same op
+   * differently must not share an answer.
+   *
+   * Defaults to true, so a caller that does not know cannot silently collide
+   * two windows. `OpSpec.usesRange` is the answer, published on the connection
+   * so the browser and the server read the same one rather than each deciding.
+   */
+  usesRange = true,
 ): string => {
-  const scope = resolved
-    ? `|${resolved.range.start}:${resolved.range.end}:${resolved.range.grain}:${stableStringify(
-        resolved.filters,
-      )}`
-    : "";
+  const window = usesRange
+    ? `${resolved?.range.start}:${resolved?.range.end}:${resolved?.range.grain}`
+    : "-";
+  const scope = resolved ? `|${window}:${stableStringify(resolved.filters)}` : "";
   return `${connection}.${op}|${stableStringify(params)}${scope}`;
 };
 

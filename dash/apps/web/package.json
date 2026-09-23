@@ -10,14 +10,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@freebirdai/core": "workspace:*",
+    "@freebirdai/core-state": "workspace:*",
     "@freebirdai/dash-adapters": "workspace:*",
     "@freebirdai/dash-agent": "workspace:*",
     "@freebirdai/dash-components": "workspace:*",
     "@freebirdai/dash-react": "workspace:*",
     "@freebirdai/dash-runtime": "workspace:*",
     "@freebirdai/dash-spec": "workspace:*",
-    "@freebirdai/core": "workspace:*",
-    "@freebirdai/core-state": "workspace:*",
     "@freebirdai/react": "workspace:*",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -27,6 +27,7 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "happy-dom": "^15.11.7",
     "typescript": "^5.7.2",
     "vite": "^5.4.11"
   }

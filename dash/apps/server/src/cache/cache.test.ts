@@ -247,6 +247,205 @@ describe("QueryCache", () => {
     return { time, cache: new QueryCache({ now: time.now }) };
   };
 
+  describe("a view never fetches", () => {
+    /*
+     * Age is not a reason to call somebody's API while they are reading it; it
+     * is a reason to say how old this is. Opening a board, switching a tab and
+     * reloading a page are all views, and none of them should cost a request.
+     */
+    it("serves what it holds at any age, without calling upstream", async () => {
+      const { cache, time } = build();
+      let calls = 0;
+      const fetcher = async () => {
+        calls++;
+        return result({ rows: calls });
+      };
+
+      await cache.read({ key: "k", connection: "c", maxAgeMs: 60_000, fetcher });
+      expect(calls).toBe(1);
+
+      time.advance(48 * 60 * 60_000);
+      const view = await cache.read({
+        key: "k",
+        connection: "c",
+        maxAgeMs: 60_000,
+        mode: "view",
+        fetcher,
+      });
+
+      expect(calls).toBe(1);
+      expect(view.body).toEqual({ rows: 1 });
+      expect(view.outcome).toBe("stale");
+      expect(view.staleReason).toMatch(/nothing was asked of the API/);
+      expect(view.ageMs).toBe(48 * 60 * 60_000);
+    });
+
+    it("reports a hit rather than a stale when it is still fresh", async () => {
+      const { cache, time } = build();
+      const fetcher = async () => result({ rows: 1 });
+      await cache.read({ key: "k", connection: "c", maxAgeMs: 60_000, fetcher });
+
+      time.advance(30_000);
+      const view = await cache.read({
+        key: "k",
+        connection: "c",
+        maxAgeMs: 60_000,
+        mode: "view",
+        fetcher,
+      });
+      expect(view.outcome).toBe("hit");
+      expect(view.staleReason).toBeUndefined();
+    });
+
+    /* A copy the keeper refreshes daily is not stale at noon. Labelling every
+     * such tile would teach people to ignore the label. */
+    it("measures old against how often the endpoint is refreshed, when told", async () => {
+      const { cache, time } = build();
+      const fetcher = async () => result({ rows: 1 });
+      await cache.read({ key: "k", connection: "c", maxAgeMs: 60_000, fetcher });
+
+      time.advance(6 * 60 * 60_000);
+      const read = (freshForMs?: number) =>
+        cache.read({
+          key: "k",
+          connection: "c",
+          maxAgeMs: 60_000,
+          mode: "view",
+          fetcher,
+          ...(freshForMs !== undefined ? { freshForMs } : {}),
+        });
+      expect((await read()).outcome).toBe("stale");
+      expect((await read(36 * 60 * 60_000)).outcome).toBe("hit");
+    });
+  });
+
+  describe("an old copy handed back in place of a refusal", () => {
+    /* A reader should get the rows either way. The keeper has to know which
+     * refusal it was, or a 403 reads as a successful refresh. */
+    it("says what refused it", async () => {
+      const { cache, time } = build();
+      let refuse = false;
+      const fetcher = async () => {
+        if (refuse) throw new AdapterError("forbidden", { status: 403 });
+        return result({ rows: 1 });
+      };
+      await cache.read({ key: "k", connection: "c", maxAgeMs: 0, fetcher });
+
+      refuse = true;
+      time.advance(1000);
+      const outcome = await cache.read({ key: "k", connection: "c", maxAgeMs: 0, fetcher });
+      expect(outcome.outcome).toBe("stale");
+      expect(outcome.body).toEqual({ rows: 1 });
+      expect(outcome.error?.status).toBe(403);
+    });
+
+    it("tells a listener when a connection's data is dropped", () => {
+      const { cache } = build();
+      const heard: (string | undefined)[] = [];
+      const stop = cache.onInvalidate((connection) => heard.push(connection));
+      cache.invalidate("c");
+      cache.invalidate();
+      stop();
+      cache.invalidate("c");
+      expect(heard).toEqual(["c", undefined]);
+    });
+
+    /* The first sight of a widget the keeper has not reached yet. An empty
+     * tile is the one outcome worse than an old one. */
+    it("fetches once when there is nothing at all to show", async () => {
+      const { cache } = build();
+      let calls = 0;
+      const fetcher = async () => {
+        calls++;
+        return result({ rows: calls });
+      };
+
+      const first = await cache.read({
+        key: "k",
+        connection: "c",
+        maxAgeMs: 60_000,
+        mode: "view",
+        fetcher,
+      });
+      expect(calls).toBe(1);
+      expect(first.outcome).toBe("miss");
+    });
+
+    /* A cooling connection with a copy takes the view path too, and gets there
+     * without the cooldown's message — because nothing was refused, nothing
+     * was asked. */
+    it("answers during a cooldown without mentioning it", async () => {
+      const { cache } = build();
+      let calls = 0;
+      const fetcher = async () => {
+        calls++;
+        if (calls === 1) return result({ rows: 1 });
+        throw new AdapterError("slow down", { status: 429, retryAfter: "60" });
+      };
+
+      await cache.read({ key: "k", connection: "c", maxAgeMs: 0, fetcher });
+      await cache.read({ key: "k", connection: "c", maxAgeMs: 0, fetcher }).catch(() => null);
+      expect(cache.cooldown.check("c", 1_000_000)).not.toBeNull();
+
+      const view = await cache.read({
+        key: "k",
+        connection: "c",
+        maxAgeMs: 60_000,
+        mode: "view",
+        fetcher,
+      });
+      expect(view.body).toEqual({ rows: 1 });
+      expect(view.staleReason ?? "").not.toMatch(/rate limit/i);
+    });
+
+    /* Reporting the rate limit here is true and useless: a view asks for
+     * nothing, so nothing was refused. What is happening is that the keeper
+     * has not reached this query yet. */
+    it("says a cold query is not warmed yet rather than blaming the limit", async () => {
+      const { cache } = build();
+      let calls = 0;
+      const fetcher = async () => {
+        calls++;
+        if (calls === 1) return result({ rows: 1 });
+        throw new AdapterError("slow down", { status: 429, retryAfter: "60" });
+      };
+
+      await cache.read({ key: "warm", connection: "c", maxAgeMs: 0, fetcher });
+      await cache.read({ key: "warm", connection: "c", maxAgeMs: 0, fetcher }).catch(() => null);
+
+      const cold = await cache
+        .read({ key: "cold", connection: "c", maxAgeMs: 60_000, mode: "view", fetcher })
+        .catch((error: unknown) => error as AdapterError);
+
+      expect(cold).toBeInstanceOf(AdapterError);
+      expect((cold as AdapterError).userMessage).toMatch(/has not been loaded yet/);
+      expect((cold as AdapterError).userMessage).not.toMatch(/rate limiting/i);
+      /* And it asked for nothing: the keeper will. */
+      expect(calls).toBe(2);
+    });
+
+    it("leaves a refresh exactly as it was", async () => {
+      const { cache, time } = build();
+      let calls = 0;
+      const fetcher = async () => {
+        calls++;
+        return result({ rows: calls });
+      };
+
+      await cache.read({ key: "k", connection: "c", maxAgeMs: 60_000, fetcher });
+      time.advance(120_000);
+      const refreshed = await cache.read({
+        key: "k",
+        connection: "c",
+        maxAgeMs: 0,
+        mode: "refresh",
+        fetcher,
+      });
+      expect(calls).toBe(2);
+      expect(refreshed.body).toEqual({ rows: 2 });
+    });
+  });
+
   it("serves a fresh entry without calling upstream", async () => {
     const { cache } = build();
     let calls = 0;

@@ -1,7 +1,8 @@
 import type { ConciergeContext } from "@freebirdai/dash-agent";
-import type { ResolvedParams } from "@freebirdai/dash-spec";
+import type { OpSpec, ResolvedParams } from "@freebirdai/dash-spec";
 import { interpolateValue, queryKey, widgetSources } from "@freebirdai/dash-spec";
 import type { WidgetHandle } from "../chat/handles.js";
+import { buildQueryRequest } from "../query.js";
 import { identityFor } from "./related.js";
 import type { Candidate } from "./types.js";
 
@@ -24,6 +25,15 @@ import type { Candidate } from "./types.js";
 export const widgetKeys = (
   widget: WidgetHandle["widget"],
   resolved: ResolvedParams,
+  /**
+   * The resolved endpoint, so these keys are built exactly as `/api/query`
+   * builds them — path parameters in the path, the time range only where the
+   * endpoint reads it. Two spellings of a key is the failure `queryKey`'s own
+   * docblock warns about; here it would quietly report cached data as absent
+   * and pay for it again. Absent, the key is built without the endpoint's
+   * contract, which is right only for a caller with no connections.
+   */
+  opFor?: (connection: string, op: string) => OpSpec | undefined,
 ): string[] =>
   widgetSources(widget)
     // A fan-out source is driven by another source's rows, so its keys cannot
@@ -35,7 +45,10 @@ export const widgetKeys = (
       for (const [name, value] of Object.entries(source.params)) {
         params[name] = interpolateValue(value, resolved);
       }
-      return queryKey(source.connection, source.op, params, resolved);
+      const op = opFor?.(source.connection, source.op);
+      return op
+        ? buildQueryRequest({ connection: source.connection, op, params, resolved }).key
+        : queryKey(source.connection, source.op, params, resolved);
     });
 
 /**
@@ -75,6 +88,8 @@ export interface BuildCandidatesInput {
   readonly resolved: ResolvedParams;
   /** True when the server's query cache already holds this key. */
   readonly isCached: (key: string) => boolean;
+  /** The resolved endpoint, so keys match `/api/query`'s. See `widgetKeys`. */
+  readonly opFor?: (connection: string, op: string) => OpSpec | undefined;
 }
 
 export const buildCandidates = (input: BuildCandidatesInput): Candidate[] => {
@@ -107,7 +122,7 @@ export const buildCandidates = (input: BuildCandidatesInput): Candidate[] => {
 
     const shape = input.context.shapes[primary.op];
     const op = opById.get(primary.op);
-    const keys = widgetKeys(entry.widget, input.resolved);
+    const keys = widgetKeys(entry.widget, input.resolved, input.opFor);
     const cached = keys.length > 0 && keys.every((key) => input.isCached(key));
     /*
      * A keyless connection is skipped — unless its rows are already held.

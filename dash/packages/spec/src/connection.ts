@@ -16,6 +16,7 @@ import {
   queryValueSchema,
 } from "./primitives.js";
 import { resourceSchema } from "./resource.js";
+import { onboardingSchema } from "./category.js";
 
 export { authSchema, paginationSchema } from "./primitives.js";
 export type { AuthSpec, PaginationSpec } from "./primitives.js";
@@ -80,6 +81,21 @@ export const opSchema = z.object({
   maxPages: z.number().int().min(1).max(50).default(5),
   rowsPath: z.string().optional(),
   schemaHash: z.string().optional(),
+  /**
+   * Whether anything this endpoint sends actually reads the time range.
+   *
+   * Carried because the cache key is scoped by the resolved window, and a
+   * relative window is re-resolved into a new bucket every few minutes — so an
+   * endpoint that never reads it was getting a fresh key, and therefore a
+   * fresh upstream call, for data identical by construction. Measured on two
+   * real connections: **none of their 243 endpoints read the range**, and the
+   * whole cache was being discarded every fifteen minutes for nothing.
+   *
+   * A fact about the endpoint rather than about the request, which is what
+   * lets the browser and the server agree on a key without either re-deriving
+   * it — see `opUsesRange`.
+   */
+  usesRange: z.boolean().default(false),
 });
 
 export type OpSpec = z.infer<typeof opSchema>;
@@ -113,6 +129,15 @@ export const connectionSchema = z.object({
   authRequired: z.boolean().default(false),
   /** Set when an MCP tool returns prose rather than a declared outputSchema. */
   brittle: z.boolean().optional(),
+  /**
+   * Which parts of this API somebody wanted, and the boards that came of it.
+   *
+   * The personal half of onboarding. The categories themselves describe the
+   * API and live in the catalog entry, shared with everybody who connects it;
+   * what one person picked out of them, and whether they wanted it on one tab
+   * or several, is theirs. Recorded so the question is asked once.
+   */
+  onboarding: onboardingSchema.optional(),
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
 });
@@ -134,6 +159,28 @@ export const connectionNeedsAuthSetup = (connection: ConnectionSpec): boolean =>
           (op.auth === undefined && connection.authRequired && connection.auth.type === "none"),
       )
     : connection.authRequired && connection.auth.type === "none";
+
+/** A `{{range.…}}` token anywhere in what this endpoint sends. */
+const RANGE_TOKEN = /\{\{\s*range\./;
+
+/**
+ * Does this endpoint read the time range?
+ *
+ * Two ways it can: the op writes a range token itself, or the dialect declares
+ * a date convention and this op is the kind that inherits it. Both are checked
+ * here rather than after resolution, so a caller can ask the question cheaply
+ * — the public connection answers it for every op on every page load, and
+ * parsing two hundred resolved ops to find out would cost more than it saves.
+ */
+export const opUsesRange = (connection: ConnectionSpec, def: OpDef): boolean => {
+  const declared = Object.values(def.query).some(
+    (value) => typeof value === "string" && RANGE_TOKEN.test(value),
+  );
+  if (declared || RANGE_TOKEN.test(def.path)) return true;
+
+  const timeFiltered = def.timeFiltered ?? ARCHETYPES[def.archetype ?? "list"].timeFiltered;
+  return Boolean(timeFiltered && connection.dialect?.timeFilter);
+};
 
 /**
  * Collapse archetype defaults, the dialect, and the op's own overrides into
@@ -191,6 +238,7 @@ export const resolveOp = (connection: ConnectionSpec, def: OpDef): OpSpec => {
       (archetype.collection ? dialect?.rowsPath : undefined) ??
       archetype.defaultRowsPath,
     ...(def.schemaHash ? { schemaHash: def.schemaHash } : {}),
+    usesRange: opUsesRange(connection, def),
   });
 };
 

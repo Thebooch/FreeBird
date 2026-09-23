@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import type { CatalogEntry, ConnectionSpec, AuthSpec, FieldFormat } from "@freebirdai/dash-spec";
 import {
@@ -8,6 +8,7 @@ import {
   authKeyRefs,
   fnv1a,
 } from "@freebirdai/dash-spec";
+import { writeJsonAtomic } from "./json-file.js";
 
 /**
  * Where an integration is kept — and the seam the hosted version arrives
@@ -151,11 +152,7 @@ export class CatalogStore implements IntegrationStore {
   /** Only ever writes to the overlay — the repo seed is read-only at runtime. */
   put(entry: CatalogEntry): CatalogEntry {
     const stored: CatalogEntry = { ...entry, updatedAt: new Date().toISOString() };
-    writeFileSync(
-      join(this.overlayDir, `${entry.id}.json`),
-      `${JSON.stringify(stored, null, 2)}\n`,
-      "utf8",
-    );
+    writeJsonAtomic(join(this.overlayDir, `${entry.id}.json`), stored);
     return stored;
   }
 

@@ -33,6 +33,7 @@ export { derivedSources, referenceColumns } from "./references.js";
 export {
   MAX_LOOKUPS,
   nameOfRecord,
+  unnamedLinks,
   referenceLookups,
   referenceNames,
   valueAtPath,

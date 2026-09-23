@@ -477,6 +477,24 @@ const WidgetFooter = ({
             · partial
           </span>
         )}
+        {/*
+         * Link cells showing an id rather than a name.
+         *
+         * Beside the row count rather than in place of the rows, because the
+         * rows are fine: what failed is the small extra fetch that turns an id
+         * into somebody's name. Silent, this reads as the links having stopped
+         * working — which is exactly how it was reported.
+         */}
+        {data.unnamed && (
+          <span
+            className="dash-widget__more"
+            data-testid="unnamed-links"
+            title={data.unnamed.reason}
+          >
+            {" "}
+            · {data.unnamed.count} name{data.unnamed.count === 1 ? "" : "s"} unavailable
+          </span>
+        )}
       </span>
       <span className="dash-widget__updated">
         {formatValue(data.lastFetchedAt, { semantic: "relative_time" }, { now })}

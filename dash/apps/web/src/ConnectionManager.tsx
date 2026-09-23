@@ -6,6 +6,7 @@ import {
   connectionNeedsAuthSetup,
 } from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useState } from "react";
+import { ConnectionOnboarding } from "./ConnectionOnboarding.js";
 import {
   ApiError,
   type Capabilities,
@@ -15,6 +16,7 @@ import {
   type EnumerationPlan,
   type MapRunResult,
   type MapState,
+  type RhythmState,
   type DescribeRunResult,
   type RecordCheckResult,
   type ReferencesResult,
@@ -38,6 +40,8 @@ type View =
   | "verify"
   | "endpoints"
   | "read"
+  | "dashboards"
+  | "rhythm"
   | "manage"
   | "records";
 
@@ -47,6 +51,22 @@ const STEPS: ReadonlyArray<{ id: View; label: string }> = [
   { id: "verify", label: "Verify" },
   { id: "endpoints", label: "Endpoints" },
   { id: "read", label: "Read" },
+  /*
+   * The step the wizard used to end without.
+   *
+   * Everything before it leaves a connection that works and a board that is
+   * empty. This is where somebody says what they actually want from the API
+   * they have just connected, and gets it.
+   */
+  { id: "dashboards", label: "Dashboards" },
+  /*
+   * Last, and after the boards exist rather than before.
+   *
+   * The question is how often to check each endpoint for new records, and it
+   * is only answerable once somebody can see which endpoints their boards
+   * actually read. Asked before, it would be a list of two hundred URLs.
+   */
+  { id: "rhythm", label: "Refresh" },
 ];
 
 const StepRail = ({ current }: { current: View }): JSX.Element => {
@@ -98,9 +118,12 @@ export const ConnectionManager = ({
   onClose,
   onChanged,
   onCreateWidget,
+  onOpenDashboard,
 }: {
   onClose: () => void;
   onChanged: () => void;
+  /** Go to a board — the one setup just made, most often. */
+  onOpenDashboard?: (dashboardId: string) => void;
   /** Absent when there is no dashboard to add to — the offers still show. */
   onCreateWidget?: (widget: WidgetSpec) => Promise<void>;
 }): JSX.Element => {
@@ -142,6 +165,20 @@ export const ConnectionManager = ({
   const [mapRun, setMapRun] = useState<MapRunResult | null>(null);
   const [mapping, setMapping] = useState(false);
   const [chosenOps, setChosenOps] = useState<string[]>([]);
+
+  /**
+   * What this connection could be set up with, and what it already was.
+   *
+   * Its own state rather than `mapInfo`'s: the parts of an API are read per
+   * connection — a part whose endpoints this connection does not carry is not
+   * on offer — so this cannot be derived from anything about the API alone.
+   */
+  /* The connection whose dashboards are being set up. Everything else about
+   * setup lives on the server and in `ConnectionOnboarding`. */
+  const [onboardingFor, setOnboardingFor] = useState<ConnectionSummary | null>(null);
+  /** How often each endpoint is checked again, and what decided it. */
+  const [rhythm, setRhythm] = useState<RhythmState | null>(null);
+  const [showAllEndpoints, setShowAllEndpoints] = useState(false);
 
   const [discoverUrl, setDiscoverUrl] = useState("");
   const [discovery, setDiscovery] = useState<DiscoveryResult | null>(null);
@@ -554,6 +591,8 @@ export const ConnectionManager = ({
     setReadProgress(null);
     setMapInfo(null);
     setMapRun(null);
+    setOnboardingFor(null);
+    setRhythm(null);
   };
 
   /**
@@ -621,6 +660,52 @@ export const ConnectionManager = ({
       } finally {
         window.clearInterval(tick);
       }
+    });
+
+  /**
+   * Open the last step: what this connection could be set up with.
+   *
+   * Costs nothing — every number is read off the stored integration and this
+   * connection's own endpoints. The one thing here that spends anything is
+   * dividing the API, and that is a button.
+   */
+  const openOnboarding = (connectionId: string): Promise<void> =>
+    run(async () => {
+      const found =
+        connections.find((one) => one.id === connectionId) ??
+        (draft?.id === connectionId ? draft : undefined) ??
+        (await api.connections()).find((one) => one.id === connectionId);
+      if (!found) throw new Error("That connection no longer exists.");
+      setOnboardingFor(found);
+      setView("dashboards");
+    });
+
+  /**
+   * The last question: how often to check each endpoint for new records.
+   *
+   * Free to open — the reading is on the integration and the cadences are on
+   * disk, so nothing is fetched and nothing is spent.
+   */
+  const openRhythm = (connectionId: string): Promise<void> =>
+    run(async () => {
+      setShowAllEndpoints(false);
+      setRhythm(await api.rhythm(connectionId));
+      setView("rhythm");
+    });
+
+  /**
+   * Move one endpoint to another cadence.
+   *
+   * Saved immediately rather than gathered behind a Save button: there is one
+   * control per row and no way to be half-finished, so a button to confirm
+   * what you already did is a step that only exists to be forgotten.
+   */
+  const moveEndpoint = (op: string, tier: string): Promise<void> =>
+    run(async () => {
+      const connectionId = rhythm?.connection;
+      if (!connectionId) return;
+      await api.setRhythm(connectionId, { [op]: tier });
+      setRhythm(await api.rhythm(connectionId));
     });
 
   /**
@@ -994,6 +1079,22 @@ export const ConnectionManager = ({
                     >
                       Records
                     </button>
+                    {/*
+                     * The step the wizard ends on, reachable for a connection
+                     * that already exists — to finish a setup left half way,
+                     * to set up one made before onboarding existed, or to make
+                     * another set.
+                     */}
+                    {connection.catalog && (
+                      <button
+                        className="dash-iconbtn"
+                        data-testid={`onboarding-${connection.id}`}
+                        aria-label={`Set up dashboards for ${connection.title}`}
+                        onClick={() => void openOnboarding(connection.id)}
+                      >
+                        Dashboards
+                      </button>
+                    )}
                     <button
                       className="dash-iconbtn"
                       data-testid={`manage-${connection.id}`}
@@ -2227,6 +2328,148 @@ export const ConnectionManager = ({
           </>
         );
 
+      case "dashboards": {
+        if (!onboardingFor) return <p>Choose a connection first.</p>;
+        return (
+          <>
+            {/* Only a step when it is one: reached from a connection's
+             * Dashboards button, this is a screen of its own. */}
+            {draftId && <StepRail current={view} />}
+            <ConnectionOnboarding
+              key={onboardingFor.id}
+              connection={onboardingFor}
+              onChanged={onChanged}
+              onDone={closeWizard}
+              onOpen={(dashboardId) => {
+                onChanged();
+                if (onOpenDashboard) onOpenDashboard(dashboardId);
+                else closeWizard();
+              }}
+              onRhythm={() => void openRhythm(onboardingFor.id)}
+            />
+          </>
+        );
+      }
+
+      case "rhythm": {
+        const endpoints = rhythm?.endpoints ?? [];
+        /*
+         * The ones a board actually reads, first and by default.
+         *
+         * A real API has two hundred endpoints and somebody has boards on
+         * eleven of them. Those eleven are the only ones whose freshness
+         * anybody will ever notice; the rest are read when something asks and
+         * are listed only if somebody goes looking.
+         */
+        const onBoards = endpoints.filter((one) => one.warmed || one.source === "override");
+        const rest = endpoints.filter((one) => !onBoards.includes(one));
+        const listed = showAllEndpoints ? [...onBoards, ...rest] : onBoards;
+
+        const everyPhrase = (ms: number): string => {
+          const minutes = Math.round(ms / 60_000);
+          if (minutes < 60) return `every ${minutes} min`;
+          const hours = Math.round(minutes / 60);
+          return hours < 48 ? `every ${hours} h` : `every ${Math.round(hours / 24)} days`;
+        };
+
+        return (
+          <>
+            {draftId && <StepRail current={view} />}
+            <h4>How often should we check for new records?</h4>
+            <p className="dash-page__description">
+              Your boards read from what we have already fetched, so opening one never waits and
+              never spends your API. We top it up in the background instead — and how often is
+              worth asking is different for each kind of record.
+            </p>
+
+            {rhythm && !rhythm.classified && (
+              <div className="dash-callout" data-testid="rhythm-unclassified">
+                Nothing has read this API for how often its records change, so everything is on
+                the quickest schedule. That is the safe direction &mdash; it costs a few requests
+                rather than showing you yesterday&rsquo;s numbers &mdash; and you can move
+                anything below.
+              </div>
+            )}
+
+            {listed.length === 0 ? (
+              <div className="dash-callout" data-testid="rhythm-empty">
+                Nothing is being kept warm for this connection yet. Once a board reads an
+                endpoint it will appear here.
+              </div>
+            ) : (
+              <ul className="dash-checklist" data-testid="rhythm-endpoints">
+                {listed.map((endpoint) => (
+                  <li key={endpoint.op}>
+                    <span style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+                      <select
+                        className="dash-control"
+                        data-testid={`rhythm-${endpoint.op}`}
+                        value={endpoint.tier}
+                        disabled={busy}
+                        onChange={(event) => void moveEndpoint(endpoint.op, event.target.value)}
+                      >
+                        {(rhythm?.tiers ?? []).map((tier) => (
+                          <option key={tier.id} value={tier.id}>
+                            {everyPhrase(tier.everyMs)}
+                          </option>
+                        ))}
+                      </select>
+                      <span>
+                        <span className="dash-checklist__name">
+                          {endpoint.records ?? endpoint.title}
+                        </span>
+                        <div className="dash-checklist__meta">
+                          {/*
+                           * Why it landed there, and who said so. A cadence
+                           * with no reason is a setting to shrug at rather
+                           * than a claim somebody can check.
+                           */}
+                          {endpoint.source === "override"
+                            ? "You moved this one."
+                            : endpoint.source === "measured"
+                              ? "Set from what we have seen change on your account."
+                              : (endpoint.because ??
+                                (endpoint.source === "model"
+                                  ? "Read from what this kind of record is."
+                                  : "Nothing has said how often this changes, so it is checked often."))}
+                          {endpoint.warmed ? "" : " · not on a board"}
+                        </div>
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {rest.length > 0 && (
+              <p className="dash-hint">
+                <button
+                  className="dash-control"
+                  data-testid="rhythm-show-all"
+                  onClick={() => setShowAllEndpoints((previous) => !previous)}
+                >
+                  {showAllEndpoints
+                    ? "Show only what my boards read"
+                    : `Show the other ${rest.length} endpoint(s)`}
+                </button>{" "}
+                &mdash; these are only read when something asks for them, so their schedule
+                rarely matters.
+              </p>
+            )}
+
+            <div className="dash-row dash-row--end" style={{ marginTop: 12 }}>
+              <button
+                className="dash-control dash-control--primary"
+                data-testid="rhythm-done"
+                onClick={closeWizard}
+              >
+                Done
+              </button>
+            </div>
+          </>
+        );
+      }
+
       case "read":
         return (
           <>
@@ -2401,12 +2644,22 @@ export const ConnectionManager = ({
 
             <div className="dash-row dash-row--end" style={{ marginTop: 12 }}>
               {readResult || plan?.alreadyRead || plan?.estimatedRequests === 0 ? (
-                <button className="dash-control" data-testid="read-close" onClick={closeWizard}>
-                  Done
+                <button
+                  className="dash-control dash-control--primary"
+                  data-testid="read-close"
+                  disabled={busy || !draftId}
+                  onClick={() => draftId && void openOnboarding(draftId)}
+                >
+                  Next
                 </button>
               ) : (
                 <>
-                  <button className="dash-control" data-testid="read-skip" onClick={closeWizard}>
+                  <button
+                    className="dash-control"
+                    data-testid="read-skip"
+                    disabled={busy || !draftId}
+                    onClick={() => draftId && void openOnboarding(draftId)}
+                  >
                     Skip for now
                   </button>
                   <button
@@ -2430,7 +2683,14 @@ export const ConnectionManager = ({
       className="dash-inspector-backdrop"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="dash-inspector" role="dialog" aria-modal="true" aria-label="Connections">
+      <div
+        className="dash-inspector"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Connections"
+        /* A previewed board needs the width a board has. */
+        style={view === "dashboards" ? { width: "min(1280px, 100%)" } : undefined}
+      >
         <div className="dash-inspector__head">
           <h3 className="dash-inspector__title">Connections</h3>
           <button

@@ -68,6 +68,17 @@ export interface FetchContext {
    */
   readonly maxAgeMs?: number;
   /**
+   * Whether somebody is looking, or somebody asked.
+   *
+   * `view` means a board is being read: serve what is held, at any age, and
+   * do not call the API. `refresh` is what a Refresh button sends. Only the
+   * proxy reads it — a direct adapter has no cache in front of it.
+   *
+   * Absent means `refresh`, which is what every caller did before this
+   * existed.
+   */
+  readonly mode?: "view" | "refresh";
+  /**
    * Validators from a previously cached copy, for a conditional request.
    *
    * Supplied only where a 304 would actually prove something — see the

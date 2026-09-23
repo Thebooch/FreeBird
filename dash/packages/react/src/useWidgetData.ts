@@ -6,10 +6,15 @@ import type {
   FieldLabels,
   WidgetSpec,
 } from "@freebirdai/dash-spec";
-import { interpolateValue, parseDuration, widgetSources } from "@freebirdai/dash-spec";
+import {
+  drawnColumns,
+  interpolateValue,
+  parseDuration,
+  widgetSources,
+} from "@freebirdai/dash-spec";
 import type { Row, RowHighlight, RunMeta } from "@freebirdai/dash-runtime";
 import { compilePlan, executeWidget, runPipeline } from "@freebirdai/dash-runtime";
-import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useDashboard } from "./context.jsx";
 import { derivedSources, entityFor, referenceColumns } from "./references.js";
 import {
@@ -17,6 +22,8 @@ import {
   type ReferenceNames,
   referenceLookups,
   referenceNames as resolveNames,
+  unnamedLinks,
+  isDenied,
   withLinkedValues,
 } from "./recordIndex.js";
 import { Wave } from "./queue.js";
@@ -271,6 +278,13 @@ export interface WidgetData {
    * described — which is why a cell's fallback has to be legible on its own.
    */
   readonly referenceNames: ReferenceNames;
+  /**
+   * How many link cells are showing an id instead of a name, and why.
+   *
+   * Null when every name resolved, and null when nothing was refused — see
+   * the comment where it is built.
+   */
+  readonly unnamed: { readonly count: number; readonly reason: string } | null;
   refetch(): void;
 }
 
@@ -291,6 +305,7 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
     timeZone,
     labels,
     entityLinks,
+    usesRange,
     approvals,
     records,
   } = useDashboard();
@@ -336,10 +351,16 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
             connection: source.connection,
             op: source.op,
             params: resolved,
-            key: queryKey(source.connection, source.op, resolved, params),
+            key: queryKey(
+              source.connection,
+              source.op,
+              resolved,
+              params,
+              usesRange(source.connection, source.op),
+            ),
           };
         }),
-    [sources, params],
+    [sources, params, usesRange],
   );
 
   const subscribe = useCallback((listener: () => void) => client.subscribe(listener), [client]);
@@ -430,7 +451,13 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
         for (const [name, raw] of Object.entries(source.params)) {
           resolved[name] = interpolateValue(raw, params);
         }
-        const key = queryKey(source.connection, source.op, resolved, params);
+        const key = queryKey(
+          source.connection,
+          source.op,
+          resolved,
+          params,
+          usesRange(source.connection, source.op),
+        );
         // Two driver rows pointing at the same record are one request.
         if (seen.has(key)) continue;
         seen.add(key);
@@ -509,6 +536,30 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
     }
   }, [client, allRequests, params]);
 
+  /*
+   * A poll re-reads the server, never the API.
+   *
+   * The keeper keeps the server's copy current on the endpoint's own cadence,
+   * so a poll asking upstream was a second schedule on top of it — one per
+   * open tab. Re-reading in view mode is free, and it is what lets a board
+   * left open pick up what the keeper fetched since.
+   */
+  const reread = useCallback(() => {
+    for (const request of allRequests) {
+      void client.ensure({
+        key: request.key,
+        connection: request.connection,
+        op: request.op,
+        params: request.params,
+        resolved: params,
+        now: Date.now(),
+        force: true,
+        mode: "view",
+        maxAgeMs: staleAfterMs,
+      });
+    }
+  }, [client, allRequests, params, staleAfterMs]);
+
   // Polling is opt-in per widget; without `every` a dashboard is manual-refresh,
   // which is the honest default when every request costs someone's rate limit.
   const everyMs = widget.refresh.every ? parseDuration(widget.refresh.every) : null;
@@ -530,10 +581,10 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
         (entry) => entry?.error?.retryAt !== undefined && entry.error.retryAt > Date.now(),
       );
       if (waiting) return;
-      refetch();
+      reread();
     }, everyMs);
     return () => clearInterval(timer);
-  }, [everyMs, refetch]);
+  }, [everyMs, reread]);
 
   /**
    * One body per source; fan-out responses are concatenated into theirs.
@@ -756,6 +807,28 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
   /** Columns this widget reads *through* a reference, where it declares any. */
   const linkedFields = useMemo(() => widget.linked ?? [], [widget]);
 
+  /**
+   * Record types this account has been refused outright.
+   *
+   * Grows and never shrinks within a session, deliberately: a 403 is a fact
+   * about the credential rather than about the moment, so re-discovering it
+   * every render would mean paying for it every render. It is also what keeps
+   * this from flapping — the evidence is the failed request, and once nothing
+   * asks again there is nothing new to read it from.
+   */
+  /** The columns this widget's component actually draws. See `drawnColumns`. */
+  const shown = useMemo(() => drawnColumns(widget), [widget]);
+
+  const [denied, setDenied] = useState<ReadonlySet<string>>(() => new Set());
+  const noteDenied = useCallback((targets: readonly string[]) => {
+    if (targets.length === 0) return;
+    setDenied((current) => {
+      const missing = targets.filter((target) => !current.has(target));
+      if (missing.length === 0) return current;
+      return new Set([...current, ...missing]);
+    });
+  }, []);
+
   const lookups = useMemo(
     () =>
       executed && executed.rows.length > 0 && direct[0]
@@ -778,9 +851,17 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
              * where a board stops paying per id for names it fetched earlier.
              */
             known: ({ target, id }) => records.has(direct[0]!.connection, target, id),
+            /*
+             * A record type the account cannot read costs nothing further: no
+             * request, and no slice of a budget that belongs to the types it
+             * can. Its cells still say why.
+             */
+            denied: (target) => denied.has(target),
+            usesRange,
+            ...(shown.size > 0 ? { shown } : {}),
           })
         : [],
-    [executed, labelled, direct, params, linkedFields, records, recordStamp],
+    [executed, labelled, direct, params, linkedFields, records, recordStamp, denied, shown, usesRange],
   );
 
   const lookupKeys = useMemo(() => lookups.map((lookup) => lookup.key), [lookups]);
@@ -811,7 +892,7 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
 
     const owed = new Map<string, number>();
     for (const lookup of lookups) {
-      if (lookup.held) continue;
+      if (lookup.held || lookup.denied) continue;
       owed.set(lookup.target, (owed.get(lookup.target) ?? 0) + 1);
     }
 
@@ -820,10 +901,14 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
       if (count < BATCH_LOOKUPS_ABOVE) continue;
       const list = views.find((view) => view.entity === target)?.list;
       if (!list) continue;
-      plans.push({ target, op: list, key: queryKey(connection, list, {}, params) });
+      plans.push({
+        target,
+        op: list,
+        key: queryKey(connection, list, {}, params, usesRange(connection, list)),
+      });
     }
     return plans;
-  }, [lookups, direct, entityLinks, params]);
+  }, [lookups, direct, entityLinks, params, usesRange]);
 
   useEffect(() => {
     if (!approved || batches.length === 0) return;
@@ -854,6 +939,21 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
     return held;
   }, [batches, client, lookupStamp, recordStamp]);
 
+  /*
+   * A list the account is not allowed to read denies its whole record type.
+   *
+   * Caught here as well as in the serial pass because the list is tried first:
+   * without this, a denied type would fail its one list call and then fall
+   * through to twenty-five by-id calls that were always going to fail the same
+   * way.
+   */
+  useEffect(() => {
+    const refused = batches
+      .filter((batch) => isDenied(client.get(batch.key)?.error?.status))
+      .map((batch) => batch.target);
+    noteDenied(refused);
+  }, [batches, client, lookupStamp, noteDenied]);
+
   useEffect(() => {
     if (!approved || lookups.length === 0) return;
     let cancelled = false;
@@ -882,7 +982,7 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
        * which is the mop-up that keeps the saving honest.
        */
       lookups: lookups.filter(
-        (lookup) => !lookup.held && !pending.has(lookup.target),
+        (lookup) => !lookup.held && !lookup.denied && !pending.has(lookup.target),
       ),
       fetch: (lookup) =>
         client.ensure({
@@ -903,13 +1003,15 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
         }),
       statusOf: (lookup) => client.get(lookup.key)?.error?.status,
       stopped: () => cancelled,
+    }).then((result) => {
+      if (!cancelled) noteDenied(result.denied ?? []);
     });
 
     return () => {
       cancelled = true;
     };
     // `now` excluded deliberately, as above: the ticking clock must not refetch.
-  }, [client, lookups, pending, params, staleAfterMs, approved]);
+  }, [client, lookups, pending, params, staleAfterMs, approved, noteDenied]);
 
   /**
    * One record, from wherever we already have it.
@@ -932,6 +1034,23 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
   const resolvedNames = useMemo<ReferenceNames>(
     () => (lookups.length === 0 ? {} : resolveNames(lookups, recordOf, labelled)),
     [lookups, recordOf, labelled],
+  );
+
+  /** Link cells left showing an id, and why. See `unnamedLinks`. */
+  const unnamed = useMemo<WidgetData["unnamed"]>(
+    () =>
+      unnamedLinks({
+        lookups,
+        names: resolvedNames,
+        batchKeys: batches.map((batch) => batch.key),
+        failureOf: (key) => {
+          const entry = client.get(key);
+          return entry?.status === "error"
+            ? (entry.error?.userMessage ?? entry.error?.message)
+            : undefined;
+        },
+      }),
+    [lookups, batches, resolvedNames, client, lookupStamp, recordStamp],
   );
 
   /*
@@ -967,6 +1086,7 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
   return {
     widget,
     referenceNames: resolvedNames,
+    unnamed,
     previewReceipts: entries.flatMap(({ request, entry }) =>
       entry?.meta?.receipt ? [{ as: request.as, receipt: entry.meta.receipt }] : [],
     ),

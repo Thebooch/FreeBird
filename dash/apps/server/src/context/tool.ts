@@ -1,5 +1,5 @@
 import type { ConciergeContext, LlmAdapter, LlmTool } from "@freebirdai/dash-agent";
-import type { DashboardSpec, ResolvedParams } from "@freebirdai/dash-spec";
+import type { DashboardSpec, OpSpec, ResolvedParams } from "@freebirdai/dash-spec";
 import { z } from "zod";
 import type { WidgetHandle } from "../chat/handles.js";
 import { turnSpendSoFar } from "../llm.js";
@@ -103,6 +103,11 @@ export interface AnswerDeps {
   readonly now: () => number;
   readonly read: OpReader;
   readonly isCached: (key: string) => boolean;
+  /**
+   * The resolved endpoint, so the keys this builds match the ones the query
+   * route wrote. See `widgetKeys`.
+   */
+  readonly opFor?: (connection: string, op: string) => OpSpec | undefined;
   readonly rowsOf: (body: unknown, rowsPath: string) => Record<string, unknown>[];
   readonly rowsPathFor: (op: string, connection?: string) => string;
   readonly budget?: Budget;
@@ -266,6 +271,7 @@ export const answerFromData = async (
     context: deps.context,
     resolved: deps.resolved,
     isCached: deps.isCached,
+    ...(deps.opFor ? { opFor: deps.opFor } : {}),
   });
   /*
    * Where they said to look, when they said. A hard constraint rather than an
