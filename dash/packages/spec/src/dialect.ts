@@ -3,7 +3,13 @@ import { fieldFormatSchema } from "./coercion.js";
 import { entitySchema } from "./entity.js";
 import { CATEGORIES_MAX, categorySchema, profileSchema } from "./category.js";
 import { apiRhythmSchema } from "./rhythm.js";
-import { authSchema, paginationSchema, paramDefSchema, queryValueSchema } from "./primitives.js";
+import {
+  authSchema,
+  paginationSchema,
+  paramDefSchema,
+  queryValueSchema,
+  serverTemplateSchema,
+} from "./primitives.js";
 import { resourceSchema } from "./resource.js";
 
 /**
@@ -170,6 +176,16 @@ export type MappedField = z.infer<typeof mappedFieldSchema>;
 /** Bumped when the mapping pass changes shape enough to need re-running. */
 export const MAP_VERSION = 1;
 
+/**
+ * Which version of the importers wrote an entry's address and auth.
+ *
+ * 2: per-account address templates, guessed addresses said to be guesses,
+ * Basic logins whose username is a credential, and the docs' own words on
+ * keys. An entry written before is brought up to date on sight — see
+ * `refreshOutdatedConnectDetails` — without touching anything learned since.
+ */
+export const IMPORT_VERSION = 2;
+
 /** A dialect plus the metadata needed to publish it in a catalog. */
 export const catalogEntrySchema = z.object({
   specVersion: z.literal(1).default(1),
@@ -179,7 +195,26 @@ export const catalogEntrySchema = z.object({
     .max(64)
     .regex(/^[a-z0-9-]+$/, "catalog ids must be lowercase [a-z0-9-]"),
   title: z.string().min(1),
+  /**
+   * Where requests go. A real address, always — for an API hosted per
+   * account it is the template filled with its documented defaults, which
+   * is a place to start and not an address anybody's account lives at. See
+   * `server`.
+   */
   baseUrl: z.string().url(),
+  /**
+   * The address as the documentation writes it, when part of it differs per
+   * account: `https://{account}.rentvine.com/api/manager`. Each connection
+   * fills in its own values; nothing account-specific is ever written here,
+   * because this entry is shared with everybody who connects the API.
+   */
+  server: serverTemplateSchema.optional(),
+  /**
+   * The documentation never said where the API lives, and `baseUrl` is a
+   * guess — usually the host the docs were served from. A connection made
+   * from this entry asks for the address before it sends anything.
+   */
+  baseUrlGuessed: z.boolean().optional(),
   dialect: dialectSchema,
   /** Unconfirmed import hint. Never executed until explicitly declared. */
   paginationProposal: paginationSchema.optional(),
@@ -365,6 +400,8 @@ export const catalogEntrySchema = z.object({
   authRequired: z.boolean().default(false),
   /** How this entry came to exist — shown so a guess is never mistaken for fact. */
   origin: z.enum(["repo", "openapi", "docs", "manual"]).default("manual"),
+  /** Which importer wrote the address and auth. Absent means before `IMPORT_VERSION` existed. */
+  importVersion: z.number().int().min(1).optional(),
   /** True once a real request against this dialect returned usable rows. */
   verified: z.boolean().default(false),
   updatedAt: z.string().optional(),

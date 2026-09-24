@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { AuthContext, DbAdapter } from "@freebirdai/core";
 import { requireScratch } from "@freebirdai/core";
+import { readField } from "@freebirdai/dash-spec";
 
 /**
  * What the conversation is currently about.
@@ -79,11 +80,11 @@ export const mergeRecords = (
 ): Record<string, unknown>[] => {
   if (!idField) return [...opened, ...held];
   const replaced = new Set(
-    opened.map((record) => String(record[idField] ?? "")).filter((id) => id !== ""),
+    opened.map((record) => String(readField(record, idField) ?? "")).filter((id) => id !== ""),
   );
   return [
     ...opened,
-    ...held.filter((record) => !replaced.has(String(record[idField] ?? ""))),
+    ...held.filter((record) => !replaced.has(String(readField(record, idField) ?? ""))),
   ];
 };
 
@@ -202,7 +203,7 @@ export const focusIds = (focus: Focus): string[] => {
   if (!focus.idField) return [];
   const seen = new Set<string>();
   for (const record of focus.records) {
-    const value = record[focus.idField];
+    const value = readField(record, focus.idField);
     if (value === null || value === undefined || value === "") continue;
     seen.add(String(value));
   }

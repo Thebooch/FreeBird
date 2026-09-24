@@ -243,6 +243,34 @@ describe("entityPanes", () => {
     });
   });
 
+  /*
+   * A section is keyed `<record type>-by-<field path>`, and on Rentvine every
+   * field path nests. Used verbatim inside a widget id — `[a-zA-Z0-9_-]`, 64 at
+   * most — every one failed to parse and was dropped silently: "Showing 0 of 3
+   * related collections" on a work order that had all three.
+   */
+  it("keeps a section keyed on a nested field, or on long names", () => {
+    const reach = { mode: "filter" as const, op: "wo_list", param: "vendorids" };
+    const dotted = { ...SECTION, reach, id: "invoice-by-invoice.workOrderID" };
+    const twin = { ...SECTION, reach, id: "invoice-by-invoice_workOrderID" };
+    const long = {
+      ...SECTION,
+      reach,
+      id: "association-ownership-account-by-AssociationOwnershipAccount.Property.Id",
+    };
+    const panes = panesOf({ sections: [dotted, twin, long] });
+
+    for (const id of [dotted.id, twin.id, long.id]) {
+      const pane = byId(panes, id);
+      expect(pane, id).toBeDefined();
+      expect(pane!.spec.id).toMatch(/^[a-zA-Z0-9_-]{1,64}$/);
+    }
+    /* Two sections that differ only in a dot stay two panes. */
+    expect(byId(panes, dotted.id)!.spec.id).not.toBe(byId(panes, twin.id)!.spec.id);
+    /* An id that was already valid is left exactly as it was. */
+    expect(byId(panes, twin.id)!.spec.id).toBe("vendor__rel__invoice-by-invoice_workOrderID");
+  });
+
   it("refuses a scan whose id cannot be embedded in an expression", () => {
     /*
      * Interpolation happens after the expression was checked, so a quote in

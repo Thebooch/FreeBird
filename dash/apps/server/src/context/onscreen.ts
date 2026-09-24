@@ -1,5 +1,6 @@
 import type { ConciergeContext } from "@freebirdai/dash-agent";
 import type { ResolvedParams } from "@freebirdai/dash-spec";
+import { readField } from "@freebirdai/dash-spec";
 import type { WidgetHandle } from "../chat/handles.js";
 import type { Focus } from "./focus.js";
 import { readWidget } from "./read.js";
@@ -292,7 +293,7 @@ export const focusFromScreen = async (
   if (!evidence) return null;
 
   const record = evidence.rows.find(
-    (row) => String(row[idField] ?? "") === open.recordId,
+    (row) => String(readField(row, idField) ?? "") === open.recordId,
   );
   if (!record) return null;
 

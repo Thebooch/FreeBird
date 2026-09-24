@@ -10,6 +10,7 @@ import {
   drawnColumns,
   interpolateValue,
   parseDuration,
+  readField,
   widgetSources,
 } from "@freebirdai/dash-spec";
 import type { Row, RowHighlight, RunMeta } from "@freebirdai/dash-runtime";
@@ -225,7 +226,7 @@ export const heldRecordFor = (input: {
   const view = entityFor(widget, links);
   if (!view?.identity) return undefined;
 
-  const id = row[view.identity];
+  const id = readField(row, view.identity);
   if (id === null || id === undefined || id === "") return undefined;
   return records.get(connection, view.entity, id as string | number);
 };

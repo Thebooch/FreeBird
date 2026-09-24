@@ -977,3 +977,88 @@ describe("offersFor", () => {
     expect(offers[1]?.unavailable).toMatch(/could be built/);
   });
 });
+
+/*
+ * Describing a large API's record types takes minutes. While it runs, the
+ * wizard must be able to say so, and onboarding must not divide the API on
+ * the half that happens to be done.
+ */
+describe("while the record types are being described", () => {
+  const blockingLlm = () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const inner = fakeLlm([{ text: "nothing to say" }]);
+    const llm: LlmAdapter = {
+      ...inner,
+      generate: async (opts) => {
+        await gate;
+        return inner.generate(opts);
+      },
+    };
+    return { llm, release };
+  };
+
+  it("says it is describing, refuses a second run, and holds onboarding back", async () => {
+    const { llm, release } = blockingLlm();
+    /* Endpoints with field lists, so the pass has something to ask the model. */
+    catalog.put(
+      entry({
+        ops: [
+          {
+            id: "tasks_list",
+            title: "Retrieve all tasks",
+            path: "/v1/tasks",
+            fields: [
+              { name: "Id", kinds: ["number"] },
+              { name: "Title", kinds: ["string"] },
+            ],
+          },
+          { id: "leases_list", title: "Retrieve all leases", path: "/v1/leases" },
+        ] as never,
+      }),
+    );
+    const app = makeApp({ llm });
+    /* Forced: the fixture's records already count as described. */
+    const running = app.inject({
+      method: "POST",
+      url: "/api/catalog/acme/entities",
+      payload: { force: true },
+    });
+    /* Let the first request reach the model and stop there. */
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const map = (await app.inject({ method: "GET", url: "/api/catalog/acme/map" })).json() as {
+      describing: boolean;
+    };
+    expect(map.describing).toBe(true);
+
+    const second = await app.inject({
+      method: "POST",
+      url: "/api/catalog/acme/entities",
+      payload: { force: true },
+    });
+    expect(second.statusCode).toBe(409);
+
+    const status = (
+      await app.inject({ method: "GET", url: "/api/connections/acme/onboarding" })
+    ).json() as { state: { describing: boolean }; reason?: string };
+    expect(status.state.describing).toBe(true);
+    expect(status.reason).toMatch(/still working out what this API's record types are/i);
+
+    const prepared = await app.inject({
+      method: "POST",
+      url: "/api/connections/acme/onboarding/prepare",
+    });
+    expect(prepared.statusCode).toBe(409);
+
+    release();
+    await running;
+    const after = (await app.inject({ method: "GET", url: "/api/catalog/acme/map" })).json() as {
+      describing: boolean;
+    };
+    expect(after.describing).toBe(false);
+    await app.close();
+  });
+});

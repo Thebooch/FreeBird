@@ -16,6 +16,7 @@ import type { FastifyInstance } from "fastify";
 import type { CatalogStore } from "../catalog.js";
 import { looksLikeOpenApi, parseOpenApi, parseSpecDocument } from "../discovery/openapi.js";
 import { extractInlineSpec } from "../discovery/inline-spec.js";
+import { withConnectDetails } from "../discovery/connect-details.js";
 
 /**
  * Mapping an API once, for everyone who ever connects to it.
@@ -39,6 +40,16 @@ import { extractInlineSpec } from "../discovery/inline-spec.js";
 
 export interface MapRouteDeps {
   readonly onRefreshed?: (previous: CatalogEntry, fresh: CatalogEntry) => void;
+  /**
+   * Catalog ids whose record types are being described right now.
+   *
+   * The describing pass is one long request — minutes on a large API — and
+   * nothing else could tell it was running: the wizard showed "Integration
+   * created" and then sat with its buttons disabled while the pass ran
+   * underneath. Shared with onboarding, which must not divide an API into
+   * parts while half its record types are still arriving.
+   */
+  readonly describing?: Set<string>;
   readonly catalog: CatalogStore | undefined;
   /**
    * The model for one action. Null means no AI key is configured.
@@ -470,6 +481,8 @@ export const mapRoutes =
         ).length,
         canRun: deps.llm("map") !== null,
         canRunRecords: deps.llm("entity") !== null,
+        /* The record types are being described at this moment. */
+        describing: deps.describing?.has(entry.id) ?? false,
       };
     });
 
@@ -551,8 +564,14 @@ export const mapRoutes =
           op.fields?.some((field) => field.name.includes(".")),
         ).length;
 
+        /*
+         * How to reach and get into the API comes from the fresh read too —
+         * the address, its template, the auth and what the docs say about
+         * keys — so an importer that learned to read those better reaches
+         * every entry refreshed here. See `withConnectDetails`.
+         */
         const saved = deps.catalog.put({
-          ...entry,
+          ...withConnectDetails(entry, parsed.entry),
           ops,
           ...(schemaMoved(entry.ops, ops)
             ? {
@@ -661,6 +680,18 @@ export const mapRoutes =
           };
         }
 
+        /*
+         * One run at a time. A second would pay for every batch twice and
+         * interleave its checkpoints with the first's.
+         */
+        if (deps.describing?.has(entry.id)) {
+          return reply.status(409).send({
+            error: "This API's record types are already being described.",
+            describing: true,
+          });
+        }
+        deps.describing?.add(entry.id);
+        try {
         const ops = entry.ops.map((op) => ({
           id: op.id,
           title: op.title,
@@ -779,6 +810,9 @@ export const mapRoutes =
            */
           skipped: [...described.skipped, ...linked.skipped],
         };
+        } finally {
+          deps.describing?.delete(entry.id);
+        }
       },
     );
 

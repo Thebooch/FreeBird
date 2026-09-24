@@ -1,6 +1,11 @@
 import type { LlmAdapter, LlmTool } from "@freebirdai/dash-agent";
-import type { CatalogEntry } from "@freebirdai/dash-spec";
-import { catalogEntrySchema } from "@freebirdai/dash-spec";
+import type { CatalogEntry, ServerVariable } from "@freebirdai/dash-spec";
+import {
+  IMPORT_VERSION,
+  catalogEntrySchema,
+  serverTemplateSchema,
+  templateVariableNames,
+} from "@freebirdai/dash-spec";
 import { z } from "zod";
 import type { RankedContext } from "./docs.js";
 
@@ -12,7 +17,22 @@ import type { RankedContext } from "./docs.js";
  */
 export const dialectProposalSchema = z.object({
   title: z.string().describe("A short human name for this API, e.g. \"Linear\"."),
-  baseUrl: z.string().describe("Origin plus any shared prefix, e.g. https://api.linear.app/v1"),
+  baseUrl: z
+    .string()
+    .describe(
+      "Origin plus any shared prefix, e.g. https://api.linear.app/v1. Where part of the address " +
+        "differs per customer account, write that part as {name}, e.g. https://{account}.example.com/api.",
+    ),
+  baseUrlParts: z
+    .array(
+      z.object({
+        name: z.string().describe("The name used inside {} in baseUrl."),
+        description: z.string().describe("What the customer should enter, in the docs' words."),
+        example: z.string().optional().describe("An example value the docs give, if any."),
+      }),
+    )
+    .optional()
+    .describe("One entry per {name} in baseUrl. Leave out when the address is the same for everyone."),
 
   authType: z
     .string()
@@ -21,6 +41,18 @@ export const dialectProposalSchema = z.object({
     .string()
     .optional()
     .describe("Header or query parameter name, when authType is header or query."),
+  authUsernameLabel: z
+    .string()
+    .optional()
+    .describe(
+      'For basic: what the docs call the value sent as the username, e.g. "Access key" or "Account ID".',
+    ),
+  authSecretLabel: z
+    .string()
+    .optional()
+    .describe(
+      'What the docs call the secret value (the password for basic), e.g. "Secret", "API token".',
+    ),
 
   paginationKind: z
     .string()
@@ -79,7 +111,8 @@ export const DIALECT_SYSTEM_PROMPT = `You read API documentation and describe ho
 Rules:
 - Only describe GET endpoints. Never include anything that creates, updates or deletes.
 - Report only what the documentation actually states. If it does not describe pagination, LEAVE THE PAGINATION FIELDS OUT — do not infer a scheme from the shape of the URL. A wrong pagination guess does not produce an error, it silently returns the first page and a chart that is quietly incomplete.
-- "baseUrl" is the origin plus any prefix every endpoint shares. Endpoint paths must then be relative to it, with no origin.
+- "baseUrl" is the origin plus any prefix every endpoint shares. Endpoint paths must then be relative to it, with no origin. If each customer's account lives at its own address (a subdomain, a region, an instance), write that part as {name} and describe it in "baseUrlParts" — never copy an example company's address as if it were everyone's.
+- For basic authentication, say what the docs call the username and the password values in "authUsernameLabel" and "authSecretLabel".
 - Prefer a handful of genuinely useful list endpoints over an exhaustive dump.
 - Put anything you could not determine into "uncertain" instead of guessing at it.
 
@@ -100,6 +133,12 @@ const AUTH_TYPES = new Set(["none", "bearer", "header", "query", "basic"]);
 const PAGINATION_KINDS = new Set(["none", "cursor", "offset", "page", "link-header"]);
 const ARCHETYPES = new Set(["list", "summary", "timeseries"]);
 const TIME_FORMATS = new Set(["iso", "unix", "unix_ms", "date"]);
+
+/** A label the model gave, trimmed to something that fits beside a field. */
+const label = (value: string | undefined): string | undefined => {
+  const text = value?.trim().replace(/\s+/g, " ");
+  return text && text.length <= 80 ? text : undefined;
+};
 
 const slug = (value: string): string =>
   value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "api";
@@ -129,8 +168,55 @@ export const mapDialectProposal = (
         : authType === "query" && proposal.authName
           ? { type: "query" as const, param: proposal.authName, keyRef }
           : authType === "basic"
-            ? { type: "basic" as const, username: "api", keyRef }
+            ? /* Both halves are the person's to enter — see `authSchema`. */
+              {
+                type: "basic" as const,
+                usernameRef: `${keyRef}-user`,
+                keyRef,
+                ...(label(proposal.authUsernameLabel)
+                  ? { usernameLabel: label(proposal.authUsernameLabel)! }
+                  : {}),
+              }
             : { type: "none" as const };
+  /* What the docs call the secret, on whichever style carries one. */
+  const secretLabel = label(proposal.authSecretLabel);
+  const labelledAuth =
+    secretLabel && auth.type !== "none" ? { ...auth, label: secretLabel } : auth;
+
+  /*
+   * An address with a per-account blank, as the documentation writes it.
+   * `baseUrl` still has to be a real address, so the blank is filled with its
+   * example (or its own name) — and the connection asks for the real value
+   * before it sends anything.
+   */
+  const names = templateVariableNames(proposal.baseUrl);
+  let baseUrl = proposal.baseUrl;
+  let server: { url: string; variables: ServerVariable[] } | undefined;
+  if (names.length > 0) {
+    const parts = new Map((proposal.baseUrlParts ?? []).map((part) => [part.name, part]));
+    const variables: ServerVariable[] = names.map((name) => {
+      const part = parts.get(name);
+      return {
+        name,
+        label: name.charAt(0).toUpperCase() + name.slice(1).replace(/[_-]+/g, " "),
+        ...(part?.description ? { description: part.description.slice(0, 300) } : {}),
+        ...(part?.example ? { default: part.example.slice(0, 200) } : {}),
+      };
+    });
+    const template = serverTemplateSchema.safeParse({
+      url: proposal.baseUrl.replace(/\/+$/, ""),
+      variables,
+    });
+    if (template.success) {
+      server = template.data;
+      baseUrl = template.data.url.replace(/\{([A-Za-z_][A-Za-z0-9_-]*)\}/g, (_raw, name: string) => {
+        const example = variables.find((one) => one.name === name)?.default ?? name;
+        return example.replace(/[^A-Za-z0-9._~-]/g, "") || name;
+      });
+    } else {
+      warnings.push("The address has blanks that could not be read; it is asked for before connecting.");
+    }
+  }
 
   let pagination: CatalogEntry["dialect"]["pagination"] = { kind: "none" };
   const kind = proposal.paginationKind;
@@ -198,9 +284,10 @@ export const mapDialectProposal = (
   const parsed = catalogEntrySchema.safeParse({
     id,
     title: proposal.title,
-    baseUrl: proposal.baseUrl,
+    baseUrl,
+    ...(server ? { server } : {}),
     dialect: {
-      auth,
+      auth: labelledAuth,
       pagination,
       ...(proposal.rowsPath ? { rowsPath: proposal.rowsPath } : {}),
       ...(proposal.timeParam ? { timeFilter: { param: proposal.timeParam, format: timeFormat } } : {}),
@@ -209,6 +296,7 @@ export const mapDialectProposal = (
     validateOpId: endpoints.find((endpoint) => endpoint.archetype === "list")?.id ?? endpoints[0]?.id,
     ...(proposal.keyHelp ? { keyHelp: proposal.keyHelp } : {}),
     origin: "docs",
+    importVersion: IMPORT_VERSION,
     // Read from prose. Only a real request can make this true.
     verified: false,
   });

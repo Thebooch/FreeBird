@@ -1,4 +1,5 @@
 import type { LlmTool } from "@freebirdai/dash-agent";
+import { readField } from "@freebirdai/dash-spec";
 import { z } from "zod";
 import { MAX_RELATED_RECORDS } from "../context/related.js";
 import type { Reference, ToolBinding, ToolDeps, ToolResult } from "./types.js";
@@ -36,15 +37,7 @@ import type { Reference, ToolBinding, ToolDeps, ToolResult } from "./types.js";
 export const MAX_RECORDS_OPENED = MAX_RELATED_RECORDS;
 
 /** Read a dotted path, so a nested identifier is reachable by name. */
-const at = (record: Record<string, unknown>, path: string): unknown => {
-  if (path in record) return record[path];
-  let value: unknown = record;
-  for (const step of path.split(".")) {
-    if (value === null || typeof value !== "object") return undefined;
-    value = (value as Record<string, unknown>)[step];
-  }
-  return value;
-};
+const at = readField;
 
 /** Case-insensitive `id`-ish key, for an object reference whose shape is unknown. */
 const idKeyOf = (value: Record<string, unknown>): string | undefined =>

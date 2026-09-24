@@ -493,6 +493,8 @@ ${seriesVars(SERIES_LIGHT)}
 .dash-iconbtn:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 1px; }
 .dash-iconbtn:disabled { opacity: 0.4; cursor: not-allowed; }
 .dash-iconbtn[data-tone="danger"] { color: var(--dash-critical); }
+/* Something here still needs doing before this thing works — an address, a key. */
+.dash-iconbtn[data-tone="attention"] { color: var(--dash-ink); box-shadow: inset 0 -2px 0 var(--dash-warning); }
 .dash-iconbtn[aria-pressed="true"] { background: var(--dash-accent-wash); color: var(--dash-accent); }
 
 /*

@@ -6,7 +6,7 @@ import type {
   RecordOverride,
   WidgetSpec,
 } from "@freebirdai/dash-spec";
-import { parseWidget, shapeSteps } from "@freebirdai/dash-spec";
+import { fnv1a, parseWidget, shapeSteps } from "@freebirdai/dash-spec";
 import type { DetailPane } from "./detail.js";
 
 /**
@@ -123,6 +123,32 @@ const fieldsOf = (
 const paneSpec = (input: Record<string, unknown>): WidgetSpec | null =>
   parseWidget(input).value ?? null;
 
+/** The longest id a widget may carry — `idSchema`. */
+const MAX_WIDGET_ID = 64;
+
+/**
+ * A pane's widget id, from parts that need not be ids themselves.
+ *
+ * A related collection is keyed `<record type>-by-<field path>`, and the field
+ * path nests on plenty of APIs — Rentvine's `invoice.workOrderID` — while a
+ * widget id is `[a-zA-Z0-9_-]`, 64 at most. Joined as they were, every section
+ * over a nested field, and every section whose names were simply long, failed
+ * `paneSpec` and was dropped without a word: "Showing 0 of 3 related
+ * collections" on a record that had all three.
+ *
+ * An id that is already valid is kept exactly, so nothing that works today
+ * changes. Anything else is made safe and suffixed with a hash of the whole,
+ * so two sections that differ only in a dot, or only past the cut, stay two
+ * panes.
+ */
+const paneWidgetId = (...parts: readonly string[]): string => {
+  const whole = parts.join("__");
+  if (/^[a-zA-Z0-9_-]+$/.test(whole) && whole.length <= MAX_WIDGET_ID) return whole;
+  const hash = fnv1a(whole);
+  const safe = whole.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, MAX_WIDGET_ID - hash.length - 1);
+  return `${safe}_${hash}`;
+};
+
 /** Where a section's rows come from, and how they are narrowed to this record. */
 const sectionRequest = (
   section: EntityPageSection,
@@ -198,7 +224,7 @@ export const entityPanes = (input: EntityPaneInput): DetailPane[] => {
       ...facts,
     ];
     const header = paneSpec({
-      id: `${page.entity}__header`,
+      id: paneWidgetId(page.entity, "header"),
       title: page.name.one,
       component: "recordHeader",
       entity: page.entity,
@@ -240,7 +266,7 @@ export const entityPanes = (input: EntityPaneInput): DetailPane[] => {
       .filter((group) => group.fields.length > 0);
 
     const record = paneSpec({
-      id: `${page.entity}__record`,
+      id: paneWidgetId(page.entity, "record"),
       title: page.name.one,
       component: "record",
       entity: page.entity,
@@ -281,7 +307,7 @@ export const entityPanes = (input: EntityPaneInput): DetailPane[] => {
     if (!request) continue;
 
     const spec = paneSpec({
-      id: `${page.entity}__rel__${section.id}`,
+      id: paneWidgetId(page.entity, "rel", section.id),
       title: section.title,
       component: "table",
       entity: section.entity,
@@ -333,7 +359,7 @@ export const entityPanes = (input: EntityPaneInput): DetailPane[] => {
     if (!request) continue;
 
     const spec = paneSpec({
-      id: `${page.entity}__stat__${stat.section}`,
+      id: paneWidgetId(page.entity, "stat", stat.section),
       title: stat.label,
       component: "stat",
       entity: section.entity,

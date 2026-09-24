@@ -180,7 +180,15 @@ export const ConnectionOnboarding = ({
        */
       const state = next.state;
       const settled = next.setup.status === "creating" || next.setup.status === "complete";
-      if (state && state.divided && !state.stale && state.remaining > 0 && state.canRun && !settled) {
+      if (
+        state &&
+        !state.describing &&
+        state.divided &&
+        !state.stale &&
+        state.remaining > 0 &&
+        state.canRun &&
+        !settled
+      ) {
         await prepareAll(alive);
       }
     });
@@ -190,6 +198,26 @@ export const ConnectionOnboarding = ({
     };
     // One setup per connection; everything else is read back from the server.
   }, [connection.id]);
+
+  /*
+   * While the record types are still being described, look again every few
+   * seconds, so the screen moves on by itself when they are done rather than
+   * sitting on a message that has stopped being true.
+   */
+  const describingNow = status?.state?.describing === true;
+  useEffect(() => {
+    if (!describingNow) return;
+    const timer = window.setInterval(() => {
+      void api
+        .onboarding(connection.id)
+        .then((next) => {
+          if (mounted.current) accept(next, true);
+        })
+        .catch(() => undefined);
+    }, 4000);
+    return () => window.clearInterval(timer);
+    // accept is stable in effect; only the flag and the connection matter.
+  }, [describingNow, connection.id]);
 
   const state = status?.state ?? null;
   const setup = status?.setup;
@@ -233,7 +261,7 @@ export const ConnectionOnboarding = ({
       onDone();
     });
 
-  const needsGate = state !== null && (!state.divided || state.stale);
+  const needsGate = state !== null && !state.describing && (!state.divided || state.stale);
   const settledStatus = setup?.status;
 
   return (

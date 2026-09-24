@@ -58,6 +58,14 @@ describe("collectRecords", () => {
     expect(found[0]?.row).toMatchObject({ CompanyName: "Acme" });
   });
 
+  it("reads an identity that nests, list and detail alike", () => {
+    /* Rentvine: every record wrapped in an object named after its type. */
+    const list = [{ property: { propertyID: 12, name: "Maple Court" } }, { property: { propertyID: 13 } }];
+    expect(collectRecords(list, "property.propertyID").map((r) => r.id)).toEqual(["12", "13"]);
+    const detail = collectRecords({ property: { propertyID: 12, name: "Maple Court" } }, "property.propertyID");
+    expect(detail.map((r) => r.id)).toEqual(["12"]);
+  });
+
   /*
    * The conservative half: a wrong guess about where rows live must not put
    * junk in the index, so only objects actually carrying the id are taken.

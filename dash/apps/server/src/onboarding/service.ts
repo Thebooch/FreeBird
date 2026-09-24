@@ -106,6 +106,14 @@ export interface OnboardingDeps {
    * have had before onboarding existed, so there is somewhere to land.
    */
   readonly ensureDefaultBoard?: ((connection: ConnectionSpec) => void) | undefined;
+  /**
+   * Whether this API's record types are being described at this moment.
+   *
+   * Dividing an API while its record types are still arriving would divide
+   * the ones that happened to be done, and the rest landing afterwards would
+   * make that division stale — to be paid for a second time.
+   */
+  readonly isDescribing?: ((catalogId: string) => boolean) | undefined;
   readonly onChanged?: (() => void) | undefined;
   readonly now?: (() => number) | undefined;
 }
@@ -308,7 +316,9 @@ export interface OnboardingStatusView {
   readonly catalog: string | null;
   readonly profile?: CatalogEntry["profile"];
   /** Null when there is no integration to set up from. */
-  readonly state: (CategoryState & { readonly canRun: boolean }) | null;
+  readonly state:
+    | (CategoryState & { readonly canRun: boolean; readonly describing: boolean })
+    | null;
   /** Why setup cannot go further right now, when it cannot. */
   readonly reason?: string | undefined;
   readonly categories: readonly CategoryOffer[];
@@ -383,11 +393,14 @@ export class OnboardingService {
     const entry = this.entryFor(connection);
     const setup = this.setupOf(connection);
     const canRun = this.deps.llm() !== null;
-    const state = entry ? { ...categoryState(entry), canRun } : null;
+    const describing = entry ? (this.deps.isDescribing?.(entry.id) ?? false) : false;
+    const state = entry ? { ...categoryState(entry), canRun, describing } : null;
 
     const reason = !entry
       ? "This connection has no integration behind it to set up from."
-      : state!.entities === 0
+      : describing
+        ? `Still working out what this API's record types are — ${state!.entities} so far. Setting up dashboards starts as soon as that finishes.`
+        : state!.entities === 0
         ? "This API's records have not been described yet. Describe them in Records first."
         : state!.remaining > 0 && !canRun
           ? "Preparing dashboards needs an AI key. Set ANTHROPIC_API_KEY or OPENAI_API_KEY on the server."
@@ -442,6 +455,11 @@ export class OnboardingService {
     return this.locked(`integration:${entryId}`, async () => {
       const entry = catalog.get(entryId);
       if (!entry) throw new OnboardingError("No such integration.", 404);
+      if (this.deps.isDescribing?.(entryId)) {
+        throw new OnboardingError(
+          "This API's record types are still being described. Setting up dashboards starts once that finishes.",
+        );
+      }
       const entities = entry.entities ?? [];
       if (entities.length === 0) {
         throw new OnboardingError(

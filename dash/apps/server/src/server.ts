@@ -36,6 +36,7 @@ import type {
 import {
   catalogEntrySchema,
   connectionKeyRefs,
+  connectionNeedsAddress,
   connectionNeedsAuthSetup,
   connectionSchema,
   dashboardSchema,
@@ -48,6 +49,7 @@ import {
   opUsesRange,
   pathParamNames,
   resolveRange,
+  resolveServerUrl,
   resourceSchema,
   statusTone,
 } from "@freebirdai/dash-spec";
@@ -128,6 +130,7 @@ import {
 } from "@freebirdai/dash-spec";
 import { mapRoutes, mergeDescribedEntities } from "./routes/map.js";
 import { onboardingRoutes } from "./routes/onboarding.js";
+import { refreshOutdatedConnectDetails } from "./discovery/connect-details.js";
 import { allocateDashboardId } from "./onboarding/materialise.js";
 import { DEFAULT_EVERY_MS, Keeper, LastSeen } from "./keeper/keeper.js";
 import { decideAll, opsOfResource } from "./keeper/rhythm.js";
@@ -507,6 +510,13 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * an hour. See `LastSeen`.
    */
   const seen = new LastSeen();
+
+  /*
+   * Catalog ids whose record types are being described right now. Written by
+   * the describing route, read by the map state and by onboarding — see
+   * `MapRouteDeps.describing`.
+   */
+  const describing = new Set<string>();
 
   /*
    * What boards have actually asked for. The keeper refreshes these rather
@@ -2140,6 +2150,98 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   });
 
   /**
+   * Say where this connection's API lives.
+   *
+   * Two ways in, because there are two kinds of API. One whose address has a
+   * per-account blank — `https://{account}.rentvine.com/api/manager` — takes
+   * `values` for the blanks and is filled in here, where the template and its
+   * rules are. One whose documentation never said, or said wrongly, takes the
+   * whole `baseUrl`, and the template, if any, no longer applies.
+   *
+   * A new address is a different account, so it is treated like a new key:
+   * cached rows are dropped and the revision moves, so nothing fetched from
+   * the old address is shown as if it came from this one.
+   */
+  app.put<{ Params: { id: string }; Body: unknown }>(
+    "/api/connections/:id/address",
+    async (request, reply) => {
+      const connection = store.getConnection(request.params.id);
+      if (!connection) return reply.status(404).send({ error: "no such connection" });
+      const parsed = z
+        .object({
+          values: z.record(z.string(), z.string().max(200)).optional(),
+          baseUrl: z.string().max(500).optional(),
+        })
+        .safeParse(request.body);
+      if (!parsed.success || (!parsed.data.values && !parsed.data.baseUrl)) {
+        return reply.status(400).send({ error: "Give the address, or the values for its blanks." });
+      }
+
+      let baseUrl: string;
+      let server = connection.server;
+      if (parsed.data.baseUrl !== undefined) {
+        let url: URL;
+        try {
+          url = new URL(parsed.data.baseUrl.trim());
+        } catch {
+          return reply.status(400).send({ error: "That is not a web address." });
+        }
+        if (url.protocol !== "https:" && url.protocol !== "http:") {
+          return reply.status(400).send({ error: "The address has to start with https:// or http://." });
+        }
+        if (url.username || url.password) {
+          return reply
+            .status(400)
+            .send({ error: "Leave credentials out of the address; they go in the key step." });
+        }
+        baseUrl = url.toString().replace(/\/+$/, "");
+        server = undefined;
+      } else {
+        if (!connection.server) {
+          return reply.status(400).send({ error: "This connection's address has no blanks to fill." });
+        }
+        const values = Object.fromEntries(
+          Object.entries(parsed.data.values ?? {}).map(([name, value]) => [name, value.trim()]),
+        );
+        const resolved = resolveServerUrl(connection.server, values);
+        if (!resolved.url) {
+          const label = (name: string) =>
+            connection.server?.variables.find((one) => one.name === name)?.label ?? name;
+          return reply.status(400).send({
+            error:
+              resolved.missing.length > 0
+                ? `Fill in ${resolved.missing.map(label).join(", ")}.`
+                : `${resolved.invalid.map(label).join(", ")} can only contain letters, numbers, dots, dashes and underscores${
+                    resolved.invalid.some((name) => connection.server?.variables.find((one) => one.name === name)?.options)
+                      ? ", and must be one of the values offered"
+                      : ""
+                  }.`,
+            missing: resolved.missing,
+            invalid: resolved.invalid,
+          });
+        }
+        baseUrl = resolved.url;
+        server = { ...connection.server, values };
+      }
+
+      const { server: _previous, addressPending: _pending, ...rest } = connection;
+      const next = connectionSchema.parse({
+        ...rest,
+        baseUrl,
+        ...(server ? { server } : {}),
+        credentialsRevision:
+          baseUrl === connection.baseUrl
+            ? connection.credentialsRevision
+            : (connection.credentialsRevision ?? 0) + 1,
+      });
+      store.putConnection(next);
+      queries.invalidate(next.id);
+      registry.addConnection(next);
+      return publicConnection(next);
+    },
+  );
+
+  /**
    * Fire the connection's declared validation op and report pass/fail fast.
    *
    * A non-technical user cannot tell "wrong key" from "wrong scope" from
@@ -2859,6 +2961,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    */
   void app.register(
     mapRoutes({
+      describing,
       onRefreshed: (previous, fresh) => {
         for (const connection of store.listConnections()) {
           if (connection.catalog !== previous.id) continue;
@@ -2890,6 +2993,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     onboardingRoutes({
       catalog,
       llm: () => resolveLlm("onboarding"),
+      isDescribing: (catalogId) => describing.has(catalogId),
       getConnection: (id) => store.getConnection(id),
       putConnection: (spec) => store.putConnection(spec),
       getDashboard: (id) => store.getDashboard(id),
@@ -3100,8 +3204,16 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       return reply.status(400).send({ error: "invalid request", detail: parsed.error.issues });
     }
 
-    const entry = catalog.get(parsed.data.catalogId);
-    if (!entry) return reply.status(404).send({ error: "no such catalog entry" });
+    const stored = catalog.get(parsed.data.catalogId);
+    if (!stored) return reply.status(404).send({ error: "no such catalog entry" });
+    /*
+     * An entry written by an older importer is brought up to date on how to
+     * connect before a connection copies it — otherwise the connection would
+     * inherit whatever the old importer got wrong about the address or the
+     * login, and keep it. Only those parts; see `withConnectDetails`.
+     */
+    const { entry, refreshed } = await refreshOutdatedConnectDetails(stored, fetchPublicDocument);
+    if (refreshed) catalog.put(entry);
 
     /**
      * Connecting the same API twice is legitimate — two Stripe accounts, two
@@ -3131,6 +3243,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       ...connection,
       hasKey: ready,
       needsKey: !ready,
+      /* Where the API lives still has to be said — see `connectionNeedsAddress`. */
+      needsAddress: connectionNeedsAddress(connection),
     };
   });
 

@@ -50,6 +50,41 @@ describe("what a row click opens", () => {
     });
   });
 
+  /*
+   * Rentvine wraps every record in an object named after its type, so its
+   * identity is `property.propertyID`. The row was drawn as clickable and the
+   * click did nothing, because the id was looked up as a flat key.
+   */
+  it("opens a record whose identity nests inside the row", () => {
+    const property: EntityLinkView = {
+      ...view,
+      entity: "property",
+      resource: "property",
+      identity: "property.propertyID",
+      ops: ["properties_list"],
+    };
+    const properties = widget({
+      id: "properties",
+      source: { connection: "rv", op: "properties_list", params: {} },
+      pipeline: [
+        { op: "extract", path: "$" },
+        { op: "derive", fields: { property_name: "property.name" } },
+      ],
+      roles: { columns: ["property_name"] },
+    });
+    const row = { property: { propertyID: 12, name: "Maple Court" }, property_name: "Maple Court" };
+    expect(recordTargetFor(properties, row, { rv: [property] })).toEqual({
+      kind: "entity",
+      connection: "rv",
+      entity: "property",
+      id: "12",
+    });
+    /* And from the flattened column, where a pipeline made one. */
+    expect(recordTargetFor(properties, { property_propertyID: 12 }, { rv: [property] })).toMatchObject({
+      id: "12",
+    });
+  });
+
   it("matches a widget saved before record types existed, on the endpoint it reads", () => {
     // These carry no `entity`, and there are boards full of them. Matching on
     // the endpoint is what spares them a migration.

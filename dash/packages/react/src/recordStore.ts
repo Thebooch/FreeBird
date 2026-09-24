@@ -1,4 +1,5 @@
 import type { EntityLinkView } from "@freebirdai/dash-spec";
+import { readField } from "@freebirdai/dash-spec";
 import type { Row } from "@freebirdai/dash-runtime";
 
 /**
@@ -72,7 +73,8 @@ export const collectRecords = (
   const take = (value: unknown): void => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return;
     const row = value as Row;
-    const id = row[identity];
+    /* An identity may nest — `property.propertyID` — and is read where it is. */
+    const id = readField(row, identity);
     if (id === null || id === undefined || id === "") return;
     found.push({ id: String(id), row });
   };

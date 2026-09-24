@@ -792,6 +792,42 @@ describe("entityLinkViews", () => {
     expect(views.find((view) => view.entity === "task")?.references[0]?.lookup).toBeUndefined();
   });
 
+  /*
+   * Rentvine's units live under their property: `/properties/{propertyID}/
+   * units/{unitID}`. A link or a page address holds only the unit's own id, so
+   * every lookup went out with a hole in its path and came back an error — one
+   * failed request per unit named on a page, on every load.
+   */
+  it("offers no lookup, and no page fetch, for a record that lives under a parent", () => {
+    const nested = {
+      entities: [TASK, VENDOR],
+      resources: [
+        RESOURCES[0]!,
+        resource({
+          id: "vendor",
+          title: "Vendors",
+          listOp: "vendors_list",
+          detailOp: "vendors_nested",
+          detailParam: "vendorId",
+        }),
+      ],
+      ops: [
+        ...OPS,
+        { id: "vendors_nested", path: "/v1/groups/{{param.groupId}}/vendors/{{param.vendorId}}", params: [] },
+      ],
+    };
+    const views = entityLinkViews(nested);
+    expect(views.find((view) => view.entity === "task")?.references[0]?.lookup).toBeUndefined();
+    expect(entityPageView(nested, "vendor")?.detail).toBeUndefined();
+
+    /* Its own id alone is enough everywhere else, as before. */
+    const plain = entityLinkViews({ entities: [TASK, VENDOR], resources: RESOURCES, ops: OPS });
+    expect(plain.find((view) => view.entity === "task")?.references[0]?.lookup).toEqual({
+      op: "vendors_byid",
+      param: "vendorId",
+    });
+  });
+
   it("leaves out a link whose target this API does not describe", () => {
     const views = entityLinkViews({ entities: [TASK], resources: RESOURCES, ops: OPS });
     expect(views[0]?.references).toEqual([]);
