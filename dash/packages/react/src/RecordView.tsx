@@ -1,6 +1,7 @@
 import { EmptyState, ErrorState, Message, Skeleton, Tabs, getComponent } from "@freebirdai/dash-components";
 import type { Row } from "@freebirdai/dash-runtime";
 import type { WidgetSpec } from "@freebirdai/dash-spec";
+import { parentsFrom } from "@freebirdai/dash-spec";
 import { useEffect, useMemo, useState } from "react";
 import { useDashboard } from "./context.jsx";
 import { type DetailPane, headerPane, recordPane, relatedPanes, statPanes } from "./detail.js";
@@ -355,8 +356,11 @@ const PaneRenderer = ({
   const connection = spec.source?.connection;
   const openReference =
     onOpenReference && connection
-      ? (target: { entity: string; id: string | number }) =>
-          onOpenReference({ ...target, connection })
+      ? (target: {
+          entity: string;
+          id: string | number;
+          parents?: Readonly<Record<string, string>> | undefined;
+        }) => onOpenReference({ ...target, connection })
       : undefined;
 
   /*
@@ -371,9 +375,19 @@ const PaneRenderer = ({
   const openEntityRow =
     pane.opensEntity && openReference
       ? (childRow: Row): void => {
-          const id = childRow[pane.opensEntity!.column];
+          const opens = pane.opensEntity!;
+          const id = childRow[opens.column];
           if (id === null || id === undefined || id === "") return;
-          openReference({ entity: pane.opensEntity!.entity, id: id as string | number });
+          // A record under a parent opens only with its whole address.
+          const parents = opens.parents?.length
+            ? parentsFrom(opens.parents, childRow, opens.known)
+            : undefined;
+          if (parents === null) return;
+          openReference({
+            entity: opens.entity,
+            id: id as string | number,
+            ...(parents ? { parents } : {}),
+          });
         }
       : undefined;
   const selectRow = opens

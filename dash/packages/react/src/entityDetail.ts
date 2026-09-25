@@ -6,7 +6,8 @@ import type {
   RecordOverride,
   WidgetSpec,
 } from "@freebirdai/dash-spec";
-import { fnv1a, parseWidget, shapeSteps } from "@freebirdai/dash-spec";
+import type { AddressPart, Coercion, SemanticType } from "@freebirdai/dash-spec";
+import { fnv1a, parentsFrom, parseWidget, shapeSteps } from "@freebirdai/dash-spec";
 import type { DetailPane } from "./detail.js";
 
 /**
@@ -25,6 +26,8 @@ export type OpenReference = (target: {
   connection: string;
   entity: string;
   id: string | number;
+  /** The record's other ids, where it lives under a parent. */
+  parents?: Readonly<Record<string, string>> | undefined;
 }) => void;
 
 /**
@@ -69,6 +72,34 @@ const deriveFor = (paths: readonly string[]): WidgetSpec["pipeline"] => {
   const nested = [...new Set(paths.filter((path) => path.includes(".")))];
   if (nested.length === 0) return [];
   return [{ op: "derive", fields: Object.fromEntries(nested.map((p) => [columnFor(p), p])) }];
+};
+
+type Reading = { readonly coercion?: Coercion; readonly readAs?: SemanticType };
+
+/**
+ * How a pane reads its columns: the step that converts values, and what they
+ * are once converted.
+ *
+ * The record type's own reading — the one a compiled widget follows — so a
+ * flag the API sends as 0/1 says "Yes" on the record exactly as it does on
+ * the board it was opened from, and a reference number is never "104,868".
+ */
+const readingFor = (
+  paths: readonly string[],
+  readingOf: (path: string) => Reading | undefined,
+): { steps: WidgetSpec["pipeline"]; format: Record<string, { semantic: SemanticType }> } => {
+  const fields: Record<string, Coercion> = {};
+  const format: Record<string, { semantic: SemanticType }> = {};
+  for (const path of new Set(paths)) {
+    const reading = readingOf(path);
+    if (!reading) continue;
+    if (reading.coercion) fields[columnFor(path)] = reading.coercion;
+    if (reading.readAs) format[columnFor(path)] = { semantic: reading.readAs };
+  }
+  return {
+    steps: Object.keys(fields).length > 0 ? [{ op: "coerce", fields }] : [],
+    format,
+  };
 };
 
 /**
@@ -154,12 +185,31 @@ const sectionRequest = (
   section: EntityPageSection,
   connection: string,
   id: string,
+  known: Readonly<Record<string, string>>,
 ): { source: Record<string, unknown>; narrow: WidgetSpec["pipeline"] } | null => {
   const reach = section.reach;
-  if (reach.mode === "filter" || reach.mode === "path") {
+  if (reach.mode === "filter") {
     // The endpoint takes this record's id, so one request returns its rows and
     // nothing else.
     return { source: { connection, op: reach.op, params: { [reach.param]: id } }, narrow: [] };
+  }
+  if (reach.mode === "path") {
+    /*
+     * Scoped under this record. Where this record is itself nested, the path
+     * names its parents too, and the page's own address supplies them — a
+     * section that cannot be addressed is left off rather than sent with a
+     * hole in its path.
+     */
+    const parents = parentsFrom(
+      (reach.parents ?? []).map((param) => ({ param })),
+      {},
+      known,
+    );
+    if (parents === null) return null;
+    return {
+      source: { connection, op: reach.op, params: { ...parents, [reach.param]: id } },
+      narrow: [],
+    };
   }
   if (reach.mode === "scan") {
     // Refused rather than mangled — see `canEmbedInExpression`.
@@ -178,9 +228,24 @@ export interface EntityPaneInput {
   readonly connection: string;
   /** The record's identifier, exactly as the address bar carried it. */
   readonly id: string;
+  /** Its other ids, where it lives under a parent — also from the address bar. */
+  readonly parents?: Readonly<Record<string, string>> | undefined;
   /** One widget's changes to this page, when its row is what opened it. */
   readonly override?: RecordOverride | undefined;
 }
+
+/**
+ * The ids a page needs that its address did not bring.
+ *
+ * A unit's page is fetched with its property's id as well as its own, and a
+ * bare link to unit 222 cannot say which property. Named rather than guessed,
+ * so the page can say what it is missing instead of looking empty.
+ */
+export const missingParents = (
+  page: EntityPageView,
+  parents: Readonly<Record<string, string>> | undefined,
+): readonly AddressPart[] =>
+  (page.detail?.parents ?? []).filter((part) => parentsFrom([part], {}, parents) === null);
 
 /**
  * One record's page, as panes.
@@ -195,6 +260,18 @@ export const entityPanes = (input: EntityPaneInput): DetailPane[] => {
   const { page, connection, id, override } = input;
   const panes: DetailPane[] = [];
 
+  /*
+   * This record's whole address, which is what everything under it is asked
+   * with: its own endpoint, and any collection scoped beneath it.
+   */
+  const known: Record<string, string> = {
+    ...input.parents,
+    ...(page.detail ? { [page.detail.param]: id } : {}),
+  };
+  const detailParents = page.detail?.parents?.length
+    ? parentsFrom(page.detail.parents, {}, input.parents)
+    : {};
+
   const hidden = new Set(override?.hide ?? []);
   const visible = page.fields.filter((field) => !hidden.has(field.path));
   const shown = new Set(visible.map((field) => field.path));
@@ -203,11 +280,15 @@ export const entityPanes = (input: EntityPaneInput): DetailPane[] => {
   const displayed = (path: string | undefined): string | undefined =>
     path !== undefined && shown.has(path) ? path : undefined;
 
+  const pageReading = (path: string): Reading | undefined =>
+    page.fields.find((field) => field.path === path);
   const title = keep(page.title);
   const facts = keep(override?.facts ?? page.facts).slice(0, 4);
   const subtitle = displayed(page.subtitle);
   const status = displayed(page.status);
-  const detail = page.detail;
+  // An address missing a parent's id fetches nothing — see `missingParents`.
+  const detail = detailParents === null ? undefined : page.detail;
+  const detailParams = { ...detailParents, ...(detail ? { [detail.param]: id } : {}) };
 
   /*
    * The identity block, over the same endpoint as the record.
@@ -223,13 +304,15 @@ export const entityPanes = (input: EntityPaneInput): DetailPane[] => {
       ...(status ? [status] : []),
       ...facts,
     ];
+    const read = readingFor(paths, pageReading);
     const header = paneSpec({
       id: paneWidgetId(page.entity, "header"),
       title: page.name.one,
       component: "recordHeader",
       entity: page.entity,
-      source: { connection, op: detail.op, params: { [detail.param]: id } },
-      pipeline: [{ op: "extract", path: "$" }, ...deriveFor(paths)],
+      source: { connection, op: detail.op, params: detailParams },
+      pipeline: [{ op: "extract", path: "$" }, ...deriveFor(paths), ...read.steps],
+      ...(Object.keys(read.format).length > 0 ? { format: read.format } : {}),
       roles: {
         /*
          * One field, not the whole title. `recordHeader` binds a single title
@@ -265,13 +348,15 @@ export const entityPanes = (input: EntityPaneInput): DetailPane[] => {
       .map((group) => ({ title: group.title, fields: keep(group.fields).map(columnFor) }))
       .filter((group) => group.fields.length > 0);
 
+    const read = readingFor(paths, pageReading);
     const record = paneSpec({
       id: paneWidgetId(page.entity, "record"),
       title: page.name.one,
       component: "record",
       entity: page.entity,
-      source: { connection, op: detail.op, params: { [detail.param]: id } },
-      pipeline: [{ op: "extract", path: "$" }, ...deriveFor(paths)],
+      source: { connection, op: detail.op, params: detailParams },
+      pipeline: [{ op: "extract", path: "$" }, ...deriveFor(paths), ...read.steps],
+      ...(Object.keys(read.format).length > 0 ? { format: read.format } : {}),
       roles: {
         fields: paths.map(columnFor),
         ...(leading ? { title: columnFor(leading) } : {}),
@@ -303,8 +388,9 @@ export const entityPanes = (input: EntityPaneInput): DetailPane[] => {
     // A table must bind at least one column, so a record type nobody has
     // described yet shows nothing rather than something broken.
     if (section.columns.length === 0) continue;
-    const request = sectionRequest(section, connection, id);
+    const request = sectionRequest(section, connection, id, known);
     if (!request) continue;
+    const read = readingFor(section.columns, (path) => section.readings?.[path]);
 
     const spec = paneSpec({
       id: paneWidgetId(page.entity, "rel", section.id),
@@ -323,10 +409,23 @@ export const entityPanes = (input: EntityPaneInput): DetailPane[] => {
          * not readable off the row until a derive step flattens it.
          */
         ...deriveFor([...section.columns, ...(section.identity ? [section.identity] : [])]),
+        ...read.steps,
       ],
+      ...(Object.keys(read.format).length > 0 ? { format: read.format } : {}),
       roles: { columns: section.columns.map(columnFor) },
     });
     if (!spec) continue;
+
+    /*
+     * A row's other ids, where the records in this section live under a
+     * parent — which is usually this very record: a lease's notes are
+     * `/leases/{leaseId}/notes/{noteId}`, and nothing on a note says which
+     * lease. The part naming this record's type is this page's id.
+     */
+    const rowKnown: Record<string, string> = { ...known };
+    for (const part of section.parents ?? []) {
+      if (part.entity === page.entity) rowKnown[part.param] = id;
+    }
 
     panes.push({
       id: section.id,
@@ -334,7 +433,13 @@ export const entityPanes = (input: EntityPaneInput): DetailPane[] => {
       spec,
       tab: true,
       ...(section.identity
-        ? { opensEntity: { entity: section.entity, column: columnFor(section.identity) } }
+        ? {
+            opensEntity: {
+              entity: section.entity,
+              column: columnFor(section.identity),
+              ...(section.parents?.length ? { parents: section.parents, known: rowKnown } : {}),
+            },
+          }
         : {}),
     });
   }
@@ -355,7 +460,7 @@ export const entityPanes = (input: EntityPaneInput): DetailPane[] => {
     if (!drawn.has(stat.section)) continue;
     const section = page.sections.find((one) => one.id === stat.section);
     if (!section) continue;
-    const request = sectionRequest(section, connection, id);
+    const request = sectionRequest(section, connection, id, known);
     if (!request) continue;
 
     const spec = paneSpec({

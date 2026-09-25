@@ -1,9 +1,10 @@
 import { Message } from "@freebirdai/dash-components";
 import type { EntityPageView, RecordOverride } from "@freebirdai/dash-spec";
+import { humanLabel } from "@freebirdai/dash-spec";
 import type { Row } from "@freebirdai/dash-runtime";
 import { useMemo } from "react";
 import { RecordView } from "./RecordView.jsx";
-import { entityPanes, type OpenReference } from "./entityDetail.js";
+import { entityPanes, missingParents, type OpenReference } from "./entityDetail.js";
 
 /**
  * One record's own page, addressed by what it is.
@@ -23,6 +24,7 @@ export const EntityRecordPage = ({
   page,
   connection,
   recordId,
+  recordParents,
   onBack,
   backLabel,
   override,
@@ -32,6 +34,11 @@ export const EntityRecordPage = ({
   readonly page: EntityPageView;
   readonly connection: string;
   readonly recordId: string;
+  /**
+   * Its other ids, where it lives under a parent: a unit's page is fetched
+   * with its property's id as well as its own.
+   */
+  readonly recordParents?: Readonly<Record<string, string>> | undefined;
   readonly onBack: () => void;
   /** What going back returns to — the board, usually. */
   readonly backLabel?: string;
@@ -49,9 +56,17 @@ export const EntityRecordPage = ({
   readonly onEditLayout?: () => void;
 }): JSX.Element => {
   const panes = useMemo(
-    () => entityPanes({ page, connection, id: recordId, ...(override ? { override } : {}) }),
-    [page, connection, recordId, override],
+    () =>
+      entityPanes({
+        page,
+        connection,
+        id: recordId,
+        ...(recordParents ? { parents: recordParents } : {}),
+        ...(override ? { override } : {}),
+      }),
+    [page, connection, recordId, recordParents, override],
   );
+  const missing = useMemo(() => missingParents(page, recordParents), [page, recordParents]);
 
   /*
    * The row exists for the shape `RecordView` takes, not because a pane needs
@@ -65,6 +80,7 @@ export const EntityRecordPage = ({
   );
 
   const shown = panes.filter((pane) => pane.tab === true).length;
+  const unknownBundles = (page.bundles ?? []).filter((bundle) => !bundle.entity);
   const hiddenSections = page.sectionsTotal - shown;
 
   return (
@@ -93,7 +109,19 @@ export const EntityRecordPage = ({
         )}
       </nav>
 
-      {panes.length === 0 ? (
+      {missing.length > 0 && (
+        /*
+         * Said rather than shown as an empty record. A bare link to a record
+         * that lives under a parent cannot say which parent, and the endpoint
+         * cannot be asked without it; the way in is through the parent.
+         */
+        <Message>
+          This {page.name.one.toLowerCase()} can only be fetched together with the{" "}
+          {missing.map((part) => part.entity ?? part.param).join(" and ")} it belongs to, and this
+          link did not say which. Open it from there instead.
+        </Message>
+      )}
+      {panes.length === 0 && missing.length === 0 ? (
         /*
          * An honest dead end rather than a blank page.
          *
@@ -108,7 +136,7 @@ export const EntityRecordPage = ({
           nothing else links to {page.name.many.toLowerCase()} — so there is nothing to show here
           yet.
         </Message>
-      ) : (
+      ) : panes.length === 0 ? null : (
         <>
           <RecordView
             panes={panes}
@@ -116,6 +144,21 @@ export const EntityRecordPage = ({
             wide
             {...(onOpenReference ? { onOpenReference } : {})}
           />
+          {unknownBundles.length > 0 && (
+            /*
+             * Said rather than dropped. These arrive inside every row, but
+             * nothing says which kind of record they are — a Rentvine
+             * `contact` may be a tenant, a vendor or an owner — so they cannot
+             * be linked, and listing their fields as this record's own is what
+             * this page stopped doing.
+             */
+            <p className="dash-pane__partial" role="status">
+              Also sent with each {page.name.one.toLowerCase()}:{" "}
+              {unknownBundles.map((bundle) => humanLabel(bundle.path).toLowerCase()).join(", ")} —
+              not shown here, because nothing says what kind of record{" "}
+              {unknownBundles.length > 1 ? "they are" : "it is"}.
+            </p>
+          )}
           {hiddenSections > 0 && (
             /*
              * Said out loud rather than implied. One real record type has 26

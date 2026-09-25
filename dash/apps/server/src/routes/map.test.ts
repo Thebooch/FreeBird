@@ -138,6 +138,8 @@ describe("entityState", () => {
       // Nothing here has been near a live account.
       verified: 0,
       referencesVerified: 0,
+      read: 0,
+      corrected: 0,
     });
   });
 
@@ -218,6 +220,25 @@ describe("mergeDescribedEntities", () => {
     // precisely because the newer reading is wanted.
     expect(merged?.name.one).toBe("Task");
     expect(merged?.description).toBe("Something that needs doing.");
+  });
+
+  it("keeps what an account read showed about the fields", () => {
+    // Evidence about the API, not about the prose — so a new description keeps it.
+    const read = entity({
+      fields: [{ path: "Id" }, { path: "IsOpen", kinds: ["boolean"], observed: { kinds: ["number"], coercion: "->boolean" } }],
+      identity: { field: "Id" },
+      readAt: "2026-09-25T00:00:00Z",
+    });
+    const again = entity({
+      fields: [{ path: "Id" }, { path: "IsOpen", kinds: ["boolean"], label: "Open" }],
+      identity: { field: "Id" },
+    });
+    const [merged] = mergeDescribedEntities([read], [again]);
+    expect(merged?.readAt).toBe("2026-09-25T00:00:00Z");
+    expect(merged?.fields[1]).toMatchObject({
+      label: "Open",
+      observed: { kinds: ["number"], coercion: "->boolean" },
+    });
   });
 
   it("lets verification lapse when the identity moved", () => {

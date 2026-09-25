@@ -4,6 +4,7 @@ import {
   SEMANTICS,
   formatValue,
   humanLabel,
+  parentsFrom,
   referenceIds,
   targetOfRow,
 } from "@freebirdai/dash-spec";
@@ -136,7 +137,11 @@ export interface ReferenceCell {
   /** Whether following it would reach a record. */
   readonly canOpen: boolean;
   /** What to open, when it can be opened. */
-  readonly target?: { readonly entity: string; readonly id: string | number };
+  readonly target?: {
+    readonly entity: string;
+    readonly id: string | number;
+    readonly parents?: Readonly<Record<string, string>> | undefined;
+  };
 }
 
 /**
@@ -195,10 +200,20 @@ export const referenceText = (input: {
    * either. Both render as text rather than as a control that goes nowhere.
    */
   const single = ids.length === 1 && first !== undefined;
+  /*
+   * A far record that lives under a parent opens with the parent's id off this
+   * same row. A row that does not carry it names the record but cannot reach
+   * it, so it is drawn as text.
+   */
+  const parents = reference.lookup?.parents?.length
+    ? parentsFrom(reference.lookup.parents, row)
+    : undefined;
   return {
     text,
-    canOpen: Boolean(reference.lookup) && single,
-    ...(single ? { target: { entity: reference.target, id: first } } : {}),
+    canOpen: Boolean(reference.lookup) && single && parents !== null,
+    ...(single
+      ? { target: { entity: reference.target, id: first, ...(parents ? { parents } : {}) } }
+      : {}),
   };
 };
 

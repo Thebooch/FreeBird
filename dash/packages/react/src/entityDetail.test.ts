@@ -1,6 +1,6 @@
 import type { EntityPageView } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
-import { canEmbedInExpression, entityPanes } from "./entityDetail.js";
+import { canEmbedInExpression, entityPanes, missingParents } from "./entityDetail.js";
 
 /**
  * A record page built from the record type rather than from a widget.
@@ -395,5 +395,129 @@ describe("entityPanes", () => {
     // Hiding the field the status pointed at unbinds the status too, rather
     // than leaving the header bound to a column that is no longer produced.
     expect(byId(panes, "header")?.spec.roles.status).toBeUndefined();
+  });
+});
+
+/*
+ * Records that live under a parent: a unit is `/properties/{propertyID}/units/
+ * {unitID}`, a lease note `/leases/{leaseId}/notes/{noteId}`. Their pages are
+ * fetched with the whole address, and a section of them opens each row with
+ * this page's own id as the parent's.
+ */
+describe("entityPanes, for records under a parent", () => {
+  const UNIT = page({
+    entity: "unit",
+    resource: "unit",
+    name: { one: "Unit", many: "Units" },
+    identity: "unitID",
+    title: ["name"],
+    status: undefined,
+    detail: {
+      op: "unit",
+      param: "unitID",
+      parents: [{ param: "propertyID", field: "propertyID", entity: "property" }],
+    },
+    fields: [{ path: "name", label: "Name", visibility: "primary" }],
+    groups: [],
+  });
+
+  it("fetches the record with its parent's id as well as its own", () => {
+    const panes = entityPanes({ page: UNIT, connection: "api", id: "222", parents: { propertyID: "210" } });
+    expect(byId(panes, "record")?.spec.source?.params).toEqual({ unitID: "222", propertyID: "210" });
+    expect(missingParents(UNIT, { propertyID: "210" })).toEqual([]);
+  });
+
+  it("fetches nothing, and says what is missing, when the address lacks a parent", () => {
+    const panes = entityPanes({ page: UNIT, connection: "api", id: "222" });
+    expect(byId(panes, "record")).toBeUndefined();
+    expect(byId(panes, "header")).toBeUndefined();
+    expect(missingParents(UNIT, undefined).map((part) => part.entity)).toEqual(["property"]);
+  });
+
+  it("opens a scoped section's row with this page's id as its parent", () => {
+    const lease = page({
+      entity: "lease",
+      resource: "lease",
+      identity: "Id",
+      detail: { op: "lease", param: "leaseId" },
+      sections: [
+        {
+          id: "lease-note-under-lease",
+          entity: "lease-note",
+          title: "Notes",
+          field: "leaseId",
+          reach: { mode: "path", op: "lease_notes", param: "leaseId" },
+          cost: "cheap",
+          verified: true,
+          identity: "Id",
+          parents: [{ param: "leaseId", entity: "lease" }],
+          columns: ["Note"],
+        },
+      ],
+      sectionsTotal: 1,
+    });
+    const panes = entityPanes({ page: lease, connection: "api", id: "7" });
+    const notes = byId(panes, "lease-note-under-lease");
+    expect(notes?.spec.source?.params).toEqual({ leaseId: "7" });
+    expect(notes?.opensEntity).toMatchObject({
+      entity: "lease-note",
+      parents: [{ param: "leaseId", entity: "lease" }],
+      known: { leaseId: "7" },
+    });
+  });
+
+  it("asks a collection under a nested record with the whole address", () => {
+    const panes = entityPanes({
+      page: page({
+        ...UNIT,
+        sections: [
+          {
+            id: "photo-under-unit",
+            entity: "photo",
+            title: "Photos",
+            field: "unitID",
+            reach: { mode: "path", op: "unit_photos", param: "unitID", parents: ["propertyID"] },
+            cost: "cheap",
+            verified: true,
+            columns: ["caption"],
+          },
+        ],
+        sectionsTotal: 1,
+      }),
+      connection: "api",
+      id: "222",
+      parents: { propertyId: "210" },
+    });
+    // The page's address spells it `propertyId`; the endpoint `propertyID`.
+    expect(byId(panes, "photo-under-unit")?.spec.source?.params).toEqual({
+      propertyID: "210",
+      unitID: "222",
+    });
+  });
+});
+
+/*
+ * Rentvine sends its flags as 0/1 while its docs declare them boolean. The
+ * record page reads a field the way a compiled widget does, so the flag says
+ * "Yes" on the record exactly as on the board it was opened from.
+ */
+describe("entityPanes, reading values", () => {
+  it("converts and describes a field the way its record type says to read it", () => {
+    const panes = entityPanes({
+      page: page({
+        fields: [
+          { path: "CompanyName", label: "Company", visibility: "primary" },
+          { path: "Flags.IsVacant", label: "Vacant", visibility: "detail", coercion: "->boolean" },
+          { path: "Number", label: "Number", visibility: "detail", readAs: "identifier" },
+        ],
+        groups: [],
+        status: undefined,
+      }),
+      connection: "api",
+      id: "41",
+    });
+    const record = byId(panes, "record")?.spec;
+    expect(record?.pipeline).toContainEqual({ op: "coerce", fields: { Flags_IsVacant: "->boolean" } });
+    expect(record?.format).toMatchObject({ Number: { semantic: "identifier" } });
   });
 });

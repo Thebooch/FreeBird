@@ -40,6 +40,8 @@ export const drillDownSchema = z.object({
   detailOp: idSchema,
   idField: z.string().max(120),
   detailParam: z.string().max(120),
+  /** The detail endpoint's other path parameters, for a record under a parent. */
+  parentParams: z.array(z.string().max(120)).max(8).optional(),
   labelField: z.string().max(120).optional(),
   sampled: z.boolean().default(false),
 });

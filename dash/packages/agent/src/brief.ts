@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { EntityKind, EntitySpec, WidgetBrief, WidgetIntent } from "@freebirdai/dash-spec";
-import { facetsFromRecipe, recipeFor } from "@freebirdai/dash-spec";
+import { facetsFromRecipe, ownFields, recipeFor } from "@freebirdai/dash-spec";
 import type { LlmAdapter, LlmTool } from "./llm.js";
 
 /**
@@ -157,7 +157,13 @@ export const briefCandidates = (sources: readonly BriefSource[]): BriefCandidate
   return sources.flatMap((source) =>
     source.entities.map((entity) => {
     const recipe = recipeFor(entity.kind);
-    const visible = entity.fields.filter((field) => field.visibility !== "hidden");
+    /*
+     * Its own fields only. A record sent inside its rows — an invoice row
+     * carrying its work order — belongs to its own record type, and a brief
+     * that filtered invoices by the work order's fields would be asking the
+     * wrong record type the question.
+     */
+    const visible = ownFields(entity, source.entities).filter((field) => field.visibility !== "hidden");
 
     const narrowPaths =
       entity.views.facets.length > 0

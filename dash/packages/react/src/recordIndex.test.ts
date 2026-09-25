@@ -123,6 +123,37 @@ describe("referenceLookups", () => {
   it("does nothing for a view with no reference columns", () => {
     expect(lookupsFor([{ Title: "x" }], [column("Title")])).toEqual([]);
   });
+
+  /*
+   * Rentvine's units are `/properties/{propertyID}/units/{unitID}`. A work
+   * order names both, so its unit is asked for with its property's id — and a
+   * row that names no property cannot address the unit at all.
+   */
+  it("asks for a nested record with its parent's id off the same row", () => {
+    const toUnit = reference({
+      target: "unit",
+      targetName: "Unit",
+      lookup: {
+        op: "unit",
+        param: "unitID",
+        parents: [{ param: "propertyID", field: "workOrder.propertyID" }],
+      },
+    });
+    const found = lookupsFor(
+      [
+        { workOrder: { unitID: 222, propertyID: 210 }, workOrder_unitID: 222 },
+        { workOrder: { unitID: 222, propertyID: 211 }, workOrder_unitID: 222 },
+        { workOrder: { unitID: 9 }, workOrder_unitID: 9 },
+      ],
+      [column("workOrder_unitID", toUnit)],
+    );
+    // Unit 222 under two properties is two records; the unit with no property is none.
+    expect(found.map((one) => [one.id, one.parents])).toEqual([
+      [222, { propertyID: "210" }],
+      [222, { propertyID: "211" }],
+    ]);
+    expect(found[0]?.key).not.toBe(found[1]?.key);
+  });
 });
 
 describe("fetchLookupsInOrder", () => {

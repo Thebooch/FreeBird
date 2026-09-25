@@ -29,6 +29,7 @@ import type {
   EntityLinkView,
   EntitySpec,
   RangePreset,
+  RecordOverride,
   ResolvedParams,
   TimeRange,
   WidgetBrief,
@@ -117,7 +118,10 @@ import {
   compileBrief,
   entityById,
   entityGraph,
+  observeEntity,
   parseDashboard,
+  readingsDiffer,
+  rerootBrief,
   recompileWidget,
   entityLinkViews,
   entityPageView,
@@ -694,6 +698,18 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   const ENUMERATION_TTL = 5 * 60_000;
 
   /**
+   * What the last account read saw, endpoint by endpoint, values included.
+   *
+   * Held only until the record types can be told what their fields really
+   * hold (see `observeConnection`): a read often finishes before the record
+   * types are described, and the values it saw are the evidence. In memory
+   * and short-lived, like the enumeration beside it — they are a customer's
+   * data, and only the conclusions drawn from them are ever written down.
+   */
+  const sampledShapes = new Map<string, { at: number; byOp: Map<string, InferredShape> }>();
+  const SAMPLES_TTL = 30 * 60_000;
+
+  /**
    * The second-opinion pass, on whatever `suggest` routes to.
    *
    * This used to hardcode a cheap model here, because reviewing a resource map
@@ -814,6 +830,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       sampleFor(connection, (opId, shape) => byOpShape.set(opId, shape)),
       budget,
     );
+    sampledShapes.set(connection.id, { at: Date.now(), byOp: byOpShape });
+    observeConnection(connection.id);
 
     // Re-key the shapes from op id onto resource id, which is what the
     // suggestion engine reasons in.
@@ -1857,6 +1875,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         carried,
         rowsPathOf: (op) => getOp(connection, op)?.rowsPath,
         budget: parsed.data.budget ?? VERIFY_BUDGET_DEFAULT,
+        ops: connection.ops,
+        now: new Date().toISOString(),
         read: async (op, params) => {
           try {
             /*
@@ -2962,6 +2982,11 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   void app.register(
     mapRoutes({
       describing,
+      onDescribed: (catalogId) => {
+        for (const connection of store.listConnections()) {
+          if (connection.catalog === catalogId) observeConnection(connection.id);
+        }
+      },
       onRefreshed: (previous, fresh) => {
         for (const connection of store.listConnections()) {
           if (connection.catalog !== previous.id) continue;
@@ -3422,6 +3447,127 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         entities,
       }),
     };
+  };
+
+  /**
+   * Build again every widget over these record types from its brief.
+   *
+   * A widget carries its reading of the values in its pipeline — a filter on a
+   * flag has to see `true`, not `1` — so learning that a field is read
+   * differently means rebuilding what reads it. Only brief-built widgets,
+   * through the same compile an edit uses; a widget the compiler would build
+   * identically is left exactly as it is. An approved widget that changes
+   * says so, by design: its figures moved and nobody has looked yet.
+   */
+  const recompileReadings = (
+    connectionId: string,
+    entityIds: ReadonlySet<string>,
+    /** Record types that moved inside a wrapper, and which — see `wrapperOf`. */
+    wrapped: ReadonlyMap<string, string> = new Map(),
+  ): number => {
+    let rebuilt = 0;
+    for (const summary of store.listDashboards()) {
+      const board = store.getDashboard(summary.id);
+      if (!board) continue;
+      let changed = false;
+      const widgets = board.widgets.map((widget) => {
+        const brief = widget.brief;
+        const on = widget.source?.connection ?? widget.sources[0]?.connection;
+        if (!brief || on !== connectionId || !entityIds.has(brief.entity)) return widget;
+        const found = settingsFor(board.id, widget.id);
+        if (!found.ok || !found.brief || !found.entity || !found.connection) return widget;
+        const resource = found.connection.resources.find((one) => one.id === found.entity!.resource);
+        if (!resource) return widget;
+        /*
+         * A record type that moved inside a wrapper moves what was built on it:
+         * the request names `name`, and the record now has `unit.name`.
+         */
+        const wrapper = wrapped.get(brief.entity);
+        const request = wrapper ? rerootBrief(found.brief, wrapper) : found.brief;
+        const compiled = compileBrief({
+          brief: request,
+          entity: found.entity,
+          resource,
+          connection: found.connection.id,
+          listPath: pathOf(found.connection, resource.listOp),
+          related: relatedFor(found.connection, found.entities ?? []),
+          id: widget.id,
+        });
+        if (!compiled.widget) return widget;
+        const rebuiltWidget = recompileWidget(widget, compiled.widget);
+        const next =
+          wrapper && rebuiltWidget.record
+            ? { ...rebuiltWidget, record: rerootRecordOverride(rebuiltWidget.record, wrapper) }
+            : rebuiltWidget;
+        if (JSON.stringify(next) === JSON.stringify(widget)) return widget;
+        changed = true;
+        rebuilt += 1;
+        return next;
+      });
+      if (!changed) continue;
+      const valid = parseDashboard({ ...board, widgets });
+      if (valid.ok && valid.value) store.putDashboard(valid.value);
+    }
+    return rebuilt;
+  };
+
+  /** A widget's own changes to a record page, with its paths moved inside `wrapper`. */
+  const rerootRecordOverride = (record: RecordOverride, wrapper: string): RecordOverride => {
+    const to = (path: string): string =>
+      path === wrapper || path.startsWith(`${wrapper}.`) ? path : `${wrapper}.${path}`;
+    return {
+      ...record,
+      ...(record.facts ? { facts: record.facts.map(to) } : {}),
+      ...(record.groups
+        ? { groups: record.groups.map((group) => ({ ...group, fields: group.fields.map(to) })) }
+        : {}),
+      ...(record.hide ? { hide: record.hide.map(to) } : {}),
+    };
+  };
+
+  /**
+   * Tell a connection's record types what their fields really hold.
+   *
+   * From the last account read, while its values are still held: flags the
+   * docs call boolean and the API sends as 0/1, numbers declared as text. Runs
+   * when a read lands and again when the record types are described, because
+   * either can finish first. Widgets reading a field whose reading changed are
+   * rebuilt so a filter on a flag compares what the API actually sends.
+   */
+  const observeConnection = (connectionId: string): void => {
+    const connection = store.getConnection(connectionId);
+    const held = sampledShapes.get(connectionId);
+    if (!connection?.catalog || !held || !options.catalog) return;
+    if (Date.now() - held.at > SAMPLES_TTL) {
+      sampledShapes.delete(connectionId);
+      return;
+    }
+    const entry = options.catalog.get(connection.catalog);
+    if (!entry?.entities?.length) return;
+
+    const at = new Date(held.at).toISOString();
+    const resources = connection.resources.length > 0 ? connection.resources : (entry.resources ?? []);
+    const changed = new Set<string>();
+    const wrapped = new Map<string, string>();
+    let touched = false;
+    const entities = entry.entities.map((entity) => {
+      const found = resources.find((one) => one.id === entity.resource);
+      // The list where it was read, else the record's own endpoint.
+      const shape =
+        (found?.listOp ? held.byOp.get(found.listOp) : undefined) ??
+        (found?.detailOp ? held.byOp.get(found.detailOp) : undefined);
+      if (!shape) return entity;
+      const observed = observeEntity(entity, shape.fields, at);
+      if (observed === entity) return entity;
+      const { wrapped: wrapper, ...next } = observed;
+      touched = true;
+      if (wrapper) wrapped.set(entity.id, wrapper);
+      if (wrapper || readingsDiffer(entity, next)) changed.add(entity.id);
+      return next;
+    });
+    if (!touched) return;
+    options.catalog.put({ ...entry, entities });
+    if (changed.size > 0) recompileReadings(connection.id, changed, wrapped);
   };
 
   app.get<{ Params: { id: string; widgetId: string } }>(
@@ -4092,10 +4238,14 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             };
           }
 
+          const parentParam = binding.parentParams?.length === 1 ? binding.parentParams[0] : undefined;
           const opened = await readRecords({
             binding,
             ids: [parsed.data.id],
             deps: toolDepsFor(dashboard, context),
+            ...(parentParam && parsed.data.parent
+              ? { parents: { [parentParam]: parsed.data.parent } }
+              : {}),
           });
 
           /*

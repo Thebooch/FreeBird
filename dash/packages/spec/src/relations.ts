@@ -128,6 +128,11 @@ export interface RecordLink {
   readonly resource: string;
   readonly op: string;
   readonly param: string;
+  /**
+   * The detail endpoint's other path parameters, for a record that lives
+   * under a parent: `/leases/{leaseId}/notes/{noteId}` needs the lease's id.
+   */
+  readonly parentParams?: readonly string[] | undefined;
   readonly idField: string;
   readonly labelField?: string | undefined;
   /**
@@ -577,10 +582,14 @@ export const relationGraph = (input: RelationGraphInput): RelationGraph => {
       const idField = resource.idField ?? inferIdField(fieldsOf(opId), nouns);
       if (!idField) return undefined;
 
+      const parentParams = pathParamNames(opById.get(resource.detailOp)?.path ?? "").filter(
+        (param) => param !== resource.detailParam,
+      );
       return {
         resource: resource.id,
         op: resource.detailOp,
         param: resource.detailParam,
+        ...(parentParams.length > 0 ? { parentParams } : {}),
         idField,
         labelField: resource.labelField,
         idFieldObserved: resource.idField !== undefined,

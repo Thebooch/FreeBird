@@ -153,7 +153,11 @@ export const columnTotals = (
 ): readonly ColumnTotal[] => {
   const numeric = new Set(
     meta
-      .filter((column) => column.valueType === "numeric" && !isIdentifierColumn(column))
+      // A flag sent as 1/0 is numeric on the wire; its sum means nothing.
+      .filter(
+        (column) =>
+          column.valueType === "numeric" && !isIdentifierColumn(column) && column.semantic !== "boolean",
+      )
       .map((column) => column.name),
   );
 

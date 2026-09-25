@@ -139,6 +139,30 @@ describe("pickIdField", () => {
 
   it("ignores nested fields, which cannot address a row", () => {
     expect(pickIdField([field("owner.id"), field("name")], "gadget")).toBeUndefined();
+    // Even with the container present: the owner's id is not the gadget's.
+    expect(
+      pickIdField([field("owner", "object"), field("owner.id"), field("name")], "gadget"),
+    ).toBeUndefined();
+  });
+
+  /*
+   * Rentvine wraps every record in an object named after its type, so the top
+   * level of a row holds no id at all — and no collection under a property
+   * was ever opened, because no property ever had an id to open one with.
+   */
+  it("finds the id inside a record wrapped in its own name", () => {
+    expect(
+      pickIdField(
+        [field("property", "object"), field("property.propertyID", "number"), field("property.name")],
+        "property",
+      ),
+    ).toBe("property.propertyID");
+    expect(
+      pickIdField([field("unit", "object"), field("unit.unitID", "number")], "property-unit"),
+    ).toBe("unit.unitID");
+    expect(
+      pickLabelField([field("unit", "object"), field("unit.unitID", "number"), field("unit.name")], "property-unit"),
+    ).toBe("unit.name");
   });
 });
 
@@ -433,6 +457,36 @@ describe("analyseConnection", () => {
       }
       return { kind: "empty" };
     };
+
+    /*
+     * Rentvine: every record wrapped in its own name, so a crate's id is
+     * `crate.crateId` and nothing at the top level identifies it. Before, no
+     * parent had an id and no child collection was ever opened.
+     */
+    it("opens a scoped collection under a parent whose record is wrapped", async () => {
+      const asked: Array<Readonly<Record<string, unknown>> | undefined> = [];
+      const wrapped: SampleFn = async (opId, inputs) => {
+        if (opId === "crates") {
+          return {
+            kind: "rows",
+            fields: [
+              withSample("crate", {}, "object"),
+              withSample("crate.crateId", 4821, "number"),
+              withSample("crate.name", "Blue crate"),
+            ],
+            rowCount: 1,
+          };
+        }
+        if (opId === "crateItems") {
+          asked.push(inputs);
+          return { kind: "rows", fields: [withSample("item", {}, "object"), withSample("item.itemId", 9, "number")], rowCount: 1 };
+        }
+        return { kind: "empty" };
+      };
+      const result = await analyseConnection(crateCo, wrapped, instant);
+      expect(result.resources.find((resource) => resource.id === "crate")?.idField).toBe("crate.crateId");
+      expect(asked).toEqual([{ crateId: 4821 }]);
+    });
 
     it("opens a scoped collection using a real id from its parent", async () => {
       const result = await analyseConnection(crateCo, crateSample, instant);

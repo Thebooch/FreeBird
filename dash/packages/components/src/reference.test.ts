@@ -159,4 +159,23 @@ describe("referenceText", () => {
     const poly = reference({ typeColumn: "Kind", typeMap: { Rental: "vendor" } });
     expect(cell({ row: { VendorId: 9 }, reference: poly }).canOpen).toBe(true);
   });
+
+  /*
+   * A far record that lives under a parent — a unit under its property — opens
+   * with the parent id off the same row, and only when the row has it.
+   */
+  it("opens a nested record with its parent id, and only when the row carries it", () => {
+    const nested = reference({
+      lookup: {
+        op: "unit",
+        param: "unitID",
+        parents: [{ param: "propertyID", field: "workOrder.propertyID" }],
+      },
+    });
+    expect(cell({ row: { VendorId: 222, workOrder: { propertyID: 210 } }, reference: nested })).toMatchObject({
+      canOpen: true,
+      target: { entity: "vendor", id: 222, parents: { propertyID: "210" } },
+    });
+    expect(cell({ row: { VendorId: 222 }, reference: nested }).canOpen).toBe(false);
+  });
 });

@@ -99,6 +99,17 @@ describe("parseView", () => {
     });
   });
 
+  it("reads a nested record's parents after its id", () => {
+    // A unit is fetched with its property's id; the page reports both.
+    expect(parseView("entity:rv:unit:222?propertyID=210")).toEqual({
+      kind: "entity",
+      connectionId: "rv",
+      entityId: "unit",
+      recordId: "222",
+      parents: { propertyID: "210" },
+    });
+  });
+
   it("keeps an entity record id containing a colon whole", () => {
     expect(parseView("entity:api:thing:urn:x:7")?.recordId).toBe("urn:x:7");
   });

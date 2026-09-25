@@ -1,4 +1,4 @@
-import type { FieldGroup, WidgetSpec } from "@freebirdai/dash-spec";
+import type { AddressPart, FieldGroup, WidgetSpec } from "@freebirdai/dash-spec";
 
 /**
  * Turning a drill-down into ordinary widgets.
@@ -28,7 +28,17 @@ export interface DetailPane {
    * `column` is the identity as the pipeline produced it, which is not the
    * field path when the identity nests.
    */
-  readonly opensEntity?: { readonly entity: string; readonly column: string };
+  readonly opensEntity?: {
+    readonly entity: string;
+    readonly column: string;
+    /**
+     * The row's other ids, for a record that lives under a parent: read off
+     * the row where it carries them, else from `known` — the address of the
+     * page the section is on, which is usually the parent itself.
+     */
+    readonly parents?: readonly AddressPart[] | undefined;
+    readonly known?: Readonly<Record<string, string>> | undefined;
+  };
   /**
    * Whether this pane wants to be a tab where there is room for tabs.
    *

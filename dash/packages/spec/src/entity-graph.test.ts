@@ -637,6 +637,56 @@ describe("entityGraph", () => {
       "task-by-CreatedById",
       "task-by-AssignedToId",
     ]);
+    /*
+     * And they read as two. Titled by the plural alone, a person's page showed
+     * "Tasks" twice — Buildium's task history shows it three times.
+     */
+    expect(graph.backrefsOf("user").map((entry) => entry.title)).toEqual([
+      "Tasks · Created by",
+      "Tasks · Assigned to",
+    ]);
+  });
+
+  it("names each link by its role, and by its path where roles collide", () => {
+    /*
+     * Measured: Buildium labels both `CreatedByUser.Id` and
+     * `LastUpdatedByUser.Id` "User ID", so the labels cannot tell them apart.
+     * Rentvine's invoice rows carry the work order's id twice — on the invoice
+     * and on the work order bundled beside it — so even the role repeats.
+     */
+    const invoice = entity({
+      ...TASK,
+      fields: [
+        { path: "Id" },
+        { path: "CreatedByUser.Id", label: "User ID", reference: { entity: "user" } },
+        { path: "LastUpdatedByUser.Id", label: "User ID", reference: { entity: "user" } },
+        { path: "invoice.workOrderID", reference: { entity: "user" } },
+        { path: "workOrder.workOrderID", reference: { entity: "user" } },
+      ],
+    });
+    const user = entity({
+      id: "user",
+      resource: "user",
+      name: { one: "Person", many: "People" },
+      kind: "party",
+    });
+    const graph = graphOf([invoice, user], OPS, [
+      ...RESOURCES,
+      resource({ id: "user", title: "Users", listOp: "users_list" }),
+    ]);
+    const titles = graph.backrefsOf("user").map((entry) => entry.title);
+    expect(titles).toEqual([
+      "Tasks · Created by user",
+      "Tasks · Last updated by user",
+      "Tasks · Invoice · Work order ID",
+      "Tasks · Work order · Work order ID",
+    ]);
+    expect(new Set(titles).size).toBe(titles.length);
+  });
+
+  it("leaves a record type that links here once titled by its plural alone", () => {
+    const graph = graphOf([TASK, VENDOR]);
+    expect(graph.backrefsOf("vendor").map((entry) => entry.title)).toEqual(["Tasks"]);
   });
 
   it("reaches an object reference through the id inside it", () => {
@@ -793,12 +843,12 @@ describe("entityLinkViews", () => {
   });
 
   /*
-   * Rentvine's units live under their property: `/properties/{propertyID}/
-   * units/{unitID}`. A link or a page address holds only the unit's own id, so
-   * every lookup went out with a hole in its path and came back an error — one
-   * failed request per unit named on a page, on every load.
+   * A record that lives under a parent is fetched with the parent's id too:
+   * `/v1/groups/{groupId}/vendors/{vendorId}`. A task that names only its
+   * vendor cannot say which group, so the link is not offered — sent anyway,
+   * every lookup went out with a hole in its path and came back an error.
    */
-  it("offers no lookup, and no page fetch, for a record that lives under a parent", () => {
+  it("offers no lookup where the row cannot say which parent the record is under", () => {
     const nested = {
       entities: [TASK, VENDOR],
       resources: [
@@ -818,7 +868,12 @@ describe("entityLinkViews", () => {
     };
     const views = entityLinkViews(nested);
     expect(views.find((view) => view.entity === "task")?.references[0]?.lookup).toBeUndefined();
-    expect(entityPageView(nested, "vendor")?.detail).toBeUndefined();
+    /* The page still knows how one is fetched, and which id it needs besides. */
+    expect(entityPageView(nested, "vendor")?.detail).toEqual({
+      op: "vendors_nested",
+      param: "vendorId",
+      parents: [{ param: "groupId" }],
+    });
 
     /* Its own id alone is enough everywhere else, as before. */
     const plain = entityLinkViews({ entities: [TASK, VENDOR], resources: RESOURCES, ops: OPS });
@@ -903,5 +958,205 @@ describe("polymorphic references", () => {
     // it to the wrong record type is worse than not offering it.
     expect(targetFor(reference, { Property_Type: "Something else" })).toBe("rental");
     expect(targetFor(reference, {})).toBe("rental");
+  });
+});
+
+/**
+ * Records that live under another record.
+ *
+ * Shaped like the two APIs this was found on. Rentvine's units are
+ * `/properties/{propertyID}/units/{unitID}` and carry their property's id;
+ * Buildium's lease notes are `/leases/{leaseId}/notes/{noteId}` and do not —
+ * 43 of Buildium's 109 record types are like one or the other.
+ */
+describe("record addresses", () => {
+  const PROPERTY = entity({
+    id: "property",
+    resource: "property",
+    name: { one: "Property", many: "Properties" },
+    kind: "place",
+    fields: [{ path: "propertyID" }, { path: "name" }],
+    identity: { field: "propertyID" },
+    display: { title: ["name"] },
+  });
+  const UNIT = entity({
+    id: "unit",
+    resource: "unit",
+    name: { one: "Unit", many: "Units" },
+    kind: "place",
+    scope: { parent: "property", param: "propertyID" },
+    fields: [{ path: "unitID" }, { path: "propertyID" }, { path: "name" }],
+    identity: { field: "unitID" },
+    display: { title: ["name"] },
+  });
+  const WORK_ORDER = entity({
+    id: "work-order",
+    resource: "work-order",
+    name: { one: "Work order", many: "Work orders" },
+    kind: "work",
+    fields: [
+      { path: "workOrder.workOrderID" },
+      { path: "workOrder.unitID", reference: { entity: "unit" } },
+      { path: "workOrder.propertyID", reference: { entity: "property" } },
+    ],
+    identity: { field: "workOrder.workOrderID" },
+  });
+  const LEASE = entity({
+    id: "lease",
+    resource: "lease",
+    name: { one: "Lease", many: "Leases" },
+    kind: "document",
+    fields: [{ path: "Id" }],
+    identity: { field: "Id" },
+  });
+  const NOTE = entity({
+    id: "lease-note",
+    resource: "lease-note",
+    name: { one: "Note", many: "Notes" },
+    kind: "note",
+    scope: { parent: "lease", param: "leaseId" },
+    fields: [{ path: "Id" }, { path: "Note" }],
+    identity: { field: "Id" },
+  });
+
+  const input = {
+    entities: [PROPERTY, UNIT, WORK_ORDER, LEASE, NOTE],
+    resources: [
+      resource({ id: "property", title: "Properties", listOp: "properties", detailOp: "property", detailParam: "propertyID" }),
+      resource({ id: "unit", title: "Units", listOp: "units", detailOp: "unit", detailParam: "unitID" }),
+      resource({ id: "work-order", title: "Work orders", listOp: "work_orders" }),
+      resource({ id: "lease", title: "Leases", listOp: "leases", detailOp: "lease", detailParam: "leaseId" }),
+      resource({ id: "lease-note", title: "Notes", listOp: "lease_notes", detailOp: "lease_note", detailParam: "noteId" }),
+    ],
+    ops: [
+      { id: "properties", path: "/properties", params: [] },
+      { id: "property", path: "/properties/{{param.propertyID}}", params: [] },
+      { id: "units", path: "/properties/{{param.propertyID}}/units", params: [] },
+      { id: "unit", path: "/properties/{{param.propertyID}}/units/{{param.unitID}}", params: [] },
+      { id: "work_orders", path: "/maintenance/work-orders", params: [] },
+      { id: "leases", path: "/v1/leases", params: [] },
+      { id: "lease", path: "/v1/leases/{{param.leaseId}}", params: [] },
+      { id: "lease_notes", path: "/v1/leases/{{param.leaseId}}/notes", params: [] },
+      { id: "lease_note", path: "/v1/leases/{{param.leaseId}}/notes/{{param.noteId}}", params: [] },
+    ],
+  };
+
+  it("finds a parent's id on the record, and which record type it is", () => {
+    expect(entityGraph(input).addressOf("unit")).toEqual({
+      op: "unit",
+      param: "unitID",
+      parents: [{ param: "propertyID", field: "propertyID", entity: "property" }],
+    });
+  });
+
+  it("knows the parent even where the record does not carry its id", () => {
+    // Opened from the lease's page, the lease's id is the page's own.
+    expect(entityGraph(input).addressOf("lease-note")).toEqual({
+      op: "lease_note",
+      param: "noteId",
+      parents: [{ param: "leaseId", entity: "lease" }],
+    });
+  });
+
+  it("needs nothing more for a record fetched by its own id", () => {
+    expect(entityGraph(input).addressOf("property")?.parents).toEqual([]);
+    expect(entityGraph(input).addressOf("work-order")).toBeNull();
+  });
+
+  it("follows a link to a nested record with the parent's id off the same row", () => {
+    const views = entityLinkViews(input);
+    const toUnit = views
+      .find((view) => view.entity === "work-order")
+      ?.references.find((reference) => reference.target === "unit");
+    expect(toUnit?.lookup).toEqual({
+      op: "unit",
+      param: "unitID",
+      parents: [{ param: "propertyID", field: "workOrder.propertyID" }],
+    });
+  });
+
+  it("tells a row of nested records which other ids it needs to open", () => {
+    const views = entityLinkViews(input);
+    expect(views.find((view) => view.entity === "unit")?.address).toEqual({
+      parents: [{ param: "propertyID", field: "propertyID", entity: "property" }],
+    });
+    expect(views.find((view) => view.entity === "property")?.address).toBeUndefined();
+  });
+
+  it("gives a page and its sections what they need to fetch and open", () => {
+    expect(entityPageView(input, "unit")?.detail).toEqual({
+      op: "unit",
+      param: "unitID",
+      parents: [{ param: "propertyID", field: "propertyID", entity: "property" }],
+    });
+    const notes = entityPageView(input, "lease")?.sections.find((one) => one.entity === "lease-note");
+    expect(notes?.reach).toEqual({ mode: "path", op: "lease_notes", param: "leaseId" });
+    expect(notes?.parents).toEqual([{ param: "leaseId", entity: "lease" }]);
+  });
+
+  it("names a nested parent's own parents on a collection under it", () => {
+    const deeper = {
+      ...input,
+      entities: [
+        ...input.entities,
+        entity({
+          id: "unit-photo",
+          resource: "unit-photo",
+          name: { one: "Photo", many: "Photos" },
+          kind: "document",
+          scope: { parent: "unit", param: "unitID" },
+          fields: [{ path: "photoID" }],
+          identity: { field: "photoID" },
+        }),
+      ],
+      resources: [
+        ...input.resources,
+        resource({ id: "unit-photo", title: "Photos", listOp: "unit_photos" }),
+      ],
+      ops: [
+        ...input.ops,
+        { id: "unit_photos", path: "/properties/{{param.propertyID}}/units/{{param.unitID}}/photos", params: [] },
+      ],
+    };
+    const photos = entityPageView(deeper, "unit")?.sections.find((one) => one.entity === "unit-photo");
+    expect(photos?.reach).toEqual({
+      mode: "path",
+      op: "unit_photos",
+      param: "unitID",
+      parents: ["propertyID"],
+    });
+  });
+});
+
+describe("flags", () => {
+  const unit = entity({
+    id: "unit",
+    resource: "unit",
+    name: { one: "Unit", many: "Units" },
+    kind: "place",
+    identity: { field: "unitID" },
+    fields: [
+      { path: "unitID", kinds: ["number"] },
+      { path: "isActive", kinds: ["boolean"] },
+      { path: "taxFormTypeID", kinds: ["boolean"], observed: { kinds: ["number"] } },
+    ],
+  });
+  const input = {
+    entities: [unit],
+    resources: [resource({ id: "unit", title: "Units", listOp: "units", detailOp: "unit", detailParam: "unitID" })],
+    ops: [
+      { id: "units", path: "/units", params: [] },
+      { id: "unit", path: "/units/{{param.unitID}}", params: [] },
+    ],
+  };
+
+  it("names its flags for the board, and not a number the docs called one", () => {
+    expect(entityLinkViews(input)[0]?.flags).toEqual(["isActive"]);
+  });
+
+  it("reads its flags as flags on its own page", () => {
+    const page = entityPageView(input, "unit");
+    expect(page?.fields.find((field) => field.path === "isActive")?.readAs).toBe("boolean");
+    expect(page?.fields.find((field) => field.path === "taxFormTypeID")?.readAs).toBeUndefined();
   });
 });

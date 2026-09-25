@@ -93,6 +93,12 @@ export interface ToolBinding {
   /** The input on `op` that receives the identifier. */
   readonly idParam?: string;
   /**
+   * The other inputs a record under a parent needs — the parent's id. Only one
+   * can be supplied through the tool, which covers every nested record type on
+   * the APIs measured; one needing more cannot be opened by hand.
+   */
+  readonly parentParams?: readonly string[];
+  /**
    * The field on a record that carries its identity.
    *
    * Never assumed to be `Id`. It comes from a sampled response, because a path

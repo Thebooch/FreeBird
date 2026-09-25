@@ -91,6 +91,37 @@ describe("identityValue", () => {
   });
 });
 
+/*
+ * A record under a parent — a lease note is /leases/{leaseId}/notes/{noteId} —
+ * is asked for with the parent's id, and not asked for at all without it.
+ */
+describe("readRecords, for a record under a parent", () => {
+  const nested = binding({ idParam: "noteId", parentParams: ["leaseId"] });
+
+  it("sends the parent's id with the record's own", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const read = (async (input: { params: Record<string, unknown> }) => {
+      seen.push(input.params);
+      return { ok: true as const, body: { id: 9 }, requests: 1, truncated: false };
+    }) as unknown as OpReader;
+    const result = await readRecords({
+      binding: nested,
+      ids: ["9"],
+      parents: { leaseId: "7" },
+      deps: deps(read),
+    });
+    expect(seen).toEqual([{ leaseId: "7", noteId: "9" }]);
+    expect(result.records).toHaveLength(1);
+  });
+
+  it("asks nothing, and says what it needs, without the parent's id", async () => {
+    const calls: string[] = [];
+    const result = await readRecords({ binding: nested, ids: ["9"], deps: deps(reader({}, calls)) });
+    expect(calls).toEqual([]);
+    expect(result.note).toMatch(/leaseId/);
+  });
+});
+
 describe("readRecords", () => {
   it("opens the record and says it did", async () => {
     const calls: string[] = [];

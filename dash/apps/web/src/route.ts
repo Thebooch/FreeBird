@@ -35,6 +35,13 @@ export type Route =
       readonly connectionId: string;
       readonly entityId: string;
       readonly recordId: string;
+      /**
+       * The record's other ids, where it lives under a parent: a unit is
+       * `/properties/{propertyID}/units/{unitID}`, and its page cannot be
+       * fetched from the unit's id alone. Carried in the address so a shared
+       * link or a reload reaches the same record.
+       */
+      readonly parents?: Readonly<Record<string, string>>;
       readonly from?: { readonly dashboardId: string; readonly widgetId: string };
     };
 
@@ -47,7 +54,9 @@ export const BOARD_ROUTE: Route = { kind: "board", dashboardId: null };
  * hand-edited link should land somewhere useful, not somewhere apologetic.
  */
 export const parseRoute = (hash: string): Route => {
-  const parts = hash
+  // A record's parents ride after the path as a query: `…/222?propertyID=210`.
+  const [path = "", query = ""] = hash.split("?", 2);
+  const parts = path
     .replace(/^#\/?/, "")
     .split("/")
     .filter((part) => part !== "")
@@ -60,11 +69,15 @@ export const parseRoute = (hash: string): Route => {
   if (parts[0] === "r") {
     const [, connectionId, entityId, recordId, fromMarker, dashboardId, widgetId] = parts;
     if (!connectionId || !entityId || !recordId) return BOARD_ROUTE;
+    const parents = Object.fromEntries(
+      [...new URLSearchParams(query)].filter(([name, value]) => name !== "" && value !== ""),
+    );
     return {
       kind: "entity",
       connectionId,
       entityId,
       recordId,
+      ...(Object.keys(parents).length > 0 ? { parents } : {}),
       ...(fromMarker === "from" && dashboardId && widgetId
         ? { from: { dashboardId, widgetId } }
         : {}),
@@ -92,7 +105,8 @@ export const routeToHash = (route: Route): string => {
       (route.from
         ? `/from/${encodeURIComponent(route.from.dashboardId)}` +
           `/${encodeURIComponent(route.from.widgetId)}`
-        : "")
+        : "") +
+      parentsQuery(route.parents)
     );
   }
   return (
@@ -100,6 +114,12 @@ export const routeToHash = (route: Route): string => {
     `/w/${encodeURIComponent(route.widgetId)}` +
     `/r/${encodeURIComponent(route.recordId)}`
   );
+};
+
+/** A record's parents as the query after its path, in a fixed order. */
+const parentsQuery = (parents: Readonly<Record<string, string>> | undefined): string => {
+  const entries = Object.entries(parents ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return entries.length > 0 ? `?${new URLSearchParams(entries).toString()}` : "";
 };
 
 export const currentRoute = (): Route =>

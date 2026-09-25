@@ -236,6 +236,29 @@ export const entityFieldSchema = z.object({
    * beautifully and is off by a hundred.
    */
   coercion: coercionSchema.optional(),
+  /**
+   * What a real response showed, where one was read.
+   *
+   * Kept apart from everything above, which is what the specification said
+   * or what a person set: the docs can be wrong — Rentvine declares flags
+   * boolean and sends 0 and 1, and a work order number "string" that arrives
+   * as a number — and a reading learned from the account must never overwrite
+   * a decision somebody made. So it lands here, and readers prefer a stated
+   * \`coercion\` or \`semantic\` over it and it over nothing.
+   *
+   * Types and conclusions only. The values it was learned from are never
+   * stored: they are a customer's data.
+   */
+  observed: z
+    .object({
+      /** The kinds real values took. Empty: every sampled record left it empty. */
+      kinds: z.array(z.enum(["string", "number", "boolean", "object", "array"])).max(5),
+      /** How to read these values, where the declared kind was wrong. */
+      coercion: coercionSchema.optional(),
+      /** What the values are, where the declared kind misled. */
+      semantic: semanticTypeSchema.optional(),
+    })
+    .optional(),
 });
 
 export type EntityField = z.infer<typeof entityFieldSchema>;
@@ -407,6 +430,14 @@ const entityBodySchema = z.object({
     .optional(),
   /** True once a real response confirmed the identity field. */
   verified: z.boolean().default(false),
+  /**
+   * When real records of this type were last read, by either account read.
+   *
+   * What lets a budgeted check resume: a run stopped by its budget or a rate
+   * limit starts next time with the types never read, rather than spending
+   * the same budget on the same first sixty again.
+   */
+  readAt: z.string().max(40).optional(),
 });
 
 export const entitySchema = entityBodySchema.superRefine((entity, ctx) => {

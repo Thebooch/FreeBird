@@ -115,7 +115,13 @@ export class QueryClient {
    * would make the cache the wrong place to change when the map changes. The
    * provider owns that map and does the indexing.
    */
-  onFetched?: (input: { connection: string; op: string; body: unknown }) => void;
+  onFetched?: (input: {
+    connection: string;
+    op: string;
+    body: unknown;
+    /** What it was asked with — a scoped list's parent id is among these. */
+    params: QueryParams;
+  }) => void;
 
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
@@ -271,7 +277,7 @@ export class QueryClient {
         });
         // After the entry lands, so anything the hook triggers sees a
         // consistent cache rather than a half-applied one.
-        this.onFetched?.({ connection, op, body: result.body });
+        this.onFetched?.({ connection, op, body: result.body, params });
       })
       .catch((error: unknown) => {
         const adapterError = error instanceof AdapterError ? error : null;

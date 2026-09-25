@@ -214,6 +214,7 @@ const recordsFromMap = (
       detailOp: record.op,
       idField: record.idField,
       detailParam: record.param,
+      ...(record.parentParams?.length ? { parentParams: record.parentParams } : {}),
       ...(record.labelField ? { labelField: record.labelField } : {}),
     });
   }
@@ -560,6 +561,7 @@ const buildSingleContext = (input: ContextInput): ConciergeContext => {
         detailOp: offer.detailOp,
         idField: offer.idField,
         detailParam: offer.detailParam,
+        ...(offer.parentParams?.length ? { parentParams: offer.parentParams } : {}),
         ...(offer.labelField ? { labelField: offer.labelField } : {}),
       });
     }

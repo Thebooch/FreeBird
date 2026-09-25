@@ -49,6 +49,8 @@ export interface OpenEntity {
   readonly connectionId: string;
   readonly entityId: string;
   readonly recordId: string;
+  /** Its other ids, where it lives under a parent. */
+  readonly parents?: Readonly<Record<string, string>> | undefined;
 }
 
 export type OpenView = OpenRecord | OpenEntity;
@@ -77,9 +79,20 @@ export const parseView = (header: unknown): OpenView | null => {
     if (parts[0] === "entity" && parts.length >= 4) {
       const connectionId = decodeURIComponent(parts[1] ?? "");
       const entityId = decodeURIComponent(parts[2] ?? "");
-      const recordId = decodeURIComponent(parts.slice(3).join(":"));
+      // A nested record's parents follow its id as a query, `…:222?propertyID=210`.
+      const [encodedId = "", query = ""] = parts.slice(3).join(":").split("?", 2);
+      const recordId = decodeURIComponent(encodedId);
       if (!connectionId || !entityId || !recordId) return null;
-      return { kind: "entity", connectionId, entityId, recordId };
+      const parents = Object.fromEntries(
+        [...new URLSearchParams(query)].filter(([name, value]) => name !== "" && value !== ""),
+      );
+      return {
+        kind: "entity",
+        connectionId,
+        entityId,
+        recordId,
+        ...(Object.keys(parents).length > 0 ? { parents } : {}),
+      };
     }
     return null;
   } catch {
@@ -155,6 +168,7 @@ export const focusFromScreen = async (
         ...(found.idField ? { idField: found.idField } : {}),
       },
       ids: [open.recordId],
+      ...(open.parents ? { parents: open.parents } : {}),
       deps: {
         read: input.read,
         resolved: input.resolved,

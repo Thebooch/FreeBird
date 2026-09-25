@@ -1,6 +1,6 @@
 import type { AlongsideMode, WidgetBrief } from "./brief-schema.js";
 import type { Coercion } from "./coercion.js";
-import { COERCION_SEMANTICS, coercionForFormat } from "./coercion.js";
+import { fieldCoercion, fieldReading } from "./observe.js";
 import type { BuiltinComponentId } from "./contracts.js";
 import type { WidgetSpec } from "./dashboard.js";
 import { parseWidget } from "./dashboard.js";
@@ -521,7 +521,7 @@ const joinOn = (
     return {
       ok: true,
       value: {
-        left: linkColumn(field, reference),
+        left: linkColumn(field, reference, far),
         right,
         /*
          * Two fields pointing at the same record type are two relationships —
@@ -1177,15 +1177,14 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
     for (const path of new Set(paths)) {
       const field = of.fields.find((one) => one.path === path);
       if (!field) continue;
-      const coercion = field.coercion ?? coercionForFormat(field.format);
-      if (!coercion) continue;
-      coercions[name(path)] = coercion;
       /*
-       * What the coercion implies, said out loud on the widget rather than
-       * left for the renderer to infer from a column's name — which is how a
-       * date called `Period` renders as the string it arrived as.
+       * The same reading a record page applies — see `fieldReading`. What it
+       * implies is said out loud on the widget rather than left for the
+       * renderer to infer from a column's name, which is how a date called
+       * `Period` rendered as the string it arrived as.
        */
-      const semantic = COERCION_SEMANTICS[coercion];
+      const { coercion, semantic } = fieldReading(field);
+      if (coercion) coercions[name(path)] = coercion;
       if (semantic) format[name(path)] = { semantic };
     }
     return { coercions, format };
@@ -1208,7 +1207,7 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
   const axisAsLabel = (of: EntitySpec, path: string | null): Record<string, Coercion> => {
     if (brief.intent !== "compare" || bucket || !path) return {};
     const field = of.fields.find((one) => one.path === path);
-    if (!field || field.coercion || coercionForFormat(field.format)) return {};
+    if (!field || fieldCoercion(field)) return {};
     return field.kinds.some((kind) => kind === "number" || kind === "boolean")
       ? { [columnForPath(path)]: "->string" }
       : {};
