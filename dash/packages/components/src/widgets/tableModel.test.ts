@@ -196,3 +196,14 @@ describe("visibleColumns", () => {
     expect(visibleColumns(["a"], new Set(["gone"]))).toEqual(["a"]);
   });
 });
+
+describe("columnTotals, for flags", () => {
+  it("does not add up a flag sent as 1 and 0", () => {
+    const totals = columnTotals(
+      [{ isActive: 1 }, { isActive: 0 }, { isActive: 1 }],
+      ["isActive"],
+      [{ name: "isActive", valueType: "numeric", semantic: "boolean" }],
+    );
+    expect(totals).toEqual([]);
+  });
+});

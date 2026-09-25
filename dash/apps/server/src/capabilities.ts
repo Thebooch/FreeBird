@@ -42,6 +42,11 @@ export interface DrillDownOffer {
   readonly idField: string;
   /** The detail endpoint's path parameter that identity feeds. */
   readonly detailParam: string;
+  /**
+   * The detail endpoint's other path parameters, for a record that lives
+   * under a parent: `/leases/{leaseId}/notes/{noteId}` needs the lease's id.
+   */
+  readonly parentParams?: readonly string[];
   readonly labelField?: string;
   /** True once a real response has shown the id field exists. */
   readonly sampled: boolean;
@@ -179,33 +184,87 @@ export const pickIdField = (
   fields: readonly FieldInfo[],
   resourceId: string,
 ): string | undefined => {
-  const flat = fields.filter((field) => !field.name.includes("."));
-  const named = (predicate: (name: string) => boolean): string | undefined =>
-    flat.find((field) => predicate(field.name.toLowerCase()))?.name;
-
   const resource = resourceId.toLowerCase().replace(/[^a-z0-9]/g, "");
-  return (
-    named((name) => name === "id") ??
-    named((name) => name === `${resource}id`) ??
-    named((name) => name === "uuid" || name === "guid" || name === "key") ??
-    named((name) => name === `${resource}_id`) ??
-    flat.filter((field) => /(^|_)id$/i.test(field.name)).map((field) => field.name)[0]
-  );
+  return inRecord(fields, resource, (pool, leaf, noun) => {
+    const named = (predicate: (name: string) => boolean): string | undefined =>
+      pool.find((field) => predicate(leaf(field.name).toLowerCase()))?.name;
+    return (
+      named((name) => name === "id") ??
+      named((name) => name === `${resource}id`) ??
+      // Inside a wrapper, the record's own id is named for the wrapper: `unit.unitID`.
+      named((name) => name === `${noun}id`) ??
+      named((name) => name === "uuid" || name === "guid" || name === "key") ??
+      named((name) => name === `${resource}_id`) ??
+      pool.filter((field) => /(^|_)id$/i.test(leaf(field.name))).map((field) => field.name)[0]
+    );
+  });
+};
+
+/**
+ * Look for something among a row's own fields, then inside the record's
+ * wrapper where the row has one.
+ *
+ * Some APIs send each record wrapped in an object named after its type —
+ * Rentvine answers `{ property: { propertyID, name } }` — so the top level
+ * holds no id and no name at all. Read only at the top level, no resource on
+ * such an API ever had an identity, and no collection scoped under one was
+ * ever opened: a property's units were never read.
+ *
+ * Only a wrapper named for the record itself — \`property\` for properties,
+ * \`unit\` for a property's units. Any other object is something the record
+ * *carries*, and its id is not the record's: a gadget's \`owner.id\` is the
+ * owner's.
+ */
+const inRecord = (
+  fields: readonly FieldInfo[],
+  resource: string,
+  find: (
+    pool: readonly FieldInfo[],
+    leaf: (name: string) => string,
+    noun: string,
+  ) => string | undefined,
+): string | undefined => {
+  const flat = fields.filter((field) => !field.name.includes("."));
+  const top = find(flat, (name) => name, resource);
+  if (top) return top;
+
+  const named = (wrapper: string): boolean => {
+    const noun = wrapper.toLowerCase().replace(/[^a-z0-9]/g, "");
+    return noun.length >= 3 && (resource === noun || resource.endsWith(noun));
+  };
+  const wrappers = flat
+    .filter((field) => field.kinds.includes("object") && named(field.name))
+    .map((field) => field.name);
+  for (const wrapper of wrappers) {
+    const inner = fields.filter(
+      (field) => field.name.startsWith(`${wrapper}.`) && field.name.split(".").length === 2,
+    );
+    const found = find(
+      inner,
+      (name) => name.slice(wrapper.length + 1),
+      wrapper.toLowerCase().replace(/[^a-z0-9]/g, ""),
+    );
+    if (found) return found;
+  }
+  return undefined;
 };
 
 /** A human-readable name for a row, so a picker shows words rather than ids. */
-export const pickLabelField = (fields: readonly FieldInfo[]): string | undefined => {
-  const flat = fields.filter((field) => !field.name.includes("."));
-  const texty = flat.filter((field) => field.kinds.includes("string"));
-  const preferred = ["name", "title", "label", "displayname", "description", "subject", "summary"];
+export const pickLabelField = (
+  fields: readonly FieldInfo[],
+  resourceId = "",
+): string | undefined =>
+  inRecord(fields, resourceId.toLowerCase().replace(/[^a-z0-9]/g, ""), (pool, leaf) => {
+    const texty = pool.filter((field) => field.kinds.includes("string"));
+    const preferred = ["name", "title", "label", "displayname", "description", "subject", "summary"];
 
-  for (const want of preferred) {
-    const hit = texty.find((field) => field.name.toLowerCase().replace(/[^a-z]/g, "") === want);
-    if (hit) return hit.name;
-  }
-  // Fall back to the first string field that is not obviously an identifier.
-  return texty.find((field) => !/(^|_)(id|uuid|guid)$/i.test(field.name))?.name;
-};
+    for (const want of preferred) {
+      const hit = texty.find((field) => leaf(field.name).toLowerCase().replace(/[^a-z]/g, "") === want);
+      if (hit) return hit.name;
+    }
+    // Fall back to the first string field that is not obviously an identifier.
+    return texty.find((field) => !/(^|_)(id|uuid|guid)$/i.test(leaf(field.name)))?.name;
+  });
 
 /** A resource a foreign key might point at. */
 export interface ForeignKeyTarget {
@@ -907,7 +966,7 @@ export const analyseConnection = async (
 
     sampled.set(resource.id, outcome.fields);
     const idField = pickIdField(outcome.fields, resource.id);
-    const labelField = pickLabelField(outcome.fields);
+    const labelField = pickLabelField(outcome.fields, resource.id);
     enriched.push({
       ...resource,
       ...(idField ? { idField } : {}),
@@ -959,7 +1018,7 @@ export const analyseConnection = async (
 
       sampled.set(child.id, outcome.fields);
       const idField = pickIdField(outcome.fields, child.id);
-      const labelField = pickLabelField(outcome.fields);
+      const labelField = pickLabelField(outcome.fields, child.id);
       Object.assign(child, {
         ...(idField ? { idField } : {}),
         ...(labelField ? { labelField } : {}),
@@ -995,16 +1054,23 @@ export const analyseConnection = async (
 
   const drillDowns: DrillDownOffer[] = enriched
     .filter((resource) => resource.detailOp && resource.detailParam && resource.idField)
-    .map((resource) => ({
-      resource: resource.id,
-      title: resource.title,
-      listOp: resource.listOp!,
-      detailOp: resource.detailOp!,
-      idField: resource.idField!,
-      detailParam: resource.detailParam!,
-      ...(resource.labelField ? { labelField: resource.labelField } : {}),
-      sampled: sampled.has(resource.id),
-    }));
+    .map((resource) => {
+      const detailPath = byOp.get(resource.detailOp!)?.path;
+      const parentParams = detailPath
+        ? pathParamNames(detailPath).filter((param) => param !== resource.detailParam)
+        : [];
+      return {
+        resource: resource.id,
+        title: resource.title,
+        listOp: resource.listOp!,
+        detailOp: resource.detailOp!,
+        idField: resource.idField!,
+        detailParam: resource.detailParam!,
+        ...(parentParams.length > 0 ? { parentParams } : {}),
+        ...(resource.labelField ? { labelField: resource.labelField } : {}),
+        sampled: sampled.has(resource.id),
+      };
+    });
 
   /*
    * Joins need identity on both sides, so only sampled resources can offer one.

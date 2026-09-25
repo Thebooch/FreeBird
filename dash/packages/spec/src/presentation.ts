@@ -202,13 +202,23 @@ export const humanLabel = (name: string): string => {
    */
   const spoken = parts.length > 2 ? [parts[0]!, parts[parts.length - 1]!] : parts;
 
-  const words = spoken.map((part) =>
-    part
+  const words = spoken.map((part) => {
+    /*
+     * An acronym inside a mixed-case name stays one: `GLAccount` is "GL
+     * account", not "Glaccount", and `workOrderID` is "Work order ID". Only
+     * inside a mixed-case name, because there the capitals were chosen — a
+     * name that is capitals throughout, `STATUS`, is just shouting.
+     */
+    const mixed = /[a-z]/.test(part) && /[A-Z]/.test(part);
+    return part
       .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
       .replace(/_+/g, " ")
       .trim()
-      .toLowerCase(),
-  );
+      .split(/\s+/)
+      .map((word) => (mixed && /^[A-Z]{2,}$/.test(word) ? word : word.toLowerCase()))
+      .join(" ");
+  });
 
   // Sentence case, not Title Case — "Unit number", because "Unit Number" reads
   // as a proper noun. Only the first level is capitalised where several are

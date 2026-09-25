@@ -54,8 +54,12 @@ export const readRoster = (bindings: readonly ToolBinding[]): string => {
     `  ${title}:`,
     ...group.map((binding) => {
       const identity = binding.idField ? `identified by ${binding.idField}` : "no identifier known";
+      // A record under a parent needs that parent's id as `parent`.
+      const within = binding.parentParams?.length
+        ? `, inside another record — also give its ${binding.parentParams.join(" and ")} as parent`
+        : "";
       const describes = binding.describes ? ` — ${gist(binding.describes)}` : "";
-      return `    ${binding.id} (${identity})${describes}`;
+      return `    ${binding.id} (${identity}${within})${describes}`;
     }),
   ]);
 

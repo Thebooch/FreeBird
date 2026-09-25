@@ -186,8 +186,8 @@ export const DashboardProvider = ({
   const plan = useMemo(() => indexPlan(entityLinks), [entityLinks]);
 
   useEffect(() => {
-    client.onFetched = ({ connection, op, body }) => {
-      records.ingest({ connection, op, body, plan });
+    client.onFetched = ({ connection, op, body, params }) => {
+      records.ingest({ connection, op, body, plan, params });
     };
     return () => {
       client.onFetched = undefined;

@@ -215,3 +215,100 @@ describe("verifyRecords", () => {
     expect(result.stopped).toBe("budget");
   });
 });
+
+/*
+ * A budget smaller than the API — sixty requests against Buildium's 108 record
+ * types — used to be spent on the same first sixty every run. Each run now
+ * starts with what has never been read and stamps what it read.
+ */
+describe("verifyRecords, resuming", () => {
+  it("reads the never-read first and stamps what it read", async () => {
+    const asked: string[] = [];
+    const read: VerifyRead = async (op) => {
+      asked.push(op);
+      return answering(op, {});
+    };
+    const older = entities.map((entity) =>
+      entity.id === "task" ? { ...entity, readAt: "2026-09-01T00:00:00Z" } : entity,
+    );
+    const result = await verifyRecords({
+      entities: older,
+      resources,
+      carried,
+      rowsPathOf: (op) => (op === "tasks" || op === "vendors" ? "$.data" : undefined),
+      read,
+      budget: 1,
+      now: "2026-09-25T00:00:00Z",
+    });
+    // One request, spent on the vendor list nobody had read.
+    expect(asked).toEqual(["vendors"]);
+    expect(result.entities.find((one) => one.id === "vendor")?.readAt).toBe("2026-09-25T00:00:00Z");
+    expect(result.entities.find((one) => one.id === "task")?.readAt).toBe("2026-09-01T00:00:00Z");
+  });
+});
+
+/*
+ * A unit is `/properties/{propertyID}/units/{unitID}`: a work order's link to
+ * its unit is checked with the work order's own property id.
+ */
+describe("verifyRecords, links to records under a parent", () => {
+  it("follows the link with the parent's id off the same row", async () => {
+    const nested: EntitySpec[] = [
+      entitySchema.parse({
+        id: "work-order",
+        resource: "work-order",
+        name: { one: "Work order", many: "Work orders" },
+        identity: { field: "workOrderID" },
+        fields: [
+          { path: "workOrderID" },
+          { path: "unitID", reference: { entity: "unit" } },
+          { path: "propertyID", reference: { entity: "property" } },
+        ],
+      }),
+      entitySchema.parse({
+        id: "unit",
+        resource: "unit",
+        name: { one: "Unit", many: "Units" },
+        scope: { parent: "property", param: "propertyID" },
+        identity: { field: "unitID" },
+        fields: [{ path: "unitID" }],
+      }),
+      entitySchema.parse({
+        id: "property",
+        resource: "property",
+        name: { one: "Property", many: "Properties" },
+        identity: { field: "propertyID" },
+        fields: [{ path: "propertyID" }],
+      }),
+    ];
+    const asked: Array<[string, Readonly<Record<string, unknown>>]> = [];
+    await verifyRecords({
+      entities: nested,
+      resources: [
+        resourceSchema.parse({ id: "work-order", title: "Work orders", listOp: "work_orders" }),
+        resourceSchema.parse({ id: "unit", title: "Units", detailOp: "unit", detailParam: "unitID" }),
+        resourceSchema.parse({
+          id: "property",
+          title: "Properties",
+          detailOp: "property",
+          detailParam: "propertyID",
+        }),
+      ],
+      carried: new Set(["work_orders", "unit", "property"]),
+      rowsPathOf: () => "$",
+      ops: [
+        { id: "work_orders", path: "/work-orders", params: [] },
+        { id: "unit", path: "/properties/{{param.propertyID}}/units/{{param.unitID}}", params: [] },
+        { id: "property", path: "/properties/{{param.propertyID}}", params: [] },
+      ],
+      read: async (op, params) => {
+        asked.push([op, params]);
+        return op === "work_orders"
+          ? { ok: true, body: [{ workOrderID: 1, unitID: 222, propertyID: 210 }] }
+          : { ok: true, body: { id: 1 } };
+      },
+      budget: 10,
+    });
+    expect(asked).toContainEqual(["unit", { propertyID: "210", unitID: 222 }]);
+  });
+});

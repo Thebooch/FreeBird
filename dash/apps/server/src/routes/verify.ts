@@ -1,6 +1,6 @@
 import { extractRows, parsePath } from "@freebirdai/dash-expr";
-import type { EntitySpec, ResourceSpec } from "@freebirdai/dash-spec";
-import { readField } from "@freebirdai/dash-spec";
+import type { EntitySpec, GraphOp, ResourceSpec } from "@freebirdai/dash-spec";
+import { entityGraph, parentsFrom, readField } from "@freebirdai/dash-spec";
 // The budgets live in the spec package: the screen that offers this check
 // has to state its cost before it is agreed to, and must quote the same
 // number this spends.
@@ -52,6 +52,14 @@ export interface VerifyInput {
   readonly read: VerifyRead;
   /** How many requests this may spend. */
   readonly budget: number;
+  /**
+   * The endpoints' paths, so a link to a record that lives under a parent is
+   * followed with the parent's id too. Without them such a link is followed
+   * by its own id alone, as before.
+   */
+  readonly ops?: readonly GraphOp[] | undefined;
+  /** When this run happened, stamped on each record type it read. */
+  readonly now?: string | undefined;
 }
 
 export interface VerifyResult {
@@ -82,6 +90,21 @@ export const verifyRecords = async (input: VerifyInput): Promise<VerifyResult> =
   const byResource = new Map(input.resources.map((resource) => [resource.id, resource]));
   const notes: string[] = [];
   const confirmed = new Map<string, { identity: boolean; references: Set<string> }>();
+  /** Record types whose rows this run read, to stamp when it did. */
+  const read = new Set<string>();
+  const graph = input.ops
+    ? entityGraph({ entities: input.entities, resources: input.resources, ops: input.ops })
+    : null;
+
+  /*
+   * The ones never read first, then the longest since. A budget smaller than
+   * the API — sixty requests against Buildium's 108 record types — used to
+   * spend itself on the same first sixty every run and never reach the rest;
+   * this way each run carries on where the last one stopped.
+   */
+  const ordered = [...input.entities].sort((a, b) =>
+    (a.readAt ?? "").localeCompare(b.readAt ?? ""),
+  );
 
   let spent = 0;
   let checked = 0;
@@ -137,7 +160,7 @@ export const verifyRecords = async (input: VerifyInput): Promise<VerifyResult> =
       "The API would not accept the stored key, so nothing could be checked. Nothing was marked wrong.",
   };
 
-  outer: for (const entity of input.entities) {
+  outer: for (const entity of ordered) {
     if (spent >= input.budget) {
       stopped = "budget";
       break;
@@ -164,6 +187,7 @@ export const verifyRecords = async (input: VerifyInput): Promise<VerifyResult> =
     }
 
     checked += 1;
+    read.add(entity.id);
     const rows = rowsFrom(listed.body, listOp, false);
     if (rows === null) {
       /*
@@ -211,8 +235,28 @@ export const verifyRecords = async (input: VerifyInput): Promise<VerifyResult> =
       const detail = target ? byResource.get(target.resource) : undefined;
       if (!detail?.detailOp || !detail.detailParam || !input.carried.has(detail.detailOp)) continue;
 
-      const id = rows.map((row) => valueAt(row, field.path)).find(present);
-      if (id === undefined) continue;
+      /*
+       * A target that lives under a parent is asked for with the parent's id
+       * off the same row — a work order's unit, with the work order's
+       * property. A row that carries the link but not the parent cannot
+       * address the target, so the next row is tried.
+       */
+      const reach = graph
+        ?.referencesOf(entity.id)
+        .find((one) => one.field === field.path)?.reach;
+      const linked = reach?.mode === "record" ? (reach.parents ?? []) : [];
+      let id: unknown;
+      let parents: Record<string, string> | null = {};
+      for (const row of rows) {
+        const value = valueAt(row, field.path);
+        if (!present(value)) continue;
+        const found = parentsFrom(linked, row);
+        if (found === null) continue;
+        id = value;
+        parents = found;
+        break;
+      }
+      if (id === undefined || parents === null) continue;
 
       if (spent >= input.budget) {
         stopped = "budget";
@@ -221,6 +265,7 @@ export const verifyRecords = async (input: VerifyInput): Promise<VerifyResult> =
       spent += 1;
       followed += 1;
       const opened = await input.read(detail.detailOp, {
+        ...parents,
         [detail.detailParam]: id as string | number,
       });
       if (!opened.ok) {
@@ -247,7 +292,10 @@ export const verifyRecords = async (input: VerifyInput): Promise<VerifyResult> =
    */
   let identitiesConfirmed = 0;
   let referencesResolved = 0;
-  const entities = input.entities.map((entity) => {
+  const entities = input.entities.map((before) => {
+    // Stamped whenever its rows were read, whatever the read confirmed.
+    const entity =
+      read.has(before.id) && input.now ? { ...before, readAt: input.now } : before;
     const found = confirmed.get(entity.id);
     if (!found) return entity;
     if (found.identity) identitiesConfirmed += 1;

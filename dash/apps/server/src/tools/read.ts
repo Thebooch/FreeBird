@@ -85,6 +85,11 @@ export interface ReadRecordsInput {
   readonly ids: readonly string[];
   readonly deps: ToolDeps;
   /**
+   * The other ids a record under a parent is fetched with, by parameter — the
+   * same for every id asked for, since they share the parent.
+   */
+  readonly parents?: Readonly<Record<string, string>> | undefined;
+  /**
    * Answer from the cache or not at all.
    *
    * True when the browser has already drawn this record — talking about what
@@ -126,6 +131,23 @@ export const readRecords = async (input: ReadRecordsInput): Promise<ReadRecordsR
       note: `No identifier was available, so no ${binding.resource} could be opened.`,
     };
   }
+  /*
+   * A record under a parent cannot be asked for without the parent's id, and
+   * a request sent anyway only comes back as an error that reads like a bad
+   * identifier. Said instead, naming what is needed.
+   */
+  const lacking = (binding.parentParams ?? []).filter((param) => !input.parents?.[param]);
+  if (lacking.length > 0) {
+    return {
+      records: [],
+      requests: 0,
+      missed: wanted,
+      warnings: [],
+      note:
+        `A ${binding.resource} lives under another record, so opening one also needs ` +
+        `${lacking.join(" and ")} — pass it as \`parent\`.`,
+    };
+  }
 
   const rowsPath = deps.rowsPathFor(binding.op, binding.connection);
   const records: Record<string, unknown>[] = [];
@@ -137,7 +159,7 @@ export const readRecords = async (input: ReadRecordsInput): Promise<ReadRecordsR
     const outcome = await deps.read({
       connection: binding.connection,
       op: binding.op,
-      params: { [binding.idParam]: id },
+      params: { ...input.parents, [binding.idParam]: id },
       resolved: deps.resolved,
       cacheOnly: input.cacheOnly ?? false,
     });
@@ -223,6 +245,14 @@ export const readToolSchema = z.object({
     .min(1)
     .max(200)
     .describe("The record's own identifier, exactly as it appeared in the data."),
+  parent: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe(
+      "Only for a kind of record listed as living inside another: that other record's identifier.",
+    ),
 });
 
 export type ReadToolArgs = z.infer<typeof readToolSchema>;

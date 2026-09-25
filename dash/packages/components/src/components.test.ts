@@ -258,6 +258,10 @@ describe("role and format resolution", () => {
     expect(humanLabel("Address.City")).toBe("Address · City");
     expect(humanLabel("postal_code")).toBe("Postal code");
     expect(humanLabel("Id")).toBe("Id");
+    // An acronym in a mixed-case name stays one; capitals throughout do not.
+    expect(humanLabel("GLAccount")).toBe("GL account");
+    expect(humanLabel("workOrderID")).toBe("Work order ID");
+    expect(humanLabel("STATUS")).toBe("Status");
   });
 
   /*

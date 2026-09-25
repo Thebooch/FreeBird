@@ -4,11 +4,15 @@ import { defaultFacets, defaultSort } from "./recipes.js";
 import type { FieldGroup } from "./dashboard.js";
 import { humanLabel } from "./presentation.js";
 import type { SemanticType } from "./semantics.js";
+import { looksLikeIdentifier, normaliseName } from "./semantics.js";
 import type { GraphOp } from "./relations.js";
 import { declaredFilterParam } from "./relations.js";
 import type { ResourceSpec } from "./resource.js";
 import { pathParamNames } from "./primitives.js";
 import { readField } from "./field-path.js";
+import type { Coercion } from "./coercion.js";
+import { fieldReading, isFlagField } from "./observe.js";
+import { type Bundle, bundleOf, bundlesOf } from "./bundles.js";
 
 /**
  * The relationships between record types, read in both directions, once.
@@ -32,12 +36,61 @@ import { readField } from "./field-path.js";
  * `cost` travels with every plan rather than being worked out by each caller.
  */
 
+/**
+ * One more id a record's address needs besides its own.
+ *
+ * A unit is `/properties/{propertyID}/units/{unitID}`: its own id fills
+ * `unitID`, and `propertyID` has to come from somewhere else — from a field on
+ * the unit, or from the property it was opened under.
+ */
+export interface AddressPart {
+  /** The path parameter it fills on the endpoint returning one record. */
+  readonly param: string;
+  /** A field on the record itself holding it, where the record carries one. */
+  readonly field?: string | undefined;
+  /** The record type it identifies: the parent this record lives under. */
+  readonly entity?: string | undefined;
+}
+
+/** How one record is fetched, and every id that takes. */
+export interface RecordAddress {
+  readonly op: string;
+  /** The parameter the record's own id fills. */
+  readonly param: string;
+  /** Ids besides its own, in path order. Empty for a top-level record. */
+  readonly parents: readonly AddressPart[];
+}
+
+/** A parent id read off the *referencing* row, to follow a link to a nested record. */
+export interface LinkedPart {
+  readonly param: string;
+  /** The field on the row holding the link that holds this id too. */
+  readonly field: string;
+}
+
 /** How the far side of a link is actually reached. */
 export type ReachPlan =
-  /** One record, by its own id: `/vendors/{vendorId}`. */
-  | { readonly mode: "record"; readonly op: string; readonly param: string }
-  /** A collection scoped under this record: `/tasks/{taskId}/history`. */
-  | { readonly mode: "path"; readonly op: string; readonly param: string }
+  /**
+   * One record: `/vendors/{vendorId}`, or `/properties/{propertyID}/units/
+   * {unitID}` with the property's id read off the same row as the unit's.
+   */
+  | {
+      readonly mode: "record";
+      readonly op: string;
+      readonly param: string;
+      readonly parents?: readonly LinkedPart[] | undefined;
+    }
+  /**
+   * A collection scoped under this record: `/tasks/{taskId}/history`. Where
+   * this record is itself nested, the endpoint names its parents too, and
+   * `parents` lists those parameters for the page's own address to fill.
+   */
+  | {
+      readonly mode: "path";
+      readonly op: string;
+      readonly param: string;
+      readonly parents?: readonly string[] | undefined;
+    }
   /** A collection the API can narrow by the id — one request for all of them. */
   | { readonly mode: "filter"; readonly op: string; readonly param: string }
   /** Read the collection and match here. Always available, always capped. */
@@ -87,7 +140,10 @@ export interface EntityBackref {
    */
   readonly id: string;
   readonly entity: string;
-  /** What to call the section, from the far entity's own plural. */
+  /**
+   * What to call the section: the far entity's own plural, plus the role the
+   * field plays wherever that entity links here more than once.
+   */
   readonly title: string;
   /** The field on the far rows holding this record's id. */
   readonly field: string;
@@ -116,6 +172,8 @@ export interface EntityGraph {
   readonly referencesOf: (entityId: string) => readonly EntityReference[];
   /** Record types whose rows point at this one, plus scoped collections. */
   readonly backrefsOf: (entityId: string) => readonly EntityBackref[];
+  /** How one of these is fetched on its own, or null when nothing returns one. */
+  readonly addressOf: (entityId: string) => RecordAddress | null;
   /**
    * What a column on an op's rows refers to, if anything.
    *
@@ -151,8 +209,20 @@ export interface EntityReferenceView {
   readonly holds: ReferenceSpec["holds"];
   readonly embedded: readonly string[];
   readonly typeField?: ReferenceSpec["typeField"];
-  /** The endpoint that returns one far record, when anything can open one. */
-  readonly lookup?: { readonly op: string; readonly param: string } | undefined;
+  /**
+   * The endpoint that returns one far record, when anything can open one.
+   *
+   * `parents` names the fields on this row holding the far record's other ids,
+   * where it lives under a parent: a work order's unit is opened with the
+   * work order's own property id.
+   */
+  readonly lookup?:
+    | {
+        readonly op: string;
+        readonly param: string;
+        readonly parents?: readonly LinkedPart[] | undefined;
+      }
+    | undefined;
   /** True when the row already carries the name, so nothing has to be read. */
   readonly free: boolean;
 }
@@ -196,6 +266,16 @@ export interface EntityLinkView {
    * spend a request to discover it.
    */
   readonly list?: string | undefined;
+  /**
+   * The other ids a row of these needs to open its page, where it lives under
+   * a parent. Absent for a record fetched by its own id alone.
+   */
+  readonly address?: { readonly parents: readonly AddressPart[] } | undefined;
+  /**
+   * Fields that are flags, by path — see `isFlagField`. A column drawn from
+   * one reads Active or Inactive, whether the API sends true/false or 1/0.
+   */
+  readonly flags?: readonly string[] | undefined;
   readonly references: readonly EntityReferenceView[];
   /**
    * What this record type calls its own fields, by the API's own path.
@@ -253,7 +333,13 @@ export const entityLinkViews = (input: EntityGraphInput): EntityLinkView[] => {
         embedded: reference.embedded,
         ...(reference.typeField ? { typeField: reference.typeField } : {}),
         ...(reference.reach?.mode === "record"
-          ? { lookup: { op: reference.reach.op, param: reference.reach.param } }
+          ? {
+              lookup: {
+                op: reference.reach.op,
+                param: reference.reach.param,
+                ...(reference.reach.parents?.length ? { parents: reference.reach.parents } : {}),
+              },
+            }
           : {}),
         free: reference.cost === "free",
       };
@@ -261,6 +347,7 @@ export const entityLinkViews = (input: EntityGraphInput): EntityLinkView[] => {
     });
 
     const resource = resourceById.get(entity.resource);
+    const address = graph.addressOf(entity.id);
     return {
       entity: entity.id,
       resource: entity.resource,
@@ -274,6 +361,11 @@ export const entityLinkViews = (input: EntityGraphInput): EntityLinkView[] => {
       ...(resource?.listOp && bare(opById.get(resource.listOp))
         ? { list: resource.listOp }
         : {}),
+      ...(address && address.parents.length > 0 ? { address: { parents: address.parents } } : {}),
+      ...(() => {
+        const flags = entity.fields.filter(isFlagField).map((field) => field.path);
+        return flags.length > 0 ? { flags } : {};
+      })(),
       references,
       /*
        * Only what a reader could not work out for themselves. A label equal to
@@ -334,6 +426,13 @@ export interface EntityPageField {
   /** Never `hidden` — those are dropped rather than carried and ignored. */
   readonly visibility: "primary" | "detail";
   readonly semantic?: SemanticType | undefined;
+  /**
+   * How to read the values, by the rule a compiled widget follows — see
+   * `fieldReading`. A flag Rentvine sends as 0/1 is read as a flag here too.
+   */
+  readonly coercion?: Coercion | undefined;
+  /** What the values are once read, where that needs saying. */
+  readonly readAs?: SemanticType | undefined;
 }
 
 /** A collection belonging to this record, ready to become a widget. */
@@ -357,6 +456,21 @@ export interface EntityPageSection {
    * than a control that goes nowhere.
    */
   readonly identity?: string | undefined;
+  /**
+   * The far record's other ids, where it lives under a parent.
+   *
+   * What a row in this section needs besides its identity to open its own
+   * page — usually this very record, when the section is the collection the
+   * API scopes under it.
+   */
+  readonly parents?: readonly AddressPart[] | undefined;
+  /**
+   * How to read the far columns, where any needs it — the far record type's
+   * own \`fieldReading\`, keyed by field path.
+   */
+  readonly readings?:
+    | Readonly<Record<string, { readonly coercion?: Coercion; readonly readAs?: SemanticType }>>
+    | undefined;
   /**
    * The far fields worth a column, name first.
    *
@@ -410,8 +524,19 @@ export interface EntityPageView {
   readonly titleMode?: "join" | "first";
   readonly subtitle?: string | undefined;
   readonly status?: string | undefined;
-  /** The endpoint returning one of these, when anything returns one. */
-  readonly detail?: { readonly op: string; readonly param: string } | undefined;
+  /**
+   * The endpoint returning one of these, when anything returns one.
+   *
+   * `parents` lists the other ids it needs, which the page's address has to
+   * carry: a unit's page is fetched with its property's id as well as its own.
+   */
+  readonly detail?:
+    | {
+        readonly op: string;
+        readonly param: string;
+        readonly parents?: readonly AddressPart[] | undefined;
+      }
+    | undefined;
   readonly fields: readonly EntityPageField[];
   /** Up to four facts for the heading, where the entity names any. */
   readonly facts: readonly string[];
@@ -426,6 +551,15 @@ export interface EntityPageView {
    */
   readonly sectionsTotal: number;
   readonly omitted: readonly OmittedSection[];
+  /**
+   * Other records the API sends inside these records' rows. Their fields are
+   * left off this page; each one known is a link, and one of unknown type —
+   * a Rentvine `contact` could be a tenant, a vendor or an owner — is named
+   * here so the page can say it was left off rather than drop it silently.
+   */
+  readonly bundles?:
+    | readonly { readonly path: string; readonly entity?: string; readonly name?: string }[]
+    | undefined;
   /**
    * Fields on these records that point at another record.
    *
@@ -614,12 +748,28 @@ export const entityPageView = (
       .map((reference) => reference.field),
   );
 
-  const kept = entity.fields.filter(
+  /*
+   * The records sent inside this one's rows are theirs, not its: a work
+   * order page listed its contact's thirty fields as the work order's own.
+   * Each keeps one field here — its id, which the reference above turns into
+   * a named link — and the rest stay on the bundled record's own page.
+   */
+  const bundles = bundlesOf(entity, input.entities);
+  /** A bundled record's link reads as that record, not as its id. */
+  const bundleLabel = (path: string): string | undefined => {
+    const bundle = bundleOf(bundles, path);
+    const target = bundle?.entity ? entityById(input.entities, bundle.entity) : undefined;
+    return target?.identity?.field === path ? target.name.one : undefined;
+  };
+  const kept = entity.fields.filter((field) => {
+    // The bundled record's link stays, openable or not: its name is on the row.
+    if (bundleLabel(field.path) !== undefined) return true;
+    if (bundleOf(bundles, field.path)) return false;
     // Everything else `hidden` covers — internal keys and fields that are null
     // on every record — stays dropped. Carrying those for a client to
     // re-filter would be shipping the noise this layer exists to remove.
-    (field) => field.visibility !== "hidden" || linkable.has(field.path),
-  );
+    return field.visibility !== "hidden" || linkable.has(field.path);
+  });
 
   /*
    * Containers whose parts are listed separately.
@@ -649,11 +799,19 @@ export const entityPageView = (
     .filter((field) => !spelledOut.has(field.path) || linkable.has(field.path))
     .map((field) => ({
       path: field.path,
-      label: field.label ?? humanLabel(field.path),
+      label: bundleLabel(field.path) ?? field.label ?? humanLabel(field.path),
       ...(field.description ? { description: field.description } : {}),
       ...(field.group ? { group: field.group } : {}),
       visibility: field.visibility === "primary" ? ("primary" as const) : ("detail" as const),
       ...(field.semantic ? { semantic: field.semantic } : {}),
+      ...(() => {
+        const reading = fieldReading(field);
+        const readAs = reading.semantic ?? (isFlagField(field) ? ("boolean" as const) : undefined);
+        return {
+          ...(reading.coercion ? { coercion: reading.coercion } : {}),
+          ...(readAs ? { readAs } : {}),
+        };
+      })(),
     }));
 
   const shown = new Set(fields.map((field) => field.path));
@@ -682,6 +840,21 @@ export const entityPageView = (
     }
 
     const far = entityById(input.entities, backref.entity);
+    const farParents = graph.addressOf(backref.entity)?.parents ?? [];
+    const columns = sectionColumns(far);
+    const readings: Record<string, { coercion?: Coercion; readAs?: SemanticType }> = {};
+    for (const path of columns) {
+      const field = far?.fields.find((one) => one.path === path);
+      if (!field) continue;
+      const reading = fieldReading(field);
+      const readAs = reading.semantic ?? (isFlagField(field) ? ("boolean" as const) : undefined);
+      if (reading.coercion || readAs) {
+        readings[path] = {
+          ...(reading.coercion ? { coercion: reading.coercion } : {}),
+          ...(readAs ? { readAs } : {}),
+        };
+      }
+    }
     sections.push({
       id: backref.id,
       entity: backref.entity,
@@ -691,7 +864,9 @@ export const entityPageView = (
       cost: backref.cost,
       verified: backref.verified,
       ...(far?.identity ? { identity: far.identity.field } : {}),
-      columns: sectionColumns(far),
+      ...(farParents.length > 0 ? { parents: farParents } : {}),
+      ...(Object.keys(readings).length > 0 ? { readings } : {}),
+      columns,
     });
   }
 
@@ -710,14 +885,17 @@ export const entityPageView = (
     titleMode: titleModeOf(entity),
     ...(entity.display?.subtitle ? { subtitle: entity.display.subtitle } : {}),
     ...(entity.display?.status ? { status: entity.display.status } : {}),
-    ...(resource?.detailOp &&
-    resource.detailParam &&
-    byOwnId(
-      input.ops.find((op) => op.id === resource.detailOp),
-      resource.detailParam,
-    )
-      ? { detail: { op: resource.detailOp, param: resource.detailParam } }
-      : {}),
+    ...(() => {
+      const address = graph.addressOf(entity.id);
+      if (!address) return {};
+      return {
+        detail: {
+          op: address.op,
+          param: address.param,
+          ...(address.parents.length > 0 ? { parents: address.parents } : {}),
+        },
+      };
+    })(),
     fields,
     facts: entity.views.record.facts.filter((path) => shown.has(path)),
     groups: stated.length > 0 ? stated : groupsFromFields(fields),
@@ -728,6 +906,17 @@ export const entityPageView = (
     stats: statsFor(entity, sections.slice(0, MAX_SECTIONS)),
     sectionsTotal: sections.length,
     omitted,
+    ...(bundles.length > 0
+      ? {
+          bundles: bundles.map((bundle) => {
+            const target = bundle.entity ? entityById(input.entities, bundle.entity) : undefined;
+            return {
+              path: bundle.path,
+              ...(target ? { entity: target.id, name: target.name.one } : {}),
+            };
+          }),
+        }
+      : {}),
     references: graph.referencesOf(entity.id).flatMap((reference) => {
       const target = entityById(input.entities, reference.target);
       if (!target) return [];
@@ -774,24 +963,81 @@ export const targetFor = (
   return selector.map[String(raw)] ?? reference.entity;
 };
 
+/**
+ * What a link is *for*, read off the field that holds it.
+ *
+ * `CreatedByUser.Id` is "Created by user", `AssignedToUserId` is "Assigned
+ * to user", `predictedWorkOrderID` is "Predicted work order": the id part is
+ * dropped, because it says what the value is and not which link it is.
+ */
+const linkRole = (field: string): string => {
+  const parts = field.split(".").filter((part) => part.length > 0);
+  const leaf = parts[parts.length - 1] ?? field;
+  const stripped = looksLikeIdentifier(leaf) ? leaf.replace(/[_-]?(Id|ID|id)$/, "") : leaf;
+  const named = stripped !== "" ? stripped : (parts[parts.length - 2] ?? leaf);
+  return humanLabel(named);
+};
+
+/**
+ * Titles for the sections one record type contributes to another's page.
+ *
+ * Several fields on one record type can point at the same target — a task's
+ * creator, assignee and last editor are all users — and each is its own
+ * section, deliberately. Titled only by the far record's plural, they read as
+ * one section three times: "Task histories", "Task histories", "Task
+ * histories" on a user's page. The field labels do not separate them either;
+ * the description pass calls all three "User ID". So each gets the role its
+ * field plays, and where two roles still read the same, the field's own path.
+ *
+ * A section the API scopes under this record keeps the plain title: it is the
+ * collection that record owns, and the others are the ones that need saying.
+ */
+const titledBackrefs = (list: readonly EntityBackref[]): EntityBackref[] => {
+  const byEntity = new Map<string, EntityBackref[]>();
+  for (const backref of list) {
+    const group = byEntity.get(backref.entity);
+    if (group) group.push(backref);
+    else byEntity.set(backref.entity, [backref]);
+  }
+
+  const titles = new Map<EntityBackref, string>();
+  for (const group of byEntity.values()) {
+    if (group.length < 2) continue;
+    const linked = group.filter((backref) => backref.reach.mode !== "path");
+    const roles = linked.map((backref) => linkRole(backref.field));
+    linked.forEach((backref, index) => {
+      const role = roles[index]!;
+      const clash = roles.filter((one) => one === role).length > 1;
+      titles.set(backref, `${backref.title} · ${clash ? humanLabel(backref.field) : role}`);
+    });
+  }
+  return list.map((backref) => {
+    const title = titles.get(backref);
+    return title ? { ...backref, title } : backref;
+  });
+};
+
 const bare = (op: GraphOp | undefined): boolean =>
   op !== undefined && pathParamNames(op.path).length === 0;
 
-/**
- * Whether one record can be fetched knowing only its own id.
- *
- * A record that lives under a parent — `/properties/{propertyID}/units/{unitID}`
- * — is fetched with the parent's id as well, and a link or a page address
- * holds only the record's own. Offered anyway, every lookup went out with a
- * hole in its path and came back an error: on Rentvine, one failed request per
- * unit named on a page, on every load, for a name that could never arrive.
- *
- * An endpoint this connection does not list is given the benefit of the doubt,
- * as before: there is nothing to judge it by.
- */
-const byOwnId = (op: GraphOp | undefined, param: string): boolean =>
-  op === undefined || pathParamNames(op.path).every((name) => name === param);
+const leafOf = (path: string): string => path.split(".").pop() ?? path;
+const rootOf = (path: string): string => (path.includes(".") ? (path.split(".")[0] ?? "") : "");
 
+/**
+ * Of several candidate fields, the one sitting beside `near`.
+ *
+ * A Rentvine work order row carries `workOrder.propertyID` and also the
+ * bundled `property.propertyID`; for the work order's own link, its own
+ * wrapper's copy is the one that belongs to it. Then the shallowest.
+ */
+const closestTo = (paths: readonly string[], near: string | undefined): string | undefined => {
+  const nearRoot = near ? rootOf(near) : "";
+  return [...paths].sort(
+    (a, b) =>
+      Number(rootOf(a) !== nearRoot) - Number(rootOf(b) !== nearRoot) ||
+      a.split(".").length - b.split(".").length,
+  )[0];
+};
 /**
  * The field on a reference that actually holds a comparable id.
  *
@@ -801,10 +1047,60 @@ const byOwnId = (op: GraphOp | undefined, param: string): boolean =>
  * reference and a join have to reach for the same column: two spellings of
  * this rule would agree today and disagree the day one of them changed.
  */
-export const linkColumn = (field: EntityField, reference: ReferenceSpec): string =>
-  reference.holds === "objectRef" && !/\.(id)$/i.test(field.path)
-    ? `${field.path}.Id`
-    : field.path;
+export const linkColumn = (
+  field: EntityField,
+  reference: ReferenceSpec,
+  target?: EntitySpec | undefined,
+): string => {
+  if (reference.holds !== "objectRef" || /\.(id)$/i.test(field.path)) return field.path;
+  /*
+   * The id inside the object is the target's own identity field, read from
+   * inside its wrapper: a Rentvine `workOrder` holds `workOrderID`, a Buildium
+   * `Vendor` holds `Id`. Assuming `Id` everywhere matched nothing on every
+   * API that does not happen to spell it that way.
+   */
+  const identity = target?.identity?.field;
+  const inner = identity
+    ? identity.includes(".")
+      ? identity.split(".").slice(1).join(".")
+      : identity
+    : "Id";
+  return `${field.path}.${inner}`;
+};
+
+/**
+ * The links a record type's rows carry, including the records sent inside
+ * them.
+ *
+ * A record bundled into a row (see `bundlesOf`) is linked through its own id,
+ * and its name is already on the row, so the link is free — nothing has to be
+ * fetched to say "Work order 104842". Everything else inside the bundle is the
+ * bundled record's, including the links *it* carries, so none of it is
+ * treated as this record's own.
+ */
+const linksOf = (
+  entity: EntitySpec,
+  entities: readonly EntitySpec[],
+  bundles: readonly Bundle[],
+): { field: EntityField; reference: ReferenceSpec }[] =>
+  entity.fields.flatMap((field) => {
+    const bundle = bundleOf(bundles, field.path);
+    if (!bundle) return field.reference ? [{ field, reference: field.reference }] : [];
+    const target = bundle.entity ? entityById(entities, bundle.entity) : undefined;
+    if (!target?.identity || field.path !== target.identity.field) return [];
+    const onRow = new Set(entity.fields.map((one) => one.path));
+    return [
+      {
+        field,
+        reference: {
+          entity: target.id,
+          holds: "scalar" as const,
+          embedded: (target.display?.title ?? []).filter((path) => onRow.has(path)),
+          verified: field.reference?.verified ?? false,
+        },
+      },
+    ];
+  });
 
 export const entityGraph = (input: EntityGraphInput): EntityGraph => {
   const opById = new Map(input.ops.map((op) => [op.id, op]));
@@ -813,6 +1109,91 @@ export const entityGraph = (input: EntityGraphInput): EntityGraph => {
 
   const resourceOf = (entity: EntitySpec): ResourceSpec | undefined =>
     resourceById.get(entity.resource);
+
+  /** A field on `entity` holding `param`, by name with the convention removed. */
+  const fieldNamed = (entity: EntitySpec, param: string, near?: string): string | undefined => {
+    const wanted = normaliseName(param);
+    return closestTo(
+      entity.fields
+        .filter((field) => !field.kinds.includes("object") && !field.kinds.includes("array"))
+        .map((field) => field.path)
+        .filter((path) => normaliseName(leafOf(path)) === wanted),
+      near,
+    );
+  };
+
+  /** A field on `entity` pointing at a record of type `targetId`. */
+  const fieldPointingAt = (
+    entity: EntitySpec,
+    targetId: string,
+    near: string,
+  ): string | undefined =>
+    closestTo(
+      entity.fields
+        .filter((field) => field.reference?.entity === targetId && field.reference.holds !== "array")
+        .map((field) =>
+          field.reference
+            ? linkColumn(field, field.reference, entityById(input.entities, targetId))
+            : field.path,
+        ),
+      near,
+    );
+
+  /**
+   * The record type a parent parameter identifies.
+   *
+   * The API's own statement first: a scoped collection says which parent it
+   * lives under. Otherwise the record type whose one-record endpoint this
+   * path begins with, by the same parameter — `/properties/{propertyID}` is
+   * the start of `/properties/{propertyID}/units/{unitID}`.
+   */
+  const parentEntityOf = (entity: EntitySpec, op: GraphOp, param: string): string | undefined => {
+    const wanted = normaliseName(param);
+    if (entity.scope && normaliseName(entity.scope.param) === wanted) return entity.scope.parent;
+    for (const resource of input.resources) {
+      if (!resource.detailOp || !resource.detailParam) continue;
+      if (normaliseName(resource.detailParam) !== wanted) continue;
+      const parentOp = opById.get(resource.detailOp);
+      if (!parentOp || !op.path.startsWith(`${parentOp.path}/`)) continue;
+      const parent = entityForResource(input.entities, resource.id);
+      if (parent && parent.id !== entity.id) return parent.id;
+    }
+    return undefined;
+  };
+
+  /**
+   * How one record of this type is fetched: its endpoint, and every id that
+   * endpoint's path needs.
+   *
+   * Most need only their own. One that lives under a parent needs the
+   * parent's as well, and each is found where it can be — on the record, or
+   * from the parent it was opened under — so the ones that can be opened are,
+   * and the ones that cannot say why rather than sending a request with a hole
+   * in it. An endpoint this connection does not list is taken at its word:
+   * there is no path to read parents from.
+   */
+  const addresses = new Map<string, RecordAddress | null>();
+  const addressOf = (entityId: string): RecordAddress | null => {
+    if (addresses.has(entityId)) return addresses.get(entityId) ?? null;
+    const entity = entityById(input.entities, entityId);
+    const resource = entity ? resourceOf(entity) : undefined;
+    let address: RecordAddress | null = null;
+    if (entity && resource?.detailOp && resource.detailParam) {
+      const op = opById.get(resource.detailOp);
+      const parents = op
+        ? pathParamNames(op.path)
+            .filter((param) => param !== resource.detailParam)
+            .map((param): AddressPart => {
+              const field = fieldNamed(entity, param, entity.identity?.field);
+              const parent = parentEntityOf(entity, op, param);
+              return { param, ...(field ? { field } : {}), ...(parent ? { entity: parent } : {}) };
+            })
+        : [];
+      address = { op: resource.detailOp, param: resource.detailParam, parents };
+    }
+    addresses.set(entityId, address);
+    return address;
+  };
 
   const references = new Map<string, EntityReference[]>();
   const backrefs = new Map<string, EntityBackref[]>();
@@ -823,10 +1204,7 @@ export const entityGraph = (input: EntityGraphInput): EntityGraph => {
   };
 
   for (const entity of input.entities) {
-    for (const field of entity.fields) {
-      const reference = field.reference;
-      if (!reference) continue;
-
+    for (const { field, reference } of linksOf(entity, input.entities, bundlesOf(entity, input.entities))) {
       const target = entityById(input.entities, reference.entity);
       if (!target) {
         unreachable.push({
@@ -839,12 +1217,28 @@ export const entityGraph = (input: EntityGraphInput): EntityGraph => {
 
       /* ── outgoing: open the record this field names ───────────────────── */
 
-      const targetResource = resourceOf(target);
+      /*
+       * A nested target is opened with the ids of what it lives under, read
+       * off this same row: a work order names its unit *and* its property, and
+       * the unit is `/properties/{propertyID}/units/{unitID}`. The field is the
+       * one pointing at that parent where the row has one, else one named for
+       * the parameter — the closest to this link either way.
+       */
+      const address = addressOf(target.id);
+      const linked = address?.parents.map((part) => {
+        const onRow =
+          (part.entity ? fieldPointingAt(entity, part.entity, field.path) : undefined) ??
+          fieldNamed(entity, part.param, field.path);
+        return onRow ? { param: part.param, field: onRow } : null;
+      });
       const reach: ReachPlan | null =
-        targetResource?.detailOp &&
-        targetResource.detailParam &&
-        byOwnId(opById.get(targetResource.detailOp), targetResource.detailParam)
-          ? { mode: "record", op: targetResource.detailOp, param: targetResource.detailParam }
+        address && linked && linked.every((part) => part !== null)
+          ? {
+              mode: "record",
+              op: address.op,
+              param: address.param,
+              ...(linked.length > 0 ? { parents: linked as LinkedPart[] } : {}),
+            }
           : null;
 
       if (!reach && reference.embedded.length === 0) {
@@ -857,8 +1251,8 @@ export const entityGraph = (input: EntityGraphInput): EntityGraph => {
         unreachable.push({
           from: entity.id,
           field: field.path,
-          reason: targetResource?.detailOp
-            ? `${target.name.one} can only be fetched through the record it belongs to, and the row carries no name for it`
+          reason: address
+            ? `${target.name.one} can only be fetched through the record it belongs to, and this row does not say which`
             : `${target.name.one} has no by-id endpoint and the row carries no name for it`,
         });
       }
@@ -889,7 +1283,7 @@ export const entityGraph = (input: EntityGraphInput): EntityGraph => {
        */
       if (!bare(op)) continue;
 
-      const column = linkColumn(field, reference);
+      const column = linkColumn(field, reference, target);
       const declared = field.filter?.param ?? declaredFilterParam(op, field.filter?.via ?? column);
 
       for (const targetId of targetsOf(reference)) {
@@ -927,18 +1321,33 @@ export const entityGraph = (input: EntityGraphInput): EntityGraph => {
     if (entity.scope) {
       const listOp = resourceOf(entity)?.listOp;
       if (listOp && entityById(input.entities, entity.scope.parent)) {
+        /*
+         * The endpoint's other parameters, which only a parent that is itself
+         * nested has: the page's own address fills them.
+         */
+        const listed = opById.get(listOp);
+        const others = listed
+          ? pathParamNames(listed.path).filter((param) => param !== entity.scope!.param)
+          : [];
         push(backrefs, entity.scope.parent, {
           id: `${entity.id}-under-${entity.scope.parent}`,
           entity: entity.id,
           title: entity.name.many,
           field: entity.scope.param,
-          reach: { mode: "path", op: listOp, param: entity.scope.param },
+          reach: {
+            mode: "path",
+            op: listOp,
+            param: entity.scope.param,
+            ...(others.length > 0 ? { parents: others } : {}),
+          },
           cost: "cheap",
           verified: true,
         });
       }
     }
   }
+
+  for (const [target, list] of backrefs) backrefs.set(target, titledBackrefs(list));
 
   const byOp = new Map<string, EntitySpec>();
   for (const resource of input.resources) {
@@ -952,6 +1361,7 @@ export const entityGraph = (input: EntityGraphInput): EntityGraph => {
     entityOf: (opId) => byOp.get(opId),
     referencesOf: (entityId) => references.get(entityId) ?? [],
     backrefsOf: (entityId) => backrefs.get(entityId) ?? [],
+    addressOf,
     resolveField: (opId, column, sources) => {
       const entity = byOp.get(opId);
       if (!entity) return undefined;

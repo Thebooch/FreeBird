@@ -60,6 +60,27 @@ describe("parseRoute, for a record addressed by what it is", () => {
     });
   });
 
+  /*
+   * A unit is `/properties/{propertyID}/units/{unitID}`: a link that carried
+   * only the unit's id could not be reloaded or shared, because nothing could
+   * fetch the unit again without its property.
+   */
+  it("carries a nested record's parents, and reads them back", () => {
+    const route = {
+      kind: "entity" as const,
+      connectionId: "rentvine",
+      entityId: "unit",
+      recordId: "222",
+      parents: { propertyID: "210" },
+      from: { dashboardId: "ops", widgetId: "units" },
+    };
+    const hash = routeToHash(route);
+    expect(hash).toBe("#/r/rentvine/unit/222/from/ops/units?propertyID=210");
+    expect(parseRoute(hash)).toEqual(route);
+    // Old links, with no parents, read exactly as they always did.
+    expect(parseRoute("#/r/rentvine/unit/222")).not.toHaveProperty("parents");
+  });
+
   it("reads which widget's row opened it, when one did", () => {
     // A widget may change its own copy of the layout; a reference link carries
     // no `from` and always opens the plain shared page.

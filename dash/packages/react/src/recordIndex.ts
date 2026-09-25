@@ -1,5 +1,5 @@
 import type { ColumnMeta, ColumnReference, ResolvedParams } from "@freebirdai/dash-spec";
-import { queryKey, readField, referenceIds, targetOfRow } from "@freebirdai/dash-spec";
+import { parentsFrom, queryKey, readField, referenceIds, targetOfRow } from "@freebirdai/dash-spec";
 import type { Row } from "@freebirdai/dash-runtime";
 
 /**
@@ -46,6 +46,11 @@ export interface ReferenceLookup {
   readonly op: string;
   readonly param: string;
   readonly id: string | number;
+  /**
+   * The far record's other ids, where it lives under a parent — read off the
+   * same row as the link, and sent with it.
+   */
+  readonly parents?: Readonly<Record<string, string>> | undefined;
   /** The record type, so a caller can index what came back. */
   readonly target: string;
   /** The column whose values these ids came from. */
@@ -93,7 +98,11 @@ export interface LookupInput {
    * vendors table would still stop naming vendors after twenty-five of them.
    * Known records are always resolved; the limit applies to the rest.
    */
-  readonly known?: (lookup: { readonly target: string; readonly id: string | number }) => boolean;
+  readonly known?: (lookup: {
+    readonly target: string;
+    readonly id: string | number;
+    readonly parents?: Readonly<Record<string, string>> | undefined;
+  }) => boolean;
   /**
    * Record types this account has been refused outright.
    *
@@ -158,11 +167,19 @@ export const referenceLookups = (input: LookupInput): readonly ReferenceLookup[]
       // wrong endpoint. Its cell falls back to the plain value.
       if (targetOfRow(row, reference) !== reference.target) continue;
 
+      /*
+       * A far record under a parent is asked for with the parent's id off this
+       * same row. A row that does not carry it cannot address the record, and
+       * a request sent without it only comes back as an error.
+       */
+      const parents = lookup.parents?.length ? parentsFrom(lookup.parents, row) : undefined;
+      if (parents === null) continue;
+
       for (const id of referenceIds(row[column.name], reference.holds)) {
         const key = queryKey(
           input.connection,
           lookup.op,
-          { [lookup.param]: id },
+          { [lookup.param]: id, ...parents },
           input.params,
           input.usesRange?.(input.connection, lookup.op) ?? true,
         );
@@ -175,6 +192,7 @@ export const referenceLookups = (input: LookupInput): readonly ReferenceLookup[]
             op: lookup.op,
             param: lookup.param,
             id,
+            ...(parents ? { parents } : {}),
             target: reference.target,
             column: column.name,
             key,
@@ -182,7 +200,7 @@ export const referenceLookups = (input: LookupInput): readonly ReferenceLookup[]
           });
           continue;
         }
-        const free = input.known?.({ target: reference.target, id }) ?? false;
+        const free = input.known?.({ target: reference.target, id, parents }) ?? false;
         /*
          * Counted against the budget only when it would cost a request. A
          * free one still has to be *returned* — it is how its name reaches
@@ -197,6 +215,7 @@ export const referenceLookups = (input: LookupInput): readonly ReferenceLookup[]
           op: lookup.op,
           param: lookup.param,
           id,
+          ...(parents ? { parents } : {}),
           target: reference.target,
           column: column.name,
           key,

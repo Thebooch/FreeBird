@@ -85,6 +85,41 @@ describe("what a row click opens", () => {
     });
   });
 
+  /*
+   * A unit is `/properties/{propertyID}/units/{unitID}`, so its page is opened
+   * with the property's id — off the row where it carries one, else from what
+   * the widget's own list was asked for under.
+   */
+  it("opens a record that lives under a parent with the parent's id", () => {
+    const unit: EntityLinkView = {
+      ...view,
+      entity: "unit",
+      resource: "unit",
+      identity: "unitID",
+      ops: ["units"],
+      address: { parents: [{ param: "propertyID", field: "propertyID", entity: "property" }] },
+    };
+    const units = widget({
+      id: "units",
+      source: { connection: "rv", op: "units", params: { propertyID: "210" } },
+      roles: { columns: ["name"] },
+    });
+    expect(recordTargetFor(units, { unitID: 222, propertyID: 211 }, { rv: [unit] })).toEqual({
+      kind: "entity",
+      connection: "rv",
+      entity: "unit",
+      id: "222",
+      parents: { propertyID: "211" },
+    });
+    // The row does not say; the widget's own request does.
+    expect(recordTargetFor(units, { unitID: 222 }, { rv: [unit] })).toMatchObject({
+      parents: { propertyID: "210" },
+    });
+    // Neither says, so there is no page it could reach.
+    const unscoped = widget({ id: "units", source: { connection: "rv", op: "units", params: {} } });
+    expect(recordTargetFor(unscoped, { unitID: 222 }, { rv: [unit] })).toBeNull();
+  });
+
   it("matches a widget saved before record types existed, on the endpoint it reads", () => {
     // These carry no `entity`, and there are boards full of them. Matching on
     // the endpoint is what spares them a migration.

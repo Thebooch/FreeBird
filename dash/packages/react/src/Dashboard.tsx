@@ -174,6 +174,8 @@ export interface DashboardProps {
     readonly page: EntityPageView;
     readonly connection: string;
     readonly recordId: string;
+    /** Its other ids, where it lives under a parent. */
+    readonly recordParents?: Readonly<Record<string, string>>;
     readonly onBack: () => void;
     readonly backLabel?: string;
     /** One widget's changes to this layout, when its row is what opened it. */

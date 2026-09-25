@@ -5,7 +5,7 @@ import { type TrailEntry, detailPanes, popTrail, truncateTrail } from "./detail.
 import { describe, expect, it } from "vitest";
 import { clampCell, completeLayout, persistCells, solveLayout } from "./layout.js";
 import { QueryClient, queryKey } from "./store.js";
-import { labelColumns } from "./useWidgetData.js";
+import { flagColumns, labelColumns } from "./useWidgetData.js";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { useDashboard, useOptionalDashboard } from "./context.jsx";
@@ -964,5 +964,52 @@ describe("persistCells", () => {
   it("leaves a cell the library did not report alone", () => {
     const result = persistCells([{ cell: cell("solo", { x: 2 }), key: "solo" }], [], []);
     expect(result[0]).toMatchObject({ x: 2, locked: true });
+  });
+});
+
+/*
+ * Rentvine's flags arrive as 1 and 0, which look like numbers. A column drawn
+ * from a field the record type knows is a flag reads as one.
+ */
+describe("flagColumns", () => {
+  const widget = widgetSchema.parse({
+    id: "w",
+    title: "W",
+    component: "table",
+    entity: "unit",
+    source: { connection: "api", op: "units" },
+    pipeline: [{ op: "derive", fields: { unit_isActive: "unit.isActive" } }],
+  });
+  const links = {
+    api: [
+      {
+        entity: "unit",
+        resource: "unit",
+        name: { one: "Unit", many: "Units" },
+        title: [],
+        ops: ["units"],
+        references: [],
+        labels: {},
+        flags: ["unit.isActive"],
+      },
+    ],
+  };
+
+  it("marks a column derived from a flag, and nothing else", () => {
+    const [flag, other] = flagColumns(
+      [
+        { name: "unit_isActive", valueType: "numeric", semantic: "count" },
+        { name: "unit_name", valueType: "text" },
+      ],
+      widget,
+      links,
+    );
+    expect(flag?.semantic).toBe("boolean");
+    expect(other?.semantic).toBeUndefined();
+  });
+
+  it("leaves a widget with no record type alone", () => {
+    const columns = [{ name: "unit_isActive", valueType: "numeric" as const }];
+    expect(flagColumns(columns, widget, undefined)).toEqual(columns);
   });
 });

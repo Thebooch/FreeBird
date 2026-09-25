@@ -1,5 +1,5 @@
-import type { EntityLinkView } from "@freebirdai/dash-spec";
-import { readField } from "@freebirdai/dash-spec";
+import type { AddressPart, EntityLinkView } from "@freebirdai/dash-spec";
+import { parentsFrom, readField, recordKeyString } from "@freebirdai/dash-spec";
 import type { Row } from "@freebirdai/dash-runtime";
 
 /**
@@ -28,6 +28,12 @@ export interface IndexedEntity {
   readonly entity: string;
   /** The field holding a record's own id, e.g. `Id`. */
   readonly identity: string;
+  /**
+   * The other ids a record of this type is addressed by, where it lives under
+   * a parent. Its key includes them, because unit 222 of one property is not
+   * unit 222 of the next.
+   */
+  readonly parents?: readonly AddressPart[] | undefined;
 }
 
 /**
@@ -49,7 +55,13 @@ export const indexPlan = (
         // and indexing its rows as the wrong type would put one record's name
         // on another. Skipping the second is the safe half of that choice.
         const key = `${connection}.${op}`;
-        if (!plan.has(key)) plan.set(key, { entity: view.entity, identity: view.identity });
+        if (!plan.has(key)) {
+          plan.set(key, {
+            entity: view.entity,
+            identity: view.identity,
+            ...(view.address ? { parents: view.address.parents } : {}),
+          });
+        }
       }
     }
   }
@@ -107,7 +119,7 @@ export const collectRecords = (
 const MAX_RECORDS_PER_CONNECTION = 5_000;
 
 export class RecordIndex {
-  /** connection → entity → id → row. */
+  /** connection → entity → record key → row. See `recordKeyString`. */
   private readonly held = new Map<string, Map<string, Map<string, Row>>>();
   private readonly listeners = new Set<() => void>();
   /**
@@ -126,12 +138,23 @@ export class RecordIndex {
     return () => this.listeners.delete(listener);
   }
 
-  get(connection: string, entity: string, id: string | number): Row | undefined {
-    return this.held.get(connection)?.get(entity)?.get(String(id));
+  /** One record, by its id and — for one that lives under a parent — its parents' ids. */
+  get(
+    connection: string,
+    entity: string,
+    id: string | number,
+    parents?: Readonly<Record<string, string>>,
+  ): Row | undefined {
+    return this.held.get(connection)?.get(entity)?.get(recordKeyString(id, parents));
   }
 
-  has(connection: string, entity: string, id: string | number): boolean {
-    return this.get(connection, entity, id) !== undefined;
+  has(
+    connection: string,
+    entity: string,
+    id: string | number,
+    parents?: Readonly<Record<string, string>>,
+  ): boolean {
+    return this.get(connection, entity, id, parents) !== undefined;
   }
 
   /**
@@ -147,6 +170,8 @@ export class RecordIndex {
     readonly op: string;
     readonly body: unknown;
     readonly plan: Map<string, IndexedEntity>;
+    /** What the response was asked with: a scoped list's parent id is here. */
+    readonly params?: Readonly<Record<string, unknown>> | undefined;
   }): number {
     const known = input.plan.get(`${input.connection}.${input.op}`);
     if (!known) return 0;
@@ -161,12 +186,23 @@ export class RecordIndex {
 
     let added = 0;
     for (const record of records) {
-      if (!rows.has(record.id)) added++;
+      /*
+       * A record that lives under a parent is held by its whole address: the
+       * parent's id off the row where it carries one, else the one the list
+       * was fetched under. One that says neither cannot be told apart from
+       * its namesakes, so it is not held at all.
+       */
+      const parents = known.parents?.length
+        ? parentsFrom(known.parents, record.row, input.params)
+        : undefined;
+      if (parents === null) continue;
+      const key = recordKeyString(record.id, parents);
+      if (!rows.has(key)) added++;
       // Re-inserted even when present, so a detail response — which carries
       // more fields than a list row — replaces the thinner copy rather than
       // being discarded by it.
-      rows.delete(record.id);
-      rows.set(record.id, record.row);
+      rows.delete(key);
+      rows.set(key, record.row);
     }
 
     this.evict(input.connection);

@@ -1,5 +1,5 @@
 import type { EntityLinkView, WidgetSpec } from "@freebirdai/dash-spec";
-import { readField, widgetSources } from "@freebirdai/dash-spec";
+import { parentsFrom, readField, widgetSources } from "@freebirdai/dash-spec";
 
 /**
  * Where clicking a row goes.
@@ -46,6 +46,8 @@ export type RecordTarget =
       readonly connection: string;
       readonly entity: string;
       readonly id: string;
+      /** Its other ids, where it lives under a parent. */
+      readonly parents?: Readonly<Record<string, string>>;
     }
   /** This widget's own sheet, for rows that are not a describable record. */
   | { readonly kind: "widget"; readonly id: string };
@@ -79,12 +81,22 @@ export const recordTargetFor = (
   const value = identity ? readField(row, identity) : undefined;
   const primary = widgetSources(widget)[0];
 
-  if (view && primary && value !== undefined && value !== null && value !== "") {
+  /*
+   * A record that lives under a parent opens with the parent's id too: off the
+   * row where it carries one, else from what this widget's own list was
+   * fetched under — a widget over one property's units knows the property.
+   */
+  const parents = view?.address
+    ? parentsFrom(view.address.parents, row, primary?.params)
+    : undefined;
+
+  if (view && primary && parents !== null && value !== undefined && value !== null && value !== "") {
     return {
       kind: "entity",
       connection: primary.connection,
       entity: view.entity,
       id: String(value),
+      ...(parents ? { parents } : {}),
     };
   }
 

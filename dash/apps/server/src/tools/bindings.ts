@@ -142,6 +142,7 @@ export const readBindings = (input: BindingsInput): ToolBinding[] => {
         list.path ??
         "",
       idParam: offer.detailParam,
+      ...(offer.parentParams?.length ? { parentParams: offer.parentParams } : {}),
       idField: offer.idField,
       listOp: offer.listOp,
     });

@@ -44,7 +44,12 @@ export interface WidgetRenderProps {
    * presentational when it is — the same contract `onSelectRow` follows. A
    * name that looks clickable and is not is worse than a name that does not.
    */
-  readonly onOpenReference?: (target: { entity: string; id: string | number }) => void;
+  readonly onOpenReference?: (target: {
+    entity: string;
+    id: string | number;
+    /** The far record's other ids, where it lives under a parent. */
+    parents?: Readonly<Record<string, string>> | undefined;
+  }) => void;
   /**
    * Rows the widget wants attention drawn to, index-parallel to `rows`.
    *

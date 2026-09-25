@@ -9,6 +9,7 @@ import type {
 import {
   drawnColumns,
   interpolateValue,
+  parentsFrom,
   parseDuration,
   readField,
   widgetSources,
@@ -97,6 +98,29 @@ export const labelColumns = (
   });
 };
 
+
+/**
+ * The columns drawn from a flag, marked as flags.
+ *
+ * Rentvine sends its flags as 1 and 0, so the values alone look like numbers
+ * and print as numbers. The record type knows better — see `isFlagField` —
+ * so a column derived from one of its flags reads Active or Inactive. A
+ * format the widget states for the column still wins: `formatFor` reads the
+ * widget's own format before a column's semantic.
+ */
+export const flagColumns = (
+  columns: readonly ColumnMeta[],
+  widget: WidgetSpec,
+  links: Readonly<Record<string, readonly EntityLinkView[]>> | undefined,
+): ColumnMeta[] => {
+  const flags = links ? entityFor(widget, links)?.flags : undefined;
+  if (!flags?.length || columns.length === 0) return [...columns];
+  const flagged = new Set(flags);
+  const derivedFrom = derivedSources(widget);
+  return columns.map((column) =>
+    flagged.has(derivedFrom[column.name] ?? column.name) ? { ...column, semantic: "boolean" } : column,
+  );
+};
 
 /**
  * An identity-stable snapshot of a set of cache entries.
@@ -228,7 +252,12 @@ export const heldRecordFor = (input: {
 
   const id = readField(row, view.identity);
   if (id === null || id === undefined || id === "") return undefined;
-  return records.get(connection, view.entity, id as string | number);
+  /* One that lives under a parent is held by its whole address. */
+  const parents = view.address
+    ? parentsFrom(view.address.parents, row, widgetSources(widget)[0]?.params)
+    : undefined;
+  if (parents === null) return undefined;
+  return records.get(connection, view.entity, id as string | number, parents);
 };
 
 /**
@@ -788,7 +817,11 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
   const labelled = useMemo<ColumnMeta[]>(
     () =>
       referenceColumns(
-        labelColumns(executed?.columns ?? [], widget, labels, entityLinks),
+        flagColumns(
+          labelColumns(executed?.columns ?? [], widget, labels, entityLinks),
+          widget,
+          entityLinks,
+        ),
         widget,
         entityLinks,
       ),
@@ -851,7 +884,8 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
              * request nor uses up the budget for the ones that do. This is
              * where a board stops paying per id for names it fetched earlier.
              */
-            known: ({ target, id }) => records.has(direct[0]!.connection, target, id),
+            known: ({ target, id, parents }) =>
+              records.has(direct[0]!.connection, target, id, parents),
             /*
              * A record type the account cannot read costs nothing further: no
              * request, and no slice of a budget that belongs to the types it
@@ -990,7 +1024,7 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
           key: lookup.key,
           connection: lookup.connection,
           op: lookup.op,
-          params: { [lookup.param]: lookup.id },
+          params: { [lookup.param]: lookup.id, ...lookup.parents },
           resolved: params,
           now,
           maxAgeMs: staleAfterMs,
@@ -1026,7 +1060,7 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
     (lookup: (typeof lookups)[number]): unknown => {
       const entry = client.get(lookup.key);
       if (entry?.body !== undefined) return entry.body;
-      return records.get(lookup.connection, lookup.target, lookup.id);
+      return records.get(lookup.connection, lookup.target, lookup.id, lookup.parents);
     },
     // `lookupStamp` changes when a fetch lands, `recordStamp` when the index does.
     [client, records, lookupStamp, recordStamp],

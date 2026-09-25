@@ -654,6 +654,10 @@ export interface RecordsState {
   /** Record types a live account has confirmed. Never a model's opinion. */
   readonly verified: number;
   readonly referencesVerified: number;
+  /** Record types whose real rows an account read has seen. */
+  readonly read?: number;
+  /** Fields whose real values turned out not to be what the docs declared. */
+  readonly corrected?: number;
 }
 
 /** What the describing pass did, and what it declined to do. */

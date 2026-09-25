@@ -171,6 +171,8 @@ export interface DrillDownCandidate {
   readonly detailOp: string;
   readonly idField: string;
   readonly detailParam: string;
+  /** The detail endpoint's other path parameters, for a record under a parent. */
+  readonly parentParams?: readonly string[] | undefined;
   readonly labelField?: string | undefined;
 }
 

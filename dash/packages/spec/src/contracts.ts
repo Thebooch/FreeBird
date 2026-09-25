@@ -1020,8 +1020,18 @@ export interface ColumnReference {
   readonly typeColumn?: string;
   /** Value from that column → record type id. */
   readonly typeMap?: Readonly<Record<string, string>>;
-  /** The endpoint returning one far record, when anything can open one. */
-  readonly lookup?: { readonly op: string; readonly param: string };
+  /**
+   * The endpoint returning one far record, when anything can open one.
+   *
+   * `parents` names the fields on this row holding the far record's other
+   * ids, for a record that lives under a parent. They are the API's field
+   * paths, read off the row as it arrived: a derive keeps the original keys.
+   */
+  readonly lookup?: {
+    readonly op: string;
+    readonly param: string;
+    readonly parents?: readonly { readonly param: string; readonly field: string }[];
+  };
 }
 
 /** What the runtime reports about each column it produced. */

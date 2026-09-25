@@ -50,6 +50,12 @@ export interface MapRouteDeps {
    * parts while half its record types are still arriving.
    */
   readonly describing?: Set<string>;
+  /**
+   * The record types were just described. What an account read showed about
+   * them can be applied now — a read that finished first had nothing to apply
+   * it to.
+   */
+  readonly onDescribed?: (catalogId: string) => void;
   readonly catalog: CatalogStore | undefined;
   /**
    * The model for one action. Null means no AI key is configured.
@@ -169,12 +175,20 @@ export const mergeDescribedEntities = (
         ? { identity: { ...identity, observed: true } }
         : {}),
       verified: sameIdentity ? previous.verified : false,
+      ...(previous.readAt && !entity.readAt ? { readAt: previous.readAt } : {}),
       fields: entity.fields.map((field) => {
-        const reference = field.reference;
-        const older = was.get(field.path)?.reference;
-        if (!reference || !older?.verified) return field;
-        const sameLink = older.entity === reference.entity && older.holds === reference.holds;
-        return sameLink ? { ...field, reference: { ...reference, verified: true } } : field;
+        const older = was.get(field.path);
+        /*
+         * What a response showed about this field is evidence about the API,
+         * not about the prose describing it, so a re-description keeps it.
+         */
+        const kept =
+          older?.observed && !field.observed ? { ...field, observed: older.observed } : field;
+        const reference = kept.reference;
+        if (!reference || !older?.reference?.verified) return kept;
+        const sameLink =
+          older.reference.entity === reference.entity && older.reference.holds === reference.holds;
+        return sameLink ? { ...kept, reference: { ...reference, verified: true } } : kept;
       }),
     };
   });
@@ -235,6 +249,10 @@ export const entityState = (
   verified: number;
   /** Links a real id actually resolved through. */
   referencesVerified: number;
+  /** Record types whose real rows an account read has seen. */
+  read: number;
+  /** Fields whose real values turned out not to be what the docs declared. */
+  corrected: number;
 } => {
   const entities = entry.entities ?? [];
   return {
@@ -278,6 +296,13 @@ export const entityState = (
     referencesVerified: entities.reduce(
       (total, entity) =>
         total + entity.fields.filter((field) => field.reference?.verified).length,
+      0,
+    ),
+    read: entities.filter((entity) => entity.readAt).length,
+    corrected: entities.reduce(
+      (total, entity) =>
+        total +
+        entity.fields.filter((field) => field.observed?.coercion || field.observed?.semantic).length,
       0,
     ),
   };
@@ -812,6 +837,7 @@ export const mapRoutes =
         };
         } finally {
           deps.describing?.delete(entry.id);
+          deps.onDescribed?.(entry.id);
         }
       },
     );

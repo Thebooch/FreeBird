@@ -859,6 +859,7 @@ const App = (): JSX.Element => {
         connectionId: target.connection,
         entityId: target.entity,
         recordId: target.id,
+        ...(target.parents ? { parents: target.parents } : {}),
         from: { dashboardId: board.id, widgetId },
       });
       return;
@@ -886,12 +887,14 @@ const App = (): JSX.Element => {
     connection: string;
     entity: string;
     id: string | number;
+    parents?: Readonly<Record<string, string>> | undefined;
   }): void => {
     navigate({
       kind: "entity",
       connectionId: target.connection,
       entityId: target.entity,
       recordId: String(target.id),
+      ...(target.parents ? { parents: target.parents } : {}),
     });
   };
 
@@ -942,6 +945,7 @@ const App = (): JSX.Element => {
                 connectionId: route.connectionId,
                 entityId: route.entityId,
                 recordId: route.recordId,
+                ...(route.parents ? { parents: route.parents } : {}),
               },
             }
           : {})}
@@ -1215,6 +1219,7 @@ const App = (): JSX.Element => {
                   page: entityPage.page,
                   connection: route.connectionId,
                   recordId: route.recordId,
+                  ...(route.parents ? { recordParents: route.parents } : {}),
                   backLabel: board.title,
                   onBack: () =>
                     navigate({

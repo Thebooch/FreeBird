@@ -7,7 +7,7 @@ import {
   connectionNeedsAddress,
   connectionNeedsAuthSetup,
 } from "@freebirdai/dash-spec";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ConnectionAddress } from "./ConnectionAddress.js";
 import { ConnectionOnboarding } from "./ConnectionOnboarding.js";
 import {
@@ -756,6 +756,26 @@ export const ConnectionManager = ({
       }
     });
 
+  /*
+   * Reading the account is part of connecting, not an extra.
+   *
+   * Record types are built from the documentation, and documentation can be
+   * wrong in ways that render confidently — Rentvine declares its flags
+   * boolean and sends 0 and 1. Reading real rows is what catches that, and an
+   * optional button meant nobody ever pressed it. So it starts as soon as this
+   * step opens, once per connection, within the budget the step states; "Skip
+   * for now" still moves on.
+   */
+  const autoRead = useRef<string | null>(null);
+  useEffect(() => {
+    if (view !== "read" || !draftId || !plan || readResult || readProgress !== null) return;
+    if (plan.alreadyRead || plan.estimatedRequests === 0) return;
+    if (autoRead.current === draftId) return;
+    autoRead.current = draftId;
+    void startReading();
+    // startReading is recreated every render; the step and the plan are what matter.
+  }, [view, draftId, plan, readResult, readProgress]);
+
   /**
    * Open the last step: what this connection could be set up with.
    *
@@ -1303,6 +1323,20 @@ export const ConnectionManager = ({
                       <div className="dash-conn-list__meta">
                         What lets a record on a row be opened by name, instead of showing the
                         number the API stores.
+                      </div>
+                    </div>
+                  </li>
+                  <li>
+                    <div className="dash-conn-list__text">
+                      <div className="dash-conn-list__title" data-testid="records-read">
+                        {records.read ?? 0} of {records.entities} read from your account
+                      </div>
+                      <div className="dash-conn-list__meta">
+                        {(records.read ?? 0) === 0
+                          ? "Not read yet — until it is, what each field holds is the documentation's word for it."
+                          : (records.corrected ?? 0) > 0
+                            ? `${records.corrected} field(s) hold something other than the documentation says, and are read the way the API really sends them.`
+                            : "Every field read so far holds what the documentation says."}
                       </div>
                     </div>
                   </li>
@@ -2781,7 +2815,7 @@ export const ConnectionManager = ({
               </div>
             )}
 
-            <h4>Shall we read this API?</h4>
+            <h4>Reading {draft?.title ?? "this API"}</h4>
 
             {readResult ? (
               <>
@@ -2846,7 +2880,7 @@ export const ConnectionManager = ({
             ) : (
               <>
                 <p className="dash-page__description" data-testid="read-estimate">
-                  This will make about{" "}
+                  Reading starts by itself and makes about{" "}
                   <strong>
                     {plan?.estimatedRequests ?? "—"}{" "}
                     {plan?.estimatedRequests === 1 ? "request" : "requests"}
@@ -2864,7 +2898,8 @@ export const ConnectionManager = ({
                 </div>
                 <p className="dash-hint">
                   Reading is how we learn which field on a row is its id, which records link to
-                  which, and what a widget can be built from. You can skip it and do it later.
+                  which, and what the values really are when the documentation says otherwise. You
+                  can skip it and do it later.
                 </p>
               </>
             )}

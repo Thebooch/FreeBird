@@ -78,6 +78,55 @@ describe("collectRecords", () => {
   });
 });
 
+/*
+ * Unit 222 of one property is not unit 222 of the next. A record that lives
+ * under a parent is held by its whole address — the parent's id off the row,
+ * or the one the list was fetched under — and never by its id alone.
+ */
+describe("RecordIndex, for records that live under a parent", () => {
+  const units = indexPlan({
+    api: [
+      view({
+        entity: "unit",
+        resource: "unit",
+        identity: "unitID",
+        ops: ["units", "unit"],
+        address: { parents: [{ param: "propertyID", field: "propertyID", entity: "property" }] },
+      }),
+    ],
+  });
+
+  it("keeps same-id records under different parents apart", () => {
+    const index = new RecordIndex();
+    index.ingest({
+      connection: "api",
+      op: "units",
+      body: [{ unitID: 222, propertyID: 210, name: "A" }, { unitID: 222, propertyID: 211, name: "B" }],
+      plan: units,
+    });
+    expect(index.get("api", "unit", 222, { propertyID: "210" })).toMatchObject({ name: "A" });
+    expect(index.get("api", "unit", 222, { propertyID: "211" })).toMatchObject({ name: "B" });
+    expect(index.get("api", "unit", 222)).toBeUndefined();
+  });
+
+  it("takes the parent from what the list was asked with, where the rows omit it", () => {
+    const index = new RecordIndex();
+    index.ingest({
+      connection: "api",
+      op: "units",
+      body: [{ unitID: 5 }],
+      plan: units,
+      params: { propertyID: "210" },
+    });
+    expect(index.has("api", "unit", 5, { propertyID: "210" })).toBe(true);
+  });
+
+  it("holds nothing it could not tell apart from its namesakes", () => {
+    const index = new RecordIndex();
+    expect(index.ingest({ connection: "api", op: "units", body: [{ unitID: 5 }], plan: units })).toBe(0);
+  });
+});
+
 describe("RecordIndex", () => {
   const plan = indexPlan({ api: [view()] });
 

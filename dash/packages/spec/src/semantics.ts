@@ -23,6 +23,7 @@ export const semanticTypeSchema = z.enum([
   "relative_time",
   "identifier",
   "status_enum",
+  "boolean",
   "url",
   "text",
 ]);
@@ -150,6 +151,13 @@ export const SEMANTICS: Readonly<Record<SemanticType, SemanticDef>> = {
     affinity: ["statusGrid", "bar", "table"],
     description: "A small closed set of states.",
   },
+  boolean: {
+    valueType: "boolean",
+    axis: "category",
+    defaultAggregation: "count",
+    affinity: ["table", "list", "statusGrid"],
+    description: "One of two states, shown as Active or Inactive.",
+  },
   url: {
     valueType: "text",
     axis: "category",
@@ -259,6 +267,27 @@ const summarise = (value: unknown): string => {
   return String(value);
 };
 
+/**
+ * A flag's state, however the API sends it.
+ *
+ * `true`/`false`, `1`/`0`, and the same as text. Null for anything else,
+ * so a field somebody called a flag that holds a 3 prints the 3 rather than a
+ * state it does not have.
+ */
+export const flagValue = (value: unknown): boolean | null => {
+  if (typeof value === "boolean") return value;
+  if (value === 1 || value === 0) return value === 1;
+  if (typeof value === "string") {
+    const text = value.trim().toLowerCase();
+    if (text === "true" || text === "1") return true;
+    if (text === "false" || text === "0") return false;
+  }
+  return null;
+};
+
+/** How a flag reads on screen. */
+export const flagLabel = (on: boolean): string => (on ? "Active" : "Inactive");
+
 export const formatValue = (
   value: unknown,
   format: FormatSpec | undefined,
@@ -268,6 +297,15 @@ export const formatValue = (
 
   const locale = options.locale ?? "en-US";
   const semantic = format?.semantic ?? "text";
+
+  /*
+   * A flag, said as a state. Rentvine sends its flags as 1 and 0; a field
+   * known to be a flag reads "Active" either way.
+   */
+  if (semantic === "boolean") {
+    const on = flagValue(value);
+    if (on !== null) return `${format?.prefix ?? ""}${flagLabel(on)}${format?.suffix ?? ""}`;
+  }
 
   if (semantic === "timestamp" || semantic === "relative_time") {
     const ms = typeof value === "number" ? value : Date.parse(String(value));
@@ -320,7 +358,15 @@ export const formatValue = (
     return `${format?.prefix ?? ""}${body}${format?.suffix ?? ""}`;
   }
 
-  const text = typeof value === "string" ? value : summarise(value);
+  /*
+   * A flag, said the way a person says it rather than "true" or "false".
+   */
+  const text =
+    typeof value === "string"
+      ? value
+      : typeof value === "boolean"
+        ? flagLabel(value)
+        : summarise(value);
   return `${format?.prefix ?? ""}${text}${format?.suffix ?? ""}`;
 };
 
@@ -394,21 +440,136 @@ export const isFieldNoise = (name: string): boolean => {
 };
 
 /**
+ * A name's words, whatever convention spelled it.
+ *
+ * `workOrderNumber`, `work_order_number`, `WorkOrderNumber` and
+ * `WORK-ORDER-NUMBER` are all `work order number`. A run of capitals is one
+ * word up to the capital that starts the next, so `GLAccountId` is
+ * `gl account id` rather than `g l account id`.
+ */
+export const nameWords = (name: string): string[] =>
+  name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length > 0);
+
+/** A name that asks a yes/no question starts with one of these: `isVacant`, `hasPets`. */
+const FLAG_FIRST_WORDS = new Set([
+  "is",
+  "has",
+  "have",
+  "can",
+  "should",
+  "allow",
+  "allows",
+  "was",
+  "were",
+  "will",
+  "does",
+  "did",
+  "needs",
+  "requires",
+  "must",
+]);
+/** …or is a state on its own: `active`, `enabled`. */
+const FLAG_NAMES = new Set(["active", "enabled", "disabled", "deleted", "archived", "visible"]);
+
+/**
+ * Whether a field's name reads as a yes/no question.
+ *
+ * Whole words, so \`isVacant\` and \`has_pets\` are and \`issueDate\` and \`isoCode\`
+ * are not. Used only beside the values themselves: a flag-shaped name holding
+ * a 3 still prints the 3.
+ */
+export const looksLikeFlag = (name: string): boolean => {
+  const leaf = name.split(".").pop() ?? name;
+  const words = nameWords(leaf);
+  if (words.length === 0) return false;
+  if (words.length === 1) return FLAG_NAMES.has(words[0]!);
+  return FLAG_FIRST_WORDS.has(words[0]!);
+};
+
+const IDENTIFIER_WORDS = new Set(["id", "ids", "uuid", "guid"]);
+/** `invoiceNumber`, `phone_number`, `order_num`: a reference, not a quantity. */
+const REFERENCE_NUMBER_WORDS = new Set(["number", "num"]);
+const STATUS_WORDS = new Set(["status", "state", "stage", "kind", "type"]);
+const TIME_WORDS = new Set(["date", "time", "datetime", "timestamp"]);
+/** Only as the last word: `createdAt`, `DateCreated` — but not `CreatedByUser`. */
+const TIME_LAST_WORDS = new Set(["at", "on", "created", "updated", "modified"]);
+const CURRENCY_WORDS = new Set([
+  "amount",
+  "price",
+  "cost",
+  "revenue",
+  "total",
+  "balance",
+  "fee",
+  "fees",
+  "mrr",
+  "arr",
+]);
+const PERCENT_WORDS = new Set(["percent", "percentage", "pct", "rate", "ratio"]);
+const BYTES_WORDS = new Set(["bytes", "size"]);
+const DURATION_WORDS = new Set(["duration", "elapsed", "latency"]);
+const COUNT_WORDS = new Set(["count", "total", "qty", "quantity"]);
+
+/**
+ * Whether a guess can stand for the value it will print.
+ *
+ * The guess formats every column nothing else describes, and a number format
+ * over text prints "—": a phone number, or an account's name, vanished from
+ * the cell because of a word in its column name. A guess the sample
+ * contradicts is dropped rather than trusted — the value is the evidence and
+ * the name is only a hint. No sample (a name judged on its own) keeps it.
+ */
+const fitsSample = (semantic: SemanticType, sample: unknown): boolean => {
+  if (sample === null || sample === undefined) return true;
+  const valueType = SEMANTICS[semantic].valueType;
+  if (valueType === "numeric") {
+    if (typeof sample === "number") return true;
+    return typeof sample === "string" && sample.trim() !== "" && Number.isFinite(Number(sample));
+  }
+  if (valueType === "temporal") {
+    if (typeof sample === "number") return true;
+    return typeof sample === "string" && Number.isFinite(Date.parse(sample));
+  }
+  return true;
+};
+
+/**
  * Best-effort semantic guess from a column name and a sample value. Used to
  * pre-fill the agent's proposal and to give hand-written specs a sane
  * default — never to override anything a user confirmed.
+ *
+ * Matched on words, not on letters inside a lowercased name. Substrings read
+ * `count` in "account", `rate` in "corporate", `date` in "candidate", `arr`
+ * in "carrier" and `ms` at the end of "items" — and lowercasing first lost
+ * the camelCase boundary, so `workOrderID` was never an id. Every rule held
+ * only for snake_case, which is the one convention the fixtures used.
  */
 export const guessSemantic = (name: string, sample: unknown): SemanticType => {
-  const lower = name.toLowerCase();
-  if (/(^|_)(id|uuid|guid)$/.test(lower) || lower.endsWith("_id")) return "identifier";
-  if (/(url|link|href)/.test(lower)) return "url";
-  if (/(status|state|stage|kind|type)$/.test(lower)) return "status_enum";
-  if (/(_at|_on|date|time|timestamp|created|updated)/.test(lower)) return "timestamp";
-  if (/(amount|price|cost|revenue|total|balance|fee|mrr|arr)/.test(lower)) return "currency";
-  if (/(percent|pct|rate|ratio)/.test(lower)) return "percent";
-  if (/(bytes|size)/.test(lower)) return "bytes";
-  if (/(duration|elapsed|latency|ms$)/.test(lower)) return "duration";
-  if (/(count|total|qty|quantity|num|number_of)/.test(lower)) return "count";
+  const words = nameWords(name);
+  const last = words[words.length - 1] ?? "";
+  const has = (set: ReadonlySet<string>): boolean => words.some((word) => set.has(word));
+
+  const guessed = ((): SemanticType | null => {
+    if (IDENTIFIER_WORDS.has(last)) return "identifier";
+    if (REFERENCE_NUMBER_WORDS.has(last)) return "identifier";
+    if (words.some((word) => /(url|link|href)s?$/.test(word))) return "url";
+    if (STATUS_WORDS.has(last)) return "status_enum";
+    if (has(TIME_WORDS) || TIME_LAST_WORDS.has(last)) return "timestamp";
+    if (has(CURRENCY_WORDS)) return "currency";
+    if (has(PERCENT_WORDS)) return "percent";
+    if (has(BYTES_WORDS)) return "bytes";
+    if (has(DURATION_WORDS) || last === "ms") return "duration";
+    // `num_items`, `numberOfUnits`: a count when the number comes first.
+    if (has(COUNT_WORDS) || words[0] === "num" || words[0] === "number") return "count";
+    return null;
+  })();
+
+  if (guessed && fitsSample(guessed, sample)) return guessed;
   if (typeof sample === "number") return "number";
   return "text";
 };

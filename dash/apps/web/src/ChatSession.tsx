@@ -120,7 +120,12 @@ export const ChatScopeReporter = ({
    * endpoint rather than through a drill-down.
    */
   readonly openEntity?:
-    | { readonly connectionId: string; readonly entityId: string; readonly recordId: string }
+    | {
+        readonly connectionId: string;
+        readonly entityId: string;
+        readonly recordId: string;
+        readonly parents?: Readonly<Record<string, string>> | undefined;
+      }
     | undefined;
 }): null => {
   const report = useContext(ChatScopeContext);
@@ -135,7 +140,10 @@ export const ChatScopeReporter = ({
   const view = openEntity
     ? `entity:${encodeURIComponent(openEntity.connectionId)}` +
       `:${encodeURIComponent(openEntity.entityId)}` +
-      `:${encodeURIComponent(openEntity.recordId)}`
+      `:${encodeURIComponent(openEntity.recordId)}` +
+      (openEntity.parents && Object.keys(openEntity.parents).length > 0
+        ? `?${new URLSearchParams(Object.entries(openEntity.parents)).toString()}`
+        : "")
     : openRecord
       ? `record:${encodeURIComponent(openRecord.widgetId)}:${encodeURIComponent(openRecord.recordId)}`
       : "board";

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyCoercion } from "./coercion.js";
-import { SEMANTICS, formatValue, guessSemantic } from "./semantics.js";
+import { SEMANTICS, formatValue, guessSemantic, looksLikeFlag } from "./semantics.js";
 
 describe("formatValue", () => {
   it("shows an em dash rather than NaN or null", () => {
@@ -95,6 +95,63 @@ describe("guessSemantic", () => {
     expect(guessSemantic("whatever", 3)).toBe("number");
     expect(guessSemantic("whatever", "text")).toBe("text");
   });
+
+  /*
+   * Every rule used to hold only for snake_case: the name was lowercased
+   * before matching, so `workOrderID` lost the boundary that made it an id.
+   */
+  it.each([
+    ["workOrder_workOrderID", "identifier"],
+    ["VendorId", "identifier"],
+    ["GLAccountId", "identifier"],
+    ["PropertyIds", "identifier"],
+    ["createdAt", "timestamp"],
+    ["DateTimeCreated", "timestamp"],
+    ["workOrderStatus", "status_enum"],
+    ["RentAmount", "currency"],
+    ["unitCount", "count"],
+    ["numberOfUnits", "count"],
+  ])("reads %s the same whatever the convention (%s)", (name, expected) => {
+    expect(guessSemantic(name, 1)).toBe(expected);
+  });
+
+  /* A reference number is not a quantity: summed, or printed as "104,868". */
+  it.each(["workOrder_workOrderNumber", "order_number", "PhoneNumber", "AccountNumber", "item_num"])(
+    "reads %s as a reference, not a count",
+    (name) => {
+      expect(guessSemantic(name, 104868)).toBe("identifier");
+      expect(formatValue(104868, { semantic: guessSemantic(name, 104868) })).toBe("104868");
+    },
+  );
+
+  /* Letters inside a word are not the word. */
+  it.each([
+    ["GLAccount_Name", "Rent Income"],
+    ["contact_isCorporate", true],
+    ["candidate_name", "Ada"],
+    ["carrier_name", "Acme Freight"],
+    ["line_items", "3 items"],
+    ["timezone", "America/Chicago"],
+  ])("does not read %s by the letters inside its words", (name, sample) => {
+    expect(guessSemantic(name, sample)).toBe("text");
+  });
+
+  /*
+   * The guess formats every column nothing else describes, so one the value
+   * contradicts must not stand: a number format over text prints "—".
+   */
+  it("never lets a name's guess make a value unreadable", () => {
+    expect(formatValue("555-123-4567", { semantic: guessSemantic("PhoneNumber", "555-123-4567") })).toBe(
+      "555-123-4567",
+    );
+    expect(formatValue("000123456789", { semantic: guessSemantic("AccountNumber", "000123456789") })).toBe(
+      "000123456789",
+    );
+    expect(guessSemantic("total_label", "Grand total")).toBe("text");
+    expect(guessSemantic("due_date", "not a date")).toBe("text");
+    /* Judged on its name alone, the guess still stands. */
+    expect(guessSemantic("order_status", null)).toBe("status_enum");
+  });
 });
 
 describe("SEMANTICS registry", () => {
@@ -147,5 +204,45 @@ describe("applyCoercion", () => {
     expect(applyCoercion("yes", "->boolean")).toBe(true);
     expect(applyCoercion(0, "->boolean")).toBe(false);
     expect(applyCoercion("TRUE", "->boolean")).toBe(true);
+  });
+});
+
+/*
+ * Rentvine sends its flags as 1 and 0. A field known to be a flag reads as a
+ * state however it arrives, and a real true/false does too.
+ */
+describe("flags", () => {
+  it("reads a flag as Active or Inactive, however the API sends it", () => {
+    for (const on of [true, 1, "1", "true", " TRUE "]) {
+      expect(formatValue(on, { semantic: "boolean" }), String(on)).toBe("Active");
+    }
+    for (const off of [false, 0, "0", "false"]) {
+      expect(formatValue(off, { semantic: "boolean" }), String(off)).toBe("Inactive");
+    }
+  });
+
+  it("prints what a so-called flag really holds when it is not one", () => {
+    // Declared boolean, sent as a type id: 3 is not a state.
+    expect(formatValue(3, { semantic: "boolean" })).toBe("3");
+    expect(formatValue(null, { semantic: "boolean" })).toBe("—");
+  });
+
+  it("reads a real true/false as a state with nothing to say it is a flag", () => {
+    expect(formatValue(true, undefined)).toBe("Active");
+    expect(formatValue(false, { semantic: "text" })).toBe("Inactive");
+  });
+});
+
+describe("looksLikeFlag", () => {
+  it("reads a name that asks a yes/no question, in any convention", () => {
+    for (const name of ["isVacant", "workOrder.isSharedWithTenant", "has_pets", "CanEdit", "active", "enabled"]) {
+      expect(looksLikeFlag(name), name).toBe(true);
+    }
+  });
+
+  it("does not read a word that merely starts with the same letters", () => {
+    for (const name of ["issueDate", "isoCode", "hash", "canonicalUrl", "status", "is", "taxFormTypeID"]) {
+      expect(looksLikeFlag(name), name).toBe(false);
+    }
   });
 });

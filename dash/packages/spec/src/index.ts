@@ -210,6 +210,23 @@ export type { BriefControl, BriefOption, BriefOptionsInput } from "./brief-optio
 export { recompileWidget } from "./recompile.js";
 
 export { readField } from "./field-path.js";
+export { bundleOf, bundlesOf, ownFields } from "./bundles.js";
+export type { Bundle } from "./bundles.js";
+export { parentsFrom, recordKeyString, valueForParam } from "./record-key.js";
+export {
+  fieldCoercion,
+  fieldReading,
+  fieldSemantic,
+  isFlagField,
+  observeEntity,
+  observeField,
+  readingsDiffer,
+  rerootBrief,
+  rerootEntity,
+  wrapperOf,
+} from "./observe.js";
+export type { SeenField } from "./observe.js";
+export type { RecordKey } from "./record-key.js";
 
 export { referenceIds, targetOfRow } from "./reference.js";
 export type { ReferenceRow } from "./reference.js";
@@ -224,6 +241,7 @@ export {
   targetsOf,
 } from "./entity-graph.js";
 export type {
+  AddressPart,
   EntityBackref,
   EntityGraph,
   EntityGraphInput,
@@ -233,9 +251,11 @@ export type {
   EntityPageView,
   EntityReference,
   EntityReferenceView,
+  LinkedPart,
   OmittedSection,
   ReachCost,
   ReachPlan,
+  RecordAddress,
   UnreachableLink,
 } from "./entity-graph.js";
 
@@ -418,8 +438,11 @@ export {
   aggregationSchema,
   statusTone,
   formatSchema,
+  flagLabel,
+  flagValue,
   formatValue,
   guessSemantic,
+  looksLikeFlag,
   isFieldNoise,
   looksLikeApiLink,
   looksLikeIdentifier,

@@ -82,7 +82,8 @@ export const inferColumns = (input: InferColumnsInput): ColumnMeta[] => {
     const distinctCount = distinct.size;
     const observed = observedType(present, distinctCount);
     const hinted = semanticHints[name];
-    const semantic = hinted ?? guessSemantic(name, present[0]);
+    // Values that are all true or false are a flag, whatever the name suggests.
+    const semantic = hinted ?? (observed === "boolean" ? "boolean" : guessSemantic(name, present[0]));
 
     // Authored intent decides the value type; a name-based guess does not get
     // to overrule what the data actually is.
