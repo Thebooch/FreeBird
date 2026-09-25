@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/dash-spec",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "FreeBird Dash spec: the versioned schemas, semantic type registry, and component role contracts that every other package agrees on.",
   "license": "MIT",
   "repository": {
