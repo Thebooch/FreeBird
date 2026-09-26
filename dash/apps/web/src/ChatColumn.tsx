@@ -10,6 +10,7 @@ import { useOptionalDashboard } from "@freebirdai/dash-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 import { ConciergeCard } from "./ConciergeCard";
+import { CHANGE_ACTIONS, ChatChangeCard } from "./ChatChangeCard.jsx";
 import { writeStoredSession } from "./ChatSession.jsx";
 import { Citations, DigDeeper, OfferWidget } from "./MessageExtras.jsx";
 import { showWidget } from "./showWidget.js";
@@ -70,6 +71,8 @@ export interface ChatColumnProps {
    */
   readonly pending?: string | null | undefined;
   readonly takePending?: (() => string | null) | undefined;
+  /** A record was changed through the chat: what it made stale, for the board to ask again. */
+  readonly onRecordChanged?: (changed: { connection: string; ops: readonly string[] }) => void;
 }
 
 /**
@@ -116,6 +119,8 @@ const WORKING_ON: Readonly<Record<string, string>> = {
   create_dashboard: "Creating the tab",
   rename_dashboard: "Renaming the tab",
   delete_dashboard: "Deleting the tab",
+  change_record: "Preparing the change",
+  remove_record: "Preparing the change",
   read_connection: "Opening the connection panel",
   open_connections: "Opening your connections",
   open_add_widget: "Opening the widget picker",
@@ -176,6 +181,7 @@ const ChatBody = ({
   onBuildingChange,
   pending,
   takePending,
+  onRecordChanged,
 }: Omit<ChatColumnProps, "open">): JSX.Element => {
   const { sessionId, createSession } = useSession({ autoCreate: true, topic: "dashboard" });
   const freeBird = useFreeBird();
@@ -419,6 +425,14 @@ const ChatBody = ({
           if (actionId === "revise_setup") setOtherReading(null);
           return;
         }
+        if (CHANGE_ACTIONS.has(actionId)) {
+          // What the change made stale is asked for again, so the board shows it.
+          const result = event.result as { connection?: unknown; invalidated?: { ops?: unknown } } | null;
+          if (result && typeof result.connection === "string" && Array.isArray(result.invalidated?.ops)) {
+            onRecordChanged?.({ connection: result.connection, ops: result.invalidated.ops as string[] });
+          }
+          return;
+        }
         if (SPEC_ACTIONS.has(actionId)) {
           onDashboardChanged();
           // Creating a tab should land on it, the same as clicking ＋ does.
@@ -462,7 +476,7 @@ const ChatBody = ({
           onOpenPanel?.("connections");
         }
       },
-      [setPreset, onDashboardChanged, onSwitchDashboard, onOpenPanel, dashboardId],
+      [setPreset, onDashboardChanged, onSwitchDashboard, onOpenPanel, onRecordChanged, dashboardId],
     ),
   );
 
@@ -630,7 +644,20 @@ const ChatBody = ({
          * dashboard, so neither runs until this is clicked — the assistant can
          * only ever propose them.
          */}
-        {actions.pending && actions.phase === "awaiting_confirmation" && (
+        {/*
+         * A change to a connected account gets the server's own review — the
+         * same one a form shows — instead of the generic card below.
+         */}
+        {actions.pending &&
+          actions.phase === "awaiting_confirmation" &&
+          CHANGE_ACTIONS.has(actions.pending.actionId) && (
+            <ChatChangeCard
+              args={actions.pending.args}
+              onApply={() => actions.confirm()}
+              onCancel={() => actions.cancel()}
+            />
+          )}
+        {actions.pending && actions.phase === "awaiting_confirmation" && !CHANGE_ACTIONS.has(actions.pending.actionId) && (
           <div className="dash-callout" data-testid="chat-confirm">
             <strong>{actions.pending.label ?? actions.pending.actionId}</strong>
             <div style={{ marginTop: 4 }}>

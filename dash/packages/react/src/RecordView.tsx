@@ -1,4 +1,12 @@
-import { EmptyState, ErrorState, Message, Skeleton, Tabs, getComponent } from "@freebirdai/dash-components";
+import {
+  EmptyState,
+  ErrorState,
+  Message,
+  type RowAction,
+  Skeleton,
+  Tabs,
+  getComponent,
+} from "@freebirdai/dash-components";
 import type { Row } from "@freebirdai/dash-runtime";
 import type { WidgetSpec } from "@freebirdai/dash-spec";
 import { parentsFrom } from "@freebirdai/dash-spec";
@@ -51,6 +59,7 @@ export const RecordView = ({
   wide,
   onOpenChild,
   onOpenReference,
+  rowActions,
 }: {
   readonly panes: readonly DetailPane[];
   readonly row: Row;
@@ -65,6 +74,12 @@ export const RecordView = ({
    * old two-level limit on how far a reader could follow a chain.
    */
   readonly onOpenReference?: OpenReference;
+  /**
+   * What can be done to the record behind a row of a related collection —
+   * a property's units, a lease's notes. Absent, or empty for a row, draws
+   * nothing.
+   */
+  readonly rowActions?: (pane: DetailPane, row: Row) => readonly RowAction[];
 }): JSX.Element => {
   const header = headerPane(panes);
   const record = recordPane(panes);
@@ -160,6 +175,7 @@ export const RecordView = ({
               row={row}
               {...(onOpenChild ? { onOpenChild } : {})}
               {...(onOpenReference ? { onOpenReference } : {})}
+              {...(rowActions ? { rowActions } : {})}
             />
           </div>
         </div>
@@ -185,6 +201,7 @@ export const RecordView = ({
               row={row}
               {...(onOpenChild ? { onOpenChild } : {})}
               {...(onOpenReference ? { onOpenReference } : {})}
+              {...(rowActions ? { rowActions } : {})}
             />
           </LazyWidget>
         </section>
@@ -203,11 +220,13 @@ const PaneBody = ({
   row,
   onOpenChild,
   onOpenReference,
+  rowActions,
 }: {
   readonly pane: DetailPane;
   readonly row: Row;
   readonly onOpenChild?: (pane: DetailPane, childRow: Row) => void;
   readonly onOpenReference?: OpenReference;
+  readonly rowActions?: (pane: DetailPane, row: Row) => readonly RowAction[];
 }): JSX.Element => {
   const { now, timeZone, presentation: sources } = useDashboard();
   return (
@@ -220,6 +239,7 @@ const PaneBody = ({
       sources={sources}
       {...(onOpenChild ? { onOpenChild } : {})}
       {...(onOpenReference ? { onOpenReference } : {})}
+      {...(rowActions ? { rowActions } : {})}
     />
   );
 };
@@ -233,6 +253,7 @@ const PaneRenderer = ({
   sources,
   onOpenChild,
   onOpenReference,
+  rowActions,
 }: {
   readonly spec: WidgetSpec;
   readonly pane: DetailPane;
@@ -242,6 +263,7 @@ const PaneRenderer = ({
   readonly sources: PresentationSources | undefined;
   readonly onOpenChild?: (pane: DetailPane, childRow: Row) => void;
   readonly onOpenReference?: OpenReference;
+  readonly rowActions?: (pane: DetailPane, row: Row) => readonly RowAction[];
 }): JSX.Element => {
   const data = useWidgetData(spec, row);
 
@@ -439,6 +461,7 @@ const PaneRenderer = ({
         : {})}
       {...(selectRow ? { onSelectRow: selectRow } : {})}
         {...(openReference ? { onOpenReference: openReference } : {})}
+        {...(rowActions ? { rowActions: (childRow: Row) => rowActions(pane, childRow) } : {})}
         {...(pane.groups ? { groups: pane.groups } : {})}
         presentation={presentationFor(sources, spec.component, spec.presentation)}
       />

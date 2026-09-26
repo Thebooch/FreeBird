@@ -11,11 +11,12 @@ import type {
 import { Button } from "@freebirdai/dash-components";
 import { type ReactNode, useEffect } from "react";
 import { DashboardGrid } from "./DashboardGrid.jsx";
-import { EntityRecordPage } from "./EntityRecordPage.jsx";
+import { EntityRecordPage, type RecordChangeRequest } from "./EntityRecordPage.jsx";
+import type { RecordCreateOffer, RecordRowActions } from "./WidgetShell.jsx";
 import { RecordPage } from "./RecordPage.jsx";
 import type { OpenReference } from "./entityDetail.js";
 import { ParamBar } from "./ParamBar.jsx";
-import { DashboardProvider } from "./context.jsx";
+import { DashboardProvider, type RecordChangeSignal } from "./context.jsx";
 import type { PresentationSources } from "./presentation.js";
 import { DASH_REACT_STYLES } from "./styles.js";
 
@@ -127,6 +128,8 @@ export interface DashboardProps {
    * connection's cached rows instead of leaving the old account's on screen.
    */
   readonly credentialRevisions?: Readonly<Record<string, number>>;
+  /** The last change to a record, so what it made stale is asked again. See the provider. */
+  readonly changes?: RecordChangeSignal | undefined;
   /**
    * Whether the board can be rearranged right now.
    *
@@ -138,6 +141,10 @@ export interface DashboardProps {
   /** Re-pack every widget with the deterministic placer. */
   readonly onAutoArrange?: () => void;
   readonly onCustomiseWidget?: (widgetId: string) => void;
+  /** Make a new record of the kind a widget shows. See `WidgetShell`. */
+  readonly onCreateRecord?: RecordCreateOffer;
+  /** Change the record behind a row: edit, act on or delete it. See `WidgetShell`. */
+  readonly onRowActions?: RecordRowActions;
   /** Arrange this widget with others, or take it out of the frame it is in. */
   readonly onFrameWidget?: (widgetId: string) => void;
   /** Open a record as a full page. Absent in an embed with no routing. */
@@ -182,6 +189,8 @@ export interface DashboardProps {
     readonly override?: RecordOverride;
     /** Offer to rearrange the page. Absent where nothing could store it. */
     readonly onEditLayout?: () => void;
+    /** Offer the changes the page allows. Absent where nothing can be changed. */
+    readonly onChangeRecord?: (request: RecordChangeRequest) => void;
   };
 }
 
@@ -198,10 +207,13 @@ export const Dashboard = ({
   entityLinks,
   rangeOps,
   credentialRevisions,
+  changes,
   editing,
   onEditingChange,
   onAutoArrange,
   onCustomiseWidget,
+  onCreateRecord,
+  onRowActions,
   onFrameWidget,
   onOpenRecordPage,
   onOpenReference,
@@ -222,6 +234,7 @@ export const Dashboard = ({
       {...(entityLinks ? { entityLinks } : {})}
       {...(rangeOps ? { rangeOps } : {})}
       {...(credentialRevisions ? { credentialRevisions } : {})}
+      {...(changes ? { changes } : {})}
     >
       <DashStyleSheet />
       <div className="dash-root dash-page">
@@ -281,6 +294,8 @@ export const Dashboard = ({
           {...(hero ? { heroWidgetId: hero } : {})}
           {...(onRemoveWidget ? { onRemoveWidget } : {})}
           {...(onCustomiseWidget ? { onCustomiseWidget } : {})}
+          {...(onCreateRecord ? { onCreateRecord } : {})}
+          {...(onRowActions ? { onRowActions } : {})}
           {...(onFrameWidget ? { onFrameWidget } : {})}
           {...(onOpenRecordPage ? { onOpenRecordPage } : {})}
           {...(onOpenReference ? { onOpenReference } : {})}

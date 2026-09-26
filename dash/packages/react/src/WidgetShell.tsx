@@ -8,6 +8,7 @@ import {
   Menu,
   type MenuItem,
   Message,
+  type RowAction,
   Skeleton,
   applyFacets,
   buildFacets,
@@ -55,6 +56,19 @@ type ChromeSlot = (typeof CHROME_SLOTS)[number];
  * component `widget` and one for whatever it is rendering, so hiding a header
  * or thinning the padding is a stored setting rather than a fork of this file.
  */
+/** A new record of the kind a widget shows, when the host says one can be made. */
+export interface RecordCreateOffer {
+  /** What the menu item says — "New property" — or undefined when nothing can be made. */
+  readonly label: (widgetId: string) => string | undefined;
+  readonly open: (widgetId: string) => void;
+}
+
+/**
+ * What can be done to the record behind a row of a widget — edit, record
+ * actions, delete — each opening a form or a review. Empty when nothing can.
+ */
+export type RecordRowActions = (widgetId: string, row: Row) => readonly RowAction[];
+
 export const WidgetShell = ({
   widget,
   hero,
@@ -63,6 +77,8 @@ export const WidgetShell = ({
   onFrame,
   onOpenPage,
   onOpenReference,
+  onCreateRecord,
+  onRowActions,
 }: {
   widget: WidgetSpec;
   hero?: boolean;
@@ -88,6 +104,20 @@ export const WidgetShell = ({
    * other affordance in this file follows.
    */
   onOpenReference?: OpenReference;
+  /**
+   * Make a new record of the kind this widget shows.
+   *
+   * The host decides whether there is one to make — this widget's records
+   * have a create endpoint, and the account allows it — and says what to call
+   * it. No label, no menu item: the same contract as every affordance here.
+   */
+  onCreateRecord?: RecordCreateOffer;
+  /**
+   * Change the record behind a row. Absent, or empty for a row, and that row
+   * has no menu — the host decides from what the API can change and what the
+   * person may.
+   */
+  onRowActions?: RecordRowActions;
 }): JSX.Element => {
   const data = useWidgetData(widget);
   /*
@@ -241,6 +271,7 @@ export const WidgetShell = ({
     });
   }
 
+  const createLabel = onCreateRecord?.label(widget.id);
   const actions: MenuItem[] = [
     { id: "refresh", label: "Refresh", icon: "↻", onSelect: data.refetch },
     {
@@ -249,6 +280,9 @@ export const WidgetShell = ({
       icon: "ⓘ",
       onSelect: () => setInspecting(true),
     },
+    ...(createLabel && onCreateRecord
+      ? [{ id: "create-record", label: createLabel, icon: "＋", onSelect: () => onCreateRecord.open(widget.id) }]
+      : []),
     ...(onCustomise
       ? [{ id: "customise", label: "Customise", icon: "◫", onSelect: () => onCustomise(widget.id) }]
       : []),
@@ -429,6 +463,7 @@ export const WidgetShell = ({
                 ? { onSelectRow: setOpenRow }
                 : {})}
             {...(openReference ? { onOpenReference: openReference } : {})}
+            {...(onRowActions ? { rowActions: (row: Row) => onRowActions(widget.id, row) } : {})}
           />
         </WidgetErrorBoundary>
         {openRow && widget.drilldown && (
@@ -601,6 +636,7 @@ const WidgetBody = ({
   presentation,
   onSelectRow,
   onOpenReference,
+  rowActions,
 }: {
   data: WidgetData;
   /**
@@ -620,6 +656,7 @@ const WidgetBody = ({
   presentation?: Presentation;
   onSelectRow?: (row: Row) => void;
   onOpenReference?: (target: { entity: string; id: string | number }) => void;
+  rowActions?: (row: Row) => readonly RowAction[];
 }): JSX.Element => {
   switch (data.state) {
     case "loading":
@@ -721,6 +758,7 @@ const WidgetBody = ({
           {...(hero ? { hero } : {})}
           {...(onSelectRow ? { onSelectRow } : {})}
           {...(onOpenReference ? { onOpenReference } : {})}
+          {...(rowActions ? { rowActions } : {})}
           {...(Object.keys(data.referenceNames).length > 0
             ? { referenceNames: data.referenceNames }
             : {})}

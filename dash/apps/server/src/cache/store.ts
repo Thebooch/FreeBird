@@ -48,10 +48,12 @@ export interface CacheStore {
   /**
    * Drop everything, or only the keys beginning with `prefix`.
    *
-   * The prefix is always `queryKeyPrefix(connection)`. An implementation that
+   * The prefix is `queryKeyPrefix(connection)` — one account, after its
+   * credentials changed — or `queryKeyOpPrefix(connection, op)` — one
+   * endpoint, after a change made its answers stale. An implementation that
    * cannot scope its delete must clear everything and not silently keep the
    * rest: over-clearing costs requests, under-clearing serves one account's
-   * rows after its credentials changed.
+   * rows after its credentials changed, or a record as it was before a change.
    */
   clear(prefix?: string): void;
 }

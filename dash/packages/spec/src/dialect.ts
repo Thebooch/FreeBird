@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { writesListSchema } from "./write.js";
 import { fieldFormatSchema } from "./coercion.js";
 import { entitySchema } from "./entity.js";
 import { CATEGORIES_MAX, categorySchema, profileSchema } from "./category.js";
@@ -257,6 +258,18 @@ export const catalogEntrySchema = z.object({
       }),
     )
     .default([]),
+  /**
+   * The endpoints that change things — create, update, delete, record
+   * actions — as the specification declared them.
+   *
+   * Never in `ops`, which stays read-only by construction: see `write.ts`.
+   * Read only by an explicit "read write endpoints", never on the side of a
+   * discovery or a refresh, and tolerant of a malformed element so that one
+   * bad endpoint cannot take the whole entry with it.
+   */
+  writes: writesListSchema,
+  /** Which version of the write importer wrote `writes`. */
+  writesVersion: z.number().int().min(1).optional(),
   /** Derived relationships between those ops. */
   resources: z.array(resourceSchema).max(200).default([]),
   /**

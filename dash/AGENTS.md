@@ -30,6 +30,18 @@ The `LlmAdapter` / `LlmTool` / `LlmStreamChunk` interfaces in `@freebirdai/dash-
 - **API responses are untrusted input to the LLM.** Truncate, redact, and carry an explicit untrusted-data clause in the system prompt.
 - **`runPipeline` takes an injected clock.** No `Date.now()` in the runtime — determinism and testability.
 
+## Writes (changes to connected accounts)
+
+- **`ops` stay GET-only.** `opDefSchema.method` is a literal. Endpoints that change things live in `CatalogEntry.writes` — never in `ops` — so no widget, keeper target, `/api/query`, brief or resource derivation can name one. Only `WriteService` (`apps/server/src/writes/service.ts`) sends a write.
+- **Every write is reviewed, then committed.** `prepare` reads the record fresh (never from the cache), builds the exact request and a before/after review, and returns a digest; `commit` sends only a review whose digest matches, once, for the person who prepared it, after re-reading the record and refusing if it moved (409 with a fresh review).
+- **A replace (`PUT`) is built from the record, never from the changes alone.** Each request field's `readFrom` says where its current value is shown; fields that cannot be read are listed on the review as "not sent". Settle them with "Match fields" (the `writes` model task) or a person's mapping — never by string similarity at run time.
+- **No retries and no redirect-following on writes.** A timeout after sending is reported as "unknown outcome", never as "nothing changed".
+- **Chat never prepares at confirm.** The guide harness re-runs `preflight` at the moment somebody clicks Apply and merges its `resolvedArgs`; `change_record`/`remove_record` therefore reuse the review while proposing and only *check* it at confirm (`ctx.auth.extra.via === "confirm"`).
+- **Every attempt is journalled and policy-checked.** `WriteJournal` gets a full event (before, sent, after, changed, reversal hint) for successes, failures, refusals and unknown outcomes; `Policy.can` is asked on prepare and again on commit. OSS defaults: `localOwner()`, `ownerPolicy`, `nullJournal` — see `apps/server/src/identity/README.md`.
+- **Writes are native to every connection — there is nothing to switch on.** The review is the safety step, and `Policy.can` is the only gate (always yes in OSS). An endpoint read from prose (`confidence: "inferred"`) is offered too and says so on its review; `confirmed: false` (set by `PUT …/writes/:opId/offered`) is the one way to stop offering an endpoint.
+- **The browser never holds a catalog entry's `writes`** (`catalogForBrowser`); a save from the browser keeps the server's. An entry whose writes were never read (`writesVersion` absent, `origin: "openapi"`) has them read from its published specification — a docs read, never the account — when a connection is added from it and once per run at startup (`WriteEndpointReader`, `autoReadWrites`, on only in `index.ts`). `IMPORT_VERSION` is deliberately not bumped for writes.
+- **Every row that is a record can be changed where it is shown.** Components draw `RowActions` from the optional `rowActions` render prop; the host builds them with `recordChangeRequests` + `changeRowActions` from `recordTargetFor` and the server's `allowed` view, so a row's menu and its click always agree on the record.
+
 ## Gotchas (paid for elsewhere, don't rediscover)
 
 - **Vitest runs serial** (`--fileParallelism=false`). Parallel workers flake on the OneDrive filesystem.

@@ -156,9 +156,40 @@ export interface GuardedFetchResult {
  */
 export const guardedFetch = async (
   rawUrl: string,
-  init: { headers?: Record<string, string>; signal?: AbortSignal },
+  init: GuardedInit,
   allowedHost: string | null,
 ): Promise<GuardedFetchResult> => fetchGuarded(rawUrl, init, (url) => assertAllowedHost(url, allowedHost));
+
+/**
+ * What a request sends. `method` and `body` exist for writes; everything that
+ * reads leaves them out and sends a GET exactly as before.
+ */
+export interface GuardedInit {
+  readonly headers?: Record<string, string>;
+  readonly signal?: AbortSignal;
+  readonly method?: string;
+  readonly body?: string;
+}
+
+/**
+ * Failures that happen before a request leaves this machine.
+ *
+ * A write that failed here changed nothing, and can say so. Any other
+ * failure — a timeout, a dropped connection, a body that could not be read —
+ * may have happened after the API acted, and saying "nothing changed" then
+ * would be a guess presented as a fact.
+ */
+const NOT_SENT_CODES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "EHOSTUNREACH", "ENETUNREACH"]);
+
+/** Marks an error as one that happened before anything was sent. */
+export const notSent = <T extends Error>(error: T): T & { readonly notSent: true } =>
+  Object.assign(error, { notSent: true as const });
+
+const failedBeforeSending = (error: unknown): boolean => {
+  if (error instanceof BlockedUrlError) return true;
+  const cause = (error as { cause?: { code?: unknown } } | null)?.cause;
+  return typeof cause?.code === "string" && NOT_SENT_CODES.has(cause.code);
+};
 
 /**
  * Fetch a document for *discovery* — an OpenAPI spec or a docs page the user
@@ -177,12 +208,19 @@ export const fetchPublicDocument = async (
 
 const fetchGuarded = async (
   rawUrl: string,
-  init: { headers?: Record<string, string>; signal?: AbortSignal },
+  init: GuardedInit,
   checkHost: (url: URL) => void,
   maxBytes: number = MAX_BODY_BYTES,
 ): Promise<GuardedFetchResult> => {
-  let current = await assertPublicHttpUrl(rawUrl);
-  checkHost(current);
+  const method = (init.method ?? "GET").toUpperCase();
+  const reading = method === "GET";
+  let current: URL;
+  try {
+    current = await assertPublicHttpUrl(rawUrl);
+    checkHost(current);
+  } catch (error) {
+    throw reading || !(error instanceof Error) ? error : notSent(error);
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -190,16 +228,33 @@ const fetchGuarded = async (
 
   try {
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-      const response = await fetch(current.toString(), {
-        method: "GET",
-        redirect: "manual",
-        signal: controller.signal,
-        headers: {
-          accept: "application/json, text/plain;q=0.9, */*;q=0.8",
-          "user-agent": "FreeBirdDash/0.1 (+https://github.com/Thebooch/FreeBird)",
-          ...init.headers,
-        },
-      });
+      let response: Response;
+      try {
+        response = await fetch(current.toString(), {
+          method,
+          redirect: "manual",
+          signal: controller.signal,
+          headers: {
+            accept: "application/json, text/plain;q=0.9, */*;q=0.8",
+            "user-agent": "FreeBirdDash/0.1 (+https://github.com/Thebooch/FreeBird)",
+            ...init.headers,
+          },
+          ...(reading || init.body === undefined ? {} : { body: init.body }),
+        });
+      } catch (error) {
+        if (!reading && error instanceof Error && failedBeforeSending(error)) throw notSent(error);
+        throw error;
+      }
+
+      /*
+       * A change is never sent twice. A redirect answering a write is handed
+       * back as it is: following it would mean sending the body again to a
+       * second address, and a 303 after a POST can mean the API already did
+       * what was asked. The caller says so rather than guessing which.
+       */
+      if (!reading && response.status >= 300 && response.status < 400) {
+        return { status: response.status, headers: response.headers, text: "", url: current.toString() };
+      }
 
       /*
        * 304 is in the 3xx range and is not a redirect.

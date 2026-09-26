@@ -6,6 +6,7 @@ import {
   fnv1a,
   humanLabel,
   isFieldNoise,
+  normaliseName,
   pathParamNames,
 } from "@freebirdai/dash-spec";
 import { z } from "zod";
@@ -447,13 +448,40 @@ export const scopeOf = (
   const params = pathParamNames(listPath);
   if (params.length !== 1) return undefined;
 
-  const prefix = listPath.slice(0, listPath.indexOf("{{"));
-  const parent = resources.find((candidate) => {
-    if (candidate.id === resource.id) return false;
-    const path = candidate.listOp ? byId.get(candidate.listOp)?.path : undefined;
-    return path !== undefined && prefix.startsWith(`${path}/`);
+  const param = params[0]!;
+  const others = resources.filter((candidate) => candidate.id !== resource.id);
+
+  /*
+   * The record whose own endpoint the path begins with, by this parameter:
+   * `/rentals/units/{unitId}` is the start of `/rentals/units/{unitId}/listing`.
+   * That is the API saying which record this lives under, so it wins.
+   */
+  const byDetail = others.find((candidate) => {
+    const path = candidate.detailOp ? byId.get(candidate.detailOp)?.path : undefined;
+    return (
+      path !== undefined &&
+      candidate.detailParam !== undefined &&
+      normaliseName(candidate.detailParam) === normaliseName(param) &&
+      listPath.startsWith(`${path}/`)
+    );
   });
-  return parent ? { parent: parent.id, param: params[0]! } : undefined;
+  if (byDetail) return { parent: byDetail.id, param };
+
+  /*
+   * Otherwise the collection the path begins with — the *longest* one. Taking
+   * the first filed every unit's listing, image and note on Buildium under
+   * the property, because `/rentals/` begins `/rentals/units/` too.
+   */
+  const prefix = listPath.slice(0, listPath.indexOf("{{"));
+  let parent: ResourceSpec | undefined;
+  let longest = -1;
+  for (const candidate of others) {
+    const path = candidate.listOp ? byId.get(candidate.listOp)?.path : undefined;
+    if (path === undefined || !prefix.startsWith(`${path}/`) || path.length <= longest) continue;
+    parent = candidate;
+    longest = path.length;
+  }
+  return parent ? { parent: parent.id, param } : undefined;
 };
 
 /**

@@ -20,6 +20,8 @@ export { FilterGlyph, Menu, MenuOrSingle } from "./Menu.jsx";
 export type { MenuItem } from "./Menu.jsx";
 
 export { Pagination, pageSlice } from "./Pagination.jsx";
+
+export { RowActions } from "./RowActions.jsx";
 export type { PageSlice } from "./Pagination.jsx";
 
 export { Skeleton, skeletonShapeFor } from "./Skeleton.jsx";

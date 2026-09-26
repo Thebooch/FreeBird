@@ -37,6 +37,26 @@ The browser renders the current draft with the normal widget runtime. Proxied re
 
 Preview outcomes are `unchecked`, `invalid`, `checked`, `empty`, and `partial`. Empty and partial results are explicitly described; they are not presented as proof of complete account data. A check is bounded to the sampled response and current configuration, not a guarantee against future upstream schema changes. Receipts expire after ten minutes and never contain credentials or response bodies.
 
+## Changes to connected accounts
+
+Reads and writes are kept apart in the data model. Connection `ops` are GET-only. Write endpoints (create, update, delete and record actions) are kept in the catalog entry's `writes`. They are read from an OpenAPI request body, or inferred from documentation prose and marked `inferred`, which every review of a change through one says. An API's write endpoints are read from its published specification when a connection is added, and once at startup for a connection whose entry never had them read; that is a documentation read and never touches the account. A write endpoint's role for a record type is derived from path shape each time it is needed:
+- POST on the collection creates a record.
+- PUT on the record replaces it.
+- PATCH, or a POST with a body, merges into it.
+- DELETE on the record removes it.
+- A PUT on a singleton adds or changes it.
+- A POST to a named step with no GET is an action.
+
+Because the role is derived each time, replacing a connection's resources cannot drop it.
+
+There is nothing to turn on: every connection can change what its API lets it change, from a row's menu, a record's page, a widget's "New" item or the assistant. The policy is the only thing that refuses (in the open-source build it never does), and an endpoint that turns out wrong can be switched off. Every change is a two-step exchange:
+- **Prepare** reads the record fresh from the API, never from the cache. It builds the exact request and returns a review: before and after for each changed value, values a replace cannot read ("not sent"), first-use and prose-derived warnings, and whether it can be undone. It also returns a digest over the request and the values it read.
+- **Commit** accepts only that digest, only from the person who prepared it, and only once. It re-reads the record and refuses with a fresh review if anything it depends on moved.
+
+A write is never retried and never follows a redirect. A failure before dispatch is reported as "not sent" and the review can be sent again. A timeout or dropped connection after dispatch is reported as "unknown outcome": the review is spent and the affected cache entries are dropped, because the change may have happened.
+
+After a successful write, only the affected endpoints' cached answers are dropped. These are the record type's list and detail endpoints, and those of the record it lives under. Other in-flight reads are unaffected. Every attempt produces a complete journal event with a reversal hint. The open-source build does not store these events yet.
+
 ## Existing installations
 
 Old drafts default missing `inputs`, `coercions`, and `format` to empty objects. New report fingerprints can make older capability reports stale; the UI offers an explicit reread instead of spending requests during migration.

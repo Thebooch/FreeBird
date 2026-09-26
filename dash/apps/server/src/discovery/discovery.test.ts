@@ -476,6 +476,32 @@ describe("mapDialectProposal", () => {
     expect(warnings.join()).toMatch(/not which response field carries it/);
   });
 
+  it("keeps writes read from prose apart, and marks them inferred", () => {
+    const { entry, warnings } = mapDialectProposal({
+      ...base,
+      writes: [
+        { id: "create_thing", method: "post", title: "Create a thing", path: "/things" },
+        { id: "nuke", method: "PURGE", title: "Nuke", path: "/things" },
+        { id: "remove_thing", method: "DELETE", title: "Delete a thing", path: "things/{{param.id}}" },
+      ],
+      writeFields: [
+        { write: "create_thing", name: "Name", type: "string", required: true },
+        { write: "create_thing", name: "Size", type: "decimal" },
+      ],
+    });
+    expect(entry?.ops.map((op) => op.id)).toEqual(["things"]);
+    expect(entry?.writes.map((write) => [write.method, write.path, write.confidence])).toEqual([
+      ["POST", "/things", "inferred"],
+      ["DELETE", "/things/{{param.id}}", "inferred"],
+    ]);
+    expect(entry?.writes[0]?.confirmed).toBeUndefined();
+    expect(entry?.writes[0]?.body?.fields).toEqual([
+      { path: "Name", type: "string", required: true },
+      { path: "Size", type: "string", required: false },
+    ]);
+    expect(warnings.join()).toMatch(/They are offered, and every change made through one says in its review/);
+  });
+
   it("falls back to none for an invented auth style", () => {
     const { entry, warnings } = mapDialectProposal({ ...base, authType: "magic" });
     expect(entry?.dialect.auth).toEqual({ type: "none" });

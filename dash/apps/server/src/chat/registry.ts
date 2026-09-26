@@ -24,6 +24,7 @@ import {
   type WidgetHandle,
 } from "./handles.js";
 
+import { recordChangeActions, type RecordChangeOps } from "./record-actions.js";
 /**
  * The dashboard, described to the chat engine.
  *
@@ -102,6 +103,13 @@ export interface BuildChatRegistryInput {
    * dead-end on its first question.
    */
   readonly concierge?: ConciergeOps;
+  /**
+   * Proposing changes to connected accounts, for a person to approve.
+   *
+   * Absent means the two actions are not registered, so a model on a server
+   * that cannot write never offers to.
+   */
+  readonly changes?: RecordChangeOps;
 }
 
 /* ── actions ──────────────────────────────────────────────────────────── */
@@ -812,6 +820,7 @@ export const buildChatRegistry = (input: BuildChatRegistryInput) => {
     ...(boardActions(input, handles) ?? []),
     ...(viewActions(handles) ?? []),
     ...(input.concierge ? (conciergeActions(input.concierge) ?? []) : []),
+    ...(input.changes ? recordChangeActions(input.changes) : []),
   ];
 
   /*

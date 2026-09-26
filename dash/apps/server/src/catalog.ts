@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import type { CatalogEntry, ConnectionSpec, AuthSpec, FieldFormat } from "@freebirdai/dash-spec";
 import {
@@ -118,6 +118,19 @@ export class CatalogStore implements IntegrationStore {
     mkdirSync(overlayDir, { recursive: true });
   }
 
+  /**
+   * Parsed entries, kept while their file is unchanged.
+   *
+   * Every lookup used to read and validate every catalog file, and a real
+   * API's entry is megabytes — with its write endpoints, several. A page that
+   * asked what each of a hundred record types can do paid that a hundred
+   * times over. Keyed by the file's modification time and size, which every
+   * write here changes, so a stale copy cannot be served. Each caller gets its
+   * own copy: an entry is a plain object that callers spread and rebuild, and
+   * one of them changing a nested list in place must not change it for the next.
+   */
+  private readonly parsed = new Map<string, { mtimeMs: number; size: number; entry: CatalogEntry | null }>();
+
   private readDir(dir: string, origin: CatalogEntry["origin"]): CatalogEntry[] {
     let names: string[];
     try {
@@ -127,9 +140,17 @@ export class CatalogStore implements IntegrationStore {
     }
     const entries: CatalogEntry[] = [];
     for (const name of names) {
+      const path = join(dir, name);
       try {
-        const raw = JSON.parse(readFileSync(join(dir, name), "utf8")) as Record<string, unknown>;
+        const stat = statSync(path);
+        const held = this.parsed.get(path);
+        if (held && held.mtimeMs === stat.mtimeMs && held.size === stat.size) {
+          if (held.entry) entries.push(held.entry);
+          continue;
+        }
+        const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
         const parsed = catalogEntrySchema.safeParse({ origin, ...raw });
+        this.parsed.set(path, { mtimeMs: stat.mtimeMs, size: stat.size, entry: parsed.success ? parsed.data : null });
         if (parsed.success) entries.push(parsed.data);
       } catch {
         // A malformed catalog file is skipped, never fatal — one bad
@@ -139,17 +160,24 @@ export class CatalogStore implements IntegrationStore {
     return entries;
   }
 
-  list(): CatalogEntry[] {
+  /** The cached entries themselves — never handed out; see `list` and `get`. */
+  private merged(): Map<string, CatalogEntry> {
     const merged = new Map<string, CatalogEntry>();
     for (const entry of this.readDir(this.seedDir, "repo")) merged.set(entry.id, entry);
     // Overlay wins.
     for (const entry of this.readDir(this.overlayDir, "manual")) merged.set(entry.id, entry);
-    return [...merged.values()].sort((a, b) => a.title.localeCompare(b.title));
+    return merged;
+  }
+
+  list(): CatalogEntry[] {
+    return [...this.merged().values()]
+      .sort((a, b) => a.title.localeCompare(b.title))
+      .map((entry) => structuredClone(entry));
   }
 
   get(id: string): CatalogEntry | null {
-    const found = this.list().find((entry) => entry.id === id);
-    return found ? hydrateFieldFormats(found) : null;
+    const found = this.merged().get(id);
+    return found ? hydrateFieldFormats(structuredClone(found)) : null;
   }
 
   /** Only ever writes to the overlay — the repo seed is read-only at runtime. */
@@ -262,6 +290,35 @@ export const connectionFromCatalog = (
     ...(entry.docsUrl ? { docsUrl: entry.docsUrl } : {}),
     ...(entry.keyHelp ? { keyHelp: entry.keyHelp } : {}),
   });
+};
+
+/**
+ * An endpoint's own authentication, given this connection's vault names.
+ *
+ * The same rule `connectionFromCatalog` applies to the read endpoints it
+ * copies: a secret the API declares for itself maps to the connection's slot
+ * in the same position, and anything else gets a name of this connection's
+ * own, so two accounts on one API never share a secret. Write endpoints stay
+ * in the catalog rather than being copied, so the rule is applied when one is
+ * sent — against the connection's auth as it is now, which is what a person
+ * may have corrected since.
+ */
+export const scopeOpAuth = (
+  entry: CatalogEntry,
+  connection: ConnectionSpec,
+): ((value: AuthSpec) => AuthSpec) => {
+  const declared = entry.dialect.auth ? authKeyRefs(entry.dialect.auth) : [];
+  const actual = authKeyRefs(connection.auth);
+  const refs = new Map<string, string>();
+  declared.forEach((ref, index) => {
+    const mapped = actual[index];
+    if (mapped !== undefined) refs.set(ref, mapped);
+  });
+  return (value) =>
+    rekeyAuth(
+      value,
+      (old) => refs.get(old) ?? `${connectionKeyRef(connection.id).slice(0, 45)}-${fnv1a(old)}`,
+    );
 };
 
 /** Refresh imported contracts without overwriting a connection's explicit overrides. */

@@ -1,7 +1,13 @@
 import { AdapterRegistry, ProxyAdapter } from "@freebirdai/dash-adapters";
 import { FramePanel } from "./FramePanel.jsx";
-import { Dashboard, DashStyleSheet, RecordPage } from "@freebirdai/dash-react";
-import type { StoredPresentations } from "@freebirdai/dash-react";
+import { Dashboard, DashStyleSheet, RecordPage, changeRowActions, recordChangeRequests } from "@freebirdai/dash-react";
+import type {
+  RecordChangeRequest,
+  RecordChangeSignal,
+  RecordCreateOffer,
+  RecordRowActions,
+  StoredPresentations,
+} from "@freebirdai/dash-react";
 import type {
   ConnectionSpec,
   DashboardSpec,
@@ -29,6 +35,8 @@ import { BOARD_ROUTE, type Route, currentRoute, navigate, onRouteChange } from "
 import { TopNav } from "./TopNav.jsx";
 import { PresentationEditor } from "./PresentationEditor.jsx";
 import { RecordLayoutEditor } from "./RecordLayoutEditor.jsx";
+import { ChangeRecordSheet } from "./ChangeRecordSheet.jsx";
+import { writesApi, type ConnectionWrites } from "./writes.js";
 
 export interface DashboardSummary {
   id: string;
@@ -316,6 +324,35 @@ const overrideFor = (
 ): RecordOverride | undefined =>
   widgetId ? widgets.find((widget) => widget.id === widgetId)?.record : undefined;
 
+/**
+ * What can be changed on each connection this board reads, for the widget
+ * menus' "New …" items and every row's menu. Only fetched for connections the
+ * board uses, and again whenever what can be written changes.
+ */
+const useConnectionWrites = (
+  connectionIds: readonly string[],
+  token: number,
+): Record<string, ConnectionWrites> => {
+  const [state, setState] = useState<Record<string, ConnectionWrites>>({});
+  const key = [...new Set(connectionIds)].sort().join(",");
+  useEffect(() => {
+    let cancelled = false;
+    const ids = key === "" ? [] : key.split(",");
+    void Promise.all(
+      ids.map(async (id) => [id, await writesApi.connection(id).catch(() => null)] as const),
+    ).then((pairs) => {
+      if (cancelled) return;
+      const next: Record<string, ConnectionWrites> = {};
+      for (const [id, writes] of pairs) if (writes) next[id] = writes;
+      setState(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [key, token]);
+  return state;
+};
+
 const App = (): JSX.Element => {
   const [reloadToken, setReloadToken] = useState(0);
   /** A failed removal, which otherwise leaves the widget there for no reason. */
@@ -368,6 +405,106 @@ const App = (): JSX.Element => {
   useEffect(() => setEditingLayout(false), [here]);
 
   const live = useLiveDashboard(reloadToken, dashboardId);
+
+  /*
+   * Changing records. `change` is the one being made, if any; `changed` is
+   * the last one made, which the board reads to ask again for exactly what
+   * that change made stale.
+   */
+  const [change, setChange] = useState<RecordChangeRequest | null>(null);
+  const [changed, setChanged] = useState<RecordChangeSignal | undefined>(undefined);
+  const [writesToken, setWritesToken] = useState(0);
+  const boardConnections = useMemo(
+    () =>
+      (live.dashboard?.widgets ?? []).flatMap((widget) => {
+        const connection = widget.source?.connection ?? widget.sources[0]?.connection;
+        return connection ? [connection] : [];
+      }),
+    [live.dashboard],
+  );
+  const connectionWrites = useConnectionWrites(boardConnections, writesToken + reloadToken);
+
+  /*
+   * "New property" on a widget's menu, where the records it shows can be made
+   * here. A record type whose list stands on its own is made on its own; one
+   * that lives under a parent is made under the parent this widget's list was
+   * read for — a widget over one property's units knows the property. A list
+   * read for no parent in particular offers nothing: that parent's page does.
+   */
+  const createOffer = useMemo<RecordCreateOffer>(() => {
+    const target = (widgetId: string) => {
+      const widget = live.dashboard?.widgets.find((one) => one.id === widgetId);
+      if (!widget?.source) return undefined;
+      const { connection, op } = widget.source;
+      const link = (live.entityLinks[connection] ?? []).find((one) => one.ops.includes(op));
+      if (!link) return undefined;
+      const writes = connectionWrites[connection]?.entities.find((one) => one.id === link.entity);
+      if (!writes?.allowed?.create) return undefined;
+      // The parent ids this list was read with — values, never a template still to be filled in.
+      const parents = Object.fromEntries(
+        Object.entries(widget.source.params ?? {}).flatMap(([name, value]) =>
+          (typeof value === "string" || typeof value === "number") && !String(value).includes("{{")
+            ? [[name, String(value)]]
+            : [],
+        ),
+      );
+      if (!link.list && Object.keys(parents).length === 0) return undefined;
+      return {
+        connection,
+        entity: link.entity,
+        name: link.name.one,
+        ...(Object.keys(parents).length > 0 ? { parents } : {}),
+      };
+    };
+    return {
+      label: (widgetId) => {
+        const found = target(widgetId);
+        return found ? `New ${found.name.toLowerCase()}` : undefined;
+      },
+      open: (widgetId) => {
+        const found = target(widgetId);
+        if (!found) return;
+        setChange({
+          connection: found.connection,
+          entity: found.entity,
+          entityName: found.name,
+          kind: "create",
+          title: `New ${found.name.toLowerCase()}`,
+          ...(found.parents ? { parents: found.parents } : {}),
+        });
+      },
+    };
+  }, [live.dashboard, live.entityLinks, connectionWrites]);
+
+  /*
+   * Every row that is a record gets its changes — edit, record actions,
+   * delete — in a menu at its end, on every widget that draws rows. Worked out
+   * the same way a row click finds the record's page, so the menu and the
+   * click always agree about which record the row is, and trimmed to what the
+   * server says the person may do.
+   */
+  const rowActions = useMemo<RecordRowActions>(
+    () => (widgetId, row) => {
+      const widget = live.dashboard?.widgets.find((one) => one.id === widgetId);
+      if (!widget) return [];
+      const target = recordTargetFor(widget, row, live.entityLinks);
+      if (!target || target.kind !== "entity") return [];
+      const entity = connectionWrites[target.connection]?.entities.find((one) => one.id === target.entity);
+      if (!entity?.allowed) return [];
+      const requests = recordChangeRequests(
+        {
+          connection: target.connection,
+          entity: target.entity,
+          entityName: entity.name.one,
+          id: target.id,
+          ...(target.parents ? { parents: target.parents } : {}),
+        },
+        entity.allowed,
+      );
+      return changeRowActions(requests, setChange);
+    },
+    [live.dashboard, live.entityLinks, connectionWrites],
+  );
 
   const reload = (): void => setReloadToken((token) => token + 1);
 
@@ -976,6 +1113,13 @@ const App = (): JSX.Element => {
          * conversation, which is the whole of what this phase moved.
          */
         onOpenPanel={() => setConnectionsOpen(true)}
+        onRecordChanged={(changedBy) =>
+          setChanged((previous) => ({
+            connection: changedBy.connection,
+            ops: changedBy.ops,
+            revision: (previous?.revision ?? 0) + 1,
+          }))
+        }
       />
       {connectionsOpen && (
         <ConnectionManager
@@ -1230,6 +1374,7 @@ const App = (): JSX.Element => {
                     ? { override: overrideFor(board.widgets, route.from?.widgetId)! }
                     : {}),
                   onEditLayout: () => setEditingLayout(true),
+                  onChangeRecord: setChange,
                 },
               }
             : {})}
@@ -1241,6 +1386,9 @@ const App = (): JSX.Element => {
           entityLinks={live.entityLinks}
           rangeOps={live.rangeOps}
           credentialRevisions={credentialRevisions}
+          changes={changed}
+          onCreateRecord={createOffer}
+          onRowActions={rowActions}
           editing={arranging}
           onEditingChange={setArranging}
           onAutoArrange={tidyUp}
@@ -1254,6 +1402,38 @@ const App = (): JSX.Element => {
           onOpenRecordPage={openRecordPage}
           onOpenReference={openReference}
         />
+        {change && (
+          <ChangeRecordSheet
+            request={change}
+            connection={live.connections.find((one) => one.id === change.connection)}
+            entityLinks={live.entityLinks[change.connection] ?? []}
+            onClose={() => setChange(null)}
+            onDone={(result) => {
+              setChanged((previous) => ({
+                connection: result.connection,
+                ops: result.invalidated.ops,
+                revision: (previous?.revision ?? 0) + 1,
+              }));
+              /*
+               * A new record opens on its own page; a record that was deleted
+               * from its own page leaves it, since there is nothing there now.
+               */
+              if (result.kind === "create" && result.key?.id && !change.singleton) {
+                setChange(null);
+                navigate({
+                  kind: "entity",
+                  connectionId: result.connection,
+                  entityId: result.entity,
+                  recordId: result.key.id,
+                  ...(result.key.parents ? { parents: result.key.parents } : {}),
+                });
+              } else if (result.kind === "delete" && !change.singleton && route.kind === "entity") {
+                setChange(null);
+                navigate({ kind: "board", dashboardId: route.from?.dashboardId ?? board.id });
+              }
+            }}
+          />
+        )}
       </div>
     </div>
   );

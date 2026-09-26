@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { STATUS_TONES, statusTone } from "../palette.js";
-import { IconButton, Message } from "../ui/index.js";
+import { IconButton, Message, RowActions } from "../ui/index.js";
 import { makeFormatter, roleColumn } from "../resolve.js";
 import type { WidgetRenderProps } from "../types.js";
 import { type CalendarDay, daysCovered, instantOf, monthGrid } from "./collectionModel.js";
@@ -105,7 +105,7 @@ export const Calendar = (props: WidgetRenderProps): JSX.Element => {
               <div className="dash-calendar__entries">
                 {entries.slice(0, 3).map((entry) => {
                   const status = statusColumn ? entry.row[statusColumn] : null;
-                  return (
+                  const button = (
                     <button
                       type="button"
                       className="dash-calendar__entry"
@@ -123,6 +123,19 @@ export const Calendar = (props: WidgetRenderProps): JSX.Element => {
                       )}
                       {formatTitle(entry.row[titleColumn])}
                     </button>
+                  );
+                  // Beside the entry, not inside it: a button cannot hold another.
+                  return props.rowActions ? (
+                    <span className="dash-calendar__entry-row" key={entry.index}>
+                      {button}
+                      <RowActions
+                        row={entry.row}
+                        actions={props.rowActions}
+                        label={formatTitle(entry.row[titleColumn])}
+                      />
+                    </span>
+                  ) : (
+                    button
                   );
                 })}
                 {/* A count rather than a scrollbar in a 60px cell. */}

@@ -514,3 +514,22 @@ export const deriveResourceGraph = (ops: readonly ShapeOp[]): ResourceModel => {
 
   return { resources, notes };
 };
+
+/**
+ * Whether this endpoint reads a record that exists at most once under its
+ * parent — a unit's listing, a lease's move-out — which the API answers with
+ * a 404 while there is none. That 404 is "not yet", not a failure, and the
+ * reader should be told so rather than shown an error.
+ *
+ * Structural, like everything else here: the resource has no one-record
+ * endpoint of its own, and another resource reaches it as `one`, by path.
+ */
+export const isSingletonOp = (resources: readonly ResourceSpec[], opId: string): boolean => {
+  const resource = resources.find((one) => one.listOp === opId);
+  if (!resource || resource.detailOp) return false;
+  return resources.some((other) =>
+    other.relations.some(
+      (relation) => relation.resource === resource.id && relation.cardinality === "one" && relation.via === "path",
+    ),
+  );
+};

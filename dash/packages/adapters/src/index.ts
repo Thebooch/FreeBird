@@ -13,4 +13,7 @@ export type {
   FetchResult,
   SourceAdapter,
   Transport,
+  WriteContext,
+  WriteRequest,
+  WriteResult,
 } from "./types.js";

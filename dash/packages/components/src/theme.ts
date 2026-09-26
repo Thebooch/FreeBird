@@ -608,6 +608,33 @@ ${seriesVars(SERIES_LIGHT)}
   font-size: 10px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums;
 }
 .dash-menu > .dash-iconbtn { position: relative; overflow: visible; }
+/* Lined up on the trigger's left edge, for a menu that opens from the left of a toolbar. */
+.dash-menu__list[data-align="start"] { right: auto; left: 0; }
+/* A menu opened from a word rather than a glyph: a button, with a caret saying it opens. */
+.dash-menu__text { gap: 6px; }
+.dash-menu__caret { font-size: 0.8em; color: var(--dash-muted); }
+/* Placed against the window by the menu itself; above the widget that holds its row. */
+.dash-menu__list[data-floating="true"] { z-index: 60; }
+
+/* A row's changes: at its end, quiet until the row is pointed at or the menu has focus. */
+.dash-row-actions { display: inline-flex; flex: none; margin-left: auto; align-self: flex-start; }
+.dash-row-actions .dash-iconbtn { opacity: 0.55; }
+:where(tr, li, article, .dash-calendar__entry-row):hover .dash-row-actions .dash-iconbtn,
+.dash-row-actions .dash-iconbtn:focus-visible,
+.dash-row-actions .dash-iconbtn[aria-expanded="true"] { opacity: 1; }
+/* Pinned to the right edge: a wide table would otherwise scroll a row's changes out of reach. */
+.dash-table td.dash-table__actions, .dash-table th.dash-table__actions {
+  width: 1%; white-space: nowrap; text-align: right; padding-top: 0; padding-bottom: 0;
+  position: sticky; right: 0; z-index: 1; background: var(--dash-surface);
+}
+/* The header's corner stays put both ways, over the rows and the pinned cells. */
+.dash-table th.dash-table__actions { z-index: 2; background: var(--dash-surface-sunken); }
+.dash-board__card { position: relative; }
+.dash-board__card > .dash-row-actions { position: absolute; top: 4px; right: 4px; }
+.dash-board__card:has(> .dash-row-actions) .dash-board__title { padding-right: 22px; }
+.dash-calendar__entry-row { display: flex; align-items: center; min-width: 0; }
+.dash-calendar__entry-row > .dash-calendar__entry { flex: 1 1 auto; min-width: 0; }
+.dash-calendar__entry-row .dash-iconbtn { padding: 0 3px; }
 
 .dash-tabs {
   display: flex; align-items: center; gap: 2px;

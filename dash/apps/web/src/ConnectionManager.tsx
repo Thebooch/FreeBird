@@ -1,3 +1,4 @@
+import { ChangesPanel } from "./ChangesPanel.jsx";
 import type { CatalogEntry, WidgetSpec } from "@freebirdai/dash-spec";
 import {
   VERIFY_BUDGET_DEFAULT,
@@ -1570,6 +1571,14 @@ export const ConnectionManager = ({
       case "manage":
         return (
           <>
+            {managed && (
+              <ChangesPanel
+                connectionId={managed.id}
+                title={managed.title}
+                catalogId={managed.catalog}
+                onChanged={onChanged}
+              />
+            )}
             <h4>What you can build here</h4>
             {!capabilities && (
               <p className="dash-hint">

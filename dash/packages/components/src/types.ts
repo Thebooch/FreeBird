@@ -1,6 +1,18 @@
 import type { ColumnMeta, FieldGroup, FormatSpec, Presentation } from "@freebirdai/dash-spec";
 import type { Row, RowHighlight } from "@freebirdai/dash-runtime";
 
+/** Something that can be done to the record behind one row. */
+export interface RowAction {
+  readonly id: string;
+  /** "Edit", "Inactivate", "Delete". */
+  readonly label: string;
+  readonly icon?: string;
+  /** `danger` for what cannot be taken back. */
+  readonly tone?: "default" | "danger";
+  /** Opens a form or a review. Nothing a row offers changes a record by itself. */
+  readonly onSelect: () => void;
+}
+
 export interface WidgetRenderProps {
   readonly rows: readonly Row[];
   readonly columns: readonly ColumnMeta[];
@@ -27,6 +39,15 @@ export interface WidgetRenderProps {
    * would not happen.
    */
   readonly onSelectRow?: (row: Row) => void;
+  /**
+   * What can be done to the record behind each row — edit, record actions,
+   * delete — drawn as a small menu at the row's end.
+   *
+   * Absent, or empty for a row, draws nothing, and components stay exactly
+   * as they were: the same contract as `onSelectRow`. The host decides, from
+   * what the API can change and what the person may.
+   */
+  readonly rowActions?: (row: Row) => readonly RowAction[];
   /**
    * Names for the records this view's reference columns point at, as
    * `column → id → name`.
