@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 /**
  * The funnel every table has had since tables had filters.
@@ -76,12 +77,18 @@ const blocksOf = (
   return blocks;
 };
 
+/** Room a floating list wants below its trigger before it opens upwards instead. */
+const FLOAT_ROOM = 220;
+
 export const Menu = ({
   items,
   label = "More actions",
   glyph = "⋯",
   testId,
   badge,
+  floating = false,
+  text,
+  align = "end",
 }: {
   readonly items: readonly MenuItem[];
   readonly label?: string;
@@ -98,11 +105,35 @@ export const Menu = ({
    * Decorative: the same fact belongs in `label`, which is what is announced.
    */
   readonly badge?: number | undefined;
+  /**
+   * Draw the list above everything else rather than inside its parent.
+   *
+   * For a menu on a row: a table scrolls, and a widget clips what spills out
+   * of its card, so a list anchored inside either would be cut off at the
+   * bottom rows — exactly where a list is longest. A floating list is placed
+   * against the window, inside the nearest `.dash-root` so it keeps the
+   * theme, and closes when anything scrolls rather than drifting off its row.
+   */
+  readonly floating?: boolean;
+  /**
+   * A word on the trigger instead of a glyph — "Add" — drawn as a button
+   * with a caret, for a menu that is one of a page's own commands rather
+   * than a tile's overflow.
+   */
+  readonly text?: string;
+  /**
+   * Which edge of the trigger the list lines up with. The end, for a trigger
+   * at the right of a header; the start, for one at the left of a toolbar,
+   * where a list lined up on its right would run off the page.
+   */
+  readonly align?: "start" | "end";
 }): JSX.Element => {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
+  const [place, setPlace] = useState<CSSProperties | null>(null);
   const rootRef = useRef<HTMLSpanElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
 
   const enabled = items.filter((item) => !item.disabled);
@@ -118,7 +149,8 @@ export const Menu = ({
     if (!open) return;
 
     const onPointerDown = (event: PointerEvent): void => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (!rootRef.current?.contains(target) && !listRef.current?.contains(target)) setOpen(false);
     };
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === "Escape") {
@@ -139,11 +171,24 @@ export const Menu = ({
 
     document.addEventListener("pointerdown", onPointerDown, true);
     document.addEventListener("keydown", onKey, true);
+    // A floating list is placed once; anything moving underneath it closes it instead.
+    const onMove = (event: Event): void => {
+      if (listRef.current?.contains(event.target as Node)) return;
+      setOpen(false);
+    };
+    if (floating) {
+      window.addEventListener("scroll", onMove, true);
+      window.addEventListener("resize", onMove);
+    }
     return () => {
       document.removeEventListener("pointerdown", onPointerDown, true);
       document.removeEventListener("keydown", onKey, true);
+      if (floating) {
+        window.removeEventListener("scroll", onMove, true);
+        window.removeEventListener("resize", onMove);
+      }
     };
-  }, [open, close, enabled.length]);
+  }, [open, close, enabled.length, floating]);
 
   const renderItem = (item: MenuItem): JSX.Element => {
     const index = enabled.indexOf(item);
@@ -158,6 +203,8 @@ export const Menu = ({
         data-separated={item.separated ? "true" : undefined}
         data-active={index === active && index >= 0 ? "true" : undefined}
         disabled={item.disabled}
+        // A long label is cut to fit the menu; the whole of it is one hover away.
+        title={item.label}
         onMouseEnter={() => index >= 0 && setActive(index)}
         onClick={() => {
           if (!item.keepOpen) close(true);
@@ -188,12 +235,49 @@ export const Menu = ({
     );
   };
 
+  const list = (
+    <div
+      ref={listRef}
+      className="dash-menu__list"
+      id={menuId}
+      role="menu"
+      aria-label={label}
+      data-align={align}
+      {...(floating ? { "data-floating": "true", style: place ?? undefined } : {})}
+    >
+      {blocksOf(items).map((block) =>
+        block.kind === "loose" ? (
+          renderItem(block.item)
+        ) : (
+          /*
+           * A real group rather than a heading floated above some rows:
+           * the name has to be attached to the choices it governs, or a
+           * reader arriving by keyboard is told "Completed" with nothing
+           * saying completed *what*.
+           */
+          <div
+            key={`section-${block.label}`}
+            role="group"
+            aria-label={block.label}
+            className="dash-menu__group"
+          >
+            <span className="dash-menu__section" aria-hidden="true">
+              {block.label}
+            </span>
+            {block.items.map(renderItem)}
+          </div>
+        ),
+      )}
+    </div>
+  );
+
   return (
     <span className="dash-menu" ref={rootRef}>
       <button
         ref={triggerRef}
         type="button"
-        className="dash-iconbtn"
+        className={text ? "dash-btn dash-menu__text" : "dash-iconbtn"}
+        {...(text ? { "data-size": "sm", "data-tone": "default" } : {})}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
@@ -201,11 +285,33 @@ export const Menu = ({
         title={label}
         onClick={() => {
           setActive(0);
+          if (floating && !open && triggerRef.current) {
+            const at = triggerRef.current.getBoundingClientRect();
+            const below = window.innerHeight - at.bottom;
+            setPlace({
+              position: "fixed",
+              ...(align === "start"
+                ? { left: Math.max(4, at.left), right: "auto" }
+                : { right: Math.max(4, window.innerWidth - at.right) }),
+              ...(below < FLOAT_ROOM && at.top > below
+                ? { bottom: window.innerHeight - at.top + 4, top: "auto" }
+                : { top: at.bottom + 4 }),
+            });
+          }
           setOpen((previous) => !previous);
         }}
         {...(testId ? { "data-testid": testId } : {})}
       >
-        <span aria-hidden="true">{glyph}</span>
+        {text ? (
+          <>
+            {text}
+            <span className="dash-menu__caret" aria-hidden="true">
+              ▾
+            </span>
+          </>
+        ) : (
+          <span aria-hidden="true">{glyph}</span>
+        )}
         {badge !== undefined && badge > 0 && (
           <span className="dash-menu__badge" aria-hidden="true">
             {badge}
@@ -213,33 +319,10 @@ export const Menu = ({
         )}
       </button>
 
-      {open && (
-        <div className="dash-menu__list" id={menuId} role="menu" aria-label={label}>
-          {blocksOf(items).map((block) =>
-            block.kind === "loose" ? (
-              renderItem(block.item)
-            ) : (
-              /*
-               * A real group rather than a heading floated above some rows:
-               * the name has to be attached to the choices it governs, or a
-               * reader arriving by keyboard is told "Completed" with nothing
-               * saying completed *what*.
-               */
-              <div
-                key={`section-${block.label}`}
-                role="group"
-                aria-label={block.label}
-                className="dash-menu__group"
-              >
-                <span className="dash-menu__section" aria-hidden="true">
-                  {block.label}
-                </span>
-                {block.items.map(renderItem)}
-              </div>
-            ),
-          )}
-        </div>
-      )}
+      {open &&
+        (floating
+          ? createPortal(list, triggerRef.current?.closest(".dash-root") ?? document.body)
+          : list)}
     </span>
   );
 };

@@ -1,12 +1,21 @@
-import type { CatalogEntry, ParamDef, ServerTemplate, ServerVariable } from "@freebirdai/dash-spec";
+import type {
+  CatalogEntry,
+  ParamDef,
+  ServerTemplate,
+  ServerVariable,
+  WriteOpDef,
+} from "@freebirdai/dash-spec";
 import { fieldsFromSchema } from "./schema-fields.js";
+import { bodyFieldsFromSchema, isJsonBody } from "./body-fields.js";
 import {
   IMPORT_VERSION,
+  WRITES_VERSION,
   catalogEntrySchema,
   deriveResourceModel,
   fnv1a,
   serverTemplateSchema,
   templateVariableNames,
+  writeOpDefSchema,
 } from "@freebirdai/dash-spec";
 import { parse as parseYaml } from "yaml";
 import type { z } from "zod";
@@ -25,6 +34,8 @@ export interface OpenApiResult {
   readonly warnings: readonly string[];
   /** GET operations found before any cap was applied. */
   readonly totalOperations: number;
+  /** Create, update, delete and action endpoints, kept apart from the reads. */
+  readonly totalWrites?: number;
 }
 
 type Json = Record<string, unknown>;
@@ -867,10 +878,36 @@ export const parseOpenApi = (
   let total = 0;
   const usedIds = new Set<string>();
 
+  /** An endpoint's own security, where it overrides the document's. */
+  const endpointAuthOf = (
+    operation: Json,
+  ): { endpointAuth: DialectAuth | undefined; endpointNeedsSetup: boolean } => {
+    /* Labelled like the top-level auth, so an endpoint that simply repeats
+     * the document's own scheme compares equal to it and inherits it. */
+    const override = Array.isArray(operation.security)
+      ? labelled(authFrom({ ...doc, security: operation.security }, keyRef))
+      : undefined;
+    const endpointAuth =
+      override && JSON.stringify(override) !== JSON.stringify(auth)
+        ? labelled(
+            authFrom(
+              { ...doc, security: operation.security },
+              `op-key-${fnv1a(JSON.stringify(operation.security))}`,
+            ),
+          )
+        : override;
+    const endpointNeedsSetup =
+      endpointAuth?.type === "none" &&
+      Array.isArray(operation.security) &&
+      operation.security.length > 0 &&
+      !operation.security.some((entry) => isObject(entry) && Object.keys(entry).length === 0);
+    return { endpointAuth, endpointNeedsSetup };
+  };
+
   for (const [rawPath, rawItem] of Object.entries(paths)) {
     const pathItem = deref(doc, rawItem);
     if (!isObject(pathItem)) continue;
-    // Read-only by construction: nothing but GET is ever imported.
+    // Reads are GET by construction; writes are read below, into their own list.
     const operation = deref(doc, pathItem.get);
     if (!isObject(operation)) continue;
     if (operation.deprecated === true) continue;
@@ -942,25 +979,7 @@ export const parseOpenApi = (
      * else to go on.
      */
     const detail = plainText(str(operation.description));
-    /* Labelled like the top-level auth, so an endpoint that simply repeats
-     * the document's own scheme compares equal to it and inherits it. */
-    const override = Array.isArray(operation.security)
-      ? labelled(authFrom({ ...doc, security: operation.security }, keyRef))
-      : undefined;
-    const endpointAuth =
-      override && JSON.stringify(override) !== JSON.stringify(auth)
-        ? labelled(
-            authFrom(
-              { ...doc, security: operation.security },
-              `op-key-${fnv1a(JSON.stringify(operation.security))}`,
-            ),
-          )
-        : override;
-    const endpointNeedsSetup =
-      endpointAuth?.type === "none" &&
-      Array.isArray(operation.security) &&
-      operation.security.length > 0 &&
-      !operation.security.some((entry) => isObject(entry) && Object.keys(entry).length === 0);
+    const { endpointAuth, endpointNeedsSetup } = endpointAuthOf(operation);
     if (endpointNeedsSetup)
       warnings.push(
         `"${str(operation.summary) ?? rawPath}" declares authentication that needs manual setup.`,
@@ -982,6 +1001,21 @@ export const parseOpenApi = (
   }
 
   if (ops.length === 0) return null;
+
+  /*
+   * The endpoints that change things, read after every read id is taken so
+   * that adding them can never rename a GET a binding already uses. Their ids
+   * are their own namespace; nothing that names an op can name one of these.
+   */
+  const writes = writeOpsFrom(doc, paths, endpointAuthOf);
+  if (writes.truncated.length > 0) {
+    const named = writes.truncated.slice(0, 3).join(", ");
+    const more = writes.truncated.length > 3 ? ", and others" : "";
+    warnings.push(
+      `Some request bodies were too large to read whole (${named}${more}); their longest field or value lists were cut.`,
+    );
+  }
+
   // Say how big it is rather than letting the number be a surprise later.
   if (ops.length > 60) {
     warnings.push(
@@ -1009,6 +1043,8 @@ export const parseOpenApi = (
       ...(inferred.timeFilter ? { timeFilter: inferred.timeFilter } : {}),
     },
     ops,
+    writes: writes.ops,
+    writesVersion: WRITES_VERSION,
     ...(inferred.pagination.kind !== "none" ? { paginationProposal: inferred.pagination } : {}),
     resources: deriveResources(ops),
     /*
@@ -1049,7 +1085,125 @@ export const parseOpenApi = (
     options.onReject?.(parsed.error.issues);
     return null;
   }
-  return { entry: parsed.data, warnings, totalOperations: total };
+  return { entry: parsed.data, warnings, totalOperations: total, totalWrites: writes.ops.length };
+};
+
+const WRITE_VERBS = ["post", "put", "patch", "delete"] as const;
+
+/**
+ * Every create, update, delete and action endpoint in a document.
+ *
+ * Kept whole, including ones no form can build — a multipart upload, a body
+ * that is a list — so they are known about and marked, rather than missing
+ * and wondered about.
+ */
+export const writeOpsFrom = (
+  doc: Json,
+  paths: Json,
+  endpointAuthOf: (operation: Json) => {
+    endpointAuth: DialectAuth | undefined;
+    endpointNeedsSetup: boolean;
+  },
+): { ops: WriteOpDef[]; truncated: string[] } => {
+  const ops: WriteOpDef[] = [];
+  const truncated: string[] = [];
+  const used = new Set<string>();
+
+  for (const [rawPath, rawItem] of Object.entries(paths)) {
+    const pathItem = deref(doc, rawItem);
+    if (!isObject(pathItem)) continue;
+    for (const verb of WRITE_VERBS) {
+      const operation = deref(doc, pathItem[verb]);
+      if (!isObject(operation) || operation.deprecated === true) continue;
+
+      const base = opId(rawPath, str(operation.operationId));
+      let id = used.has(base) ? `${verb}_${base}` : base;
+      let suffix = 2;
+      while (used.has(id)) id = `${verb}_${base}_${suffix++}`;
+      used.add(id);
+
+      const params = operationParams(doc, operation, pathItem).map(
+        ({ value: _seed, ...param }) => param,
+      );
+      const title =
+        str(operation.summary) ?? str(operation.operationId) ?? `${verb.toUpperCase()} ${rawPath}`;
+      const body = requestBodyOf(doc, operation);
+      if (body?.truncated) truncated.push(title);
+      const { endpointAuth, endpointNeedsSetup } = endpointAuthOf(operation);
+      const detail = plainText(str(operation.description));
+
+      const parsed = writeOpDefSchema.safeParse({
+        id,
+        title: title.slice(0, 200),
+        ...(detail ? { description: detail.slice(0, 400) } : {}),
+        method: verb.toUpperCase(),
+        path: templatePath(rawPath),
+        params,
+        ...(endpointAuth ? { auth: endpointAuth, authRequired: endpointNeedsSetup } : {}),
+        ...(body ? { body: body.body } : {}),
+        returns: returnsOf(doc, operation),
+        confidence: "declared",
+        verified: false,
+      });
+      if (parsed.success) ops.push(parsed.data);
+    }
+  }
+  return { ops, truncated };
+};
+
+/** A request body's schema, from either spec version, read into fields. */
+const requestBodyOf = (
+  doc: Json,
+  operation: Json,
+): { body: WriteOpDef["body"]; truncated: boolean } | undefined => {
+  const resolve = (node: unknown) => deref(doc, node);
+  const read = (contentType: string, schema: unknown) => {
+    const reading = bodyFieldsFromSchema(schema, resolve);
+    return {
+      body: {
+        contentType,
+        fields: reading.fields,
+        ...(reading.unsupported ? { unsupported: reading.unsupported } : {}),
+      },
+      truncated: reading.truncated,
+    };
+  };
+
+  // Swagger 2: a parameter `in: body`.
+  if (specVersionOf(doc) === 2) {
+    const raw = Array.isArray(operation.parameters) ? operation.parameters : [];
+    const param = raw.map(resolve).find((entry) => isObject(entry) && entry.in === "body");
+    if (!isObject(param)) return undefined;
+    const consumes = Array.isArray(operation.consumes) ? operation.consumes.map(String) : [];
+    const contentType = consumes.find(isJsonBody) ?? consumes[0] ?? "application/json";
+    if (!isJsonBody(contentType)) {
+      return { body: { contentType, fields: [], unsupported: contentType }, truncated: false };
+    }
+    return read(contentType, param.schema);
+  }
+
+  const requestBody = resolve(operation.requestBody);
+  if (!isObject(requestBody) || !isObject(requestBody.content)) return undefined;
+  const types = Object.keys(requestBody.content);
+  const contentType = types.find(isJsonBody);
+  if (!contentType) {
+    const declared = types[0] ?? "unknown";
+    return { body: { contentType: declared, fields: [], unsupported: declared }, truncated: false };
+  }
+  const media = requestBody.content[contentType];
+  return read(contentType, isObject(media) ? media.schema : undefined);
+};
+
+/** What a success sends back: the record, nothing, or unsaid. */
+const returnsOf = (doc: Json, operation: Json): WriteOpDef["returns"] => {
+  const schema = successSchema(doc, operation);
+  if (isObject(schema) && (isObject(schema.properties) || str(schema.type) === "object")) {
+    return "record";
+  }
+  const responses = isObject(operation.responses) ? Object.keys(operation.responses) : [];
+  const successes = responses.filter((code) => /^2/.test(code));
+  if (successes.length > 0 && successes.every((code) => code === "204")) return "none";
+  return "unknown";
 };
 
 /** Where specs conventionally live, tried against the URL's own origin. */

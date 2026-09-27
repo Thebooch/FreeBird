@@ -13,6 +13,9 @@ import { readField } from "./field-path.js";
 import type { Coercion } from "./coercion.js";
 import { fieldReading, isFlagField } from "./observe.js";
 import { type Bundle, bundleOf, bundlesOf } from "./bundles.js";
+import { pathShape, type WriteField, type WriteMethod, type WriteOpDef } from "./write.js";
+import { MODE_PREFERENCE, pairedAction, writeRoleOf, type WriteMode, type WriteRole } from "./write-roles.js";
+import { mapWriteFields } from "./write-map.js";
 
 /**
  * The relationships between record types, read in both directions, once.
@@ -164,7 +167,105 @@ export interface EntityGraphInput {
   /** The structural half: which endpoint lists a thing, and which returns one. */
   readonly resources: readonly ResourceSpec[];
   readonly ops: readonly GraphOp[];
+  /**
+   * The endpoints that change things, from the catalog entry. Never mixed into
+   * `ops`: see `write.ts`. Absent or empty, every record type is read-only.
+   */
+  readonly writes?: readonly WriteOpDef[] | undefined;
 }
+
+/**
+ * One way to change one record type, with everything needed to send it.
+ *
+ * `own` is the parameter the record's own id fills, and is absent for a
+ * create — the record has no id yet — and for a singleton, which is addressed
+ * by its parent alone: a unit's listing is `/units/{unitId}/listing`, and the
+ * unit's id is the whole of its address.
+ */
+export interface WriteTarget {
+  readonly kind: "create" | "update" | "delete" | "action";
+  readonly mode: WriteMode;
+  readonly op: string;
+  readonly method: WriteMethod;
+  readonly path: string;
+  readonly title: string;
+  readonly own?: { readonly param: string; readonly field?: string | undefined } | undefined;
+  readonly parents: readonly AddressPart[];
+  /** The body's fields, each with where its current value is read from. */
+  readonly fields: readonly WriteField[];
+  /** Set when the body cannot be built from a form, so this is never offered. */
+  readonly unsupported?: string | undefined;
+  readonly action?:
+    | {
+        readonly id: string;
+        readonly danger: boolean;
+        readonly pairedWith?: string | undefined;
+        /** Makes a new record under this one — "Create a payment" on a lease. */
+        readonly creates?: boolean | undefined;
+      }
+    | undefined;
+  readonly confidence: "declared" | "inferred";
+  /** False only for an endpoint somebody switched off. */
+  readonly confirmed: boolean;
+  readonly verified: boolean;
+}
+
+/** Every way this record type can be changed. Empty when it cannot. */
+export interface EntityWrites {
+  readonly create?: WriteTarget | undefined;
+  readonly update?: WriteTarget | undefined;
+  readonly remove?: WriteTarget | undefined;
+  readonly actions: readonly WriteTarget[];
+}
+
+/** What a page needs to draw the controls — never the fields, never a path. */
+export interface WriteKindView {
+  readonly op: string;
+  readonly mode: WriteMode;
+  readonly title: string;
+  readonly confidence: "declared" | "inferred";
+  /** False only for an endpoint somebody switched off. */
+  readonly confirmed: boolean;
+  readonly verified: boolean;
+}
+
+export interface EntityWritesView {
+  readonly create?: WriteKindView | undefined;
+  readonly update?: WriteKindView | undefined;
+  readonly remove?: WriteKindView | undefined;
+  readonly actions: readonly (WriteKindView & {
+    readonly id: string;
+    readonly danger: boolean;
+    /** Makes a new record under this one, so it belongs with "Add" rather than with the changes. */
+    readonly creates?: boolean | undefined;
+  })[];
+}
+
+const kindView = (target: WriteTarget): WriteKindView => ({
+  op: target.op,
+  mode: target.mode,
+  title: target.title,
+  confidence: target.confidence,
+  confirmed: target.confirmed,
+  verified: target.verified,
+});
+
+/** The controls a set of writes allows, stripped of everything needed to send one. */
+export const writesView = (writes: EntityWrites): EntityWritesView => ({
+  ...(writes.create ? { create: kindView(writes.create) } : {}),
+  ...(writes.update ? { update: kindView(writes.update) } : {}),
+  ...(writes.remove ? { remove: kindView(writes.remove) } : {}),
+  actions: writes.actions.map((action) => ({
+    ...kindView(action),
+    id: action.action?.id ?? action.op,
+    danger: action.action?.danger ?? false,
+    ...(action.action?.creates ? { creates: true } : {}),
+  })),
+});
+
+/** True when nothing at all can be changed. */
+export const writesEmpty = (writes: EntityWrites | EntityWritesView): boolean =>
+  !writes.create && !writes.update && !writes.remove && writes.actions.length === 0;
 
 export interface EntityGraph {
   readonly entityOf: (opId: string) => EntitySpec | undefined;
@@ -174,6 +275,17 @@ export interface EntityGraph {
   readonly backrefsOf: (entityId: string) => readonly EntityBackref[];
   /** How one of these is fetched on its own, or null when nothing returns one. */
   readonly addressOf: (entityId: string) => RecordAddress | null;
+  /** Every way to change one of these, read off the write endpoints' paths. */
+  readonly writesOf: (entityId: string) => EntityWrites;
+  /**
+   * The record type a scoped collection really lives under.
+   *
+   * The describe pass's `scope` is checked against the paths before it is
+   * believed: see `entityGraph`.
+   */
+  readonly scopeParentOf: (entityId: string) => string | undefined;
+  /** Exists at most once under its parent, so it is added, changed or removed in place. */
+  readonly isSingleton: (entityId: string) => boolean;
   /**
    * What a column on an op's rows refers to, if anything.
    *
@@ -446,6 +558,15 @@ export interface EntityPageSection {
   readonly cost: ReachCost;
   readonly verified: boolean;
   /**
+   * What can be changed among the far records, from inside this one: add one
+   * here, or — for a record that exists once under this one, a unit's
+   * listing — add, change or remove it in place. Filled per request by the
+   * server, and only where the account allows it and the person may.
+   */
+  readonly writes?: EntityWritesView | undefined;
+  /** The far record exists at most once under this one. */
+  readonly singleton?: boolean | undefined;
+  /**
    * The field identifying one far record, where it has one.
    *
    * What makes a row in this section openable. Without it a reader can see a
@@ -560,6 +681,12 @@ export interface EntityPageView {
   readonly bundles?:
     | readonly { readonly path: string; readonly entity?: string; readonly name?: string }[]
     | undefined;
+  /**
+   * What can be changed about one of these records. Filled per request by the
+   * server — never part of the shared description — and only where the
+   * account allows it and the person may.
+   */
+  readonly writes?: EntityWritesView | undefined;
   /**
    * Fields on these records that point at another record.
    *
@@ -866,6 +993,7 @@ export const entityPageView = (
       ...(far?.identity ? { identity: far.identity.field } : {}),
       ...(farParents.length > 0 ? { parents: farParents } : {}),
       ...(Object.keys(readings).length > 0 ? { readings } : {}),
+      ...(graph.isSingleton(backref.entity) ? { singleton: true } : {}),
       columns,
     });
   }
@@ -1147,18 +1275,85 @@ export const entityGraph = (input: EntityGraphInput): EntityGraph => {
    * path begins with, by the same parameter — `/properties/{propertyID}` is
    * the start of `/properties/{propertyID}/units/{unitID}`.
    */
-  const parentEntityOf = (entity: EntitySpec, op: GraphOp, param: string): string | undefined => {
+  const parentEntityOf = (entity: EntitySpec, path: string, param: string): string | undefined => {
     const wanted = normaliseName(param);
-    if (entity.scope && normaliseName(entity.scope.param) === wanted) return entity.scope.parent;
+    const scoped = scopeParentOf(entity.id);
+    if (entity.scope && scoped && normaliseName(entity.scope.param) === wanted) return scoped;
     for (const resource of input.resources) {
       if (!resource.detailOp || !resource.detailParam) continue;
       if (normaliseName(resource.detailParam) !== wanted) continue;
       const parentOp = opById.get(resource.detailOp);
-      if (!parentOp || !op.path.startsWith(`${parentOp.path}/`)) continue;
+      if (!parentOp || !path.startsWith(`${parentOp.path}/`)) continue;
       const parent = entityForResource(input.entities, resource.id);
       if (parent && parent.id !== entity.id) return parent.id;
     }
     return undefined;
+  };
+
+  /**
+   * Whether `resourceId`'s one-record endpoint is where `path` lives, with its
+   * id in the parameter `param` — `/rentals/units/{unitId}` is the start of
+   * `/rentals/units/{unitId}/listing`, by `unitId`. Compared by shape and by
+   * position, so two spellings of the same parameter still agree.
+   */
+  const detailPrefixes = (resourceId: string, path: string, param: string): boolean => {
+    const resource = resourceById.get(resourceId);
+    const detail = resource?.detailOp ? opById.get(resource.detailOp) : undefined;
+    if (!resource?.detailParam || !detail) return false;
+    if (!pathShape(path).startsWith(`${pathShape(detail.path)}/`)) return false;
+    const at = pathParamNames(detail.path).indexOf(resource.detailParam);
+    const inChild = pathParamNames(path)[at];
+    return inChild !== undefined && normaliseName(inChild) === normaliseName(param);
+  };
+
+  /**
+   * The parent a scoped collection really lives under.
+   *
+   * The describe pass names one, and used to be believed outright. It picked
+   * the first collection whose path began the scoped one, so on Buildium
+   * `/rentals/` beat `/rentals/units/` and a unit's listing, images and notes
+   * were all filed under the property — whose page then fetched
+   * `/rentals/units/{propertyId}/listing` with the property's id, and whose
+   * units had no listing at all. So the stated parent is checked against the
+   * paths: kept when its one-record endpoint begins this collection's path by
+   * the same parameter, replaced by the record type that does when it does
+   * not, and kept as stated only where there is nothing to check it against.
+   */
+  const scopeParents = new Map<string, string | undefined>();
+  const scopeParentOf = (entityId: string): string | undefined => {
+    if (scopeParents.has(entityId)) return scopeParents.get(entityId);
+    const entity = entityById(input.entities, entityId);
+    const scope = entity?.scope;
+    let parent: string | undefined;
+    if (entity && scope) {
+      const listOp = resourceOf(entity)?.listOp;
+      const listed = listOp ? opById.get(listOp) : undefined;
+      const declared = entityById(input.entities, scope.parent);
+      if (!listed) {
+        parent = scope.parent;
+      } else if (declared && detailPrefixes(declared.resource, listed.path, scope.param)) {
+        parent = declared.id;
+      } else {
+        for (const resource of input.resources) {
+          if (!detailPrefixes(resource.id, listed.path, scope.param)) continue;
+          const found = entityForResource(input.entities, resource.id);
+          if (found && found.id !== entity.id) {
+            parent = found.id;
+            break;
+          }
+        }
+        if (parent === undefined) {
+          const declaredResource = declared ? resourceById.get(declared.resource) : undefined;
+          const checkable = Boolean(
+            declaredResource?.detailOp && opById.has(declaredResource.detailOp),
+          );
+          // Proven wrong and nothing better: no section beats one that fetches the wrong record.
+          parent = checkable ? undefined : scope.parent;
+        }
+      }
+    }
+    scopeParents.set(entityId, parent);
+    return parent;
   };
 
   /**
@@ -1185,7 +1380,7 @@ export const entityGraph = (input: EntityGraphInput): EntityGraph => {
             .filter((param) => param !== resource.detailParam)
             .map((param): AddressPart => {
               const field = fieldNamed(entity, param, entity.identity?.field);
-              const parent = parentEntityOf(entity, op, param);
+              const parent = parentEntityOf(entity, op.path, param);
               return { param, ...(field ? { field } : {}), ...(parent ? { entity: parent } : {}) };
             })
         : [];
@@ -1193,6 +1388,144 @@ export const entityGraph = (input: EntityGraphInput): EntityGraph => {
     }
     addresses.set(entityId, address);
     return address;
+  };
+
+  /**
+   * A record type that exists at most once under its parent: no one-record
+   * endpoint of its own, and reached from another record through a path that
+   * returns one — a unit's listing.
+   */
+  const singletonOf = (entity: EntitySpec): boolean => {
+    const resource = resourceOf(entity);
+    if (!resource?.listOp || resource.detailOp) return false;
+    const listed = opById.get(resource.listOp);
+    if (!listed || pathParamNames(listed.path).length === 0) return false;
+    const reachedAsOne = input.resources.some((other) =>
+      other.relations.some(
+        (relation) =>
+          relation.resource === resource.id && relation.cardinality === "one" && relation.via === "path",
+      ),
+    );
+    return reachedAsOne || !entity.identity;
+  };
+
+  const readShapes = new Set(input.ops.map((op) => pathShape(op.path)));
+  const writeCache = new Map<string, EntityWrites>();
+
+  /**
+   * Every way to change one record type, each with its address.
+   *
+   * The address is built by the same rules as a read's: the record's own id
+   * fills the parameter its one-record endpoint uses for it, and every other
+   * parameter is a parent, found on the record or from the record type it
+   * lives under. A create has no own id yet; a singleton never has one, and
+   * is addressed by its parent alone.
+   */
+  const writesOf = (entityId: string): EntityWrites => {
+    const cached = writeCache.get(entityId);
+    if (cached) return cached;
+    const entity = entityById(input.entities, entityId);
+    const resource = entity ? resourceOf(entity) : undefined;
+    if (!entity || !resource || !input.writes?.length) {
+      const none: EntityWrites = { actions: [] };
+      writeCache.set(entityId, none);
+      return none;
+    }
+    const list = resource.listOp ? opById.get(resource.listOp) : undefined;
+    const detail = resource.detailOp ? opById.get(resource.detailOp) : undefined;
+    const singleton = singletonOf(entity);
+
+    const targetOf = (op: WriteOpDef, role: WriteRole): WriteTarget => {
+      const params = pathParamNames(op.path);
+      let own: WriteTarget["own"];
+      if (role.kind !== "create" && role.mode !== "upsert" && !singleton && detail && resource.detailParam) {
+        const at = pathParamNames(detail.path).indexOf(resource.detailParam);
+        const param = at >= 0 ? params[at] : undefined;
+        if (param) own = { param, ...(entity.identity ? { field: entity.identity.field } : {}) };
+      }
+      const parents = params
+        .filter((param) => param !== own?.param)
+        .map((param): AddressPart => {
+          const field = role.kind === "create" ? undefined : fieldNamed(entity, param, entity.identity?.field);
+          const parent = parentEntityOf(entity, op.path, param);
+          return { param, ...(field ? { field } : {}), ...(parent ? { entity: parent } : {}) };
+        });
+      return {
+        kind: role.kind,
+        mode: role.mode,
+        op: op.id,
+        method: op.method,
+        path: op.path,
+        title: op.title,
+        ...(own ? { own } : {}),
+        parents,
+        fields: mapWriteFields(entity, op.body?.fields ?? []),
+        ...(op.body?.unsupported ? { unsupported: op.body.unsupported } : {}),
+        ...(role.kind === "action"
+          ? { action: { id: role.id, danger: role.danger, ...(role.creates ? { creates: true } : {}) } }
+          : {}),
+        confidence: op.confidence,
+        // Offered unless somebody switched it off: the review is the check, not a tick.
+        confirmed: op.confirmed !== false,
+        verified: op.verified,
+      };
+    };
+
+    /** The safer of two ways to do the same thing; one whose body no form can build never wins. */
+    const better = (held: WriteTarget | undefined, next: WriteTarget): WriteTarget | undefined => {
+      if (next.unsupported) return held;
+      return !held || MODE_PREFERENCE[next.mode] < MODE_PREFERENCE[held.mode] ? next : held;
+    };
+
+    let create: WriteTarget | undefined;
+    let update: WriteTarget | undefined;
+    let remove: WriteTarget | undefined;
+    const actions: WriteTarget[] = [];
+    for (const op of input.writes) {
+      const role = writeRoleOf(op, {
+        list: list?.path,
+        detail: detail?.path,
+        singleton,
+        readShapes,
+      });
+      if (!role) continue;
+      if (role.kind === "action") {
+        actions.push(targetOf(op, role));
+      } else if (role.kind === "delete") {
+        remove = better(remove, targetOf(op, role));
+      } else if (role.mode === "upsert") {
+        // One endpoint that makes the record or changes it, whichever applies.
+        update = better(update, targetOf(op, { kind: "update", mode: "upsert" }));
+        create = better(create, targetOf(op, { kind: "create", mode: "upsert" }));
+      } else if (role.kind === "create") {
+        create = better(create, targetOf(op, role));
+      } else {
+        update = better(update, targetOf(op, role));
+      }
+    }
+    const actionIds = actions.map((action) => action.action!.id);
+    /*
+     * An action with a step that undoes it can be undone — Buildium's
+     * inactivate has reactivate beside it — so it is not flagged as one that
+     * cannot, whatever its name sounds like. The pairing is kept either way,
+     * for whoever reverses a change later.
+     */
+    const paired = actions
+      .map((action) => {
+        const pairedWith = pairedAction(action.action!.id, actionIds);
+        return pairedWith
+          ? { ...action, action: { ...action.action!, danger: false, pairedWith } }
+          : action;
+      })
+      .sort((a, b) => a.title.localeCompare(b.title));
+    const writes: EntityWrites = {
+      ...(create ? { create } : {}),
+      ...(update ? { update } : {}),
+      ...(remove ? { remove } : {}),
+      actions: paired.filter((action) => !action.unsupported),
+    };
+    writeCache.set(entityId, writes);
+    return writes;
   };
 
   const references = new Map<string, EntityReference[]>();
@@ -1318,9 +1651,10 @@ export const entityGraph = (input: EntityGraphInput): EntityGraph => {
      * record, and the strongest kind: the API put the parent in the URL, so
      * nothing was inferred from a name.
      */
-    if (entity.scope) {
+    const scopeParent = scopeParentOf(entity.id);
+    if (entity.scope && scopeParent) {
       const listOp = resourceOf(entity)?.listOp;
-      if (listOp && entityById(input.entities, entity.scope.parent)) {
+      if (listOp && entityById(input.entities, scopeParent)) {
         /*
          * The endpoint's other parameters, which only a parent that is itself
          * nested has: the page's own address fills them.
@@ -1329,8 +1663,8 @@ export const entityGraph = (input: EntityGraphInput): EntityGraph => {
         const others = listed
           ? pathParamNames(listed.path).filter((param) => param !== entity.scope!.param)
           : [];
-        push(backrefs, entity.scope.parent, {
-          id: `${entity.id}-under-${entity.scope.parent}`,
+        push(backrefs, scopeParent, {
+          id: `${entity.id}-under-${scopeParent}`,
           entity: entity.id,
           title: entity.name.many,
           field: entity.scope.param,
@@ -1362,6 +1696,12 @@ export const entityGraph = (input: EntityGraphInput): EntityGraph => {
     referencesOf: (entityId) => references.get(entityId) ?? [],
     backrefsOf: (entityId) => backrefs.get(entityId) ?? [],
     addressOf,
+    writesOf,
+    scopeParentOf,
+    isSingleton: (entityId) => {
+      const entity = entityById(input.entities, entityId);
+      return entity ? singletonOf(entity) : false;
+    },
     resolveField: (opId, column, sources) => {
       const entity = byOp.get(opId);
       if (!entity) return undefined;

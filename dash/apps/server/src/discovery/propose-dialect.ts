@@ -1,8 +1,10 @@
 import type { LlmAdapter, LlmTool } from "@freebirdai/dash-agent";
-import type { CatalogEntry, ServerVariable } from "@freebirdai/dash-spec";
+import type { CatalogEntry, ServerVariable, WriteOpDef } from "@freebirdai/dash-spec";
 import {
   IMPORT_VERSION,
+  WRITES_VERSION,
   catalogEntrySchema,
+  writeOpDefSchema,
   serverTemplateSchema,
   templateVariableNames,
 } from "@freebirdai/dash-spec";
@@ -91,6 +93,36 @@ export const dialectProposalSchema = z.object({
     )
     .describe("Read-only GET endpoints worth putting on a dashboard. Prefer a few useful ones."),
 
+  /*
+   * Endpoints that change something, kept apart from the reads above and in
+   * two flat lists rather than one nested one — the converter handles arrays
+   * of flat objects and nothing deeper.
+   */
+  writes: z
+    .array(
+      z.object({
+        id: z.string().describe("lowercase_with_underscores, unique among writes"),
+        method: z.string().describe("One of: POST, PUT, PATCH, DELETE."),
+        title: z.string().describe('What it does, in the docs\' words, e.g. "Create a contact".'),
+        path: z.string().describe("Path only, no origin. Path params as {{param.name}}."),
+      }),
+    )
+    .optional()
+    .describe(
+      "Endpoints that create, update or delete records — ONLY those the documentation actually shows, with the method it states. Leave out when it shows none.",
+    ),
+  writeFields: z
+    .array(
+      z.object({
+        write: z.string().describe("The id of the write this field belongs to."),
+        name: z.string().describe("The field's name in the JSON body; nested as Parent.Child."),
+        type: z.string().describe("One of: string, number, integer, boolean."),
+        required: z.boolean().optional().describe("True only when the docs say it is required."),
+      }),
+    )
+    .optional()
+    .describe("The JSON body fields each write takes, as the documentation lists them."),
+
   uncertain: z
     .array(z.object({ topic: z.string(), note: z.string() }))
     .optional()
@@ -109,7 +141,7 @@ export const proposeDialectTool: LlmTool<DialectProposal> = {
 export const DIALECT_SYSTEM_PROMPT = `You read API documentation and describe how that API works, so a dashboard tool can call it.
 
 Rules:
-- Only describe GET endpoints. Never include anything that creates, updates or deletes.
+- "endpoints" are GET endpoints only. Endpoints that create, update or delete go in "writes" instead, and only when the documentation shows them with their method — never invent one, and never guess a method from a verb in a title.
 - Report only what the documentation actually states. If it does not describe pagination, LEAVE THE PAGINATION FIELDS OUT — do not infer a scheme from the shape of the URL. A wrong pagination guess does not produce an error, it silently returns the first page and a chart that is quietly incomplete.
 - "baseUrl" is the origin plus any prefix every endpoint shares. Endpoint paths must then be relative to it, with no origin. If each customer's account lives at its own address (a subdomain, a region, an instance), write that part as {name} and describe it in "baseUrlParts" — never copy an example company's address as if it were everyone's.
 - For basic authentication, say what the docs call the username and the password values in "authUsernameLabel" and "authSecretLabel".
@@ -281,6 +313,13 @@ export const mapDialectProposal = (
     warnings.push(`${item.topic}: ${item.note}`);
   }
 
+  const writes = writesFromProposal(proposal);
+  if (writes.length > 0) {
+    warnings.push(
+      `${writes.length} endpoint(s) that change records were read from prose. They are offered, and every change made through one says in its review that the documentation described it rather than a specification.`,
+    );
+  }
+
   const parsed = catalogEntrySchema.safeParse({
     id,
     title: proposal.title,
@@ -293,6 +332,8 @@ export const mapDialectProposal = (
       ...(proposal.timeParam ? { timeFilter: { param: proposal.timeParam, format: timeFormat } } : {}),
     },
     ops: endpoints,
+    writes,
+    writesVersion: WRITES_VERSION,
     validateOpId: endpoints.find((endpoint) => endpoint.archetype === "list")?.id ?? endpoints[0]?.id,
     ...(proposal.keyHelp ? { keyHelp: proposal.keyHelp } : {}),
     origin: "docs",
@@ -311,6 +352,43 @@ export const mapDialectProposal = (
     };
   }
   return { entry: parsed.data, warnings };
+};
+
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const FIELD_TYPES = new Set(["string", "number", "integer", "boolean"]);
+
+/**
+ * The write endpoints a docs page described, as inferred writes.
+ *
+ * Read from prose, so every one is `inferred`. It is offered like any other —
+ * nothing is sent without a person approving a review of exactly what will
+ * be — and that review says the endpoint came from prose.
+ */
+export const writesFromProposal = (proposal: DialectProposal): WriteOpDef[] => {
+  const fields = proposal.writeFields ?? [];
+  return (proposal.writes ?? []).slice(0, 40).flatMap((write, index): WriteOpDef[] => {
+    const method = write.method.trim().toUpperCase();
+    if (!WRITE_METHODS.has(method) || !write.path || /^https?:/i.test(write.path)) return [];
+    const id = slug(write.id || write.title || `write_${index}`).replace(/-/g, "_");
+    const own = fields
+      .filter((field) => field.write === write.id && field.name.trim() !== "")
+      .slice(0, 60)
+      .map((field) => ({
+        path: field.name.trim(),
+        type: (FIELD_TYPES.has(field.type) ? field.type : "string") as "string" | "number" | "integer" | "boolean",
+        required: field.required === true,
+      }));
+    const parsed = writeOpDefSchema.safeParse({
+      id,
+      title: write.title || `${method} ${write.path}`,
+      method,
+      path: write.path.startsWith("/") ? write.path : `/${write.path}`,
+      ...(method !== "DELETE" ? { body: { contentType: "application/json", fields: own } } : {}),
+      confidence: "inferred",
+      verified: false,
+    });
+    return parsed.success ? [parsed.data] : [];
+  });
 };
 
 /** One forced tool call. Same shape as the widget agent's proposal step. */

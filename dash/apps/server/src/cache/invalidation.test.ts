@@ -121,3 +121,71 @@ describe("invalidation is scoped to one connection", () => {
     expect(cache.store.get("api2.list|{}")).toBeDefined();
   });
 });
+
+describe("a change drops only what it made stale", () => {
+  const meta = {
+    url: "https://example.com",
+    status: 200,
+    fetchedAt: 0,
+    durationMs: 0,
+    pages: 1,
+    truncated: false,
+    warnings: [],
+  };
+
+  it("clears the endpoints named and leaves the connection's others", async () => {
+    const cache = new QueryCache();
+    for (const key of ["api.rental|-:{}", "api.rentals|-:{}", "api.leases|-:{}"]) {
+      await cache.read({ key, connection: "api", maxAgeMs: 0, fetcher: async () => ({ body: [key], meta }) });
+    }
+    cache.invalidateOps("api", ["rental", "rentals"]);
+    expect(cache.store.get("api.rental|-:{}")).toBeUndefined();
+    expect(cache.store.get("api.rentals|-:{}")).toBeUndefined();
+    expect(cache.store.get("api.leases|-:{}")).toBeDefined();
+  });
+
+  /*
+   * The two halves of the per-endpoint generation: an answer already on its
+   * way for a changed endpoint must not land and put the old record back,
+   * and an answer on its way for any other endpoint must land as normal —
+   * a connection-wide bump would reject it and leave its failure stuck.
+   */
+  it("rejects a read of a changed endpoint that was already on its way, and only that one", async () => {
+    const cache = new QueryCache();
+    let finishRental!: (result: { body: unknown; meta: typeof meta }) => void;
+    let finishLeases!: (result: { body: unknown; meta: typeof meta }) => void;
+    const rental = cache.read({
+      key: "api.rental|-:{}",
+      connection: "api",
+      maxAgeMs: 0,
+      fetcher: () => new Promise((resolve) => (finishRental = resolve)),
+    });
+    const leases = cache.read({
+      key: "api.leases|-:{}",
+      connection: "api",
+      maxAgeMs: 0,
+      fetcher: () => new Promise((resolve) => (finishLeases = resolve)),
+    });
+    const rejected = expect(rental).rejects.toMatchObject({ status: 409 });
+    cache.invalidateOps("api", ["rental"]);
+    finishRental({ body: [{ Name: "old" }], meta });
+    finishLeases({ body: [{ Id: 1 }], meta });
+    await rejected;
+    await expect(leases).resolves.toMatchObject({ body: [{ Id: 1 }] });
+    expect(cache.store.get("api.rental|-:{}")).toBeUndefined();
+    expect(cache.store.get("api.leases|-:{}")).toBeDefined();
+
+    // And the next read of the changed endpoint goes out again rather than finding a stuck failure.
+    await expect(
+      cache.read({ key: "api.rental|-:{}", connection: "api", maxAgeMs: 0, fetcher: async () => ({ body: [{ Name: "new" }], meta }) }),
+    ).resolves.toMatchObject({ body: [{ Name: "new" }] });
+  });
+
+  it("does not tell the keeper the credentials changed", () => {
+    const cache = new QueryCache();
+    let told = 0;
+    cache.onInvalidate(() => told++);
+    cache.invalidateOps("api", ["rental"]);
+    expect(told).toBe(0);
+  });
+});

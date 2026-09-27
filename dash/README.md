@@ -89,7 +89,7 @@ Pre-alpha. Under active development — see `AGENTS.md` for the build order.
 
 - **No history the API doesn't have.** Most product APIs hand you a list of objects with no aggregation primitives and no history — a follower-count endpoint returns today's number. Dash shows the current window. Trend lines over data the provider doesn't retain require snapshotting on a schedule, which is an ETL product, not this one.
 - **No cross-source joins.** Combining Stripe customers with HubSpot contacts requires entity resolution. Each widget reads from one source.
-- **No writes.** Read-only against every connected API.
+- **No unreviewed writes.** Widgets, boards and the query path are read-only against every connected API. Records can be created, edited, deleted and acted on — from any row's menu, a record's page, a widget's menu or the assistant — on every connection without anything to switch on, and every change is shown as a review (before and after) and sent only when a person approves it.
 
 ## License
 

@@ -1,6 +1,6 @@
 import { isSlotHidden } from "@freebirdai/dash-spec";
 import { statusTone } from "../palette.js";
-import { Message, StatusPill } from "../ui/index.js";
+import { Message, RowActions, StatusPill } from "../ui/index.js";
 import { makeFormatter, roleColumn } from "../resolve.js";
 import type { WidgetRenderProps } from "../types.js";
 
@@ -81,6 +81,7 @@ export const List = (props: WidgetRenderProps): JSX.Element => {
             {showMeta && metaColumn && (
               <div className="dash-list__meta">{formatMeta(row[metaColumn])}</div>
             )}
+            <RowActions row={row} actions={props.rowActions} label={title} />
           </li>
         );
       })}

@@ -20,6 +20,12 @@
 
 /** Lower runs first. */
 export const enum Priority {
+  /**
+   * A person pressed a button and is waiting on this: a change they approved,
+   * or the read that change needs. Nothing on a board is more urgent than
+   * somebody's own save.
+   */
+  Interactive = -1,
   /** A widget's own source. Something on screen is waiting for it. */
   Widget = 0,
   /** One row's worth of a fan-out. Enriches a tile that can already draw. */

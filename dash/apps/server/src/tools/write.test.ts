@@ -1,15 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { WRITE_TOOL, planWrite } from "./write.js";
+import { WRITE_TOOL, planWrite, type WriteOffer } from "./write.js";
 import type { ToolBinding } from "./types.js";
 
 /**
- * The verb that exists so a refusal can be accurate.
+ * The verb that exists so an answer about changing a record can be accurate.
  *
- * Without it the model has two ways to be wrong and no way to be right: invent
- * a capability it does not have, or refuse in a way that sounds like a policy
- * when it is a fact about the connection. `opDefSchema.method` is
- * `z.literal("GET")` — read-only by construction — and saying *that* is what
- * turns a dead end into a decision somebody can make.
+ * Without it the model has two ways to be wrong: invent a capability it does
+ * not have, or refuse in a way that sounds like a policy when it is a fact
+ * about the connection. It describes; `change_record` proposes; a person
+ * approves. It never sends anything itself.
  */
 
 const binding = (over: Partial<ToolBinding> = {}): ToolBinding => ({
@@ -26,20 +25,40 @@ const binding = (over: Partial<ToolBinding> = {}): ToolBinding => ({
   ...over,
 });
 
+const OFFER: WriteOffer = {
+  connection: "helpdesk",
+  entity: "conversation",
+  entityName: "Conversation",
+  allowed: true,
+  parents: [],
+  singleton: false,
+  changes: [
+    {
+      kind: "update",
+      title: "Update a conversation",
+      fields: [{ field: "status", label: "Status", type: "string", required: false, options: ["open", "closed"] }],
+    },
+    { kind: "delete", title: "Delete a conversation", danger: true, fields: [] },
+  ],
+};
+
 describe("planWrite", () => {
-  it("never performs anything", () => {
-    const plan = planWrite({
-      binding: binding(),
-      resource: "conversation",
-      id: "77",
-      changes: [{ field: "status", value: "closed" }],
-    });
-    expect(plan.performed).toBe(false);
-    expect(plan.requests).toBe(0);
-    expect(plan.records).toEqual([]);
+  it("never performs anything, whatever the answer", () => {
+    for (const offer of [undefined, { ...OFFER, allowed: false }, OFFER]) {
+      const plan = planWrite({
+        binding: binding(),
+        resource: "conversation",
+        id: "77",
+        changes: [{ field: "status", value: "closed" }],
+        offer,
+      });
+      expect(plan.performed).toBe(false);
+      expect(plan.requests).toBe(0);
+      expect(plan.records).toEqual([]);
+    }
   });
 
-  it("names the record, the API and the fields it would have set", () => {
+  it("names the record, the API and the fields it would set", () => {
     const plan = planWrite({
       binding: binding(),
       resource: "conversation",
@@ -60,17 +79,67 @@ describe("planWrite", () => {
   });
 
   /*
-   * The distinction that makes the answer useful: this is not a permission
-   * somebody can go and grant, it is what the connection can express at all.
+   * The distinction that makes the answer useful: a connection that describes
+   * no such endpoint is a fact about it, not a permission somebody can grant.
    */
-  it("gives the structural reason rather than sounding like a policy", () => {
+  it("says when the connection describes no way to do it, without sounding like a policy", () => {
     const plan = planWrite({ binding: binding(), resource: "conversation", id: "1", changes: [] });
-    expect(plan.refusal).toBe("read-only-connection");
-    expect(plan.note).toContain("by construction");
-    expect(plan.note).toContain("nothing was sent");
-    // Attributing it to the API would be wrong, and it is what the model did
-    // when the note left room for it: Buildium is not read-only, this is.
-    expect(plan.note).toContain("NOT of the API");
+    expect(plan.refusal).toBe("not-offered");
+    expect(plan.note).toContain("nothing was sent".replace(/^n/, "N"));
+    expect(plan.note).toContain("NOT a permission");
+    expect(plan.note).toContain("Read write endpoints");
+  });
+
+  it("says who decides when the API can but the person asking may not", () => {
+    const plan = planWrite({
+      binding: binding(),
+      resource: "conversation",
+      id: "1",
+      changes: [],
+      offer: { ...OFFER, allowed: false },
+    });
+    expect(plan.refusal).toBe("not-allowed");
+    expect(plan.note).toContain("whoever manages this workspace decides");
+    expect(plan.offered?.changes).toHaveLength(2);
+  });
+
+  it("says how to propose it for approval when it can be done", () => {
+    const plan = planWrite({
+      binding: binding(),
+      resource: "conversation",
+      id: "1",
+      changes: [{ field: "status", value: "closed" }],
+      offer: OFFER,
+    });
+    expect(plan.refusal).toBeUndefined();
+    expect(plan.offered?.changes[0]?.fields[0]).toMatchObject({ field: "status", options: ["open", "closed"] });
+    // The call itself, ready to make: instructions alone got described rather than made.
+    expect(plan.next).toEqual({
+      tool: "change_record",
+      args: {
+        connection: "helpdesk",
+        entity: "conversation",
+        kind: "update",
+        id: "1",
+        values: [{ field: "status", value: "closed" }],
+      },
+    });
+    expect(plan.note).toContain("Call change_record NOW");
+    expect(plan.note).toContain("no card is showing");
+  });
+
+  /*
+   * The engine quotes only the first six hundred characters of a tool's result
+   * back to the model; instructions after a long field listing never arrive.
+   */
+  it("leads with the note and the next call, whatever else it carries", () => {
+    for (const offer of [undefined, { ...OFFER, allowed: false }, OFFER]) {
+      const plan = planWrite({ binding: binding(), resource: "conversation", id: "1", changes: [{ field: "status", value: "closed" }], offer });
+      const keys = Object.keys(plan);
+      expect(keys[0]).toBe("note");
+      if (plan.next) expect(keys[1]).toBe("next");
+      expect(JSON.stringify(plan).slice(0, 600)).toContain(JSON.stringify(plan.note).slice(1, 150));
+    }
   });
 
   it("says when no fields were named at all", () => {
@@ -78,7 +147,7 @@ describe("planWrite", () => {
     expect(plan.note).toContain("no fields were named");
   });
 
-  it("separates an unknown resource from a read-only connection", () => {
+  it("separates an unknown resource from everything else", () => {
     const plan = planWrite({ binding: null, resource: "invoice", id: "1", changes: [] });
     expect(plan.refusal).toBe("unknown-resource");
     expect(plan.note).toContain("not a kind of record this workspace can address");
@@ -87,9 +156,10 @@ describe("planWrite", () => {
 });
 
 describe("WRITE_TOOL", () => {
-  it("tells the model to use the result rather than answer from memory", () => {
-    expect(WRITE_TOOL.name).toBe("write_record");
-    expect(WRITE_TOOL.description).toContain("rather than answering from memory");
-    expect(WRITE_TOOL.description).toContain("never changes anything");
+  it("is named and described as a question, so a request to change is not answered with it", () => {
+    expect(WRITE_TOOL.name).toBe("can_change_record");
+    expect(WRITE_TOOL.description).toContain("ONLY for questions");
+    expect(WRITE_TOOL.description).toContain("NEVER proposes or changes anything");
+    expect(WRITE_TOOL.description).toContain("start the change_record action");
   });
 });

@@ -1,5 +1,5 @@
 import { AdapterError, type FetchResult } from "@freebirdai/dash-adapters";
-import { queryKeyPrefix } from "@freebirdai/dash-spec";
+import { opOfQueryKey, queryKeyOpPrefix, queryKeyPrefix } from "@freebirdai/dash-spec";
 import { RequestAccounting } from "./accounting.js";
 import { ConnectionCooldown, coolingMessage, retryAfterSeconds } from "./cooldown.js";
 import { ConnectionGate, Priority } from "./gate.js";
@@ -91,6 +91,8 @@ export class QueryCache {
   private readonly now: () => number;
   private readonly inFlight = new Map<string, Promise<FetchResult>>();
   private readonly generations = new Map<string, number>();
+  /** Per endpoint, keyed `${connection}.${op}`. See `invalidateOps`. */
+  private readonly opGenerations = new Map<string, number>();
   private globalGeneration = 0;
   private readonly invalidated = new Set<(connection: string | undefined) => void>();
 
@@ -102,8 +104,38 @@ export class QueryCache {
    * compared equal across an invalidation would write the old account's rows
    * back into the cache after they were meant to be gone.
    */
-  private generationOf(connection: string): string {
-    return `${this.globalGeneration}:${this.generations.get(connection) ?? 0}`;
+  private generationOf(connection: string, key?: string): string {
+    const op = key === undefined ? undefined : opOfQueryKey(connection, key);
+    const opGeneration = op === undefined ? 0 : (this.opGenerations.get(`${connection}.${op}`) ?? 0);
+    return `${this.globalGeneration}:${this.generations.get(connection) ?? 0}:${opGeneration}`;
+  }
+
+  /**
+   * Drop what a change made stale: the answers of these endpoints, and no
+   * others.
+   *
+   * Narrower than `invalidate`, on purpose. A change to one property makes the
+   * property list and the property's own page stale; it says nothing about
+   * the leases, and throwing those away too would send every widget on the
+   * board back to the API at once — on an API that rate-limits hard, the
+   * shortest way to turn one save into a refusal.
+   *
+   * Its own generation per endpoint, so an answer that was already on its way
+   * for one of these cannot land after the change and put the old record
+   * back — while reads of every other endpoint carry on untouched. It does not
+   * tell the keeper anything: `onInvalidate` means "the credentials changed",
+   * which this is not.
+   */
+  invalidateOps(connection: string, ops: readonly string[]): void {
+    for (const op of new Set(ops)) {
+      const id = `${connection}.${op}`;
+      this.opGenerations.set(id, (this.opGenerations.get(id) ?? 0) + 1);
+      const prefix = queryKeyOpPrefix(connection, op);
+      this.store.clear(prefix);
+      for (const key of [...this.inFlight.keys()]) {
+        if (key.startsWith(prefix)) this.inFlight.delete(key);
+      }
+    }
   }
 
   /**
@@ -237,7 +269,7 @@ export class QueryCache {
       mode = "refresh",
     } = input;
     const freshForMs = Math.max(maxAgeMs, input.freshForMs ?? 0);
-    const generation = this.generationOf(connection);
+    const generation = this.generationOf(connection, key);
     const now = this.now();
     const cached = this.store.get(key);
     const age = cached ? now - cached.storedAt : Number.POSITIVE_INFINITY;
@@ -307,7 +339,7 @@ export class QueryCache {
      */
     if (cooling) {
       const reason = coolingMessage(cooling, now);
-      if (cached && generation === this.generationOf(connection)) {
+      if (cached && generation === this.generationOf(connection, key)) {
         this.accounting.stale(connection);
         return {
           body: cached.body,
@@ -362,7 +394,7 @@ export class QueryCache {
        * Nothing came back. If we hold anything at all, that is better than an
        * empty tile — provided it says why it is old.
        */
-      if (cached && generation === this.generationOf(connection)) {
+      if (cached && generation === this.generationOf(connection, key)) {
         this.accounting.stale(connection);
         const reason =
           error instanceof AdapterError
@@ -401,7 +433,7 @@ export class QueryCache {
   ): Promise<FetchResult> {
     const pending = this.inFlight.get(key);
     if (pending) return pending;
-    const generation = this.generationOf(connection);
+    const generation = this.generationOf(connection, key);
 
     const run = (async () => {
       const previous = this.store.get(key);
@@ -461,7 +493,7 @@ export class QueryCache {
             throw error;
           }
         });
-        if (generation !== this.generationOf(connection))
+        if (generation !== this.generationOf(connection, key))
           throw new AdapterError(
             "The connection changed while data was loading. Refresh the preview.",
             { status: 409 },
@@ -501,7 +533,7 @@ export class QueryCache {
          * the cooldown's *own* refusal and extend the wait every time somebody
          * was turned away by it, so a busy board could never come back.
          */
-        if (generation === this.generationOf(connection)) this.inFlight.delete(key);
+        if (generation === this.generationOf(connection, key)) this.inFlight.delete(key);
       }
     })();
 

@@ -37,8 +37,10 @@ export const opDefSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
   /**
-   * Read-only by construction: v1 issues GET and nothing else, so no spec
-   * and no generated binding can ever mutate a connected account.
+   * Read-only by construction: an op is always a GET, so no widget, binding,
+   * keeper target or query can ever change a connected account. Endpoints
+   * that do change things are a different list — `CatalogEntry.writes` — and
+   * only the write service can send one, after a person has reviewed it.
    */
   method: z.literal("GET").default("GET"),
   /** Appended to the connection's baseUrl. May contain `{{…}}` params. */

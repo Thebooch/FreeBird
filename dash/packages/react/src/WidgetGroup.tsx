@@ -2,7 +2,7 @@ import type { Presentation, WidgetGroup as GroupSpec, WidgetSpec } from "@freebi
 import { Tabs, useMeasure } from "@freebirdai/dash-components";
 import { useState } from "react";
 import { WidgetErrorBoundary } from "./WidgetErrorBoundary.jsx";
-import { WidgetShell } from "./WidgetShell.jsx";
+import { WidgetShell, type RecordCreateOffer, type RecordRowActions } from "./WidgetShell.jsx";
 import type { OpenReference } from "./entityDetail.js";
 
 /**
@@ -82,6 +82,8 @@ export interface WidgetGroupProps {
   readonly members: readonly WidgetSpec[];
   readonly onRemoveWidget?: (widgetId: string) => void;
   readonly onCustomiseWidget?: (widgetId: string) => void;
+  readonly onCreateRecord?: RecordCreateOffer;
+  readonly onRowActions?: RecordRowActions;
   readonly onFrameWidget?: (widgetId: string) => void;
   readonly onOpenRecordPage?: (widgetId: string, row: Record<string, unknown>) => void;
   /**
@@ -99,6 +101,8 @@ export const WidgetGroup = ({
   members,
   onRemoveWidget,
   onCustomiseWidget,
+  onCreateRecord,
+  onRowActions,
   onFrameWidget,
   onOpenRecordPage,
   onOpenReference,
@@ -122,6 +126,8 @@ export const WidgetGroup = ({
         widget={quieted(widget, hideTitle)}
         {...(onRemoveWidget ? { onRemove: onRemoveWidget } : {})}
         {...(onCustomiseWidget ? { onCustomise: onCustomiseWidget } : {})}
+        {...(onCreateRecord ? { onCreateRecord } : {})}
+        {...(onRowActions ? { onRowActions } : {})}
         {...(onFrameWidget ? { onFrame: onFrameWidget } : {})}
         {...(onOpenRecordPage ? { onOpenPage: onOpenRecordPage } : {})}
         {...(onOpenReference ? { onOpenReference } : {})}

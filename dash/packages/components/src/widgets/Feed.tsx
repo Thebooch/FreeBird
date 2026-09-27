@@ -1,6 +1,6 @@
 import { formatValue, isSlotHidden, settingBool } from "@freebirdai/dash-spec";
 import { statusTone } from "../palette.js";
-import { Avatar, Message, StatusPill } from "../ui/index.js";
+import { Avatar, Message, RowActions, StatusPill } from "../ui/index.js";
 import { makeFormatter, roleColumn } from "../resolve.js";
 import type { WidgetRenderProps } from "../types.js";
 import { byRecency, groupByDay } from "./collectionModel.js";
@@ -120,6 +120,7 @@ export const Feed = (props: WidgetRenderProps): JSX.Element => {
             <span className="dash-feed__meta">{formatMeta(row[metaColumn])}</span>
           )}
         </div>
+        <RowActions row={row} actions={props.rowActions} label={title} />
       </li>
     );
   };

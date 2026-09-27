@@ -155,7 +155,21 @@ export interface DashboardProviderProps {
    * displaying them afterwards.
    */
   readonly credentialRevisions?: Readonly<Record<string, number>>;
+  /**
+   * The last change made to a connected account, and which endpoints it made
+   * stale. A new `revision` asks those again — and only those — so the board
+   * shows the change without reloading anything else.
+   */
+  readonly changes?: RecordChangeSignal | undefined;
   readonly children: ReactNode;
+}
+
+/** What a change to a record made stale, as the server reported it. */
+export interface RecordChangeSignal {
+  readonly connection: string;
+  readonly ops: readonly string[];
+  /** Bumped on every change, so two changes to the same endpoints are both seen. */
+  readonly revision: number;
 }
 
 /** How often the shared clock advances — drives stale badges and "3 min ago". */
@@ -172,6 +186,7 @@ export const DashboardProvider = ({
   rangeOps,
   approvals,
   credentialRevisions,
+  changes,
   children,
 }: DashboardProviderProps): JSX.Element => {
   const [client] = useState(() => new QueryClient(registry));
@@ -230,6 +245,19 @@ export const DashboardProvider = ({
       }
     }
   }, [client, records, revisions]);
+
+  /*
+   * A record was changed: ask again for what that made stale. The names the
+   * index holds for this account are dropped too — the change may have been
+   * to a name — and are read back in as the rows land.
+   */
+  const lastChange = useRef(changes?.revision);
+  useEffect(() => {
+    if (!changes || changes.revision === lastChange.current) return;
+    lastChange.current = changes.revision;
+    records.forget(changes.connection);
+    client.refreshOps(changes.connection, changes.ops, Date.now());
+  }, [client, records, changes]);
 
   const [tick, setTick] = useState(() => pinnedNow ?? Date.now());
 

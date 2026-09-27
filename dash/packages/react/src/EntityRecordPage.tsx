@@ -1,10 +1,77 @@
-import { Message } from "@freebirdai/dash-components";
-import type { EntityPageView, RecordOverride } from "@freebirdai/dash-spec";
-import { humanLabel } from "@freebirdai/dash-spec";
+import { Button, Menu, type MenuItem, Message, type RowAction } from "@freebirdai/dash-components";
+import type { EntityPageSection, EntityPageView, RecordOverride } from "@freebirdai/dash-spec";
+import { humanLabel, parentsFrom } from "@freebirdai/dash-spec";
 import type { Row } from "@freebirdai/dash-runtime";
 import { useMemo } from "react";
+import type { DetailPane } from "./detail.js";
 import { RecordView } from "./RecordView.jsx";
 import { entityPanes, missingParents, type OpenReference } from "./entityDetail.js";
+import { changeRowActions, recordChangeRequests, recordToolbar, type ToolbarEntry } from "./writes/requests.js";
+
+/**
+ * A change somebody asked for from a page: which record, and what to do to it.
+ *
+ * Only a request. The host opens the form and the review; nothing here talks
+ * to a server or sends anything.
+ */
+export interface RecordChangeRequest {
+  readonly connection: string;
+  readonly entity: string;
+  /** What one of these is called, for a heading. */
+  readonly entityName?: string | undefined;
+  readonly kind: "create" | "update" | "delete" | "action";
+  readonly action?:
+    | {
+        readonly id: string;
+        readonly title: string;
+        readonly danger: boolean;
+        /** Makes a new record under this one, so it is offered under "Add". */
+        readonly creates?: boolean | undefined;
+      }
+    | undefined;
+  /** The record's own id; absent for a create and for one addressed by its parent. */
+  readonly id?: string | undefined;
+  readonly parents?: Readonly<Record<string, string>> | undefined;
+  /** What to call it: "Edit", "Inactivate a property", "Delete a listing". */
+  readonly title: string;
+  /** How the request came about: this record, or one of its sections. */
+  readonly singleton?: boolean | undefined;
+}
+
+/**
+ * The changes one section offers, from inside the record it belongs to: add
+ * one under it, or — for something that exists once under it, a unit's
+ * listing — add or change it and remove it in place. Only for a section the
+ * API scopes under this record, whose address this record's id completes.
+ */
+const sectionRequests = (
+  section: EntityPageSection,
+  connection: string,
+  recordId: string,
+  recordParents: Readonly<Record<string, string>> | undefined,
+): RecordChangeRequest[] => {
+  const writes = section.writes;
+  if (!writes || section.reach.mode !== "path") return [];
+  const parents = { ...(recordParents ?? {}), [section.reach.param]: recordId };
+  const base = { connection, entity: section.entity, parents, ...(section.singleton ? { singleton: true } : {}) };
+  const out: RecordChangeRequest[] = [];
+  if (section.singleton) {
+    const change = writes.update ?? writes.create;
+    if (change) out.push({ ...base, kind: "update", title: change.title });
+  } else if (writes.create) {
+    out.push({ ...base, kind: "create", title: writes.create.title });
+  }
+  if (section.singleton && writes.remove) out.push({ ...base, kind: "delete", title: writes.remove.title });
+  return out;
+};
+
+const menuItem = (entry: ToolbarEntry, open: (request: RecordChangeRequest) => void): MenuItem => ({
+  id: entry.id,
+  label: entry.label,
+  onSelect: () => open(entry.request),
+  ...(entry.tone === "danger" ? { tone: "danger" as const } : {}),
+  ...(entry.separated ? { separated: true } : {}),
+});
 
 /**
  * One record's own page, addressed by what it is.
@@ -30,6 +97,7 @@ export const EntityRecordPage = ({
   override,
   onOpenReference,
   onEditLayout,
+  onChangeRecord,
 }: {
   readonly page: EntityPageView;
   readonly connection: string;
@@ -54,6 +122,12 @@ export const EntityRecordPage = ({
    * then nothing is offered.
    */
   readonly onEditLayout?: () => void;
+  /**
+   * Offer the changes this page allows — edit, delete, the record's actions,
+   * and adding to its sections. The page says which the account allows and
+   * the person may make; the host does the rest. Absent, nothing is offered.
+   */
+  readonly onChangeRecord?: (request: RecordChangeRequest) => void;
 }): JSX.Element => {
   const panes = useMemo(
     () =>
@@ -78,6 +152,53 @@ export const EntityRecordPage = ({
     () => ({ [page.identity ?? "Id"]: recordId }),
     [page.identity, recordId],
   );
+
+  const own = page.writes;
+  const base = {
+    connection,
+    entity: page.entity,
+    entityName: page.name.one,
+    id: recordId,
+    ...(recordParents ? { parents: recordParents } : {}),
+  };
+  const ownRequests: RecordChangeRequest[] =
+    own && onChangeRecord && missing.length === 0 ? recordChangeRequests(base, own) : [];
+
+  /*
+   * A row of a related collection is a record too — one of this property's
+   * units — and can be changed from here like any other, with the section's
+   * own record type and the row's own address. Not a singleton section: that
+   * one is changed from the toolbar, where it is added when missing.
+   */
+  const sectionRowActions = onChangeRecord
+    ? (pane: DetailPane, childRow: Row): readonly RowAction[] => {
+        const section = page.sections.find((one) => one.id === pane.id);
+        const opens = pane.opensEntity;
+        if (!section?.writes || section.singleton || !opens) return [];
+        const id = childRow[opens.column];
+        if (id === null || id === undefined || id === "") return [];
+        const parents = opens.parents?.length ? parentsFrom(opens.parents, childRow, opens.known) : undefined;
+        if (parents === null) return [];
+        const requests = recordChangeRequests(
+          {
+            connection,
+            entity: section.entity,
+            id: String(id),
+            ...(parents ? { parents } : {}),
+          },
+          section.writes,
+        );
+        return changeRowActions(requests, onChangeRecord);
+      }
+    : undefined;
+  const sectionOffers =
+    onChangeRecord && missing.length === 0
+      ? page.sections
+          .map((section) => ({ section, requests: sectionRequests(section, connection, recordId, recordParents) }))
+          .filter((offer) => offer.requests.length > 0)
+      : [];
+
+  const toolbar = onChangeRecord ? recordToolbar(ownRequests, sectionOffers) : undefined;
 
   const shown = panes.filter((pane) => pane.tab === true).length;
   const unknownBundles = (page.bundles ?? []).filter((bundle) => !bundle.entity);
@@ -108,6 +229,41 @@ export const EntityRecordPage = ({
           </button>
         )}
       </nav>
+
+      {toolbar && onChangeRecord && (
+        /*
+         * What can be changed here, as the page reports it: only what the
+         * person may. Edit on its own; everything that makes something new
+         * — a payment on this lease, a note, a renewal — under one "Add";
+         * the rest of the changes, the one that cannot be undone last, under
+         * one menu beside it. Each opens a form or a review: nothing here
+         * sends a change by itself.
+         */
+        <div className="dash-record-changes" role="toolbar" aria-label="Changes" data-testid="record-changes">
+          {toolbar.edit && (
+            <Button size="sm" onClick={() => onChangeRecord(toolbar.edit!)} testId="record-change-update">
+              {toolbar.edit.title}
+            </Button>
+          )}
+          {toolbar.add.length > 0 && (
+            <Menu
+              text="Add"
+              align="start"
+              label={`Add to this ${page.name.one.toLowerCase()}`}
+              testId="record-add"
+              items={toolbar.add.map((entry) => menuItem(entry, onChangeRecord))}
+            />
+          )}
+          {toolbar.more.length > 0 && (
+            <Menu
+              align="start"
+              label={`More changes to this ${page.name.one.toLowerCase()}`}
+              testId="record-more"
+              items={toolbar.more.map((entry) => menuItem(entry, onChangeRecord))}
+            />
+          )}
+        </div>
+      )}
 
       {missing.length > 0 && (
         /*
@@ -143,6 +299,7 @@ export const EntityRecordPage = ({
             row={row}
             wide
             {...(onOpenReference ? { onOpenReference } : {})}
+            {...(sectionRowActions ? { rowActions: sectionRowActions } : {})}
           />
           {unknownBundles.length > 0 && (
             /*

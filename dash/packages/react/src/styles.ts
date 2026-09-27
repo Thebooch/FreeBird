@@ -1382,4 +1382,50 @@ export const DASH_REACT_STYLES = `
 /* A stacked member sizes to its content rather than being squeezed to an
    equal share of a height it cannot know. */
 .dash-group[data-arrangement="stack"] .dash-group__member { flex: 0 0 auto; }
+
+/*
+ * Changing a record: the form, and the review a person says yes to.
+ * Plain text in comments here: a backtick would end this template literal.
+ */
+.dash-write-form { display: flex; flex-direction: column; }
+.dash-write-form .dash-keyblock { margin-top: 4px; }
+.dash-write-item {
+  border-bottom: 1px dashed var(--dash-border); padding-bottom: 8px; margin-bottom: 8px;
+}
+.dash-write-error { color: var(--dash-critical); font-size: var(--dash-text-xs); }
+.dash-write-review { display: flex; flex-direction: column; gap: 8px; }
+.dash-write-review__summary { margin: 0; color: var(--dash-ink); font-size: var(--dash-text-sm); line-height: 1.5; }
+.dash-write-review__diff { border-collapse: collapse; width: 100%; font-size: var(--dash-text-sm); }
+.dash-write-review__diff th, .dash-write-review__diff td {
+  text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--dash-border); vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.dash-write-review__diff thead th { font-size: var(--dash-text-xs); color: var(--dash-muted); font-weight: 500; }
+.dash-write-review__before { color: var(--dash-muted); text-decoration: line-through; text-decoration-color: var(--dash-border); }
+.dash-write-review__after { color: var(--dash-ink); font-weight: 500; }
+.dash-write-review__kept { display: block; margin-top: 4px; }
+.dash-write-review__detail {
+  margin-top: 6px; font-family: var(--dash-font-mono); font-size: var(--dash-text-xs);
+  color: var(--dash-muted); overflow-wrap: anywhere;
+}
+.dash-write-review[data-compact="true"] .dash-write-review__diff th,
+.dash-write-review[data-compact="true"] .dash-write-review__diff td { padding: 4px 6px; }
+.dash-linkish {
+  font: inherit; font-size: inherit; color: var(--dash-accent); background: none; border: none;
+  padding: 0; cursor: pointer; text-decoration: underline;
+}
+.dash-record-changes {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 10px;
+}
+.dash-sheet-overlay {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.32); z-index: 50;
+  display: flex; justify-content: flex-end;
+}
+.dash-sheet-panel {
+  width: min(560px, 100vw); height: 100%; overflow-y: auto; background: var(--dash-surface);
+  border-left: 1px solid var(--dash-border); padding: 18px 20px 24px; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.dash-sheet-panel__head { display: flex; align-items: center; gap: 8px; }
+.dash-sheet-panel__head h2 { margin: 0; font-size: var(--dash-text-lg, 1.1rem); flex: 1; }
 `;

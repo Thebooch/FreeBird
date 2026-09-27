@@ -1,6 +1,6 @@
 import { formatValue } from "@freebirdai/dash-spec";
 import { statusTone } from "../palette.js";
-import { Message, StatusPill } from "../ui/index.js";
+import { Message, RowActions, StatusPill } from "../ui/index.js";
 import { makeFormatter, roleColumn } from "../resolve.js";
 import type { WidgetRenderProps } from "../types.js";
 import { byRecency } from "./collectionModel.js";
@@ -58,6 +58,7 @@ export const Timeline = (props: WidgetRenderProps): JSX.Element => {
       {statusColumn && row[statusColumn] != null && (
         <StatusPill tone={statusTone(row[statusColumn])} label={String(row[statusColumn])} />
       )}
+      <RowActions row={row} actions={props.rowActions} label={formatTitle(row[titleColumn])} />
     </li>
   );
 

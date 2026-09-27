@@ -306,9 +306,10 @@ export interface CapabilityAllowlist {
   readonly connection: string;
   readonly ops: readonly AllowedOp[];
   /**
-   * Always true today. Connections are GET-only by construction, and the flag
-   * exists so a future write path has to set it deliberately rather than
-   * arriving by omission.
+   * Always true. This allowlist is built from `ops`, which are GET-only by
+   * construction. Endpoints that change things live apart, in the catalog
+   * entry's `writes`, and are sent only by the write service after a person
+   * approves a review — they never pass through here.
    */
   readonly readOnly: true;
 }

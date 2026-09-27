@@ -1,6 +1,6 @@
 import { isSlotHidden, settingNumber } from "@freebirdai/dash-spec";
 import { statusTone } from "../palette.js";
-import { Message, StatusPill } from "../ui/index.js";
+import { Message, RowActions, StatusPill } from "../ui/index.js";
 import { labelOf, makeFormatter, roleColumn, roleColumns } from "../resolve.js";
 import type { WidgetRenderProps } from "../types.js";
 
@@ -102,6 +102,7 @@ export const Cards = (props: WidgetRenderProps): JSX.Element => {
               {statusColumn && row[statusColumn] != null && (
                 <StatusPill tone={statusTone(row[statusColumn])} label={String(row[statusColumn])} />
               )}
+              <RowActions row={row} actions={props.rowActions} label={title} />
             </div>
 
             {showSubtitle && subtitleColumn && row[subtitleColumn] != null && (

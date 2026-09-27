@@ -235,7 +235,8 @@ export type LlmTask =
   | "narrow"
   | "suggest"
   | "context"
-  | "respond";
+  | "respond"
+  | "writes";
 
 /**
  * Two tiers, not three.
@@ -300,6 +301,18 @@ export const TASKS: readonly TaskInfo[] = [
     label: "Planning a connection's dashboards",
     tier: "capable",
     note: "Works out what an API is for and what each part of it should open with. Once per API.",
+  },
+  {
+    /*
+     * Which record field holds each value a change sends back. A wrong match
+     * does not render badly — it writes one value into another field of
+     * somebody's real account — so it gets the model that decides well. Runs
+     * once per record type, when somebody turns changes on for it.
+     */
+    id: "writes",
+    label: "Matching fields for changes",
+    tier: "capable",
+    note: "Works out where an update's values are shown on the record, so an edit keeps what it does not change.",
   },
   {
     id: "record",

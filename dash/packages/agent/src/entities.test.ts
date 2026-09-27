@@ -243,6 +243,28 @@ describe("scopeOf", () => {
   it("leaves a plain collection unscoped", () => {
     expect(scopeOf(parent, [parent, child], ops)).toBeUndefined();
   });
+
+  /*
+   * `/rentals/` begins `/rentals/units/` too, and taking the first match filed
+   * a unit's listing under the property — whose page then fetched the listing
+   * with a property id in the unit's slot.
+   */
+  it("files a nested collection under the record whose own path holds it", () => {
+    const rental = resource({ id: "rental", title: "Properties", listOp: "rentals", detailOp: "rental", detailParam: "propertyId" });
+    const unit = resource({ id: "unit", title: "Units", listOp: "units", detailOp: "unit", detailParam: "unitId" });
+    const listing = resource({ id: "listing", title: "Listing", listOp: "listing" });
+    const nested = [
+      { id: "rentals", title: "Properties", path: "/v1/rentals" },
+      { id: "rental", title: "Property", path: "/v1/rentals/{{param.propertyId}}" },
+      { id: "units", title: "Units", path: "/v1/rentals/units" },
+      { id: "unit", title: "Unit", path: "/v1/rentals/units/{{param.unitId}}" },
+      { id: "listing", title: "Listing", path: "/v1/rentals/units/{{param.unitId}}/listing" },
+    ];
+    expect(scopeOf(listing, [rental, unit, listing], nested)).toEqual({ parent: "unit", param: "unitId" });
+    // Without a one-record endpoint to go on, the longest collection still wins.
+    const bareUnit = resource({ id: "unit", title: "Units", listOp: "units" });
+    expect(scopeOf(listing, [rental, bareUnit, listing], nested)).toEqual({ parent: "unit", param: "unitId" });
+  });
 });
 
 describe("describeEntities", () => {

@@ -8,7 +8,7 @@ import {
  * Re-exported, not re-implemented. The server caches on the same identity,
  * and a second copy that drifted would serve one widget the rows of another.
  */
-import { queryKeyPrefix, type QueryParams, type ResolvedParams } from "@freebirdai/dash-spec";
+import { queryKeyOpPrefix, queryKeyPrefix, type QueryParams, type ResolvedParams } from "@freebirdai/dash-spec";
 import { RequestQueue, Wave } from "./queue.js";
 export { queryKey } from "@freebirdai/dash-spec";
 export type { QueryParams } from "@freebirdai/dash-spec";
@@ -162,6 +162,24 @@ export class QueryClient {
       if (key.startsWith(prefix)) this.entries.delete(key);
     }
     this.emit();
+  }
+
+  /**
+   * Re-run the queries of these endpoints only, keeping their rows on screen.
+   *
+   * What a change to a record needs: the server has already dropped what the
+   * change made stale, and this asks again for exactly those answers — the
+   * property list and the property's page after a property is edited — while
+   * everything else on the board stays as it is. Replayed with `force`, like
+   * `refreshAll`, so a tile shows its old rows until the new ones land rather
+   * than going blank.
+   */
+  refreshOps(connection: string, ops: readonly string[], now: number): void {
+    const prefixes = ops.map((op) => queryKeyOpPrefix(connection, op));
+    for (const [key, entry] of [...this.entries]) {
+      if (!entry.request || !prefixes.some((prefix) => key.startsWith(prefix))) continue;
+      void this.ensure({ ...entry.request, key, now, force: true });
+    }
   }
 
   /**

@@ -316,3 +316,20 @@ export const queryKey = (
  * asked to drop.
  */
 export const queryKeyPrefix = (connection: string): string => `${connection}.`;
+
+/**
+ * Every cached key for one endpoint on one connection.
+ *
+ * `queryKey` is `${connection}.${op}|…`, and neither an id nor an op id may
+ * contain `.` or `|`, so this prefix names exactly one endpoint's answers —
+ * which is what lets a change drop what it made stale and nothing else.
+ */
+export const queryKeyOpPrefix = (connection: string, op: string): string => `${connection}.${op}|`;
+
+/** The op a cache key belongs to, or undefined for a key of another shape. */
+export const opOfQueryKey = (connection: string, key: string): string | undefined => {
+  const prefix = queryKeyPrefix(connection);
+  if (!key.startsWith(prefix)) return undefined;
+  const end = key.indexOf("|", prefix.length);
+  return end > prefix.length ? key.slice(prefix.length, end) : undefined;
+};

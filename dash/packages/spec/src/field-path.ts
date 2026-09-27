@@ -34,3 +34,37 @@ export const readField = (row: unknown, path: string): unknown => {
   }
   return current;
 };
+
+/**
+ * The inverse of {@link readField}: one value placed at a dotted path, with
+ * every object on the way made if it is missing.
+ *
+ * Used to build request bodies, where the API's nesting is the only spelling
+ * it accepts — `Address.PostalCode` has to arrive as `{ Address: {
+ * PostalCode } }`, never as a flattened key. Returns a new object; the input
+ * is left alone, because it is usually a record somebody is still looking at.
+ */
+export const setField = (
+  target: Readonly<Record<string, unknown>>,
+  path: string,
+  value: unknown,
+): Record<string, unknown> => {
+  const parts = path.split(".");
+  const root: Record<string, unknown> = { ...target };
+  let current = root;
+  for (const [index, part] of parts.entries()) {
+    if (part === "__proto__" || part === "constructor" || part === "prototype") return root;
+    if (index === parts.length - 1) {
+      current[part] = value;
+      break;
+    }
+    const next = current[part];
+    const copy =
+      next && typeof next === "object" && !Array.isArray(next)
+        ? { ...(next as Record<string, unknown>) }
+        : {};
+    current[part] = copy;
+    current = copy;
+  }
+  return root;
+};

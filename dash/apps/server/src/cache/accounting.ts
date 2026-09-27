@@ -26,6 +26,12 @@ export interface ConnectionCost {
   servedStale: number;
   /** Roughly how much was transferred, for the ones that left. */
   bytesFetched: number;
+  /**
+   * Changes sent to the account — creates, updates, deletes, actions. Each
+   * is also an upstream call; counted apart because a change is the one kind
+   * of request somebody will want to find again.
+   */
+  writes: number;
   lastCallAt: number | null;
 }
 
@@ -37,6 +43,7 @@ const empty = (): ConnectionCost => ({
   rateLimited: 0,
   servedStale: 0,
   bytesFetched: 0,
+  writes: 0,
   lastCallAt: null,
 });
 
@@ -55,6 +62,14 @@ export class RequestAccounting {
     const entry = this.entry(connection);
     entry.upstreamCalls++;
     entry.bytesFetched += Math.round(bytes);
+    entry.lastCallAt = now;
+  }
+
+  /** A change sent to the account. Also an upstream call, and counted as one. */
+  wrote(connection: string, now: number): void {
+    const entry = this.entry(connection);
+    entry.writes++;
+    entry.upstreamCalls++;
     entry.lastCallAt = now;
   }
 

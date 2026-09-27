@@ -115,17 +115,89 @@ export class AdapterError extends Error {
    * duration back out of an English sentence is not a thing to ask of anyone.
    */
   readonly retryAfter?: string;
+  /**
+   * The status the API itself answered with, where it answered.
+   *
+   * `status` is this product's reading of the failure — every error the API
+   * gives that is not a refusal becomes a 502 — and that reading hides the one
+   * distinction some callers need: a 404 means "there is none", which is how
+   * a unit with no listing yet is told apart from a listing that failed to load.
+   */
+  readonly upstreamStatus?: number;
+  /**
+   * What the API said about a refused change, trimmed and with any secret
+   * taken out. A 422 that names the field it objected to is the only way a
+   * person can fix what they sent.
+   */
+  readonly detail?: string;
+  /**
+   * For a change: whether it is known that nothing was sent (`not-sent`), or
+   * the request went out and the answer was lost (`unknown`). Absent when the
+   * API answered, which says for itself what happened.
+   */
+  readonly outcome?: "not-sent" | "unknown";
 
   constructor(
     message: string,
-    options: { status?: number; userMessage?: string; retryAfter?: string } = {},
+    options: {
+      status?: number;
+      userMessage?: string;
+      retryAfter?: string;
+      upstreamStatus?: number;
+      detail?: string;
+      outcome?: "not-sent" | "unknown";
+    } = {},
   ) {
     super(message);
     this.name = "AdapterError";
     this.status = options.status ?? 502;
     this.userMessage = options.userMessage ?? message;
     if (options.retryAfter) this.retryAfter = options.retryAfter;
+    if (options.upstreamStatus !== undefined) this.upstreamStatus = options.upstreamStatus;
+    if (options.detail !== undefined) this.detail = options.detail;
+    if (options.outcome !== undefined) this.outcome = options.outcome;
   }
+}
+
+/**
+ * One change to send: the endpoint, the values for its path, and the body.
+ *
+ * Deliberately not an `OpSpec`. A read op is resolved through pagination, row
+ * paths and the time range, none of which a change has; and keeping the two
+ * types apart is what stops a write from ever being handed to `fetch`.
+ */
+export interface WriteRequest {
+  readonly op: {
+    readonly id: string;
+    readonly title: string;
+    readonly method: "POST" | "PUT" | "PATCH" | "DELETE";
+    readonly path: string;
+    readonly query: Readonly<Record<string, string | number | boolean>>;
+    readonly headers: Readonly<Record<string, string>>;
+    readonly auth?: import("@freebirdai/dash-spec").AuthSpec | undefined;
+    readonly authRequired?: boolean | undefined;
+  };
+  /** Every path parameter's value, as text. Encoded when the URL is built. */
+  readonly params: Readonly<Record<string, string>>;
+  readonly body?: unknown;
+  readonly contentType?: string;
+}
+
+export interface WriteResult {
+  readonly status: number;
+  /** What the API answered with: the record, usually, or `null`. */
+  readonly body: unknown;
+  /** Where a create says the new record lives, when it says. */
+  readonly location: string | null;
+  /** The URL as sent, with any query-string credential masked. */
+  readonly url: string;
+  readonly durationMs: number;
+}
+
+export interface WriteContext {
+  readonly now: number;
+  readonly signal?: AbortSignal;
+  readonly resolveSecret?: (keyRef: string) => Promise<string | null>;
 }
 
 /**

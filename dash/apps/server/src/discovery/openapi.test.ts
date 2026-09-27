@@ -133,7 +133,7 @@ describe("parseOpenApi", () => {
     expect(entry.origin).toBe("openapi");
   });
 
-  it("imports GET only — read-only by construction", () => {
+  it("keeps reads GET-only, and writes in a list of their own", () => {
     const withWrites = spec({
       paths: {
         "/charges": {
@@ -143,9 +143,122 @@ describe("parseOpenApi", () => {
         },
       },
     });
-    const { entry } = parseOpenApi(withWrites, SPEC_URL)!;
+    const { entry, totalOperations, totalWrites } = parseOpenApi(withWrites, SPEC_URL)!;
     expect(entry.ops).toHaveLength(1);
     expect(entry.ops[0]?.title).toBe("List");
+    expect(totalOperations).toBe(1);
+    expect(totalWrites).toBe(2);
+    expect(entry.writes.map((write) => [write.method, write.title])).toEqual([
+      ["POST", "Create a charge"],
+      ["DELETE", "Delete everything"],
+    ]);
+  });
+
+  describe("write endpoints", () => {
+    /*
+     * Shaped like a property-management API: a replace that requires what it
+     * does not change, a singleton written by PUT, an action with no body, and
+     * an upload no form can build.
+     */
+    const property = {
+      type: "object",
+      required: ["Name", "Address"],
+      properties: {
+        Id: { type: "integer", readOnly: true },
+        Name: { type: "string", maxLength: 100 },
+        YearBuilt: { type: "integer", format: "int32", nullable: true },
+        SubType: { type: "string", enum: ["SingleFamily", "MultiFamily"] },
+        OwnerIds: { type: "array", items: { type: "integer" } },
+        Address: {
+          type: "object",
+          required: ["PostalCode"],
+          properties: { PostalCode: { type: "string" }, City: { type: "string" } },
+        },
+        Notes: {
+          type: "object",
+          properties: { Body: { type: "string" } },
+          required: ["Body"],
+        },
+        Units: {
+          type: "array",
+          items: { type: "object", required: ["UnitNumber"], properties: { UnitNumber: { type: "string" } } },
+        },
+      },
+    };
+    const writesSpec = spec({
+      paths: {
+        "/rentals": {
+          get: { operationId: "ListRentals", summary: "List", responses: {} },
+          post: {
+            operationId: "CreateRental",
+            summary: "Create a property",
+            requestBody: { content: { "application/json": { schema: { allOf: [property] } } } },
+            responses: { "201": { content: { "application/json": { schema: property } } } },
+          },
+        },
+        "/rentals/{propertyId}": {
+          get: { operationId: "GetRental", summary: "Get", responses: {} },
+          put: {
+            operationId: "UpdateRental",
+            summary: "Update a property",
+            requestBody: { content: { "application/json": { schema: property } } },
+            responses: {},
+          },
+        },
+        "/rentals/{propertyId}/inactivationrequest": {
+          post: { operationId: "Inactivate", summary: "Inactivate a property", responses: { "204": {} } },
+        },
+        "/rentals/{propertyId}/images": {
+          post: {
+            operationId: "UploadImage",
+            summary: "Upload an image",
+            requestBody: { content: { "multipart/form-data": { schema: { type: "object" } } } },
+            responses: {},
+          },
+        },
+      },
+    });
+
+    it("reads each body into fields a form can ask for", () => {
+      const { entry } = parseOpenApi(writesSpec, SPEC_URL)!;
+      const create = entry.writes.find((write) => write.title === "Create a property")!;
+      expect(create).toMatchObject({ method: "POST", path: "/rentals", returns: "record", confidence: "declared" });
+      const fields = Object.fromEntries(create.body!.fields.map((field) => [field.path, field]));
+      // Written by the API, never sent.
+      expect(fields["Id"]).toBeUndefined();
+      expect(fields["Name"]).toMatchObject({ type: "string", required: true, maxLength: 100 });
+      // Not required is not the same promise as nullable.
+      expect(fields["YearBuilt"]).toMatchObject({ type: "integer", required: false, nullable: true, format: "int32" });
+      expect(fields["SubType"]?.enum).toEqual(["SingleFamily", "MultiFamily"]);
+      expect(fields["OwnerIds"]).toMatchObject({ type: "array", items: "integer" });
+      expect(fields["Address.PostalCode"]?.required).toBe(true);
+      // Required inside an object that is itself optional is not required.
+      expect(fields["Notes.Body"]?.required).toBe(false);
+      expect(fields["Units[].UnitNumber"]?.required).toBe(true);
+    });
+
+    it("keeps an endpoint no form can build, and says why", () => {
+      const { entry } = parseOpenApi(writesSpec, SPEC_URL)!;
+      const upload = entry.writes.find((write) => write.title === "Upload an image")!;
+      expect(upload.body).toMatchObject({ contentType: "multipart/form-data", unsupported: "multipart/form-data" });
+      const inactivate = entry.writes.find((write) => write.title === "Inactivate a property")!;
+      expect(inactivate).toMatchObject({ method: "POST", returns: "none" });
+      expect(inactivate.body).toBeUndefined();
+    });
+
+    it("never renames a read to make room for a write", () => {
+      const noIds = spec({
+        paths: {
+          "/items": {
+            post: { summary: "Create", responses: {} },
+            get: { summary: "List", responses: {} },
+          },
+        },
+      });
+      const { entry } = parseOpenApi(noIds, SPEC_URL)!;
+      expect(entry.ops.map((op) => op.id)).toEqual(["items"]);
+      expect(entry.writes.map((write) => write.id)).toEqual(["items"]);
+    });
   });
 
   it("skips deprecated operations", () => {

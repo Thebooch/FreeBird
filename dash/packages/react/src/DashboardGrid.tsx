@@ -11,7 +11,7 @@ import { useMeasure } from "@freebirdai/dash-components";
 import { LazyWidget } from "./LazyWidget.jsx";
 import { WidgetErrorBoundary } from "./WidgetErrorBoundary.jsx";
 import { WidgetGroup } from "./WidgetGroup.jsx";
-import { WidgetShell } from "./WidgetShell.jsx";
+import { WidgetShell, type RecordCreateOffer, type RecordRowActions } from "./WidgetShell.jsx";
 import { useDashboard } from "./context.jsx";
 import type { OpenReference } from "./entityDetail.js";
 import { completeLayout, persistCells } from "./layout.js";
@@ -67,6 +67,8 @@ export const DashboardGrid = ({
   onFrameWidget,
   onOpenRecordPage,
   onOpenReference,
+  onCreateRecord,
+  onRowActions,
   editing,
 }: {
   onLayoutChange?: (cells: LayoutCell[]) => void;
@@ -77,6 +79,10 @@ export const DashboardGrid = ({
   onOpenRecordPage?: (widgetId: string, row: Record<string, unknown>) => void;
   /** Open the record a cell names. Absent means references render as plain text. */
   onOpenReference?: OpenReference;
+  /** Make a new record of the kind a widget shows. Absent means no widget offers it. */
+  onCreateRecord?: RecordCreateOffer;
+  /** Change the record behind a row. Absent means no row offers it. */
+  onRowActions?: RecordRowActions;
   /** Drag and resize are off unless the board is in edit mode. */
   editing?: boolean;
 }): JSX.Element => {
@@ -298,6 +304,8 @@ export const DashboardGrid = ({
                       {...(onFrameWidget ? { onFrameWidget } : {})}
                       {...(onOpenRecordPage ? { onOpenRecordPage } : {})}
                       {...(onOpenReference ? { onOpenReference } : {})}
+                      {...(onCreateRecord ? { onCreateRecord } : {})}
+                      {...(onRowActions ? { onRowActions } : {})}
                     />
                   ) : (
                     <WidgetErrorBoundary widgetTitle={unit.widget.title}>
@@ -309,6 +317,8 @@ export const DashboardGrid = ({
                         {...(onFrameWidget ? { onFrame: onFrameWidget } : {})}
                         {...(onOpenRecordPage ? { onOpenPage: onOpenRecordPage } : {})}
                         {...(onOpenReference ? { onOpenReference } : {})}
+                        {...(onCreateRecord ? { onCreateRecord } : {})}
+                        {...(onRowActions ? { onRowActions } : {})}
                       />
                     </WidgetErrorBoundary>
                   )}

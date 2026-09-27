@@ -4,6 +4,7 @@ import {
   Menu,
   Message,
   Pagination,
+  RowActions,
   SearchInput,
   StatusPill,
   Toolbar,
@@ -252,6 +253,8 @@ export const Table = (props: WidgetRenderProps): JSX.Element => {
                     </th>
                   );
                 })}
+                {/* A column for each row's changes, after the bound ones so none of theirs moves. */}
+                {props.rowActions && <th className="dash-table__actions" aria-label="Changes" />}
               </tr>
             </thead>
           )}
@@ -321,6 +324,11 @@ export const Table = (props: WidgetRenderProps): JSX.Element => {
                           ))}
                     </td>
                   ))}
+                  {props.rowActions && (
+                    <td className="dash-table__actions">
+                      <RowActions row={row} actions={props.rowActions} label={titleFor(row[columns[0] ?? ""])} />
+                    </td>
+                  )}
                 </tr>
               );
             })}
@@ -355,6 +363,7 @@ export const Table = (props: WidgetRenderProps): JSX.Element => {
                     </td>
                   );
                 })}
+                {props.rowActions && <td />}
               </tr>
             </tfoot>
           )}

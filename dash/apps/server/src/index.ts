@@ -145,6 +145,9 @@ try {
 const app = buildServer({
   // The keeper: see `keeper/keeper.ts`. On here, off in tests.
   keeper: true,
+  // Every connection can change records; one whose write endpoints were never
+  // read has them read from its published specification. Off in tests.
+  autoReadWrites: true,
   rhythms,
   store,
   keys,

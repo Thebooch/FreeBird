@@ -7,12 +7,14 @@ export { ParamBar } from "./ParamBar.jsx";
 export { WidgetInspector } from "./WidgetInspector.jsx";
 export { WidgetGroup, arrangementFor } from "./WidgetGroup.jsx";
 export { WidgetShell } from "./WidgetShell.jsx";
+export type { RecordCreateOffer, RecordRowActions } from "./WidgetShell.jsx";
 
 export { DashboardProvider, useDashboard, useOptionalDashboard } from "./context.jsx";
 export type {
   DashboardContextValue,
   DashboardControls,
   DashboardProviderProps,
+  RecordChangeSignal,
 } from "./context.jsx";
 
 export { clampCell, completeLayout, persistCells, solveLayout } from "./layout.js";
@@ -51,6 +53,13 @@ export { WidgetDetail } from "./WidgetDetail.js";
 export { RecordView } from "./RecordView.jsx";
 export { RecordPage, missingTokens } from "./RecordPage.jsx";
 export { EntityRecordPage } from "./EntityRecordPage.jsx";
+export type { RecordChangeRequest } from "./EntityRecordPage.jsx";
+export { addLabel, changeRowActions, recordChangeRequests, recordToolbar } from "./writes/requests.js";
+export type { RecordChangeBase, RecordToolbar, ToolbarEntry } from "./writes/requests.js";
+export { RecordForm, changedValues } from "./writes/RecordForm.jsx";
+export type { FormValues, RecordFormProps, ReferenceOption } from "./writes/RecordForm.jsx";
+export { WriteReview } from "./writes/WriteReview.jsx";
+export type { WriteReviewProps } from "./writes/WriteReview.jsx";
 export {
   detailPanes,
   headerPane,

@@ -1,6 +1,6 @@
 import { isSlotHidden, settingBool, settingNumber } from "@freebirdai/dash-spec";
 import { statusTone } from "../palette.js";
-import { Message, StatusPill } from "../ui/index.js";
+import { Message, RowActions, StatusPill } from "../ui/index.js";
 import { makeFormatter, roleColumn } from "../resolve.js";
 import type { WidgetRenderProps } from "../types.js";
 import { bucketBy } from "./collectionModel.js";
@@ -8,12 +8,13 @@ import { bucketBy } from "./collectionModel.js";
 /**
  * Records in columns, grouped by a status.
  *
- * Read-only, and that is a property of the product rather than an omission:
- * every spec this runs is GET-only by construction, so a card that could be
- * dragged into another column would be promising a write nothing can perform.
- * The cards therefore carry no drag affordance at all — the same rule the rest
- * of the library follows about never advertising an interaction that will not
- * happen.
+ * Read-only, and deliberately so: every spec this runs is GET-only by
+ * construction. Changing a record is possible, but only through a review a
+ * person approves — never as a side effect of a gesture — so a card that could
+ * be dragged into another column would be promising a write that would not
+ * happen the way it looks. The cards carry no drag affordance, the same rule
+ * the rest of the library follows about never advertising an interaction that
+ * will not happen.
  */
 export const Board = (props: WidgetRenderProps): JSX.Element => {
   const groupColumn = roleColumn(props.roles, "group");
@@ -72,6 +73,7 @@ export const Board = (props: WidgetRenderProps): JSX.Element => {
                   : {})}
               >
                 <div className="dash-board__title">{formatTitle(row[titleColumn])}</div>
+                <RowActions row={row} actions={props.rowActions} label={formatTitle(row[titleColumn])} />
                 {showSubtitle && subtitleColumn && row[subtitleColumn] != null && (
                   <div className="dash-board__subtitle">{formatSubtitle(row[subtitleColumn])}</div>
                 )}

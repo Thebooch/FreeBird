@@ -111,4 +111,4 @@ export { OTHER_KEY, buildCategories, buildSeries } from "./series.js";
 export type { BuildSeriesInput, BuiltSeries, CategoryDatum, SeriesPoint } from "./series.js";
 
 export { DASH_STYLES } from "./theme.js";
-export type { WidgetComponent, WidgetRenderProps } from "./types.js";
+export type { RowAction, WidgetComponent, WidgetRenderProps } from "./types.js";

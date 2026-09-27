@@ -198,3 +198,5 @@ export { SYSTEM_PROMPT, buildUserPrompt, proposalSchema, proposeWidgetTool } fro
 export type { Proposal } from "./tool.js";
 
 export { draftPatchSchema } from "./concierge/patch.js";
+export { buildMatchPrompt, matchFieldsSchema, matchFieldsTool, matchWriteFields } from "./writes.js";
+export type { MatchFieldsInput, MatchFieldsProposal, MatchFieldsResult } from "./writes.js";

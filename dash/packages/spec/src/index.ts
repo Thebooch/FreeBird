@@ -209,7 +209,44 @@ export type { BriefControl, BriefOption, BriefOptionsInput } from "./brief-optio
 
 export { recompileWidget } from "./recompile.js";
 
-export { readField } from "./field-path.js";
+export { readField, setField } from "./field-path.js";
+export {
+  WRITES_VERSION,
+  WRITE_METHODS,
+  pathShape,
+  writeBodySchema,
+  writeFieldSchema,
+  writeMethodSchema,
+  writeOpDefSchema,
+  writesListSchema,
+} from "./write.js";
+export type {
+  WriteBody,
+  WriteCommitView,
+  WriteDiffRow,
+  WriteField,
+  WriteFieldError,
+  WriteFormField,
+  WriteFormView,
+  WriteMethod,
+  WriteOpDef,
+  WriteReviewView,
+} from "./write.js";
+export { actionCreates, MODE_PREFERENCE, pairedAction, writeRoleOf } from "./write-roles.js";
+export type { RolePaths, WriteMode, WriteRole } from "./write-roles.js";
+export { mapWriteFields, unmappedFields } from "./write-map.js";
+export {
+  PERMISSIONS,
+  ROLES,
+  inviteSchema,
+  memberSchema,
+  permissionSchema,
+  principalSchema,
+  roleSchema,
+  scopeCapability,
+  workspaceSchema,
+} from "./access.js";
+export type { Invite, Member, Permission, Principal, Role, Scope, Workspace } from "./access.js";
 export { bundleOf, bundlesOf, ownFields } from "./bundles.js";
 export type { Bundle } from "./bundles.js";
 export { parentsFrom, recordKeyString, valueForParam } from "./record-key.js";
@@ -233,6 +270,8 @@ export type { ReferenceRow } from "./reference.js";
 
 export {
   entityGraph,
+  writesEmpty,
+  writesView,
   entityLinkViews,
   fieldLexicon,
   entityPageView,
@@ -251,6 +290,10 @@ export type {
   EntityPageView,
   EntityReference,
   EntityReferenceView,
+  EntityWrites,
+  EntityWritesView,
+  WriteKindView,
+  WriteTarget,
   LinkedPart,
   OmittedSection,
   ReachCost,
@@ -381,7 +424,9 @@ export {
   interpolateValue,
   parseTokens,
   quantiseEnd,
+  opOfQueryKey,
   queryKey,
+  queryKeyOpPrefix,
   queryKeyPrefix,
   rangePresetSchema,
   resolveGrain,
@@ -471,6 +516,7 @@ export {
   resolveSameNoun,
   sharedPathPrefix,
   relationSchema,
+  isSingletonOp,
   resourceForOp,
   resourceSchema,
   singularNoun,
