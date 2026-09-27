@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/codegen",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "FreeBird codegen: turn a Registration Manifest into registry files and integration steps. Single source of truth for the CLI and FreeBird Studio.",
   "license": "MIT",
   "repository": {

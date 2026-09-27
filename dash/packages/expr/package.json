@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/dash-expr",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "FreeBird Dash safe expression engine: a hand-rolled, non-Turing-complete path and expression language with no eval.",
   "license": "MIT",
   "repository": {
