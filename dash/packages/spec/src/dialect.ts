@@ -282,6 +282,13 @@ export const catalogEntrySchema = z.object({
          * empty means it described one with no fields.
          */
         fields: z.array(mappedFieldSchema).max(300).optional(),
+        /**
+         * Where `fields` came from: the specification (`declared`, the default)
+         * or a real read, where the documentation declared none (`observed`).
+         * Observed fields are names and kinds only — which values one account
+         * holds belongs to that account, never to a shared entry.
+         */
+        fieldsFrom: z.enum(["declared", "observed"]).optional(),
       }),
     )
     .default([]),

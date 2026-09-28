@@ -459,6 +459,12 @@ describe("mapDialectProposal", () => {
     expect(entry?.origin).toBe("docs");
   });
 
+  /* Measurement 1: an API documented in prose had no resources, so no request could reach it. */
+  it("reads the record structure off the paths the prose named, as a specification's are", () => {
+    const { entry } = mapDialectProposal(base);
+    expect(entry?.resources).toEqual([expect.objectContaining({ id: "thing", listOp: "things" })]);
+  });
+
   it("refuses a pagination scheme that arrived without its parameter", () => {
     const { entry, warnings } = mapDialectProposal({ ...base, paginationKind: "cursor" });
     // Better single-page than a scheme that silently returns page one.

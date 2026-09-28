@@ -84,6 +84,24 @@ describe("deriveResourceGraph — top-level shapes", () => {
       expect(resource.verified).toBe(false);
     }
   });
+
+  /* A search, an export, an API with no by-id reads: its rows are records all the same. */
+  it("makes a collection with no by-id endpoint a resource, with no record page to open", () => {
+    const listOnly = [
+      ...crateCo,
+      op("pallets", "/v1/pallets", "Pallets"),
+      op("cartonSearch", "/v1/cartons/search", "Search cartons"),
+      op("summary", "/v1/summary", "Summary", "summary"),
+    ];
+    expect(find(listOnly, "pallet")).toMatchObject({ listOp: "pallets" });
+    expect(find(listOnly, "pallet")?.detailOp).toBeUndefined();
+    /* Named for what it holds, not how it is asked for. */
+    expect(find(listOnly, "carton")).toMatchObject({ listOp: "cartonSearch" });
+    /* One record, not a collection. */
+    expect(graph(listOnly).resources.some((one) => one.listOp === "summary")).toBe(false);
+    /* Every resource derived before stays exactly as it was. */
+    expect(graph(listOnly).resources.slice(0, graph(crateCo).resources.length)).toEqual(graph(crateCo).resources);
+  });
 });
 
 describe("deriveResourceGraph — collections inside a record", () => {

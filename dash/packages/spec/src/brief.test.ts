@@ -110,6 +110,51 @@ describe("compileBrief", () => {
     });
   });
 
+  /* Unscripted benchmark, 2026-09-28: a wrapped list was read as one record, and 1,234 invoices counted as 1. */
+  it("reads records where the endpoint puts them, not at the top of the response", () => {
+    const wrapped = compileBrief({
+      brief: { entity: "task", intent: "measure" },
+      entity: entity({}),
+      resource: resource(),
+      connection: "api",
+      id: "w1",
+      rowsPathOf: (op) => (op === "tasks_list" ? "$.data" : undefined),
+    });
+    expect(wrapped.widget?.pipeline[0]).toEqual({ op: "extract", path: "$.data" });
+    /* A caller that does not say gets what every caller had. */
+    expect(compile({ intent: "measure" }).widget?.pipeline[0]).toEqual({ op: "extract", path: "$" });
+  });
+
+  /* Unscripted benchmark, 2026-09-28: "done tasks" counted every task, and nothing said so. */
+  it("narrows a number by the values the request named, and says so", () => {
+    const result = compile({ intent: "measure", filters: [{ field: "Status", values: ["Done"] }] });
+    expect(result.errors).toEqual([]);
+    const filter = result.widget?.pipeline.find((step) => step.op === "filter");
+    expect(filter).toEqual({ op: "filter", where: 'lower(string(Status)) in ["done"]' });
+    /* Before the number is taken, not after it. */
+    expect(stepOps(result).indexOf("filter")).toBeLessThan(stepOps(result).indexOf("group"));
+    expect(result.notes.join(" ")).toMatch(/Only Tasks whose Status is Done are counted/);
+    /* A list keeps its visible strip instead: nothing is baked into it. */
+    expect(stepOps(compile({ intent: "records", filters: [{ field: "Status", values: ["Done"] }] }))).not.toContain("filter");
+  });
+
+  /* Unscripted benchmark, 2026-09-28: "VIP contacts" compared a flag with the word "VIP", and counted 0. */
+  it("narrows a number by a flag as the flag being set, unless the words say not", () => {
+    const withFlag = {
+      fields: [
+        { path: "Id", visibility: "hidden" },
+        { path: "Title", label: "Summary", visibility: "primary" },
+        { path: "Status", label: "Status", visibility: "primary" },
+        { path: "urgent", label: "Urgent", kinds: ["boolean"], visibility: "detail" },
+      ],
+    };
+    const set = compile({ intent: "measure", filters: [{ field: "urgent", values: ["Urgent"] }] }, withFlag);
+    expect(set.widget?.pipeline.find((step) => step.op === "filter")).toEqual({ op: "filter", where: "urgent == true" });
+    expect(set.notes.join(" ")).toMatch(/Only Tasks with Urgent are counted/);
+    const unset = compile({ intent: "measure", filters: [{ field: "urgent", values: ["not urgent"] }] }, withFlag);
+    expect(unset.widget?.pipeline.find((step) => step.op === "filter")).toEqual({ op: "filter", where: "urgent == false" });
+  });
+
   it("offers no filter strip over buckets, which are not records", () => {
     // A strip on a chart would filter its own bars, which is not what anybody
     // means by a filter.

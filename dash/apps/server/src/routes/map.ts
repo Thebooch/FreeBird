@@ -468,6 +468,165 @@ const mergeRelations = (
     };
   });
 
+
+/**
+ * The describing pass over one catalog entry: record types, then which of
+ * their fields point at other records, checkpointed as it goes.
+ *
+ * Shared by the route a person starts and by the integration check, which
+ * starts it by itself once a read has shown fields the documentation never
+ * declared. Batches are keyed by their content, so a pass that is not forced
+ * describes only the resources whose fields are new, and keeps the rest.
+ */
+export const describeCatalogRecords = async (
+  catalog: NonNullable<MapRouteDeps["catalog"]>,
+  entry: CatalogEntry,
+  llm: LlmAdapter,
+  force: boolean,
+) => {
+  const ops = entry.ops.map((op) => ({
+    id: op.id,
+    title: op.title,
+    path: op.path,
+    ...(op.description ? { description: op.description } : {}),
+    ...(op.fields ? { fields: op.fields } : {}),
+  }));
+
+  /*
+   * One progress list for both passes.
+   *
+   * Safe because a batch key is a content hash: each pass recognises
+   * only its own and ignores the other's, so a resumed run picks up
+   * wherever it stopped without either pass having to know the other
+   * exists.
+   */
+  const batches =
+    !force && entry.entityProgress?.version === ENTITY_VERSION
+      ? entry.entityProgress.batches
+      : [];
+
+  const checkpoint = (entities: readonly CatalogEntry["entities"][number][], done: readonly string[]): void => {
+    const current = catalog.get(entry.id) ?? entry;
+    catalog.put({
+      ...current,
+      entities: [...entities],
+      // Cleared while a pass is mid-flight: a half-described API must
+      // not read as finished if the next batch never lands.
+      entityVersion: undefined,
+      entityProgress: { version: ENTITY_VERSION, batches: [...done] },
+    });
+  };
+
+  const described = await describeEntities(
+    llm,
+    { apiTitle: entry.title, resources: entry.resources, ops },
+    {
+      completedBatches: batches,
+      existing: entry.entities,
+      onCheckpoint: (result: EntityResult) =>
+        checkpoint(result.entities, result.completedBatches),
+    },
+  );
+
+  /*
+   * Where each record type's rows live, so two collections sharing a
+   * noun can be told apart by their section of the API. The same
+   * evidence `resolveSameNoun` reads, handed to the model as the only
+   * thing that distinguishes them.
+   */
+  const pathOf = (id: string): string | undefined => {
+    const listOp = entry.resources.find((resource) => resource.id === id)?.listOp;
+    return listOp ? ops.find((op) => op.id === listOp)?.path : undefined;
+  };
+
+  const linked =
+    described.entities.length > 0
+      ? await classifyReferences(
+          llm,
+          { apiTitle: entry.title, entities: described.entities, pathOf },
+          {
+            completedBatches: batches,
+            onCheckpoint: (result: ReferenceResult) =>
+              checkpoint(result.entities, [
+                ...described.completedBatches,
+                ...result.completedBatches,
+              ]),
+          },
+        )
+      : {
+          entities: described.entities,
+          errors: [] as readonly string[],
+          skipped: [] as readonly string[],
+          completedBatches: [] as readonly string[],
+          considered: 0,
+          linked: 0,
+        };
+
+  const errors = [...described.errors, ...linked.errors];
+  const saved = catalog.put({
+    ...entry,
+    /*
+     * Merged rather than replaced: a re-description must not throw away
+     * evidence gathered from a live account, which is the one thing a
+     * model cannot produce.
+     */
+    entities: mergeDescribedEntities(entry.entities ?? [], linked.entities),
+    entitiesAt: new Date().toISOString(),
+    // Only a clean run marks the pass done; a partial one stays
+    // resumable and says what it is missing.
+    entityVersion: errors.length === 0 ? ENTITY_VERSION : undefined,
+    entityProgress: {
+      version: ENTITY_VERSION,
+      batches: [...described.completedBatches, ...linked.completedBatches],
+    },
+    updatedAt: new Date().toISOString(),
+  });
+
+  return {
+    ...entityState(saved),
+    ranPass: true,
+    entitiesAt: saved.entitiesAt ?? null,
+    /*
+     * How many fields were *asked* about against how many became links.
+     * The difference is the honest part: a candidate the model refused
+     * is a field that looks like a reference and is not one, and that
+     * number being large is information rather than a fault.
+     */
+    considered: linked.considered,
+    linked: linked.linked,
+    errors,
+    /*
+     * Readings the passes declined. Not errors — they worked and refused
+     * to guess — but a record type left unnamed or a link left unmade
+     * needs a reason attached or it reads as the pass not noticing.
+     */
+    skipped: [...described.skipped, ...linked.skipped],
+  };
+};
+
+/**
+ * Describe what has no description yet, by itself — for the integration check.
+ *
+ * Nothing to press: the check read endpoints whose documentation declared no
+ * fields, recorded what the reads showed, and this describes the record types
+ * that now can be. One run at a time per API, like the route's.
+ */
+export const describeMissingRecords = async (
+  deps: Pick<MapRouteDeps, "catalog" | "llm" | "describing" | "onDescribed">,
+  entryId: string,
+): Promise<void> => {
+  const entry = deps.catalog?.get(entryId);
+  const llm = deps.llm("entity");
+  if (!deps.catalog || !entry || !llm || entry.resources.length === 0 || deps.describing?.has(entry.id)) return;
+  deps.describing?.add(entry.id);
+  try {
+    await describeCatalogRecords(deps.catalog, entry, llm, false);
+  } finally {
+    deps.describing?.delete(entry.id);
+    deps.onDescribed?.(entry.id);
+  }
+};
+
 export const mapRoutes =
   (deps: MapRouteDeps) =>
   async (app: FastifyInstance): Promise<void> => {
@@ -717,124 +876,7 @@ export const mapRoutes =
         }
         deps.describing?.add(entry.id);
         try {
-        const ops = entry.ops.map((op) => ({
-          id: op.id,
-          title: op.title,
-          path: op.path,
-          ...(op.description ? { description: op.description } : {}),
-          ...(op.fields ? { fields: op.fields } : {}),
-        }));
-
-        /*
-         * One progress list for both passes.
-         *
-         * Safe because a batch key is a content hash: each pass recognises
-         * only its own and ignores the other's, so a resumed run picks up
-         * wherever it stopped without either pass having to know the other
-         * exists.
-         */
-        const batches =
-          !force && entry.entityProgress?.version === ENTITY_VERSION
-            ? entry.entityProgress.batches
-            : [];
-
-        const checkpoint = (entities: readonly CatalogEntry["entities"][number][], done: readonly string[]): void => {
-          const current = deps.catalog!.get(entry.id) ?? entry;
-          deps.catalog!.put({
-            ...current,
-            entities: [...entities],
-            // Cleared while a pass is mid-flight: a half-described API must
-            // not read as finished if the next batch never lands.
-            entityVersion: undefined,
-            entityProgress: { version: ENTITY_VERSION, batches: [...done] },
-          });
-        };
-
-        const described = await describeEntities(
-          llm,
-          { apiTitle: entry.title, resources: entry.resources, ops },
-          {
-            completedBatches: batches,
-            existing: entry.entities,
-            onCheckpoint: (result: EntityResult) =>
-              checkpoint(result.entities, result.completedBatches),
-          },
-        );
-
-        /*
-         * Where each record type's rows live, so two collections sharing a
-         * noun can be told apart by their section of the API. The same
-         * evidence `resolveSameNoun` reads, handed to the model as the only
-         * thing that distinguishes them.
-         */
-        const pathOf = (id: string): string | undefined => {
-          const listOp = entry.resources.find((resource) => resource.id === id)?.listOp;
-          return listOp ? ops.find((op) => op.id === listOp)?.path : undefined;
-        };
-
-        const linked =
-          described.entities.length > 0
-            ? await classifyReferences(
-                llm,
-                { apiTitle: entry.title, entities: described.entities, pathOf },
-                {
-                  completedBatches: batches,
-                  onCheckpoint: (result: ReferenceResult) =>
-                    checkpoint(result.entities, [
-                      ...described.completedBatches,
-                      ...result.completedBatches,
-                    ]),
-                },
-              )
-            : {
-                entities: described.entities,
-                errors: [] as readonly string[],
-                skipped: [] as readonly string[],
-                completedBatches: [] as readonly string[],
-                considered: 0,
-                linked: 0,
-              };
-
-        const errors = [...described.errors, ...linked.errors];
-        const saved = deps.catalog.put({
-          ...entry,
-          /*
-           * Merged rather than replaced: a re-description must not throw away
-           * evidence gathered from a live account, which is the one thing a
-           * model cannot produce.
-           */
-          entities: mergeDescribedEntities(entry.entities ?? [], linked.entities),
-          entitiesAt: new Date().toISOString(),
-          // Only a clean run marks the pass done; a partial one stays
-          // resumable and says what it is missing.
-          entityVersion: errors.length === 0 ? ENTITY_VERSION : undefined,
-          entityProgress: {
-            version: ENTITY_VERSION,
-            batches: [...described.completedBatches, ...linked.completedBatches],
-          },
-          updatedAt: new Date().toISOString(),
-        });
-
-        return {
-          ...entityState(saved),
-          ranPass: true,
-          entitiesAt: saved.entitiesAt ?? null,
-          /*
-           * How many fields were *asked* about against how many became links.
-           * The difference is the honest part: a candidate the model refused
-           * is a field that looks like a reference and is not one, and that
-           * number being large is information rather than a fault.
-           */
-          considered: linked.considered,
-          linked: linked.linked,
-          errors,
-          /*
-           * Readings the passes declined. Not errors — they worked and refused
-           * to guess — but a record type left unnamed or a link left unmade
-           * needs a reason attached or it reads as the pass not noticing.
-           */
-          skipped: [...described.skipped, ...linked.skipped],
-        };
+        return await describeCatalogRecords(deps.catalog, entry, llm, force);
         } finally {
           deps.describing?.delete(entry.id);
           deps.onDescribed?.(entry.id);

@@ -1435,8 +1435,14 @@ export const parseOpenApi = (
       ...(detail ? { description: detail.slice(0, 400) } : {}),
       ...(fields.length > 0 ? { fields } : {}),
       path: templatePath(located.path),
-      archetype: shape.archetype,
-      ...(shape.rowsPath ? { rowsPath: shape.rowsPath } : {}),
+      /*
+       * One record per line, or per row: a collection, whatever its schema
+       * says (usually just "string"). Read as one summary, it was never a
+       * resource, so its records could never be asked for (measurement 1).
+       */
+      ...(format === "response.ndjson" || format === "response.csv"
+        ? { archetype: "list" as const, rowsPath: "$" }
+        : { archetype: shape.archetype, ...(shape.rowsPath ? { rowsPath: shape.rowsPath } : {}) }),
       ...(totalPath ? { totalPath } : {}),
       // Strip the seeding-only field; the rest is the declared contract.
       params: params.map(({ value: _seed, ...param }) => param),

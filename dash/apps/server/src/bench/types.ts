@@ -8,7 +8,8 @@ import type { CredentialBroker } from "../auth/broker.js";
  * document is the contract, and these types are its shape.
  */
 
-export type Split = "dev" | "heldout";
+/** `real`: public APIs reached over the network, run by hand. See `providers/real.ts`. */
+export type Split = "dev" | "heldout" | "real";
 
 export interface BenchRequest {
   readonly method: string;
@@ -83,6 +84,13 @@ export interface MockProvider {
   handle(request: BenchRequest): BenchResponse;
   /** Forget any state, before each scenario. */
   reset?(): void;
+  /** Reached over the network rather than in-process: a real API. */
+  readonly live?: boolean;
+  /**
+   * Whether the data behind the answer keys is still what the API holds: null
+   * when it is, the reason when not. A stale key is reported, never scored.
+   */
+  readonly freshness?: (http: HttpFetch) => Promise<string | null>;
   /**
    * How a developer who read the docs would configure it, by hand.
    *

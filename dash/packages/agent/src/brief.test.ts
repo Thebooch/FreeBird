@@ -70,6 +70,30 @@ describe("briefCandidates", () => {
     );
   });
 
+  /* Unscripted benchmark, 2026-09-28: a VIP flag and an untagged total were never offered, so neither could be asked for. */
+  it("offers flags to narrow by, and untagged numbers to add up, but never an identity", () => {
+    const [candidate] = briefCandidates([
+      {
+        connection: "api",
+        title: "The API",
+        entities: [
+          entity({
+            fields: [
+              { path: "Id", visibility: "hidden" },
+              { path: "Status", label: "Status", visibility: "primary" },
+              { path: "vip", label: "VIP", kinds: ["boolean"], visibility: "detail" },
+              { path: "total", label: "Order total", kinds: ["number"], visibility: "detail" },
+              { path: "customer_id", label: "Customer", kinds: ["number"], visibility: "detail" },
+            ],
+          }),
+        ],
+      },
+    ]);
+    expect(candidate?.fields.find((field) => field.path === "vip")?.role).toBe("narrow");
+    expect(candidate?.fields.find((field) => field.path === "total")?.role).toBe("total");
+    expect(candidate?.fields.some((field) => field.path === "customer_id")).toBe(false);
+  });
+
   it("marks a reference list as not something to start from", () => {
     expect(briefCandidates([{ connection: "api", title: "The API", entities: [glossary] }])[0]?.starting).toBe(false);
     expect(briefCandidates([{ connection: "api", title: "The API", entities: [entity({})] }])[0]?.starting).toBe(true);
@@ -149,6 +173,30 @@ describe("writeBrief", () => {
       groupBy: "Status",
       measure: { agg: "sum", field: "Cost" },
     });
+  });
+
+  /* Unscripted benchmark, 2026-09-28: a sum with nothing to add up compiled into no widget at all. */
+  it("sends back a sum that does not say what to add up, once", async () => {
+    const llm = fakeLlm([
+      { args: { entity: "task", intent: "measure", measureAgg: "sum", reason: "Total cost." } },
+      { args: { entity: "task", intent: "measure", measureAgg: "sum", measureField: "Cost", reason: "Total cost." } },
+    ]);
+    const result = await writeBrief(llm, { intent: "what does the work cost", candidates });
+    expect(result.brief).toMatchObject({ intent: "measure", measure: { agg: "sum", field: "Cost" } });
+    expect(llm.calls).toHaveLength(2);
+    expect(String(llm.calls[1]!.messages.at(-1)!.content)).toMatch(/measureField is missing/);
+  });
+
+  it("takes a field named by its label as that field, and sends back one named by a description", async () => {
+    const byLabel = fakeLlm([{ args: { entity: "task", intent: "compare", groupBy: "category", reason: "By category." } }]);
+    expect((await writeBrief(byLabel, { intent: "tasks per category", candidates })).brief?.groupBy).toBe("Category.Name");
+    const described = fakeLlm([
+      { args: { entity: "task", intent: "measure", measureAgg: "sum", measureField: "total cost", reason: "Cost." } },
+      { args: { entity: "task", intent: "measure", measureAgg: "sum", measureField: "Cost", reason: "Cost." } },
+    ]);
+    const result = await writeBrief(described, { intent: "what does it all cost", candidates });
+    expect(result.brief?.measure).toEqual({ agg: "sum", field: "Cost" });
+    expect(String(described.calls[1]!.messages.at(-1)!.content)).toMatch(/"total cost" is not a field/);
   });
 
   it("carries a narrowing phrase as values on a filter", async () => {

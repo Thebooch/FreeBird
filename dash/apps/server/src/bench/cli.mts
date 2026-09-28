@@ -26,7 +26,7 @@ const flag = (name: string): string | undefined => {
 };
 
 const split = (flag("split") ?? "dev") as Split;
-if (split !== "dev" && split !== "heldout") throw new Error(`unknown split "${split}"`);
+if (split !== "dev" && split !== "heldout" && split !== "real") throw new Error(`unknown split "${split}"`);
 const checkpoint = flag("checkpoint");
 if (split === "heldout" && !checkpoint) {
   console.error(
@@ -35,9 +35,16 @@ if (split === "heldout" && !checkpoint) {
   process.exit(2);
 }
 const live = args.includes("--live");
+/* The integrator chooses the endpoint and the measure itself, through the product's brief path. */
+const unscripted = args.includes("--unscripted");
 const which = flag("integrator") ?? "agent";
 if (which !== "agent" && which !== "baseline") throw new Error(`unknown integrator "${which}"`);
 const only = flag("only")?.split(",");
+/* Real APIs are documented in prose, read with a model, and reached over the network: by hand, with a model. */
+if (split === "real" && !live) {
+  console.error("The real split reads real documentation with a model: run it with --live. It reaches the network.");
+  process.exit(2);
+}
 
 let llm = null;
 let model = "scripted per provider";
@@ -55,7 +62,7 @@ if (live) {
 const scores = await runSuite({
   split,
   integrator: () => (which === "agent" ? agentIntegrator() : baselineIntegrator()),
-  scripted: true,
+  scripted: !unscripted,
   ...(live ? { llm } : {}),
   ...(only ? { only } : {}),
 });
@@ -64,7 +71,7 @@ const date = new Date().toISOString();
 const report = reportMarkdown(scores, {
   split,
   integrator: which,
-  scripted: true,
+  scripted: !unscripted,
   model,
   date,
   ...(checkpoint ? { checkpoint } : {}),
@@ -78,7 +85,7 @@ mkdirSync(results, { recursive: true });
  */
 const base = `${date.slice(0, 10)}-${split}-${which}${checkpoint ? `-${checkpoint.replace(/[^a-z0-9]+/gi, "-")}` : ""}${
   only ? `-only-${only.join("-").replace(/[^a-z0-9-]+/gi, "-")}` : ""
-}${live ? "-live" : ""}`;
+}${unscripted ? "-unscripted" : ""}${live ? "-live" : ""}`;
 let stem = base;
 for (let copy = 2; existsSync(join(results, `${stem}.md`)) || existsSync(join(results, `${stem}.json`)); copy++)
   stem = `${base}-${copy}`;

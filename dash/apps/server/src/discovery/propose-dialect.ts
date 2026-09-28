@@ -6,6 +6,7 @@ import {
   type CapabilityId,
   capabilityNote,
   catalogEntrySchema,
+  deriveResourceModel,
   writeOpDefSchema,
   serverTemplateSchema,
   templateVariableNames,
@@ -372,6 +373,13 @@ export const mapDialectProposal = (
       ...(proposal.timeParam ? { timeFilter: { param: proposal.timeParam, format: timeFormat } } : {}),
     },
     ops: endpoints,
+    /*
+     * The same record structure a specification's paths give, read off the
+     * paths the prose named. Without it an API documented in prose had no
+     * resources, so no record types, and no request could ever reach its
+     * data (measurement 1: every real API measured).
+     */
+    resources: deriveResourceModel(endpoints),
     writes,
     writesVersion: WRITES_VERSION,
     ...(pagination.kind !== "none" ? { paginationProposal: pagination } : {}),

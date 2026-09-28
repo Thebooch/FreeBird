@@ -512,8 +512,38 @@ export const deriveResourceGraph = (ops: readonly ShapeOp[]): ResourceModel => {
     });
   }
 
+  /*
+   * Collections with no by-id endpoint: a search, an export, a report, or an
+   * API that only ever offers its records as a list. Each row is still a
+   * record, so each is still a resource — one with no record page to open
+   * until something supplies one (`canDrillDown` says so). Dropping them left
+   * such records unreachable from any request that names them.
+   *
+   * Added last, so that every id the passes above derive stays exactly what
+   * it was: existing catalogs, and the importer's tests, depend on that.
+   */
+  for (const op of ops) {
+    if (!isList(op) || pathParamNames(op.path).length > 0) continue;
+    if (byListPath.has(collectionKey(op.path)) || resources.some((one) => one.listOp === op.id)) continue;
+    const segments = pathSegments(op.path);
+    /* `/orders/search` holds orders: a trailing verb names the request, not the records. */
+    while (segments.length > 1 && LIST_VERBS.test(segments[segments.length - 1]!)) segments.pop();
+    const resource: ResourceSpec = {
+      id: claim(singularNoun(segments.pop() ?? "record")),
+      title: op.title,
+      listOp: op.id,
+      relations: [],
+      verified: false,
+    };
+    resources.push(resource);
+    byListPath.set(collectionKey(op.path), resource);
+  }
+
   return { resources, notes };
 };
+
+/** Last path segments that name how a list is asked for rather than what is in it. */
+const LIST_VERBS = /^(search|query|list|all|find|filter|lookup|browse)$/i;
 
 /**
  * Whether this endpoint reads a record that exists at most once under its

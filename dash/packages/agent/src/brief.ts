@@ -118,8 +118,11 @@ export interface WriteBriefResult {
 }
 
 /** How many fields of each kind are worth putting in front of the model. */
-const MAX_NARROW = 4;
-const MAX_TOTAL = 2;
+const MAX_NARROW = 5;
+const MAX_TOTAL = 3;
+
+/** A path that names an identity rather than a quantity: `id`, `userId`, `account_id`. */
+const IDENTIFIER_PATH = /(^|[._])id$|Id$|_ids?$/;
 const DESCRIPTION_CHARS = 100;
 
 /** Numbers worth totalling, as opposed to identifiers that happen to be numeric. */
@@ -178,18 +181,47 @@ export const briefCandidates = (sources: readonly BriefSource[]): BriefCandidate
     const labelOf = (path: string): string =>
       entity.fields.find((field) => field.path === path)?.label ?? path;
 
-    const valuesOf = (path: string): readonly string[] =>
-      entity.fields.find((field) => field.path === path)?.values ?? [];
+    /* A flag's values are true and false, whatever it is called: "VIP" is a name, not a value. */
+    const valuesOf = (path: string): readonly string[] => {
+      const field = entity.fields.find((one) => one.path === path);
+      if (!field) return [];
+      if ((field.values?.length ?? 0) > 0) return field.values ?? [];
+      return field.kinds.includes("boolean") ? ["true", "false"] : [];
+    };
 
-    const narrow: BriefField[] = narrowPaths.slice(0, MAX_NARROW).map((path) => ({
+    /*
+     * Flags and closed sets narrow as surely as the recipe's own choices:
+     * "VIP contacts", "unpaid bills". Offered after the recipe's, so nothing it
+     * chose is pushed out; a record type whose recipe had no room for a flag
+     * offered no way to ask for "the VIP ones", and a count of VIP contacts
+     * came out as a count of all of them (unscripted benchmark, 2026-09-28).
+     */
+    const closed = visible
+      .filter(
+        (field) =>
+          !narrowPaths.includes(field.path) &&
+          (field.kinds.includes("boolean") || (field.values?.length ?? 0) > 0),
+      )
+      .map((field) => field.path);
+    const narrow: BriefField[] = [...narrowPaths, ...closed].slice(0, MAX_NARROW).map((path) => ({
       path,
       label: labelOf(path),
       role: "narrow" as const,
       ...(valuesOf(path).length > 0 ? { values: valuesOf(path).slice(0, 8) } : {}),
     }));
 
-    const total: BriefField[] = visible
-      .filter((field) => field.semantic && TOTALLABLE.has(field.semantic))
+    /*
+     * Numbers worth adding up: first what the record type says is money or a
+     * quantity, then any other number that is not an identity. A plain numeric
+     * `total` the description left untagged was never offered, and asked for
+     * the value of paid orders the model named a field that does not exist
+     * (unscripted benchmark, 2026-09-28).
+     */
+    const tagged = visible.filter((field) => field.semantic && TOTALLABLE.has(field.semantic));
+    const untagged = visible.filter(
+      (field) => !field.semantic && field.kinds.includes("number") && !IDENTIFIER_PATH.test(field.path),
+    );
+    const total: BriefField[] = [...tagged, ...untagged]
       .slice(0, MAX_TOTAL)
       .map((field) => ({ path: field.path, label: field.label ?? field.path, role: "total" as const }));
 
@@ -618,31 +650,104 @@ export const writeBrief = async (
     return none("this API has no record types described yet");
   }
 
-  let result: Awaited<ReturnType<LlmAdapter["generate"]>>;
-  try {
-    result = await llm.generate({
-      ...(options.model ? { model: options.model } : {}),
-      ...(options.signal ? { signal: options.signal } : {}),
-      temperature: 0,
-      maxOutputTokens: 1024,
-      messages: [
-        { role: "system" as const, content: BRIEF_SYSTEM_PROMPT },
-        { role: "user" as const, content: buildBriefPrompt(input) },
-      ],
-      tools: { write_brief: briefTool },
-      toolChoice: { name: "write_brief" as const },
-    });
-  } catch (cause) {
-    return none(cause instanceof Error ? cause.message : String(cause));
+  /*
+   * Asked twice at most. A brief that breaks a rule its own schema states — a
+   * sum with nothing to add up — goes back once with the reason, rather than
+   * compiling into nothing: one did, and a question about a total got no
+   * widget at all (unscripted benchmark, 2026-09-28).
+   */
+  let accepted: BriefArgs | null = null;
+  let problem: string | null = null;
+  for (let attempt = 1; attempt <= 2 && !accepted; attempt++) {
+    let result: Awaited<ReturnType<LlmAdapter["generate"]>>;
+    try {
+      result = await llm.generate({
+        ...(options.model ? { model: options.model } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+        temperature: 0,
+        maxOutputTokens: 1024,
+        messages: [
+          { role: "system" as const, content: BRIEF_SYSTEM_PROMPT },
+          {
+            role: "user" as const,
+            content:
+              problem === null
+                ? buildBriefPrompt(input)
+                : `${buildBriefPrompt(input)}\n\nYOUR PREVIOUS ANSWER COULD NOT BE USED: ${problem}\nAnswer again, following the rules above.`,
+          },
+        ],
+        tools: { write_brief: briefTool },
+        toolChoice: { name: "write_brief" as const },
+      });
+    } catch (cause) {
+      return none(cause instanceof Error ? cause.message : String(cause));
+    }
+    const call = result.toolCalls.find((candidate) => candidate.name === "write_brief");
+    const parsed = call ? briefSchema.safeParse(call.args) : null;
+    if (!parsed?.success) {
+      problem = "no brief was written with the write_brief tool.";
+      continue;
+    }
+    const wanted = (one: { measureAgg?: string | undefined; measureField?: string | undefined; intent: string }) =>
+      one.intent !== "records" && one.measureAgg === "sum" && !one.measureField;
+    if (wanted(parsed.data) || (parsed.data.alternative && wanted(parsed.data.alternative))) {
+      problem = 'measureAgg is "sum" but measureField is missing: name the number to add up, copied from the record type\'s fields.';
+      continue;
+    }
+    /*
+     * A field written as words — "total amount" — that is neither a path nor
+     * any field's label is a description, not a name. Sent back once rather
+     * than compiled into nothing.
+     */
+    const roster = input.candidates.find((candidate) => candidate.entity === parsed.data.entity);
+    const named = [
+      ...(parsed.data.filters ?? []).map((one) => one.field),
+      ...(parsed.data.columns ?? []),
+      ...(parsed.data.groupBy ? [parsed.data.groupBy] : []),
+      ...(parsed.data.measureField ? [parsed.data.measureField] : []),
+      ...(parsed.data.sortField ? [parsed.data.sortField] : []),
+    ];
+    const described = roster
+      ? named.filter(
+          (name) =>
+            /\s/.test(name) &&
+            !roster.fields.some(
+              (field) => field.path === name || field.label.toLowerCase() === name.trim().toLowerCase(),
+            ),
+        )
+      : [];
+    if (described.length > 0) {
+      problem = `${described.map((name) => `"${name}"`).join(", ")} ${described.length === 1 ? "is" : "are"} not a field: use a field path exactly as the list shows it in parentheses.`;
+      continue;
+    }
+    accepted = parsed.data;
   }
-
-  const call = result.toolCalls.find((candidate) => candidate.name === "write_brief");
-  const parsed = call ? briefSchema.safeParse(call.args) : null;
-  if (!parsed?.success) return none("the model did not write a brief");
-
-  const args = parsed.data;
+  if (!accepted) return none(problem ? `the model did not write a usable brief: ${problem}` : "the model did not write a brief");
+  let args: BriefArgs = accepted;
   const found = input.candidates.find((candidate) => candidate.entity === args.entity);
   if (!found) return none(`the model chose "${args.entity}", which is not a record type here`);
+
+  /*
+   * A field named by what it is called rather than where it is: the roster
+   * shows "Total amount (total)", and a model copying the words in front of
+   * the path wrote "total amount" — a field no record has, so a sum refused to
+   * compile and a filter was dropped (unscripted benchmark, 2026-09-28).
+   * Resolved to the path only where exactly one field carries that label;
+   * anything else is left as written, for the compiler to refuse by name.
+   */
+  const pathOf = (named: string | undefined): string | undefined => {
+    if (named === undefined || found.fields.some((field) => field.path === named)) return named;
+    const labelled = found.fields.filter((field) => field.label.toLowerCase() === named.trim().toLowerCase());
+    return labelled.length === 1 ? labelled[0]!.path : named;
+  };
+  args = {
+    ...args,
+    ...(args.filters ? { filters: args.filters.map((one) => ({ ...one, field: pathOf(one.field)! })) } : {}),
+    ...(args.columns ? { columns: args.columns.map((one) => pathOf(one)!) } : {}),
+    ...(args.groupBy ? { groupBy: pathOf(args.groupBy) } : {}),
+    ...(args.measureField ? { measureField: pathOf(args.measureField) } : {}),
+    ...(args.sortField ? { sortField: pathOf(args.sortField) } : {}),
+  };
 
   const brief: WidgetBrief = {
     entity: found.entity,

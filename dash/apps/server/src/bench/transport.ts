@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import type { HttpFetch, HttpResponse } from "@freebirdai/dash-adapters";
+import { fetchPublicDocument, guardedFetch } from "../safe-fetch.js";
 import type { BenchResponse, IntegrationEnv, MockProvider } from "./types.js";
 
 /**
@@ -64,6 +65,43 @@ export const benchTransport = (providers: readonly MockProvider[]): BenchTranspo
     try {
       const answer = route("GET", raw, {});
       return { status: answer.status, text: textOf(answer.body), url: raw };
+    } catch {
+      return { status: 404, text: "", url: raw };
+    }
+  };
+
+  return { http, fetchDocument, log, apiRequests: () => api };
+};
+
+/**
+ * The network, for real providers: the server's own SSRF guard, and only the
+ * hosts the scenario's providers name. Anything else is refused before it is
+ * sent, as a request to an unknown provider is in-process.
+ */
+export const liveTransport = (providers: readonly MockProvider[]): BenchTransport => {
+  const hosts = new Set(providers.flatMap((provider) => provider.hosts));
+  const log: string[] = [];
+  let api = 0;
+  const allowed = (raw: string): URL => {
+    const url = new URL(raw);
+    if (!hosts.has(url.hostname)) throw new Error(`unreachable: ${url.hostname} is not one of this scenario's hosts`);
+    return url;
+  };
+
+  const http: HttpFetch = async (raw, init, allowedHost) => {
+    allowed(raw);
+    log.push(`${init.method ?? "GET"} ${raw}`);
+    api++;
+    const result = await guardedFetch(raw, init, allowedHost);
+    return { status: result.status, text: result.text, url: result.url, header: (name) => result.headers.get(name) };
+  };
+
+  const fetchDocument: IntegrationEnv["fetchDocument"] = async (raw) => {
+    try {
+      allowed(raw);
+      log.push(`GET ${raw}`);
+      const result = await fetchPublicDocument(raw);
+      return { status: result.status, text: result.text, url: result.url };
     } catch {
       return { status: 404, text: "", url: raw };
     }

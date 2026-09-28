@@ -4,6 +4,7 @@ import { emptyco } from "./emptyco.js";
 import { helpline, stockroom, vaultbank } from "./heldout.js";
 import { ledgerline, quotient } from "./heldout-step3.js";
 import { harborline } from "./heldout-step4.js";
+import { dummyjsonCarts, dummyjsonProducts, jsonplaceholderTodos } from "./real.js";
 import { keyring } from "./keyring.js";
 import { ledgerly } from "./ledgerly.js";
 import { multicur } from "./multicur.js";
@@ -34,6 +35,9 @@ export const PROVIDERS: readonly MockProvider[] = [
   quotient,
   ledgerline,
   harborline,
+  dummyjsonProducts,
+  dummyjsonCarts,
+  jsonplaceholderTodos,
 ];
 
 export const providersIn = (split: Split): readonly MockProvider[] =>

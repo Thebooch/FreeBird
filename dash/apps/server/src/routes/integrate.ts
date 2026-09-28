@@ -62,6 +62,12 @@ export interface IntegrateRouteDeps {
   readonly connectors?: ConnectorKit;
   /** The model that writes connector code — its own task, so it can be chosen apart from repairs. */
   readonly connectorLlm?: () => LlmAdapter | null;
+  /**
+   * What the check's reads showed, for the catalog entry: fields for endpoints
+   * the documentation declared none for, and the record types that can then
+   * be described. Absent in tests that do not keep a catalog.
+   */
+  readonly recordObserved?: (connection: ConnectionSpec, observed: IntegrationReport["observed"]) => void;
 }
 
 /** How many endpoints a check settles, and what it may spend doing it. */
@@ -89,15 +95,19 @@ export const integrationTargets = (connection: ConnectionSpec, options: { canWri
    * one no connection can send: the endpoint discovery chose to validate with
    * is where connector code starts. Only where code can be written at all.
    */
-  if (
-    targets.length === 0 &&
-    options.canWriteCode &&
-    connection.authRequired &&
-    connection.auth.type === "none" &&
-    connection.validateOpId &&
-    getOp(connection, connection.validateOpId)
-  )
-    return [connection.validateOpId];
+  if (targets.length === 0 && options.canWriteCode && connection.authRequired && connection.auth.type === "none") {
+    /*
+     * Failing that, the first collection the documentation offers, even one
+     * whose path needs an id: connector code may be what supplies it. Without
+     * this, an API whose records exist only behind an export had nothing for
+     * a check to start on, so nothing was read, nothing could be described,
+     * and no request could reach it (measurement 1).
+     */
+    const fallback = [connection.validateOpId, ...connection.resources.map((resource) => resource.listOp)].find(
+      (opId): opId is string => !!opId && !!getOp(connection, opId),
+    );
+    if (fallback) return [fallback];
+  }
   return targets;
 };
 
@@ -201,6 +211,12 @@ export const createIntegrationRunner = (deps: IntegrateRouteDeps): IntegrationRu
     deps.log?.(
       `checked ${connection.id}: ${report.outcome}, ${report.changes.length} change(s), ${report.requests} request(s)`,
     );
+    /* Kept, never allowed to cost the check: a read that showed fields is worth describing. */
+    try {
+      if (Object.keys(report.observed).length > 0) deps.recordObserved?.(report.connection, report.observed);
+    } catch (error) {
+      deps.log?.(`what ${connection.id}'s check read could not be kept: ${error instanceof Error ? error.message : String(error)}`);
+    }
     return {
       outcome: report.outcome,
       ...(report.blocked ? { blocked: report.blocked } : {}),

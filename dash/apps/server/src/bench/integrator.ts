@@ -13,6 +13,13 @@ import {
 import { connectionFromCatalog } from "../catalog.js";
 import { discover } from "../discovery/index.js";
 import { integrate } from "../integrate/agent.js";
+import { RestAdapter } from "@freebirdai/dash-adapters";
+import { getOp, resolveRange } from "@freebirdai/dash-spec";
+import { OAuthRetryAdapter } from "../auth/retry-adapter.js";
+import { ConnectorAdapter } from "../connector/adapter.js";
+import { withEntryResources, withObservedFields } from "../integrate/observed.js";
+import { integrationTargets } from "../routes/integrate.js";
+import { chooseByBrief, observeFirstRead } from "./brief-choice.js";
 import { benchConnectors } from "./connectors.js";
 import { benchCredentials, signInAsThePerson } from "./oauth.js";
 import type {
@@ -284,15 +291,20 @@ export const agentIntegrator = (options: { llm?: LlmAdapter | null; requests?: n
     const signedIn = await signInIfAsked(connection, broker, env, interventions);
     if (signedIn) return stop("sign-in", signedIn);
 
+    /*
+     * What answers the objective: the scenario's scripted choice where there is
+     * one, and otherwise the product's own path — record types, a brief, a
+     * compiled widget — with the endpoint that widget reads settled next.
+     */
     const choice = input.objective.scripted;
-    if (!choice) return stop("choose", "An unscripted choice needs the brief path, which live runs use.");
-    const opId = opAt(connection, choice.path);
-    if (!opId) return stop("choose", `No endpoint at ${choice.path} was imported.`);
-
-    const check = () =>
+    let targets: string[];
+    let chosen: WidgetSpec | null = null;
+    let compiledFrom: { brief: import("@freebirdai/dash-spec").WidgetBrief; entity: import("@freebirdai/dash-spec").EntitySpec } | null = null;
+    /** The integration loop over some endpoints, with this scenario's credentials and connector kit. */
+    const settleOps = (ops: readonly string[], requests: number) =>
       integrate(
         connection,
-        { targets: [opId], entry, docsUrl: input.docsUrl, requests: options.requests ?? 80, traverseUpTo: 50 },
+        { targets: ops, entry, docsUrl: input.docsUrl, requests, traverseUpTo: 50 },
         {
           http: env.http,
           resolveSecret: broker.resolve,
@@ -303,6 +315,44 @@ export const agentIntegrator = (options: { llm?: LlmAdapter | null; requests?: n
           connectors,
         },
       );
+    if (choice) {
+      const opId = opAt(connection, choice.path);
+      if (!opId) return stop("choose", `No endpoint at ${choice.path} was imported.`);
+      targets = [opId];
+    } else {
+      if (!model.llm) return stop("choose", "Choosing without a script needs a model.");
+      /*
+       * The product's own check first: what runs by itself once a key is saved
+       * (or at once, for an API that needs none), before anybody asks for
+       * anything. Its reads are what an endpoint with no declared fields is
+       * described from — the same order the product runs in.
+       */
+      let described = entry;
+      const own = integrationTargets(connection, { canWriteCode: true });
+      if (own.length > 0) {
+        let precheck = await settleOps(own, 60);
+        notes.push(...precheck.changes.map((change) => `Changed by the first check: ${change}`), ...precheck.log);
+        connection = precheck.connection;
+        if (precheck.needsCredentials) {
+          for (const [keyRef, value] of pasteInto(precheck.needsCredentials, input)) vault.set(keyRef, value);
+          precheck = await settleOps(own, 60);
+          notes.push(...precheck.log);
+          connection = precheck.connection;
+        }
+        described = withObservedFields(entry, precheck.observed) ?? entry;
+        connection = withEntryResources(connection, described);
+        if (described !== entry)
+          notes.push(`The first check read fields the documentation did not declare, for ${Object.keys(precheck.observed).join(", ")}.`);
+      }
+      const brief = await chooseByBrief({ connection, entry: described, request: input.objective.request, llm: model.llm });
+      notes.push(...brief.notes);
+      if ("stop" in brief) return stop(brief.stop, brief.why);
+      chosen = brief.widget;
+      compiledFrom = { brief: brief.brief, entity: brief.entity };
+      targets = [...brief.ops];
+    }
+
+    const check = () => settleOps(targets, options.requests ?? 80);
     let report = await check();
     notes.push(...report.changes.map((change) => `Changed: ${change}`), ...report.log);
     connection = report.connection;
@@ -320,7 +370,37 @@ export const agentIntegrator = (options: { llm?: LlmAdapter | null; requests?: n
     countAsked(connection, input, interventions);
     if (report.outcome === "blocked") return stop("integrate", report.blocked ?? "The connection could not be read.");
 
-    const widget = widgetFor(connection, opId, input.objective.request, choice);
+    /* The product's first read, observed: a widget compiled from a brief is rebuilt if the records are not where the docs said. */
+    if (chosen && compiledFrom && targets[0]) {
+      try {
+        const rest = connection.connector ? new ConnectorAdapter(env.http, connectors) : new RestAdapter(env.http);
+        const adapter = new OAuthRetryAdapter(rest, broker);
+        const op = getOp(connection, targets[0]);
+        if (op) {
+          const read = await adapter.fetch(connection, op, {}, {
+            params: { range: resolveRange({ preset: "30d", now: env.now }), filters: {} },
+            now: env.now,
+            resolveSecret: broker.resolve,
+          });
+          const rebuilt = observeFirstRead({
+            connection,
+            brief: compiledFrom.brief,
+            entity: compiledFrom.entity,
+            opId: targets[0],
+            body: read.body,
+            at: new Date(env.now).toISOString(),
+          });
+          if (rebuilt) {
+            chosen = rebuilt.widget;
+            notes.push(...rebuilt.notes);
+          }
+        }
+      } catch (error) {
+        notes.push(`The first read could not be observed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    const widget = chosen ?? (choice ? widgetFor(connection, targets[0]!, input.objective.request, choice) : null);
     if (!widget) return stop("build", "The widget for this objective did not validate.");
     return { connection, widget, secrets: secretsNow(), interventions, notes, modelCalls: model.calls(), broker };
   },

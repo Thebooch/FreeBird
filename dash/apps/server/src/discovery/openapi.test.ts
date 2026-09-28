@@ -562,6 +562,17 @@ describe("parseOpenApi", () => {
       expect(warnings.join(" ")).toMatch(/1 endpoint uses CSV and TSV responses, which is only partly supported\. Read through connector code/);
     });
 
+    /* Measurement 1: read as one summary, a file of records was never a resource, so never askable. */
+    it("reads an endpoint answering one record per row or line as a collection", () => {
+      for (const type of ["text/csv", "application/x-ndjson"]) {
+        const { entry } = parseOpenApi(
+          withRefunds({ responses: { "200": { content: { [type]: { schema: { type: "string" } } } } } }),
+          SPEC_URL,
+        )!;
+        expect(entry.ops.find((op) => op.title === "List refunds")).toMatchObject({ archetype: "list", rowsPath: "$" });
+      }
+    });
+
     it("says when parts of the specification live in other files", () => {
       const { warnings } = parseOpenApi(
         withRefunds({
@@ -1086,7 +1097,10 @@ describe("deriveResources", () => {
       "/v1/leases": list("All leases"),
       "/v1/leases/{leaseId}/notes/{noteId}": detail("A note", "noteId"),
     }).entry;
-    expect(entry.resources).toHaveLength(0);
+    /* The leases are a collection of their own, with no record page: the note is not one of them. */
+    expect(entry.resources).toHaveLength(1);
+    expect(entry.resources[0]).toMatchObject({ id: "lease", listOp: expect.any(String) });
+    expect(entry.resources[0]?.detailOp).toBeUndefined();
   });
 
   it("singularises without mangling the common API nouns", () => {

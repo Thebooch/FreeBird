@@ -19,6 +19,7 @@ import { signInGapNotes } from "../discovery/openapi.js";
 import { cursorPaths, probePagination, reportedTotal } from "../discovery/probe-pagination.js";
 import { authorConnector, connectorReader, stoppedShort, type ConnectorKit } from "./connector.js";
 import { docsKnowledge } from "./docs.js";
+import { observedShape, type ObservedShape } from "./observed.js";
 import { applyPatch, describePatch, sameSite, type ConnectionPatch } from "./patch.js";
 import { budgetOf, tryRead, type Attempt, type DiagnosisKind, type ReadDeps } from "./read.js";
 import { DEFAULT_STRATEGIES, type RepairStrategy } from "./strategies.js";
@@ -112,6 +113,12 @@ export interface IntegrationReport {
    * person is asked for these, and the next check tries the code.
    */
   readonly needsCredentials?: readonly AuthCredential[];
+  /**
+   * What each endpoint that read showed of its records: where they are and
+   * the name and kind of each field — never their values. For endpoints the
+   * documentation declared no fields for, the only account there is.
+   */
+  readonly observed: Readonly<Record<string, ObservedShape>>;
 }
 
 /** How much further a read got. A change is kept only when it moves a read up this list. */
@@ -432,6 +439,7 @@ export const integrate = async (
   }
   const observed: Observed[] = [];
   const outcomes: OpOutcome[] = [];
+  const shapes: Record<string, ObservedShape> = {};
 
   /** Confirm how an endpoint that read pages, when there is reason to think it does. */
   const confirmPaging = async (opId: string, first: Attempt): Promise<void> => {
@@ -514,6 +522,8 @@ export const integrate = async (
       }
       continue;
     }
+    const shape = observedShape(attempt.body, getOp(connection, opId)?.rowsPath);
+    if (shape) shapes[opId] = shape;
     /* Code that reads a whole collection and says how many there are: counted against its own word. */
     const servedTotal = getOp(connection, opId)?.servedBy === "connector" ? attempt.meta?.reportedTotal : undefined;
     const rows = attempt.rows?.length ?? 0;
@@ -578,6 +588,7 @@ export const integrate = async (
     log,
     requests: budget.spent,
     modelCalls,
+    observed: shapes,
     ...(blocked && connection.auth.type === "connector" && outcomes[0]?.note.startsWith("Paste the ")
       ? { needsCredentials: authCredentials(connection.auth) }
       : {}),

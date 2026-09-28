@@ -68,6 +68,19 @@ export interface CompileBriefInput {
    */
   readonly listPath?: string | undefined;
   /**
+   * Where an endpoint's records are in its response: `$.data` for an API that
+   * wraps its list under a key.
+   *
+   * Every widget compiled here used to read its records at `$`, the top of the
+   * response — so on an API that wraps its list, the wrapper was read as one
+   * record, and a count of 1,234 invoices came out as 1, with nothing on the
+   * tile to say so (unscripted benchmark, 2026-09-28). The API's own shape,
+   * asked of the endpoint by whoever holds the connection.
+   *
+   * Optional, and `$` without it, which is what every caller before it had.
+   */
+  readonly rowsPathOf?: ((op: string) => string | undefined) | undefined;
+  /**
    * The rest of the API, for a brief that names a second record type.
    *
    * Only `alongside` reads it, and its absence costs nothing else: a caller
@@ -113,6 +126,9 @@ export interface CompiledBrief {
  * mapping, and two spellings of it would disagree on the day one changed.
  */
 export const columnForPath = (path: string): string => path.replace(/\./g, "_");
+
+/** Words that ask for a flag to be unset: "not VIP", "no", "false". */
+const NO_WORDS = /^(false|no|n|0|off|none|not\b.*|without\b.*|non-?\w.*)$/i;
 
 /** How many fields a list shows before it stops being readable. */
 const MAX_COLUMNS = 6;
@@ -1145,7 +1161,12 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
           /* The field the join matches on is a column before it is a key. */
           ...(pair?.on ? [pair.on.left] : []),
         ]
-      : [...(groupColumn ? [groupColumn] : []), ...(measure.field ? [measure.field] : [])];
+      : [
+          ...(groupColumn ? [groupColumn] : []),
+          ...(measure.field ? [measure.field] : []),
+          /* A narrowing on a number reads its field before the number is taken. */
+          ...preselect.keys(),
+        ];
   const nested = [...new Set(mentioned.filter((path) => path.includes(".")))];
   const deriveFields: Record<string, string> = Object.fromEntries(
     nested.map((path) => [columnForPath(path), path]),
@@ -1245,6 +1266,48 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
     ...(shape.limit !== undefined ? { limit: shape.limit } : {}),
   });
 
+  /** Where an endpoint's records are in its response. See `rowsPathOf`. */
+  const rowsOf = (op: string | undefined): string => (op ? input.rowsPathOf?.(op) : undefined) ?? "$";
+
+  /*
+   * A scope phrase on a number: "open invoices", "done tasks".
+   *
+   * On a list it starts a filter strip, which the reader sees and can widen. A
+   * number has no strip, so the narrowing has to be part of the calculation —
+   * and it used to be dropped without a word, so a count of done tasks came out
+   * as a count of every task (unscripted benchmark, 2026-09-28). It is applied
+   * before the number is taken, matched without regard to case, and said on the
+   * widget, so a reader knows what the number counts.
+   */
+  const narrowing: PipelineStep[] = [];
+  if (brief.intent !== "records") {
+    const clauses: string[] = [];
+    for (const [path, values] of preselect) {
+      const column = columnForPath(path);
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(column)) {
+        notes.push(`The request narrowed ${entity.name.many} by "${path}", which cannot be applied to a number here; this counts all of them.`);
+        continue;
+      }
+      const field = entity.fields.find((one) => one.path === path);
+      const label = field?.label ?? path;
+      /*
+       * A flag narrowed by a word means the flag is set — "VIP contacts" — and
+       * only a word that says no means it is not. Compared as text, "VIP" matched
+       * nothing, and a count of VIP contacts came out as 0 (unscripted benchmark,
+       * 2026-09-28).
+       */
+      if (field && [...field.kinds, ...(field.observed?.kinds ?? [])].includes("boolean")) {
+        const unset = values.length > 0 && values.every((value) => NO_WORDS.test(value.trim()));
+        clauses.push(`${column} == ${unset ? "false" : "true"}`);
+        notes.push(`Only ${entity.name.many} ${unset ? "without" : "with"} ${label} are counted.`);
+        continue;
+      }
+      clauses.push(`lower(string(${column})) in [${values.map((value) => JSON.stringify(value.toLowerCase())).join(", ")}]`);
+      notes.push(`Only ${entity.name.many} whose ${label} is ${values.join(" or ")} are counted.`);
+    }
+    if (clauses.length > 0) narrowing.push({ op: "filter", where: clauses.join(" && ") });
+  }
+
   /*
    * One source or two, and what each of them does before they meet.
    *
@@ -1275,7 +1338,7 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
         op: listOp,
         params: {},
         label: entity.name.many,
-        pipeline: [{ op: "extract", path: "$" }, ...derive, ...coerce],
+        pipeline: [{ op: "extract", path: rowsOf(listOp) }, ...derive, ...coerce],
       },
       {
         as: rightAs,
@@ -1304,7 +1367,7 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
          * them at the component costs memory per matched row for nothing.
          */
         pipeline: [
-          { op: "extract", path: "$" },
+          { op: "extract", path: rowsOf(pair.op) },
           ...farDerive([pair.on.right, ...farColumns]),
           /*
            * The far record's values read by its own record type, before the
@@ -1338,21 +1401,24 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
        */
       kind: "left",
     };
-    /* The rows arrive joined and already extracted; only the shaping is left. */
-    pipeline = [...shaped];
+    /* The rows arrive joined and already extracted; only the narrowing and the shaping are left. */
+    pipeline = [...narrowing, ...shaped];
   } else if (pair && farAxis && groupColumn) {
     /** One side of a comparison, grouped into the shared column names. */
     const side = (
       axis: string,
       flatten: readonly string[],
       of: EntitySpec,
+      op: string | undefined,
+      narrow: readonly PipelineStep[] = [],
     ): PipelineStep[] => {
       // Each side reads its own axis by its own record type's account of it.
       const fields = { ...coercions, ...axisAsLabel(of, axis) };
       return [
-        { op: "extract", path: "$" },
+        { op: "extract", path: rowsOf(op) },
         ...farDerive(flatten),
         ...(Object.keys(fields).length > 0 ? [{ op: "coerce" as const, fields }] : []),
+        ...narrow,
         ...shapeSteps({
           groupBy: [
             { field: columnForPath(axis), ...(bucket ? { bucket } : {}), as: PAIR_BUCKET },
@@ -1375,7 +1441,13 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
         op: listOp,
         params: {},
         label: entity.name.many,
-        pipeline: side(groupColumn, [groupColumn, ...(measure.field ? [measure.field] : [])], entity),
+        pipeline: side(
+          groupColumn,
+          [groupColumn, ...(measure.field ? [measure.field] : []), ...preselect.keys()],
+          entity,
+          listOp,
+          narrowing,
+        ),
       },
       {
         as: rightAs,
@@ -1383,7 +1455,7 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
         op: pair.op,
         params: {},
         label: pair.far.name.many,
-        pipeline: side(farAxis, [farAxis, ...(measure.field ? [measure.field] : [])], pair.far),
+        pipeline: side(farAxis, [farAxis, ...(measure.field ? [measure.field] : [])], pair.far, pair.op),
       },
     ];
     combine = { op: "union", as: PAIR_SERIES };
@@ -1402,7 +1474,7 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
      * come after the derive that produces one — and before the grouping, or a
      * date would be bucketed as the string it arrived as.
      */
-    pipeline = [{ op: "extract", path: "$" }, ...derive, ...coerce, ...shaped];
+    pipeline = [{ op: "extract", path: rowsOf(listOp) }, ...derive, ...coerce, ...narrowing, ...shaped];
   }
 
   if (errors.length > 0) return { widget: null, errors, notes };

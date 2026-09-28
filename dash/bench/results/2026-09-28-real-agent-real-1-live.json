@@ -1,0 +1,185 @@
+[
+  {
+    "provider": "dummyjson-products",
+    "objective": "smartphones",
+    "split": "real",
+    "integrator": "agent",
+    "interventions": {
+      "technical": 0,
+      "intent": 0,
+      "consent": 0,
+      "account": 0
+    },
+    "expected": 16,
+    "records": 194,
+    "modelCalls": 1,
+    "setup": "done",
+    "retrieval": "ok",
+    "completeness": "incomplete-flagged",
+    "metric": "wrong",
+    "value": 3,
+    "recordsRead": 30,
+    "flagged": [
+      "Only the first page was read, because how this API splits its results into pages has not been confirmed yet. What is shown may exclude additional records."
+    ],
+    "requests": 8,
+    "ms": 10297,
+    "log": [
+      "Read 29 of 34 sections of the documentation at https://dummyjson.com/docs/products. Everything here is a guess until you test it.",
+      "Pagination is an unconfirmed suggestion. Only one response will be read until an endpoint's pagination contract is confirmed.",
+      "Search query parameter: The example shows q for product search, but the excerpt does not explicitly document the parameter definition.",
+      "Category-list endpoint: The documentation shows GET /products/category-list returning category slugs, but it is omitted in favor of the richer categories endpoint.",
+      "modifiedBefore filter: The text states modifiedBefore is supported with ISO 8601 dates, but only modifiedAfter is configured as the dashboard time parameter.",
+      "Write body schema: Examples show title and refer to other product data, but do not provide a complete request-body field schema or required fields.",
+      "4 endpoint(s) that change records were read from prose. They are offered, and every change made through one says in its review that the documentation described it rather than a specification.",
+      "Get all products: 30 record(s) on 1 page(s)",
+      "Paging for Get all products: The API says it holds 33 records, but no way of reading past the first 30 worked. (tried offset skip/limit by 100; offset skip/limit by 33; link-header)"
+    ],
+    "success": false
+  },
+  {
+    "provider": "dummyjson-products",
+    "objective": "stock",
+    "split": "real",
+    "integrator": "agent",
+    "interventions": {
+      "technical": 0,
+      "intent": 0,
+      "consent": 0,
+      "account": 0
+    },
+    "expected": 9779,
+    "records": 194,
+    "modelCalls": 1,
+    "setup": "done",
+    "retrieval": "ok",
+    "completeness": "incomplete-flagged",
+    "metric": "wrong",
+    "value": 1458,
+    "recordsRead": 30,
+    "flagged": [
+      "Only the first page was read, because how this API splits its results into pages has not been confirmed yet. What is shown may exclude additional records."
+    ],
+    "requests": 8,
+    "ms": 9798,
+    "log": [
+      "Read 29 of 34 sections of the documentation at https://dummyjson.com/docs/products. Everything here is a guess until you test it.",
+      "Pagination is an unconfirmed suggestion. Only one response will be read until an endpoint's pagination contract is confirmed.",
+      "Search query parameter: The example uses q for search, but the prose in the supplied excerpt does not explicitly define it.",
+      "Sorting parameters: Examples show sortBy and order, but the supplied excerpt does not formally define their allowed values.",
+      "modifiedBefore: The documentation says modifiedBefore is supported, but only modifiedAfter is configured as the dashboard time filter.",
+      "Write request fields: Only title is shown in write examples; the documentation refers to other product data without listing fields or required fields.",
+      "4 endpoint(s) that change records were read from prose. They are offered, and every change made through one says in its review that the documentation described it rather than a specification.",
+      "Get all products: 30 record(s) on 1 page(s)",
+      "Paging for Get all products: The API says it holds 33 records, but no way of reading past the first 30 worked. (tried offset skip/limit by 100; offset skip/limit by 33; link-header)"
+    ],
+    "success": false
+  },
+  {
+    "provider": "dummyjson-products",
+    "objective": "over-100",
+    "split": "real",
+    "integrator": "agent",
+    "interventions": {
+      "technical": 0,
+      "intent": 0,
+      "consent": 0,
+      "account": 0
+    },
+    "expected": 61,
+    "records": 194,
+    "modelCalls": 1,
+    "setup": "done",
+    "retrieval": "ok",
+    "completeness": "incomplete-flagged",
+    "metric": "wrong",
+    "value": 6,
+    "recordsRead": 30,
+    "flagged": [
+      "Only the first page was read, because how this API splits its results into pages has not been confirmed yet. What is shown may exclude additional records."
+    ],
+    "requests": 8,
+    "ms": 9072,
+    "log": [
+      "Read 29 of 34 sections of the documentation at https://dummyjson.com/docs/products. Everything here is a guess until you test it.",
+      "Pagination is an unconfirmed suggestion. Only one response will be read until an endpoint's pagination contract is confirmed.",
+      "Search query parameter: The example shows `q=phone`, but the excerpts do not explicitly define the parameter.",
+      "Modified-before filtering: The documentation says `modifiedBefore` is supported, but the dashboard schema supports one time filter parameter; `modifiedAfter` was selected.",
+      "Write request fields: Only `title` is shown in add and update examples; the docs refer generally to other product data without enumerating fields or requiredness.",
+      "Category endpoint response row path: The excerpts show category-list endpoints but do not show a category product response body; it is not confirmed whether its rows path is `$.products`.",
+      "4 endpoint(s) that change records were read from prose. They are offered, and every change made through one says in its review that the documentation described it rather than a specification.",
+      "Get all products: 30 record(s) on 1 page(s)",
+      "Paging for Get all products: The API says it holds 33 records, but no way of reading past the first 30 worked. (tried offset skip/limit by 100; offset skip/limit by 33; link-header)"
+    ],
+    "success": false
+  },
+  {
+    "provider": "dummyjson-carts",
+    "objective": "discounted-value",
+    "split": "real",
+    "integrator": "agent",
+    "interventions": {
+      "technical": 0,
+      "intent": 0,
+      "consent": 0,
+      "account": 0
+    },
+    "expected": 3456709.58,
+    "records": 208,
+    "modelCalls": 1,
+    "setup": "done",
+    "retrieval": "ok",
+    "completeness": "complete",
+    "metric": "correct",
+    "value": 3456709.5799999977,
+    "recordsRead": 208,
+    "flagged": [],
+    "requests": 10,
+    "ms": 9054,
+    "log": [
+      "Read 22 of 24 sections of the documentation at https://dummyjson.com/docs/carts. Everything here is a guess until you test it.",
+      "Pagination is an unconfirmed suggestion. Only one response will be read until an endpoint's pagination contract is confirmed.",
+      "Write body product fields: The documentation text says products are objects containing productId and quantity, but the displayed request examples use id and quantity. The tool's flat write-field schema cannot represent the documented nested product object reliably.",
+      "Required write fields: The excerpts describe fields that can be provided but do not state that any request-body fields are required.",
+      "4 endpoint(s) that change records were read from prose. They are offered, and every change made through one says in its review that the documentation described it rather than a specification.",
+      "Changed: Read all 208 records over 3 page(s), as many as the API says it holds — read every page of Get all carts",
+      "Get all carts: 30 record(s) on 1 page(s)",
+      "Paging for Get all carts: Read all 208 records over 3 page(s), as many as the API says it holds. (tried offset skip/limit by 100)"
+    ],
+    "success": true
+  },
+  {
+    "provider": "jsonplaceholder-todos",
+    "objective": "done",
+    "split": "real",
+    "integrator": "agent",
+    "interventions": {
+      "technical": 0,
+      "intent": 0,
+      "consent": 0,
+      "account": 0
+    },
+    "expected": 90,
+    "records": 200,
+    "modelCalls": 1,
+    "setup": "done",
+    "retrieval": "ok",
+    "completeness": "complete",
+    "metric": "correct",
+    "value": 90,
+    "recordsRead": 200,
+    "flagged": [],
+    "requests": 3,
+    "ms": 6108,
+    "log": [
+      "Read 20 of 21 sections of the documentation at https://jsonplaceholder.typicode.com/. Everything here is a guess until you test it.",
+      "Write field requirements: The examples show JSON body fields but do not state which fields are required.",
+      "Pagination: The documentation excerpts do not describe pagination.",
+      "Write persistence: The documentation says create, update, patch, and delete responses are faked; resources are not actually changed on the server.",
+      "4 endpoint(s) that change records were read from prose. They are offered, and every change made through one says in its review that the documentation described it rather than a specification.",
+      "List todos: 200 record(s) on 1 page(s)",
+      "Paging for List todos: Only one page could be read; no way of reading a second page worked. (tried link-header)"
+    ],
+    "success": true
+  }
+]

@@ -408,7 +408,8 @@ describe("analyseConnection", () => {
   it("reports a connection with no pairs rather than failing", async () => {
     const flat = connectionSchema.parse({
       ...connection,
-      ops: [{ id: "totals", title: "Totals", path: "/v2/totals" }],
+      /* One object, not a collection: nothing here is a record to build from. */
+      ops: [{ id: "totals", title: "Totals", path: "/v2/totals", archetype: "summary" }],
       validateOpId: "totals",
     });
     const result = await analyseConnection(flat, sample, instant);

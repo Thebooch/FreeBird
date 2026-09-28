@@ -147,7 +147,8 @@ import {
   recipeFor,
   widgetBriefSchema,
 } from "@freebirdai/dash-spec";
-import { mapRoutes, mergeDescribedEntities } from "./routes/map.js";
+import { describeMissingRecords, mapRoutes, mergeDescribedEntities } from "./routes/map.js";
+import { withEntryResources, withObservedFields } from "./integrate/observed.js";
 import { onboardingRoutes } from "./routes/onboarding.js";
 import { refreshOutdatedConnectDetails } from "./discovery/connect-details.js";
 import { allocateDashboardId } from "./onboarding/materialise.js";
@@ -853,6 +854,42 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     auto: options.autoIntegrate ?? false,
     log: (message) => app.log.info(message),
     connectors,
+    /*
+     * What the check's reads showed, onto the shared catalog entry: fields for
+     * endpoints the documentation declared none for — names and kinds, never
+     * values. The record types that can now be described are described next,
+     * by themselves, like the check itself: nobody presses anything.
+     */
+    recordObserved: (connection, observed) => {
+      const entries = options.catalog;
+      const entry = connection.catalog ? entries?.get(connection.catalog) : undefined;
+      if (!entries || !entry) return;
+      const next = withObservedFields(entry, observed);
+      if (!next) return;
+      entries.put(next);
+      /* A collection a read showed, carried by every connection made from this entry. */
+      for (const one of store.listConnections()) {
+        if (one.catalog !== entry.id) continue;
+        const grown = withEntryResources(one, next);
+        if (grown !== one) {
+          store.putConnection(grown);
+          registry.addConnection(grown);
+        }
+      }
+      void describeMissingRecords(
+        {
+          catalog: entries,
+          llm: (task) => resolveLlm(task),
+          describing,
+          onDescribed: (catalogId) => {
+            for (const one of store.listConnections()) if (one.catalog === catalogId) observeConnection(one.id);
+          },
+        },
+        entry.id,
+      ).catch((error: unknown) =>
+        app.log.warn(`describing ${entry.id} after its check failed: ${error instanceof Error ? error.message : String(error)}`),
+      );
+    },
   };
   const integration = createIntegrationRunner(integrationDeps);
   /** Read a connection's write endpoints if its entry never has had them read. Set below, once the reader exists. */
@@ -1536,7 +1573,21 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   const pathOf = (
     connection: { readonly ops: readonly { readonly id: string; readonly path: string }[] },
     op: string | undefined,
-  ): string | undefined => (op ? connection.ops.find((one) => one.id === op)?.path : undefined);
+  ): string | undefined => {
+    const found = op ? connection.ops.find((one) => one.id === op) : undefined;
+    /* Connector code supplies whatever ids its own requests need: nothing in the path is the board's to give. */
+    return found && (found as { servedBy?: string }).servedBy !== "connector" ? found.path : undefined;
+  };
+
+  /**
+   * Where each of a connection's endpoints puts its records, for the compiler
+   * — see `CompileBriefInput.rowsPathOf`. Without it, a widget over an API
+   * that wraps its list read the wrapper as one record.
+   */
+  const rowsPathsOf =
+    (connection: ConnectionSpec) =>
+    (op: string): string | undefined =>
+      getOp(connection, op)?.rowsPath;
 
   /**
    * The rest of an API, for a brief that names two record types.
@@ -1752,6 +1803,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         resource,
         connection: connection.id,
         listPath: pathOf(connection, resource.listOp),
+        rowsPathOf: rowsPathsOf(connection),
         related: relatedFor(connection, entities),
         id: widgetId(parsed.data.brief.title ?? entity.name.many, taken),
       });
@@ -2274,6 +2326,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         resource,
         connection: connection.id,
         listPath: pathOf(connection, resource.listOp),
+        rowsPathOf: rowsPathsOf(connection),
         related: relatedFor(connection, entities),
         id: widgetId(written.brief.title ?? entity.name.many, taken),
       });
@@ -2300,6 +2353,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
               resource: otherResource,
               connection: connection.id,
               listPath: pathOf(connection, otherResource.listOp),
+              rowsPathOf: rowsPathsOf(connection),
               related: relatedFor(connection, entities),
               id: widgetId(
                 otherEntity.name.many,
@@ -3807,6 +3861,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           resource,
           connection: found.connection.id,
           listPath: pathOf(found.connection, resource.listOp),
+          rowsPathOf: rowsPathsOf(found.connection),
           related: relatedFor(found.connection, found.entities ?? []),
           id: widget.id,
         });
@@ -3936,6 +3991,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         resource,
         connection: found.connection.id,
         listPath: pathOf(found.connection, resource.listOp),
+          rowsPathOf: rowsPathsOf(found.connection),
         related: relatedFor(found.connection, found.entities ?? []),
         /*
          * The widget's own id, which `recompileWidget` also enforces. A fresh

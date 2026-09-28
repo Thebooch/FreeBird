@@ -1,0 +1,1170 @@
+{
+ "source": "https://dummyjson.com/products?limit=0&select=category,stock,price",
+ "at": "2026-09-28T22:03:31.171Z",
+ "records": [
+  {
+   "id": 1,
+   "category": "beauty",
+   "stock": 99,
+   "price": 9.99
+  },
+  {
+   "id": 2,
+   "category": "beauty",
+   "stock": 34,
+   "price": 19.99
+  },
+  {
+   "id": 3,
+   "category": "beauty",
+   "stock": 89,
+   "price": 14.99
+  },
+  {
+   "id": 4,
+   "category": "beauty",
+   "stock": 91,
+   "price": 12.99
+  },
+  {
+   "id": 5,
+   "category": "beauty",
+   "stock": 79,
+   "price": 8.99
+  },
+  {
+   "id": 6,
+   "category": "fragrances",
+   "stock": 29,
+   "price": 49.99
+  },
+  {
+   "id": 7,
+   "category": "fragrances",
+   "stock": 58,
+   "price": 129.99
+  },
+  {
+   "id": 8,
+   "category": "fragrances",
+   "stock": 98,
+   "price": 89.99
+  },
+  {
+   "id": 9,
+   "category": "fragrances",
+   "stock": 4,
+   "price": 69.99
+  },
+  {
+   "id": 10,
+   "category": "fragrances",
+   "stock": 91,
+   "price": 79.99
+  },
+  {
+   "id": 11,
+   "category": "furniture",
+   "stock": 88,
+   "price": 1899.99
+  },
+  {
+   "id": 12,
+   "category": "furniture",
+   "stock": 60,
+   "price": 2499.99
+  },
+  {
+   "id": 13,
+   "category": "furniture",
+   "stock": 64,
+   "price": 299.99
+  },
+  {
+   "id": 14,
+   "category": "furniture",
+   "stock": 26,
+   "price": 499.99
+  },
+  {
+   "id": 15,
+   "category": "furniture",
+   "stock": 7,
+   "price": 799.99
+  },
+  {
+   "id": 16,
+   "category": "groceries",
+   "stock": 8,
+   "price": 1.99
+  },
+  {
+   "id": 17,
+   "category": "groceries",
+   "stock": 86,
+   "price": 12.99
+  },
+  {
+   "id": 18,
+   "category": "groceries",
+   "stock": 46,
+   "price": 8.99
+  },
+  {
+   "id": 19,
+   "category": "groceries",
+   "stock": 97,
+   "price": 9.99
+  },
+  {
+   "id": 20,
+   "category": "groceries",
+   "stock": 10,
+   "price": 4.99
+  },
+  {
+   "id": 21,
+   "category": "groceries",
+   "stock": 84,
+   "price": 1.49
+  },
+  {
+   "id": 22,
+   "category": "groceries",
+   "stock": 71,
+   "price": 10.99
+  },
+  {
+   "id": 23,
+   "category": "groceries",
+   "stock": 9,
+   "price": 2.99
+  },
+  {
+   "id": 24,
+   "category": "groceries",
+   "stock": 74,
+   "price": 14.99
+  },
+  {
+   "id": 25,
+   "category": "groceries",
+   "stock": 33,
+   "price": 1.29
+  },
+  {
+   "id": 26,
+   "category": "groceries",
+   "stock": 3,
+   "price": 0.99
+  },
+  {
+   "id": 27,
+   "category": "groceries",
+   "stock": 34,
+   "price": 6.99
+  },
+  {
+   "id": 28,
+   "category": "groceries",
+   "stock": 27,
+   "price": 5.49
+  },
+  {
+   "id": 29,
+   "category": "groceries",
+   "stock": 50,
+   "price": 3.99
+  },
+  {
+   "id": 30,
+   "category": "groceries",
+   "stock": 99,
+   "price": 2.49
+  },
+  {
+   "id": 31,
+   "category": "groceries",
+   "stock": 31,
+   "price": 0.79
+  },
+  {
+   "id": 32,
+   "category": "groceries",
+   "stock": 27,
+   "price": 3.49
+  },
+  {
+   "id": 33,
+   "category": "groceries",
+   "stock": 99,
+   "price": 4.99
+  },
+  {
+   "id": 34,
+   "category": "groceries",
+   "stock": 57,
+   "price": 7.99
+  },
+  {
+   "id": 35,
+   "category": "groceries",
+   "stock": 13,
+   "price": 2.29
+  },
+  {
+   "id": 36,
+   "category": "groceries",
+   "stock": 80,
+   "price": 19.99
+  },
+  {
+   "id": 37,
+   "category": "groceries",
+   "stock": 82,
+   "price": 1.99
+  },
+  {
+   "id": 38,
+   "category": "groceries",
+   "stock": 59,
+   "price": 5.99
+  },
+  {
+   "id": 39,
+   "category": "groceries",
+   "stock": 53,
+   "price": 1.99
+  },
+  {
+   "id": 40,
+   "category": "groceries",
+   "stock": 46,
+   "price": 3.99
+  },
+  {
+   "id": 41,
+   "category": "groceries",
+   "stock": 86,
+   "price": 2.49
+  },
+  {
+   "id": 42,
+   "category": "groceries",
+   "stock": 53,
+   "price": 0.99
+  },
+  {
+   "id": 43,
+   "category": "home-decoration",
+   "stock": 47,
+   "price": 59.99
+  },
+  {
+   "id": 44,
+   "category": "home-decoration",
+   "stock": 77,
+   "price": 29.99
+  },
+  {
+   "id": 45,
+   "category": "home-decoration",
+   "stock": 28,
+   "price": 39.99
+  },
+  {
+   "id": 46,
+   "category": "home-decoration",
+   "stock": 59,
+   "price": 14.99
+  },
+  {
+   "id": 47,
+   "category": "home-decoration",
+   "stock": 9,
+   "price": 49.99
+  },
+  {
+   "id": 48,
+   "category": "kitchen-accessories",
+   "stock": 37,
+   "price": 7.99
+  },
+  {
+   "id": 49,
+   "category": "kitchen-accessories",
+   "stock": 75,
+   "price": 5.99
+  },
+  {
+   "id": 50,
+   "category": "kitchen-accessories",
+   "stock": 73,
+   "price": 9.99
+  },
+  {
+   "id": 51,
+   "category": "kitchen-accessories",
+   "stock": 9,
+   "price": 39.99
+  },
+  {
+   "id": 52,
+   "category": "kitchen-accessories",
+   "stock": 40,
+   "price": 29.99
+  },
+  {
+   "id": 53,
+   "category": "kitchen-accessories",
+   "stock": 14,
+   "price": 12.99
+  },
+  {
+   "id": 54,
+   "category": "kitchen-accessories",
+   "stock": 22,
+   "price": 8.99
+  },
+  {
+   "id": 55,
+   "category": "kitchen-accessories",
+   "stock": 40,
+   "price": 6.99
+  },
+  {
+   "id": 56,
+   "category": "kitchen-accessories",
+   "stock": 21,
+   "price": 49.99
+  },
+  {
+   "id": 57,
+   "category": "kitchen-accessories",
+   "stock": 85,
+   "price": 9.99
+  },
+  {
+   "id": 58,
+   "category": "kitchen-accessories",
+   "stock": 7,
+   "price": 3.99
+  },
+  {
+   "id": 59,
+   "category": "kitchen-accessories",
+   "stock": 46,
+   "price": 4.99
+  },
+  {
+   "id": 60,
+   "category": "kitchen-accessories",
+   "stock": 84,
+   "price": 10.99
+  },
+  {
+   "id": 61,
+   "category": "kitchen-accessories",
+   "stock": 84,
+   "price": 34.99
+  },
+  {
+   "id": 62,
+   "category": "kitchen-accessories",
+   "stock": 13,
+   "price": 5.99
+  },
+  {
+   "id": 63,
+   "category": "kitchen-accessories",
+   "stock": 68,
+   "price": 7.99
+  },
+  {
+   "id": 64,
+   "category": "kitchen-accessories",
+   "stock": 7,
+   "price": 14.99
+  },
+  {
+   "id": 65,
+   "category": "kitchen-accessories",
+   "stock": 94,
+   "price": 12.99
+  },
+  {
+   "id": 66,
+   "category": "kitchen-accessories",
+   "stock": 59,
+   "price": 89.99
+  },
+  {
+   "id": 67,
+   "category": "kitchen-accessories",
+   "stock": 88,
+   "price": 15.99
+  },
+  {
+   "id": 68,
+   "category": "kitchen-accessories",
+   "stock": 90,
+   "price": 24.99
+  },
+  {
+   "id": 69,
+   "category": "kitchen-accessories",
+   "stock": 66,
+   "price": 3.99
+  },
+  {
+   "id": 70,
+   "category": "kitchen-accessories",
+   "stock": 82,
+   "price": 6.99
+  },
+  {
+   "id": 71,
+   "category": "kitchen-accessories",
+   "stock": 40,
+   "price": 39.99
+  },
+  {
+   "id": 72,
+   "category": "kitchen-accessories",
+   "stock": 88,
+   "price": 8.99
+  },
+  {
+   "id": 73,
+   "category": "kitchen-accessories",
+   "stock": 79,
+   "price": 19.99
+  },
+  {
+   "id": 74,
+   "category": "kitchen-accessories",
+   "stock": 59,
+   "price": 4.99
+  },
+  {
+   "id": 75,
+   "category": "kitchen-accessories",
+   "stock": 71,
+   "price": 16.99
+  },
+  {
+   "id": 76,
+   "category": "kitchen-accessories",
+   "stock": 80,
+   "price": 11.99
+  },
+  {
+   "id": 77,
+   "category": "kitchen-accessories",
+   "stock": 35,
+   "price": 5.99
+  },
+  {
+   "id": 78,
+   "category": "laptops",
+   "stock": 24,
+   "price": 1999.99
+  },
+  {
+   "id": 79,
+   "category": "laptops",
+   "stock": 45,
+   "price": 1799.99
+  },
+  {
+   "id": 80,
+   "category": "laptops",
+   "stock": 75,
+   "price": 1399.99
+  },
+  {
+   "id": 81,
+   "category": "laptops",
+   "stock": 40,
+   "price": 1099.99
+  },
+  {
+   "id": 82,
+   "category": "laptops",
+   "stock": 74,
+   "price": 1499.99
+  },
+  {
+   "id": 83,
+   "category": "mens-shirts",
+   "stock": 38,
+   "price": 29.99
+  },
+  {
+   "id": 84,
+   "category": "mens-shirts",
+   "stock": 90,
+   "price": 24.99
+  },
+  {
+   "id": 85,
+   "category": "mens-shirts",
+   "stock": 82,
+   "price": 34.99
+  },
+  {
+   "id": 86,
+   "category": "mens-shirts",
+   "stock": 2,
+   "price": 19.99
+  },
+  {
+   "id": 87,
+   "category": "mens-shirts",
+   "stock": 95,
+   "price": 27.99
+  },
+  {
+   "id": 88,
+   "category": "mens-shoes",
+   "stock": 7,
+   "price": 149.99
+  },
+  {
+   "id": 89,
+   "category": "mens-shoes",
+   "stock": 12,
+   "price": 79.99
+  },
+  {
+   "id": 90,
+   "category": "mens-shoes",
+   "stock": 90,
+   "price": 89.99
+  },
+  {
+   "id": 91,
+   "category": "mens-shoes",
+   "stock": 17,
+   "price": 119.99
+  },
+  {
+   "id": 92,
+   "category": "mens-shoes",
+   "stock": 62,
+   "price": 109.99
+  },
+  {
+   "id": 93,
+   "category": "mens-watches",
+   "stock": 32,
+   "price": 89.99
+  },
+  {
+   "id": 94,
+   "category": "mens-watches",
+   "stock": 100,
+   "price": 1499.99
+  },
+  {
+   "id": 95,
+   "category": "mens-watches",
+   "stock": 40,
+   "price": 8999.99
+  },
+  {
+   "id": 96,
+   "category": "mens-watches",
+   "stock": 36,
+   "price": 12999.99
+  },
+  {
+   "id": 97,
+   "category": "mens-watches",
+   "stock": 86,
+   "price": 10999.99
+  },
+  {
+   "id": 98,
+   "category": "mens-watches",
+   "stock": 55,
+   "price": 13999.99
+  },
+  {
+   "id": 99,
+   "category": "mobile-accessories",
+   "stock": 61,
+   "price": 99.99
+  },
+  {
+   "id": 100,
+   "category": "mobile-accessories",
+   "stock": 67,
+   "price": 129.99
+  },
+  {
+   "id": 101,
+   "category": "mobile-accessories",
+   "stock": 59,
+   "price": 549.99
+  },
+  {
+   "id": 102,
+   "category": "mobile-accessories",
+   "stock": 1,
+   "price": 79.99
+  },
+  {
+   "id": 103,
+   "category": "mobile-accessories",
+   "stock": 27,
+   "price": 99.99
+  },
+  {
+   "id": 104,
+   "category": "mobile-accessories",
+   "stock": 31,
+   "price": 19.99
+  },
+  {
+   "id": 105,
+   "category": "mobile-accessories",
+   "stock": 1,
+   "price": 99.99
+  },
+  {
+   "id": 106,
+   "category": "mobile-accessories",
+   "stock": 33,
+   "price": 349.99
+  },
+  {
+   "id": 107,
+   "category": "mobile-accessories",
+   "stock": 50,
+   "price": 49.99
+  },
+  {
+   "id": 108,
+   "category": "mobile-accessories",
+   "stock": 69,
+   "price": 29.99
+  },
+  {
+   "id": 109,
+   "category": "mobile-accessories",
+   "stock": 48,
+   "price": 19.99
+  },
+  {
+   "id": 110,
+   "category": "mobile-accessories",
+   "stock": 58,
+   "price": 14.99
+  },
+  {
+   "id": 111,
+   "category": "mobile-accessories",
+   "stock": 11,
+   "price": 12.99
+  },
+  {
+   "id": 112,
+   "category": "mobile-accessories",
+   "stock": 15,
+   "price": 499.99
+  },
+  {
+   "id": 113,
+   "category": "motorcycle",
+   "stock": 34,
+   "price": 3999.99
+  },
+  {
+   "id": 114,
+   "category": "motorcycle",
+   "stock": 52,
+   "price": 8999.99
+  },
+  {
+   "id": 115,
+   "category": "motorcycle",
+   "stock": 10,
+   "price": 14999.99
+  },
+  {
+   "id": 116,
+   "category": "motorcycle",
+   "stock": 84,
+   "price": 2999.99
+  },
+  {
+   "id": 117,
+   "category": "motorcycle",
+   "stock": 0,
+   "price": 7499.99
+  },
+  {
+   "id": 118,
+   "category": "skin-care",
+   "stock": 94,
+   "price": 8.99
+  },
+  {
+   "id": 119,
+   "category": "skin-care",
+   "stock": 34,
+   "price": 12.99
+  },
+  {
+   "id": 120,
+   "category": "skin-care",
+   "stock": 95,
+   "price": 9.99
+  },
+  {
+   "id": 121,
+   "category": "smartphones",
+   "stock": 25,
+   "price": 199.99
+  },
+  {
+   "id": 122,
+   "category": "smartphones",
+   "stock": 60,
+   "price": 299.99
+  },
+  {
+   "id": 123,
+   "category": "smartphones",
+   "stock": 56,
+   "price": 1099.99
+  },
+  {
+   "id": 124,
+   "category": "smartphones",
+   "stock": 37,
+   "price": 899.99
+  },
+  {
+   "id": 125,
+   "category": "smartphones",
+   "stock": 19,
+   "price": 249.99
+  },
+  {
+   "id": 126,
+   "category": "smartphones",
+   "stock": 78,
+   "price": 399.99
+  },
+  {
+   "id": 127,
+   "category": "smartphones",
+   "stock": 55,
+   "price": 299.99
+  },
+  {
+   "id": 128,
+   "category": "smartphones",
+   "stock": 48,
+   "price": 149.99
+  },
+  {
+   "id": 129,
+   "category": "smartphones",
+   "stock": 12,
+   "price": 299.99
+  },
+  {
+   "id": 130,
+   "category": "smartphones",
+   "stock": 80,
+   "price": 349.99
+  },
+  {
+   "id": 131,
+   "category": "smartphones",
+   "stock": 67,
+   "price": 299.99
+  },
+  {
+   "id": 132,
+   "category": "smartphones",
+   "stock": 0,
+   "price": 499.99
+  },
+  {
+   "id": 133,
+   "category": "smartphones",
+   "stock": 19,
+   "price": 699.99
+  },
+  {
+   "id": 134,
+   "category": "smartphones",
+   "stock": 50,
+   "price": 249.99
+  },
+  {
+   "id": 135,
+   "category": "smartphones",
+   "stock": 82,
+   "price": 299.99
+  },
+  {
+   "id": 136,
+   "category": "smartphones",
+   "stock": 7,
+   "price": 499.99
+  },
+  {
+   "id": 137,
+   "category": "sports-accessories",
+   "stock": 53,
+   "price": 19.99
+  },
+  {
+   "id": 138,
+   "category": "sports-accessories",
+   "stock": 100,
+   "price": 8.99
+  },
+  {
+   "id": 139,
+   "category": "sports-accessories",
+   "stock": 22,
+   "price": 24.99
+  },
+  {
+   "id": 140,
+   "category": "sports-accessories",
+   "stock": 75,
+   "price": 14.99
+  },
+  {
+   "id": 141,
+   "category": "sports-accessories",
+   "stock": 43,
+   "price": 39.99
+  },
+  {
+   "id": 142,
+   "category": "sports-accessories",
+   "stock": 30,
+   "price": 12.99
+  },
+  {
+   "id": 143,
+   "category": "sports-accessories",
+   "stock": 98,
+   "price": 29.99
+  },
+  {
+   "id": 144,
+   "category": "sports-accessories",
+   "stock": 10,
+   "price": 44.99
+  },
+  {
+   "id": 145,
+   "category": "sports-accessories",
+   "stock": 25,
+   "price": 29.99
+  },
+  {
+   "id": 146,
+   "category": "sports-accessories",
+   "stock": 95,
+   "price": 5.99
+  },
+  {
+   "id": 147,
+   "category": "sports-accessories",
+   "stock": 96,
+   "price": 17.99
+  },
+  {
+   "id": 148,
+   "category": "sports-accessories",
+   "stock": 84,
+   "price": 9.99
+  },
+  {
+   "id": 149,
+   "category": "sports-accessories",
+   "stock": 90,
+   "price": 49.99
+  },
+  {
+   "id": 150,
+   "category": "sports-accessories",
+   "stock": 16,
+   "price": 29.99
+  },
+  {
+   "id": 151,
+   "category": "sports-accessories",
+   "stock": 28,
+   "price": 6.99
+  },
+  {
+   "id": 152,
+   "category": "sports-accessories",
+   "stock": 6,
+   "price": 49.99
+  },
+  {
+   "id": 153,
+   "category": "sports-accessories",
+   "stock": 0,
+   "price": 11.99
+  },
+  {
+   "id": 154,
+   "category": "sunglasses",
+   "stock": 60,
+   "price": 29.99
+  },
+  {
+   "id": 155,
+   "category": "sunglasses",
+   "stock": 1,
+   "price": 24.99
+  },
+  {
+   "id": 156,
+   "category": "sunglasses",
+   "stock": 24,
+   "price": 34.99
+  },
+  {
+   "id": 157,
+   "category": "sunglasses",
+   "stock": 86,
+   "price": 19.99
+  },
+  {
+   "id": 158,
+   "category": "sunglasses",
+   "stock": 27,
+   "price": 22.99
+  },
+  {
+   "id": 159,
+   "category": "tablets",
+   "stock": 47,
+   "price": 499.99
+  },
+  {
+   "id": 160,
+   "category": "tablets",
+   "stock": 62,
+   "price": 599.99
+  },
+  {
+   "id": 161,
+   "category": "tablets",
+   "stock": 92,
+   "price": 349.99
+  },
+  {
+   "id": 162,
+   "category": "tops",
+   "stock": 52,
+   "price": 29.99
+  },
+  {
+   "id": 163,
+   "category": "tops",
+   "stock": 43,
+   "price": 19.99
+  },
+  {
+   "id": 164,
+   "category": "tops",
+   "stock": 55,
+   "price": 34.99
+  },
+  {
+   "id": 165,
+   "category": "tops",
+   "stock": 22,
+   "price": 24.99
+  },
+  {
+   "id": 166,
+   "category": "tops",
+   "stock": 73,
+   "price": 39.99
+  },
+  {
+   "id": 167,
+   "category": "vehicle",
+   "stock": 54,
+   "price": 28999.99
+  },
+  {
+   "id": 168,
+   "category": "vehicle",
+   "stock": 57,
+   "price": 32999.99
+  },
+  {
+   "id": 169,
+   "category": "vehicle",
+   "stock": 82,
+   "price": 24999.99
+  },
+  {
+   "id": 170,
+   "category": "vehicle",
+   "stock": 95,
+   "price": 36999.99
+  },
+  {
+   "id": 171,
+   "category": "vehicle",
+   "stock": 53,
+   "price": 31999.99
+  },
+  {
+   "id": 172,
+   "category": "womens-bags",
+   "stock": 76,
+   "price": 49.99
+  },
+  {
+   "id": 173,
+   "category": "womens-bags",
+   "stock": 99,
+   "price": 129.99
+  },
+  {
+   "id": 174,
+   "category": "womens-bags",
+   "stock": 75,
+   "price": 599.99
+  },
+  {
+   "id": 175,
+   "category": "womens-bags",
+   "stock": 39,
+   "price": 39.99
+  },
+  {
+   "id": 176,
+   "category": "womens-bags",
+   "stock": 11,
+   "price": 59.99
+  },
+  {
+   "id": 177,
+   "category": "womens-dresses",
+   "stock": 25,
+   "price": 129.99
+  },
+  {
+   "id": 178,
+   "category": "womens-dresses",
+   "stock": 30,
+   "price": 89.99
+  },
+  {
+   "id": 179,
+   "category": "womens-dresses",
+   "stock": 33,
+   "price": 79.99
+  },
+  {
+   "id": 180,
+   "category": "womens-dresses",
+   "stock": 6,
+   "price": 49.99
+  },
+  {
+   "id": 181,
+   "category": "womens-dresses",
+   "stock": 62,
+   "price": 179.99
+  },
+  {
+   "id": 182,
+   "category": "womens-jewellery",
+   "stock": 54,
+   "price": 29.99
+  },
+  {
+   "id": 183,
+   "category": "womens-jewellery",
+   "stock": 73,
+   "price": 24.99
+  },
+  {
+   "id": 184,
+   "category": "womens-jewellery",
+   "stock": 1,
+   "price": 19.99
+  },
+  {
+   "id": 185,
+   "category": "womens-shoes",
+   "stock": 3,
+   "price": 19.99
+  },
+  {
+   "id": 186,
+   "category": "womens-shoes",
+   "stock": 93,
+   "price": 79.99
+  },
+  {
+   "id": 187,
+   "category": "womens-shoes",
+   "stock": 88,
+   "price": 49.99
+  },
+  {
+   "id": 188,
+   "category": "womens-shoes",
+   "stock": 49,
+   "price": 29.99
+  },
+  {
+   "id": 189,
+   "category": "womens-shoes",
+   "stock": 7,
+   "price": 34.99
+  },
+  {
+   "id": 190,
+   "category": "womens-watches",
+   "stock": 90,
+   "price": 4999.99
+  },
+  {
+   "id": 191,
+   "category": "womens-watches",
+   "stock": 52,
+   "price": 15999.99
+  },
+  {
+   "id": 192,
+   "category": "womens-watches",
+   "stock": 4,
+   "price": 10999.99
+  },
+  {
+   "id": 193,
+   "category": "womens-watches",
+   "stock": 0,
+   "price": 799.99
+  },
+  {
+   "id": 194,
+   "category": "womens-watches",
+   "stock": 12,
+   "price": 129.99
+  }
+ ]
+}

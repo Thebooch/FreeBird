@@ -1,0 +1,45 @@
+[
+  {
+    "provider": "vaultbank",
+    "objective": "july-debits",
+    "split": "dev",
+    "integrator": "agent",
+    "interventions": {
+      "technical": 0,
+      "intent": 0,
+      "consent": 0,
+      "account": 0
+    },
+    "expected": 123953.4,
+    "records": 640,
+    "modelCalls": 5,
+    "setup": "done",
+    "retrieval": "ok",
+    "completeness": "complete",
+    "metric": "wrong",
+    "value": 640,
+    "recordsRead": 640,
+    "flagged": [],
+    "requests": 21,
+    "ms": 26140,
+    "log": [
+      "Imported 2 endpoint(s) from the OpenAPI spec at https://api.vaultbank.bench.test/openapi.json.",
+      "The \"signed\" sign-in scheme uses signed requests (AWS Signature, HMAC), which is only partly supported. Connector code signs each request: the server makes the signature with your key, and the code never sees the key. Each API's signing is written from its documentation and proven by a read.",
+      "1 endpoint uses CSV and TSV responses, which is only partly supported. Read through connector code, which turns the file into records. An endpoint that answers with a spreadsheet file is not read without it.",
+      "Changed by the first check: the API needs what a connection cannot describe (The \"signed\" sign-in scheme uses signed requests (AWS Signature, HMAC), which is only partly supported. Connector code signs each request: the server makes the signature with your key, and the code never sees the key. Each API's signing is written from its documentation and proven by a read. Check an export: This endpoint needs its authentication configured before it can be read); connector code does it — sign in through the connector with Key ID and Secret; run connector code (acd3d7238f15) that may reach api.vaultbank.bench.test: Checks the specified transaction export until it is ready, then downloads and parses every CSV transaction record. It signs each Vaultbank request with the configured key ID and secret without exposing the secret.; read Check an export with the connector; read Check an export in one response",
+      "Check an export: This endpoint needs its authentication configured before it can be read.",
+      "The model wrote connector code assuming: An export is ready when its status is exactly \"ready\". The documented URL, when present, remains on api.vaultbank.bench.test; otherwise the documented /exports/{id}/file route is used. Pending exports are polled once per second, up to ctx.maxPages attempts.",
+      "Connector code written; it needs Key ID and Secret before it can be tried.",
+      "Check an export: Vaultbank Business's connector could not read this: The connector failed: Error: Export status request failed with HTTP 404",
+      "The model wrote connector code assuming: The requested endpoint's path parameter is available as ctx.op.params.id. The export URL in a ready response is on api.vaultbank.bench.test; if the response omits it, the documented /exports/{id}/file endpoint is used. Polling occurs once per allowed page, with a one-second interval.",
+      "Tried connector code (15cd7eb20b03): Check an export: Vaultbank Business's connector could not read this: The connector failed: Error: An export id is required",
+      "The model wrote connector code assuming: The POST /exports response body contains the started export identifier in `id`. The supplied export URL, when present, is on api.vaultbank.bench.test; otherwise the documented /exports/{id}/file endpoint is used. Poll once per second and use maxPages as the maximum poll count.",
+      "Tried connector code (85b0c48c995e): Check an export: 640 record(s) on 5 page(s)",
+      "The first check read fields the documentation did not declare, for exports.",
+      "Record types described: Exports.",
+      "Brief: {\"entity\":\"export\",\"intent\":\"measure\",\"title\":\"Account outflows in July 2026\"}. The model said: I built a total for money that went out of the account in July 2026.",
+      "Check an export: 640 record(s) on 5 page(s)"
+    ],
+    "success": false
+  }
+]

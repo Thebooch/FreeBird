@@ -2,7 +2,7 @@ import type { LlmAdapter } from "@freebirdai/dash-agent";
 import { PROVIDERS, providersIn } from "./providers/index.js";
 import { BENCH_NOW } from "./seed.js";
 import { scoreOutcome } from "./score.js";
-import { benchTransport } from "./transport.js";
+import { benchTransport, liveTransport } from "./transport.js";
 import type { Integrator, MockProvider, ScenarioScore, Split } from "./types.js";
 
 /**
@@ -47,10 +47,31 @@ export const runSuite = async (options: SuiteOptions): Promise<ScenarioScore[]> 
     (provider) => !options.only || options.only.includes(provider.id),
   );
   for (const provider of providers) {
+    /*
+     * A real API's answer keys hold only while its data is what the snapshot
+     * says. Checked once per provider, before anything is scored.
+     */
+    const stale = provider.live && provider.freshness ? await provider.freshness(liveTransport([provider]).http).catch((error: unknown) => `the freshness check failed: ${error instanceof Error ? error.message : String(error)}`) : null;
     for (const objective of provider.objectives) {
       provider.reset?.();
       /* Only this provider is reachable: nothing can leak between scenarios. */
-      const transport = benchTransport(PROVIDERS.filter((one) => one.id === provider.id));
+      const transport = provider.live
+        ? liveTransport([provider])
+        : benchTransport(PROVIDERS.filter((one) => one.id === provider.id));
+      if (stale) {
+        scores.push(
+          await scoreOutcome({
+            provider,
+            objective,
+            integrator: options.integrator(provider).id,
+            outcome: { connection: null, widget: null, secrets: {}, interventions: [], notes: [`Stale answer key: ${stale}`], stoppedAt: "stale-key", modelCalls: 0 },
+            transport,
+            now: BENCH_NOW,
+            startedAt: Date.now(),
+          }),
+        );
+        continue;
+      }
       const integrator = options.integrator(provider);
       const llm = options.llm !== undefined ? options.llm : scriptedModel(provider.scriptedModel ?? {});
       const startedAt = Date.now();

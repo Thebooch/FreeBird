@@ -67,7 +67,8 @@ describe("mergeSpecDocuments", () => {
       parseOpenApi(fragment("/widgets"), "https://docs.widgets.test/a"),
       parseOpenApi(fragment("/widgets/{widgetId}"), "https://docs.widgets.test/b"),
     ];
-    expect(separately.flatMap((r) => r?.entry.resources ?? [])).toEqual([]);
+    /* Alone, the list is a collection with no record page to open. */
+    expect(separately.flatMap((r) => r?.entry.resources ?? []).map((one) => one.detailOp)).toEqual([undefined]);
 
     const { merged } = mergeSpecDocuments([
       at(fragment("/widgets"), "list-widgets"),
