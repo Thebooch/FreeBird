@@ -153,10 +153,18 @@ export const columnTotals = (
 ): readonly ColumnTotal[] => {
   const numeric = new Set(
     meta
-      // A flag sent as 1/0 is numeric on the wire; its sum means nothing.
+      /*
+       * A flag sent as 1/0 is numeric on the wire; its sum means nothing. Nor
+       * does a sum of percentages, or of a column a join repeated — that one
+       * counts some rows' values more than once.
+       */
       .filter(
         (column) =>
-          column.valueType === "numeric" && !isIdentifierColumn(column) && column.semantic !== "boolean",
+          column.valueType === "numeric" &&
+          !isIdentifierColumn(column) &&
+          column.semantic !== "boolean" &&
+          column.semantic !== "percent" &&
+          !column.repeated,
       )
       .map((column) => column.name),
   );

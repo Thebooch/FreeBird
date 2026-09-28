@@ -187,6 +187,26 @@ describe("group", () => {
       rows,
     ).rows;
 
+  it("says how many values a total could not read, instead of dropping them quietly", () => {
+    const result = run(
+      widget({
+        pipeline: [
+          { op: "extract", path: "$[*]" },
+          { op: "group", by: [{ field: "region" }], agg: { v: "sum(amount)" } },
+        ],
+      }),
+      [
+        { region: "emea", amount: 10 },
+        { region: "emea", amount: "$1,200" },
+        { region: "emea", amount: null },
+        { region: "emea", amount: true },
+      ],
+    );
+    // A flag still counts as 1: summing flags is how matching records are counted.
+    expect(result.rows).toEqual([{ region: "emea", v: 11 }]);
+    expect(result.meta.warnings.join()).toMatch(/1 value\(s\) in "amount" were not numbers/);
+  });
+
   it("computes every aggregation", () => {
     expect(grouped({ v: "sum(amount)" })).toEqual([
       { region: "amer", v: 5 },

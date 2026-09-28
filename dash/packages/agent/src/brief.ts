@@ -123,7 +123,12 @@ const MAX_TOTAL = 2;
 const DESCRIPTION_CHARS = 100;
 
 /** Numbers worth totalling, as opposed to identifiers that happen to be numeric. */
-const TOTALLABLE = new Set(["currency", "number", "count", "duration", "bytes", "percent"]);
+/*
+ * Not percentages: adding shares gives a number that is a share of nothing.
+ * An average of them is only right when every share is out of the same whole,
+ * which nothing here can know, so they are not offered as a total at all.
+ */
+const TOTALLABLE = new Set(["currency", "number", "count", "duration", "bytes"]);
 
 /**
  * The record types a request could be about, with the few fields worth naming.

@@ -16,6 +16,22 @@ export interface ConnectionSummary extends ConnectionSpec {
   hasKey: boolean;
 }
 
+/** What checking a connection found. See `routes/integrate.ts` on the server. */
+export interface IntegrationResult {
+  readonly outcome: "ready" | "partial" | "blocked";
+  readonly blocked?: string;
+  readonly changes: readonly string[];
+  readonly ops: ReadonlyArray<{
+    readonly op: string;
+    readonly title: string;
+    readonly outcome: "ready" | "blocked" | "skipped";
+    readonly level?: string;
+    readonly note: string;
+  }>;
+  readonly requests: number;
+  readonly modelCalls: number;
+}
+
 export interface SampleField {
   name: string;
   kinds: string[];
@@ -530,7 +546,7 @@ export interface WidgetCheck {
   readonly category: string;
   readonly widget: string;
   readonly title: string;
-  readonly status: "ready" | "unchecked" | "denied" | "unavailable" | "missingInput" | "schema";
+  readonly status: "ready" | "partial" | "unchecked" | "denied" | "unavailable" | "missingInput" | "schema";
   readonly message: string;
 }
 
@@ -896,6 +912,17 @@ export const api = {
    * API: the answer describes the API rather than this account, so everybody
    * who connects it afterwards inherits it.
    */
+  /**
+   * Read the endpoints that matter, repair what the documentation got wrong,
+   * confirm how each pages, and keep the result. Spends API requests, bounded.
+   */
+  integrateConnection: (connectionId: string): Promise<IntegrationResult> =>
+    request(`/api/connections/${connectionId}/integrate`, json({})),
+
+  /** Where to send somebody to sign in with the provider, and the return address it uses. */
+  startSignIn: (connectionId: string): Promise<{ authorizeUrl: string; redirectUri: string }> =>
+    request(`/api/connections/${connectionId}/oauth/start`, json({})),
+
   prepareOnboarding: (
     connectionId: string,
   ): Promise<OnboardingState & { readonly step: PrepareStep }> =>

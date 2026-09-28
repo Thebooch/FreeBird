@@ -120,7 +120,7 @@ describe("RestAdapter", () => {
     const { http } = stub([{ body: { data: [{ id: 1 }], cursor: "same" } }]);
     const result = await new RestAdapter(http).fetch(conn, op(conn), {}, ctx());
     expect(result.meta.truncated).toBe(true);
-    expect(result.meta.warnings.join(" ")).toContain("repeated");
+    expect(result.meta.warnings.join(" ")).toContain("same page twice");
   });
   it("must run server-side", () => {
     expect(new RestAdapter(stub([{ body: {} }]).http).transport).toBe("proxy");
@@ -156,6 +156,20 @@ describe("RestAdapter", () => {
     expect(url.searchParams.get("since")).toBe(
       String(Math.floor(resolveRange({ preset: "7d", now: NOW }).start / 1000)),
     );
+  });
+
+  it("encodes a path value, so an id with a slash stays one segment", async () => {
+    const { http, calls } = stub([{ body: { data: [] } }]);
+    const conn = connection({
+      ops: [{ id: "items", title: "Items", path: "/orgs/{{param.region}}/items" }],
+    });
+    await new RestAdapter(http).fetch(
+      conn,
+      op(conn),
+      {},
+      ctx({ params: { ...ctx().params, filters: { region: "a/b?c" } } }),
+    );
+    expect(new URL(calls[0]!.url).pathname).toBe("/v1/orgs/a%2Fb%3Fc/items");
   });
 
   it("treats an empty override as no filter rather than filtering by empty", async () => {
@@ -461,7 +475,7 @@ describe("RestAdapter", () => {
       const result = await new RestAdapter(http).fetch(conn, op(conn), {}, ctx());
 
       expect(result.meta.truncated).toBe(true);
-      expect(result.meta.warnings[0]).toMatch(/stopped after 2 page\(s\)/);
+      expect(result.meta.warnings[0]).toMatch(/first 2 page\(s\) were read/);
     });
 
     it("breaks a pagination loop instead of hammering the same URL", async () => {
@@ -480,7 +494,7 @@ describe("RestAdapter", () => {
       });
       const result = await new RestAdapter(http).fetch(conn, op(conn), {}, ctx());
       expect(calls.length).toBeLessThan(4);
-      expect(result.meta.warnings.join()).toMatch(/repeated a page/);
+      expect(result.meta.warnings.join()).toMatch(/same page twice/);
     });
   });
 });

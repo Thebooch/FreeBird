@@ -23,6 +23,12 @@ export interface FetchMeta {
   readonly pages: number;
   /** Set when the page cap stopped us before the data ran out. */
   readonly truncated: boolean;
+  /**
+   * How many records the API says match in all, when it says — a total in
+   * the response or an `X-Total-Count` header. What a read is checked
+   * against, and what "read 500 of 12,431" is counted from.
+   */
+  readonly reportedTotal?: number;
   readonly warnings: readonly string[];
   /**
    * Whether this came from the server's cache, and how.
@@ -90,6 +96,14 @@ export interface FetchContext {
    * themselves and never see a key they were not explicitly handed.
    */
   readonly resolveSecret?: (keyRef: string) => Promise<string | null>;
+  /**
+   * A new credential after a page was refused for its token — OAuth's
+   * renewal. Resolves true when there is one; the refused page is then read
+   * again with it, and the read carries on from there rather than starting
+   * over, so a token that runs out part-way through does not cost the pages
+   * already read.
+   */
+  readonly renew?: () => Promise<boolean>;
 }
 
 export interface SourceAdapter {

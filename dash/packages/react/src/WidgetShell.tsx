@@ -436,6 +436,27 @@ export const WidgetShell = ({
           </p>
         )}
 
+      {/*
+       * What is drawn is not all of it: a page cap, a record read only in
+       * part, a source that stopped early. On the tile, not behind a hover,
+       * because this is what changes whether a total can be acted on — and
+       * it is phrased as what was left out, never as a guess at how much.
+       */}
+      {(data.state === "ok" || data.state === "empty") && data.incomplete.length > 0 && (
+        <p
+          className="dash-widget__incomplete"
+          role="note"
+          data-testid={`incomplete-${widget.id}`}
+          title={data.incomplete.join("\n")}
+        >
+          <span aria-hidden="true">◐</span>
+          <span>
+            {data.incomplete[0]}
+            {data.incomplete.length > 1 ? ` (${data.incomplete.length - 1} more reason${data.incomplete.length === 2 ? "" : "s"})` : ""}
+          </span>
+        </p>
+      )}
+
       <div className="dash-widget__body">
         {/*
          * The boundary sits inside the frame, not around it.
@@ -501,13 +522,13 @@ const WidgetFooter = ({
   rows: readonly Row[];
   now: number;
 }): JSX.Element => {
-  const truncated = data.fetchMeta?.truncated === true;
+  const truncated = data.fetchMeta?.truncated === true || data.incomplete.length > 0;
   return (
     <div className="dash-widget__foot">
       <span className="dash-widget__count">
         {rows.length.toLocaleString()} {rows.length === 1 ? "row" : "rows"}
         {truncated && (
-          <span className="dash-widget__more" title="More records exist upstream than were fetched">
+          <span className="dash-widget__more" title={data.incomplete.join("\n") || "Not every record was read"}>
             {" "}
             · partial
           </span>

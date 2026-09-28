@@ -1,11 +1,10 @@
 /**
  * Every change made to a connected account, as one record.
  *
- * The event log that keeps these — what was there before, what was sent,
- * what came back, who did it — is not built yet. What is built is the one
- * place every write passes through handing it a complete event, so the log
- * is a matter of storing what already arrives rather than of finding every
- * write and teaching it to report.
+ * Every write passes through one place that hands it a complete event: what
+ * was there before, what was sent, what came back, who did it. The open-source
+ * build keeps them in Dash's own database (`DbWriteJournal`); a hosted build
+ * keeps them wherever it keeps its audit trail.
  *
  * `before` and `sent` are what a reversal needs. `reversal` says which step
  * would undo this one, as far as the API allows it: a hint for whoever
@@ -67,18 +66,47 @@ export interface WriteEvent {
   readonly reversal?: WriteReversal | undefined;
 }
 
-/** Where write events go. */
-export interface WriteJournal {
-  record(event: WriteEvent): void | Promise<void>;
+/**
+ * A read sent with POST whose safety rests on a reading of the documentation
+ * rather than on the protocol — a search, named like one. It should change
+ * nothing; if it ever did, this is where somebody finds out when, and how
+ * often it was sent.
+ */
+export interface ReadEvent {
+  readonly id: string;
+  /** ISO timestamp. */
+  readonly at: string;
+  readonly connection: string;
+  readonly opId: string;
+  readonly method: "POST";
+  /** The path as sent. Never the query string, which can carry a key. */
+  readonly path: string;
+  /** Why it is believed to read: the op's `readSafety`. */
+  readonly basis: string;
+  /** Who sent it: a board somebody opened, or the connection's check. */
+  readonly via: "board" | "check";
+  readonly status: "succeeded" | "failed";
+  readonly upstreamStatus?: number | undefined;
+  readonly pages?: number | undefined;
 }
 
-/** Nowhere, yet. The open-source default until the event log exists. */
+/** Where write events go — and reads that might not be reads. */
+export interface WriteJournal {
+  record(event: WriteEvent): void | Promise<void>;
+  recordRead?(event: ReadEvent): void | Promise<void>;
+}
+
+/** Nowhere: what a test gets. The real entry point keeps them in Dash's database. */
 export const nullJournal: WriteJournal = { record: () => undefined };
 
 /** Kept in memory, for tests and for anything that wants the last few. */
 export class MemoryJournal implements WriteJournal {
   readonly events: WriteEvent[] = [];
+  readonly reads: ReadEvent[] = [];
   record(event: WriteEvent): void {
     this.events.push(event);
+  }
+  recordRead(event: ReadEvent): void {
+    this.reads.push(event);
   }
 }

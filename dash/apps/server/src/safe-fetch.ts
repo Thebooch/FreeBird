@@ -169,6 +169,8 @@ export interface GuardedInit {
   readonly signal?: AbortSignal;
   readonly method?: string;
   readonly body?: string;
+  /** See `HttpFetch`'s init: a read sent with POST says it reads. */
+  readonly purpose?: "read" | "write";
 }
 
 /**
@@ -213,7 +215,13 @@ const fetchGuarded = async (
   maxBytes: number = MAX_BODY_BYTES,
 ): Promise<GuardedFetchResult> => {
   const method = (init.method ?? "GET").toUpperCase();
-  const reading = method === "GET";
+  /*
+   * A read sent with POST is still a read — a failure before it left is not a
+   * "change not sent" — but it is never redirected: following one would send
+   * its body to a second address.
+   */
+  const reading = init.purpose ? init.purpose === "read" : method === "GET";
+  const follows = method === "GET";
   let current: URL;
   try {
     current = await assertPublicHttpUrl(rawUrl);
@@ -239,7 +247,7 @@ const fetchGuarded = async (
             "user-agent": "FreeBirdDash/0.1 (+https://github.com/Thebooch/FreeBird)",
             ...init.headers,
           },
-          ...(reading || init.body === undefined ? {} : { body: init.body }),
+          ...(method === "GET" || init.body === undefined ? {} : { body: init.body }),
         });
       } catch (error) {
         if (!reading && error instanceof Error && failedBeforeSending(error)) throw notSent(error);
@@ -252,7 +260,7 @@ const fetchGuarded = async (
        * second address, and a 303 after a POST can mean the API already did
        * what was asked. The caller says so rather than guessing which.
        */
-      if (!reading && response.status >= 300 && response.status < 400) {
+      if (!follows && response.status >= 300 && response.status < 400) {
         return { status: response.status, headers: response.headers, text: "", url: current.toString() };
       }
 

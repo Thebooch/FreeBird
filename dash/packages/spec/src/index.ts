@@ -13,7 +13,20 @@ export {
   coercionSchema,
   fieldFormatSchema,
 } from "./coercion.js";
-export { connectionKeyRef } from "./primitives.js";
+export {
+  MAX_PAGES,
+  PARAM_LOCATIONS,
+  READ_SAFETY_BASES,
+  authTokenRefs,
+  connectionKeyRef,
+  graphqlOperations,
+  graphqlReadsOnly,
+  pagingParamNames,
+  readBodySchema,
+  readSafetySchema,
+  safeByProtocol,
+} from "./primitives.js";
+export type { OAuthSpec, ReadBody, ReadSafety } from "./primitives.js";
 export type { Coercion, FieldFormat } from "./coercion.js";
 
 export {
@@ -421,6 +434,7 @@ export {
   grainSchema,
   hasTokens,
   interpolate,
+  interpolatePath,
   interpolateValue,
   parseTokens,
   quantiseEnd,
@@ -538,3 +552,35 @@ export type { NamedSource } from "./dashboard.js";
 export type { BuiltinComponentId } from "./contracts.js";
 export { findNarrowing, narrowingFileSchema, narrowingSchema } from "./narrowing.js";
 export type { Narrowing, NarrowingFile } from "./narrowing.js";
+export {
+  CAPABILITIES,
+  capability,
+  capabilityNote,
+  compatibilityMarkdown,
+} from "./capabilities.js";
+export type {
+  Capability,
+  CapabilityArea,
+  CapabilityId,
+  CapabilityStatus,
+} from "./capabilities.js";
+export {
+  EVIDENCE_LEVELS,
+  EVIDENCE_WORDS,
+  evidenceLevelSchema,
+  evidenceRank,
+  evidenceSchema,
+  strongestEvidence,
+} from "./evidence.js";
+export type { Evidence, EvidenceLevel } from "./evidence.js";
+export {
+  CONNECTOR_CONTRACT,
+  CONNECTOR_HOOKS,
+  CONNECTOR_METHODS,
+  connectorAuthoritySchema,
+  connectorDestinationSchema,
+  connectorExchangeSchema,
+  connectorSchema,
+} from "./connector.js";
+export type { ConnectorAuthority, ConnectorDestination, ConnectorHook, ConnectorSpec } from "./connector.js";
+export { credentialNameSchema } from "./primitives.js";

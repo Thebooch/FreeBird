@@ -472,8 +472,19 @@ describe("mapDialectProposal", () => {
       paginationKind: "cursor",
       paginationParam: "after",
     });
-    expect(entry?.dialect.pagination).toMatchObject({ kind: "cursor", param: "after" });
+    expect(entry?.paginationProposal).toMatchObject({ kind: "cursor", param: "after" });
     expect(warnings.join()).toMatch(/not which response field carries it/);
+  });
+
+  it("keeps prose pagination as a proposal, never the live setting", () => {
+    const { entry, warnings } = mapDialectProposal({
+      ...base,
+      paginationKind: "page",
+      paginationParam: "page",
+    });
+    expect(entry?.dialect.pagination).toEqual({ kind: "none" });
+    expect(entry?.paginationProposal).toMatchObject({ kind: "page", param: "page" });
+    expect(warnings.join()).toMatch(/unconfirmed suggestion/);
   });
 
   it("keeps writes read from prose apart, and marks them inferred", () => {
@@ -506,6 +517,17 @@ describe("mapDialectProposal", () => {
     const { entry, warnings } = mapDialectProposal({ ...base, authType: "magic" });
     expect(entry?.dialect.auth).toEqual({ type: "none" });
     expect(warnings.join()).toMatch(/not an authentication style we support/);
+  });
+
+  it("names a sign-in the docs describe that no supported style covers", () => {
+    const signed = mapDialectProposal({ ...base, authType: "signed (HMAC)" });
+    expect(signed.entry?.dialect.auth).toEqual({ type: "none" });
+    expect(signed.warnings.join()).toMatch(/signed requests.*only partly supported\. Connector code signs/);
+
+    // OAuth stands in as a pasted token, and says the token will expire.
+    const oauth = mapDialectProposal({ ...base, authType: "oauth2" });
+    expect(oauth.entry?.dialect.auth).toMatchObject({ type: "bearer" });
+    expect(oauth.warnings.join()).toMatch(/OAuth 2\.0 without a flow Dash can run, which is only partly supported/);
   });
 
   it("drops endpoints given as absolute URLs", () => {

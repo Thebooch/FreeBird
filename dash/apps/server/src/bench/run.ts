@@ -1,0 +1,146 @@
+import type { LlmAdapter } from "@freebirdai/dash-agent";
+import { PROVIDERS, providersIn } from "./providers/index.js";
+import { BENCH_NOW } from "./seed.js";
+import { scoreOutcome } from "./score.js";
+import { benchTransport } from "./transport.js";
+import type { Integrator, MockProvider, ScenarioScore, Split } from "./types.js";
+
+/**
+ * A model that answers from a provider's script, by tool name.
+ *
+ * A call the script has no answer for gets no tool call at all, which every
+ * caller already treats as the model declining — so an unscripted step fails
+ * the way a real refusal would, rather than being handed some other answer.
+ */
+export const scriptedModel = (answers: Readonly<Record<string, unknown>>): LlmAdapter => {
+  const generate: LlmAdapter["generate"] = async (opts) => {
+    const name =
+      typeof opts.toolChoice === "object" && opts.toolChoice
+        ? (opts.toolChoice as { name: string }).name
+        : Object.keys(opts.tools ?? {})[0];
+    if (!name || !(name in answers)) return { text: "", toolCalls: [] };
+    return { text: "", toolCalls: [{ id: `scripted_${name}`, name, args: answers[name] }] };
+  };
+  return {
+    defaultModel: "scripted",
+    generate,
+    stream: async function* (opts) {
+      const result = await generate(opts);
+      for (const call of result.toolCalls) yield { toolCall: call };
+    },
+  };
+};
+
+export interface SuiteOptions {
+  readonly split: Split;
+  readonly integrator: (provider: MockProvider) => Integrator;
+  /** Give the integrator each objective's scripted choice. CI does; a judgment run does not. */
+  readonly scripted: boolean;
+  /** A real model for live runs; otherwise each provider's script. */
+  readonly llm?: LlmAdapter | null;
+  readonly only?: readonly string[];
+}
+
+export const runSuite = async (options: SuiteOptions): Promise<ScenarioScore[]> => {
+  const scores: ScenarioScore[] = [];
+  const providers = providersIn(options.split).filter(
+    (provider) => !options.only || options.only.includes(provider.id),
+  );
+  for (const provider of providers) {
+    for (const objective of provider.objectives) {
+      provider.reset?.();
+      /* Only this provider is reachable: nothing can leak between scenarios. */
+      const transport = benchTransport(PROVIDERS.filter((one) => one.id === provider.id));
+      const integrator = options.integrator(provider);
+      const llm = options.llm !== undefined ? options.llm : scriptedModel(provider.scriptedModel ?? {});
+      const startedAt = Date.now();
+      const outcome = await integrator.integrate(
+        {
+          provider: provider.id,
+          docsUrl: provider.docsUrl,
+          credentials: provider.credentials,
+          ...(provider.credentialLabels ? { credentialLabels: provider.credentialLabels } : {}),
+          objective: {
+            id: objective.id,
+            request: objective.request,
+            ...(options.scripted ? { scripted: objective.scripted } : {}),
+          },
+        },
+        { http: transport.http, fetchDocument: transport.fetchDocument, llm, now: BENCH_NOW },
+      );
+      scores.push(
+        await scoreOutcome({
+          provider,
+          objective,
+          integrator: integrator.id,
+          outcome,
+          transport,
+          now: BENCH_NOW,
+          startedAt,
+        }),
+      );
+    }
+  }
+  return scores;
+};
+
+/** Float noise such as 3591.2400000000002 does not reach a report. */
+const cell = (value: unknown): string =>
+  (typeof value === "number" && !Number.isInteger(value)
+    ? String(Math.round(value * 10_000) / 10_000)
+    : String(value ?? "—")
+  )
+    .replace(/\|/g, "\\|")
+    .replace(/\n/g, " ");
+
+/** The report: every dimension in its own column, and no single blended score. */
+export const reportMarkdown = (
+  scores: readonly ScenarioScore[],
+  context: { split: Split; integrator: string; scripted: boolean; checkpoint?: string; model: string; date: string },
+): string => {
+  const count = (test: (score: ScenarioScore) => boolean) => scores.filter(test).length;
+  const lines = [
+    `# Benchmark: ${context.integrator}, ${context.split} split${context.checkpoint ? ` — ${context.checkpoint}` : ""}`,
+    "",
+    `- Date: ${context.date}`,
+    `- Choices: ${context.scripted ? "scripted (measures mechanics, not judgment — see PROTOCOL.md)" : "the integrator's own"}`,
+    `- Model: ${context.model}`,
+    "",
+    "| | Count |",
+    "|---|---|",
+    `| Scenarios | ${scores.length} |`,
+    `| Task success | ${count((one) => one.success)} |`,
+    `| Setup done | ${count((one) => one.setup === "done")} |`,
+    `| With a technical intervention | ${count((one) => one.interventions.technical > 0)} |`,
+    `| Retrieval ok | ${count((one) => one.retrieval === "ok")} |`,
+    `| Complete | ${count((one) => one.completeness === "complete")} |`,
+    `| Incomplete, and said so | ${count((one) => one.completeness === "incomplete-flagged")} |`,
+    `| Incomplete, silently | ${count((one) => one.completeness === "incomplete-silent")} |`,
+    `| Metric correct | ${count((one) => one.metric === "correct")} |`,
+    "",
+    "| Provider | Objective | Setup | Tech. int. | Retrieval | Completeness | Read / held | Metric | Value / expected | Requests | Model calls | Note |",
+    "|---|---|---|---|---|---|---|---|---|---|---|---|",
+    ...scores.map((one) =>
+      [
+        one.provider,
+        one.objective,
+        one.setup,
+        one.interventions.technical,
+        one.retrieval,
+        one.completeness,
+        `${one.recordsRead ?? "—"} / ${one.records}`,
+        one.metric,
+        `${cell(one.value)} / ${cell(one.expected)}`,
+        one.requests,
+        one.modelCalls,
+        one.error ?? one.flagged[0] ?? "",
+      ]
+        .map(cell)
+        .join(" | ")
+        .replace(/^/, "| ")
+        .replace(/$/, " |"),
+    ),
+    "",
+  ];
+  return lines.join("\n");
+};

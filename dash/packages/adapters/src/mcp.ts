@@ -1,3 +1,4 @@
+import { INCOMPLETE } from "./incomplete.js";
 import type { ConnectionSpec, OpSpec } from "@freebirdai/dash-spec";
 import { interpolate } from "@freebirdai/dash-spec";
 import { firstPageParams, mergePages, nextPageParams, rowsAt } from "./paginate.js";
@@ -185,9 +186,7 @@ export class McpAdapter implements SourceAdapter {
      * silently treated as a single page.
      */
     if (op.pagination.kind === "link-header") {
-      warnings.push(
-        "this connection declares link-header pagination, which MCP has no equivalent for; only the first page was read",
-      );
+      warnings.push(INCOMPLETE.linkHeader);
     }
 
     const pages: unknown[] = [];
@@ -201,7 +200,7 @@ export class McpAdapter implements SourceAdapter {
       const request = JSON.stringify(args);
       if (seen.has(request)) {
         truncated = true;
-        warnings.push("pagination repeated the same tool arguments; the result may be incomplete");
+        warnings.push(INCOMPLETE.repeatedArgs);
         break;
       }
       seen.add(request);
@@ -218,9 +217,7 @@ export class McpAdapter implements SourceAdapter {
       pageIndex++;
       if (op.pagination.kind !== "none" && rowsAt(pages[pages.length - 1], op.rowsPath) === null) {
         truncated = true;
-        warnings.push(
-          "the declared row list is missing; pagination stopped with an incomplete result",
-        );
+        warnings.push(INCOMPLETE.rowsMissing);
         break;
       }
 
@@ -240,17 +237,20 @@ export class McpAdapter implements SourceAdapter {
           // Say so loudly, exactly as REST does: a silently truncated result
           // is a chart that is quietly incomplete.
           truncated = true;
-          warnings.push(
-            `stopped after ${op.maxPages} page(s); there is more data behind this tool`,
-          );
+          warnings.push(INCOMPLETE.pageCap(op.maxPages, "tool"));
         }
       } else {
         more = false;
       }
     }
 
+    const beforeMerge = warnings.length;
+    const body = pages.length === 1 ? pages[0] : mergePages(pages, op.rowsPath, warnings);
+    // A merge that fell back to the first page left the rest out.
+    if (warnings.length > beforeMerge) truncated = true;
+
     return {
-      body: pages.length === 1 ? pages[0] : mergePages(pages, op.rowsPath, warnings),
+      body,
       meta: {
         url: `mcp://${connection.id}/${toolName}`,
         status: 200,

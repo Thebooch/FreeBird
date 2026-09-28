@@ -114,16 +114,73 @@ const mergeNamed = (
   }
 };
 
+/**
+ * Where each reusable kind lives, per specification version.
+ *
+ * Swagger 2 keeps them at the root; OpenAPI 3 under `components`. The merged
+ * document takes the first fragment's version, and every kind has to land
+ * where that version's readers look — a Swagger 2 document whose definitions
+ * sat under `components` resolved no `#/definitions/…` reference and declared
+ * no security scheme, which imported as an API needing no key and returning
+ * nothing.
+ */
+const KINDS = [
+  { v3: "securitySchemes", v2: "securityDefinitions" },
+  { v3: "schemas", v2: "definitions" },
+  { v3: "parameters", v2: "parameters" },
+  { v3: "responses", v2: "responses" },
+  /* No Swagger 2 equivalent: a body there is an `in: body` parameter. */
+  { v3: "requestBodies", v2: null },
+] as const;
+
+type Version = 2 | 3;
+
+const versionOf = (doc: Json): Version => (typeof doc.swagger === "string" ? 2 : 3);
+
+const refPrefix = (kind: (typeof KINDS)[number], version: Version): string | null =>
+  version === 2 ? (kind.v2 ? `#/${kind.v2}/` : null) : `#/components/${kind.v3}/`;
+
+/**
+ * Point a fragment's references at where the merged document keeps things.
+ *
+ * Only a fragment of the other version needs it; the walk returns the value
+ * untouched otherwise, so the common case copies nothing.
+ */
+const rewriteRefs = (value: unknown, from: Version, to: Version): unknown => {
+  if (from === to) return value;
+  if (Array.isArray(value)) return value.map((item) => rewriteRefs(item, from, to));
+  if (!isObject(value)) return value;
+  const out: Json = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (key === "$ref" && typeof child === "string") {
+      let ref = child;
+      for (const kind of KINDS) {
+        const source = refPrefix(kind, from);
+        const target = refPrefix(kind, to);
+        if (source && target && ref.startsWith(source)) {
+          ref = target + ref.slice(source.length);
+          break;
+        }
+      }
+      out[key] = ref;
+    } else {
+      out[key] = rewriteRefs(child, from, to);
+    }
+  }
+  return out;
+};
+
 export const mergeSpecDocuments = (fragments: readonly SpecFragment[]): MergedSpec => {
   const warnings: string[] = [];
   const usable = fragments.filter((fragment) => isObject(fragment.spec));
   if (usable.length === 0) return { merged: null, warnings, operations: 0 };
 
   const first = usable[0]!.spec as Json;
+  const target = versionOf(first);
 
   const paths: Json = {};
-  const securitySchemes: Json = {};
-  const schemas: Json = {};
+  /* One map per reusable kind, keyed by its OpenAPI 3 name. */
+  const named = new Map<string, Json>(KINDS.map((kind) => [kind.v3, {}]));
   const security: unknown[] = [];
   const seenSecurity = new Set<string>();
   /*
@@ -149,7 +206,10 @@ export const mergeSpecDocuments = (fragments: readonly SpecFragment[]): MergedSp
   const serverHosts = new Set<string>();
 
   for (const { spec, sourceUrl } of usable) {
-    const doc = spec as Json;
+    const raw = spec as Json;
+    const from = versionOf(raw);
+    /* A fragment of the other version has its references repointed first. */
+    const doc = rewriteRefs(raw, from, target) as Json;
 
     // ── info: the first page to state something wins ──────────────────────
     const info = isObject(doc.info) ? doc.info : {};
@@ -206,11 +266,12 @@ export const mergeSpecDocuments = (fragments: readonly SpecFragment[]): MergedSp
 
     // ── components: the $ref targets each fragment carries with it ────────
     const components = isObject(doc.components) ? doc.components : {};
-    mergeNamed(securitySchemes, components.securitySchemes, "securitySchemes", sourceUrl, warnings);
-    mergeNamed(schemas, components.schemas, "schemas", sourceUrl, warnings);
-    // Swagger 2 keeps them at the root.
-    mergeNamed(securitySchemes, doc.securityDefinitions, "securityDefinitions", sourceUrl, warnings);
-    mergeNamed(schemas, doc.definitions, "definitions", sourceUrl, warnings);
+    for (const kind of KINDS) {
+      const into = named.get(kind.v3)!;
+      if (from === 3) mergeNamed(into, components[kind.v3], kind.v3, sourceUrl, warnings);
+      // Swagger 2 keeps them at the root.
+      else if (kind.v2) mergeNamed(into, doc[kind.v2], kind.v2, sourceUrl, warnings);
+    }
 
     // ── security: the union feeds authFrom's declared-scheme bonus ────────
     if (Array.isArray(doc.security)) {
@@ -252,24 +313,26 @@ export const mergeSpecDocuments = (fragments: readonly SpecFragment[]): MergedSp
     ...(security.length > 0 ? { security } : {}),
     ...(tags.size > 0 ? { tags: [...tags.values()] } : {}),
     paths,
-    ...(Object.keys(securitySchemes).length > 0 || Object.keys(schemas).length > 0
-      ? {
-          components: {
-            ...(Object.keys(securitySchemes).length > 0 ? { securitySchemes } : {}),
-            ...(Object.keys(schemas).length > 0 ? { schemas } : {}),
-          },
-        }
-      : {}),
   };
 
+  const filled = KINDS.filter((kind) => Object.keys(named.get(kind.v3)!).length > 0);
   // Swagger 2 fragments carry `swagger` rather than `openapi`; keep whichever
   // the first document declared so `looksLikeOpenApi` and `specVersionOf` agree.
-  if (typeof first.swagger === "string") {
+  if (target === 2) {
     delete merged.openapi;
     merged.swagger = first.swagger;
     if (typeof first.host === "string") merged.host = first.host;
     if (typeof first.basePath === "string") merged.basePath = first.basePath;
     if (Array.isArray(first.schemes)) merged.schemes = first.schemes;
+    for (const kind of filled) {
+      if (kind.v2) merged[kind.v2] = named.get(kind.v3);
+      else
+        warnings.push(
+          `Shared ${kind.v3} from OpenAPI 3 pages have no place in this Swagger 2 document and were dropped.`,
+        );
+    }
+  } else if (filled.length > 0) {
+    merged.components = Object.fromEntries(filled.map((kind) => [kind.v3, named.get(kind.v3)]));
   }
 
   return { merged, warnings, operations };

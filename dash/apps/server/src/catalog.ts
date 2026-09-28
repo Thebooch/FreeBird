@@ -282,6 +282,7 @@ export const connectionFromCatalog = (
       ...(op.rowsPath ? { rowsPath: op.rowsPath } : {}),
       query: op.query,
     })),
+    ...(entry.connector ? { connector: entry.connector } : {}),
     ...(entry.validateOpId && chosen.some((op) => op.id === entry.validateOpId)
       ? { validateOpId: entry.validateOpId }
       : chosen[0]

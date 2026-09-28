@@ -226,6 +226,25 @@ export const interpolate = (source: string, params: ResolvedParams): string =>
     ),
   );
 
+/**
+ * Interpolate a URL path, encoding every substituted value.
+ *
+ * A path value is one segment: an id holding `/`, `?` or `#` must not become
+ * two segments or the start of a query string, which would read a different
+ * record — or a different endpoint — under this one's name.
+ */
+export const interpolatePath = (source: string, params: ResolvedParams): string =>
+  source.replace(TOKEN_RE, (_raw, key: string, filter: string | undefined) =>
+    encodeURIComponent(
+      applyFilter(
+        lookup(key, params),
+        (TOKEN_FILTERS as readonly string[]).includes(filter ?? "")
+          ? (filter as TokenFilter)
+          : null,
+      ),
+    ),
+  );
+
 /** Interpolate a value that may or may not be a string. */
 export const interpolateValue = (
   value: string | number | boolean,

@@ -85,7 +85,8 @@ export class WriteError extends Error {
 export interface WriteServiceDeps {
   readonly store: SpecStore;
   readonly catalog: CatalogStore | undefined;
-  readonly keys: KeyStore;
+  /** Only read, and through the credential broker, so an OAuth token is always current. */
+  readonly keys: Pick<KeyStore, "get"> | { get(keyRef: string): Promise<string | null> };
   readonly registry: AdapterRegistry;
   readonly rest: RestAdapter;
   readonly queries: QueryCache;
@@ -307,7 +308,7 @@ export class WriteService {
           this.deps.registry.fetch(connection.id, op.id, {}, {
             params: { range: resolveRange({ preset: "30d", now: this.now() }), filters },
             now: this.now(),
-            resolveSecret: async (keyRef) => this.deps.keys.get(keyRef),
+            resolveSecret: async (keyRef) => (await this.deps.keys.get(keyRef)) ?? null,
           }),
         Priority.Interactive,
       );
@@ -634,7 +635,7 @@ export class WriteService {
               ...(pending.body !== undefined ? { body: pending.body } : {}),
               ...(writeOp.body?.contentType ? { contentType: writeOp.body.contentType } : {}),
             },
-            { now: this.now(), resolveSecret: async (keyRef) => this.deps.keys.get(keyRef) },
+            { now: this.now(), resolveSecret: async (keyRef) => (await this.deps.keys.get(keyRef)) ?? null },
           );
         },
         Priority.Interactive,

@@ -1,0 +1,211 @@
+[
+  {
+    "provider": "ledgerly",
+    "objective": "invoice-count",
+    "split": "dev",
+    "integrator": "baseline",
+    "interventions": {
+      "technical": 0,
+      "intent": 0,
+      "consent": 0,
+      "account": 0
+    },
+    "expected": 1234,
+    "records": 1234,
+    "modelCalls": 0,
+    "setup": "done",
+    "retrieval": "ok",
+    "completeness": "incomplete-flagged",
+    "metric": "wrong",
+    "value": 25,
+    "recordsRead": 25,
+    "flagged": [
+      "Only the first page was read, because how this API splits its results into pages has not been confirmed yet. What is shown may exclude additional records."
+    ],
+    "requests": 1,
+    "ms": 46,
+    "success": false
+  },
+  {
+    "provider": "ledgerly",
+    "objective": "open-total",
+    "split": "dev",
+    "integrator": "baseline",
+    "interventions": {
+      "technical": 0,
+      "intent": 0,
+      "consent": 0,
+      "account": 0
+    },
+    "expected": 879419.12,
+    "records": 1234,
+    "modelCalls": 0,
+    "setup": "done",
+    "retrieval": "ok",
+    "completeness": "incomplete-flagged",
+    "metric": "wrong",
+    "value": 17709.42,
+    "recordsRead": 25,
+    "flagged": [
+      "Only the first page was read, because how this API splits its results into pages has not been confirmed yet. What is shown may exclude additional records."
+    ],
+    "requests": 1,
+    "ms": 12,
+    "success": false
+  },
+  {
+    "provider": "taskpad",
+    "objective": "done-count",
+    "split": "dev",
+    "integrator": "baseline",
+    "interventions": {
+      "technical": 0,
+      "intent": 0,
+      "consent": 0,
+      "account": 0
+    },
+    "expected": 25,
+    "records": 57,
+    "modelCalls": 0,
+    "setup": "done",
+    "retrieval": "error",
+    "completeness": "n/a",
+    "metric": "n/a",
+    "value": null,
+    "recordsRead": null,
+    "flagged": [],
+    "error": "502: Taskpad returned an error (400).",
+    "requests": 1,
+    "ms": 5,
+    "success": false
+  },
+  {
+    "provider": "rentroll",
+    "objective": "active-leases",
+    "split": "dev",
+    "integrator": "baseline",
+    "interventions": {
+      "technical": 0,
+      "intent": 0,
+      "consent": 0,
+      "account": 0
+    },
+    "expected": 100,
+    "records": 180,
+    "modelCalls": 0,
+    "setup": "done",
+    "retrieval": "ok",
+    "completeness": "incomplete-flagged",
+    "metric": "wrong",
+    "value": 34,
+    "recordsRead": 50,
+    "flagged": [
+      "Only the first page was read, because how this API splits its results into pages has not been confirmed yet. What is shown may exclude additional records."
+    ],
+    "requests": 1,
+    "ms": 11,
+    "success": false
+  },
+  {
+    "provider": "emptyco",
+    "objective": "customer-count",
+    "split": "dev",
+    "integrator": "baseline",
+    "interventions": {
+      "technical": 0,
+      "intent": 0,
+      "consent": 0,
+      "account": 0
+    },
+    "expected": 0,
+    "records": 0,
+    "modelCalls": 0,
+    "setup": "done",
+    "retrieval": "ok",
+    "completeness": "complete",
+    "metric": "correct",
+    "value": 0,
+    "recordsRead": 0,
+    "flagged": [],
+    "requests": 1,
+    "ms": 4,
+    "success": true
+  },
+  {
+    "provider": "prosebook",
+    "objective": "book-count",
+    "split": "dev",
+    "integrator": "baseline",
+    "interventions": {
+      "technical": 0,
+      "intent": 0,
+      "consent": 0,
+      "account": 0
+    },
+    "expected": 42,
+    "records": 42,
+    "modelCalls": 1,
+    "setup": "done",
+    "retrieval": "ok",
+    "completeness": "complete",
+    "metric": "correct",
+    "value": 42,
+    "recordsRead": 42,
+    "flagged": [],
+    "requests": 1,
+    "ms": 13,
+    "success": true
+  },
+  {
+    "provider": "prosebook",
+    "objective": "history-pages",
+    "split": "dev",
+    "integrator": "baseline",
+    "interventions": {
+      "technical": 0,
+      "intent": 0,
+      "consent": 0,
+      "account": 0
+    },
+    "expected": 5220,
+    "records": 42,
+    "modelCalls": 1,
+    "setup": "done",
+    "retrieval": "ok",
+    "completeness": "complete",
+    "metric": "correct",
+    "value": 5220,
+    "recordsRead": 42,
+    "flagged": [],
+    "requests": 1,
+    "ms": 7,
+    "success": true
+  },
+  {
+    "provider": "multicur",
+    "objective": "usd-received",
+    "split": "dev",
+    "integrator": "baseline",
+    "interventions": {
+      "technical": 0,
+      "intent": 0,
+      "consent": 0,
+      "account": 0
+    },
+    "expected": 90112.26,
+    "records": 300,
+    "modelCalls": 0,
+    "setup": "done",
+    "retrieval": "ok",
+    "completeness": "incomplete-flagged",
+    "metric": "wrong",
+    "value": 3591.2400000000002,
+    "recordsRead": 20,
+    "flagged": [
+      "Only the first page was read, because how this API splits its results into pages has not been confirmed yet. What is shown may exclude additional records."
+    ],
+    "requests": 1,
+    "ms": 10,
+    "success": false
+  }
+]

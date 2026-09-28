@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { connectionSchema, getOp, resolveOp } from "./connection.js";
 import { ARCHETYPES, catalogEntrySchema } from "./dialect.js";
+import { MAX_PAGES } from "./primitives.js";
 
 /** Stripe's real conventions, which is the whole point of the abstraction. */
 const stripe = connectionSchema.parse({
@@ -146,6 +147,26 @@ describe("catalog entries", () => {
     expect(entry.origin).toBe("manual");
     expect(entry.verified).toBe(false);
     expect(entry.ops[0]?.archetype).toBe("list");
+  });
+
+  it("clamps an old entry's page limit to what an endpoint accepts", () => {
+    const entry = catalogEntrySchema.parse({
+      id: "old",
+      title: "Old",
+      baseUrl: "https://old.example.com",
+      dialect: {},
+      ops: [{ id: "items", title: "Items", path: "/items", maxPages: 80 }],
+    });
+    expect(entry.ops[0]?.maxPages).toBe(MAX_PAGES);
+    // And the connection made from it parses, which it did not before.
+    const conn = connectionSchema.safeParse({
+      id: "old",
+      title: "Old",
+      kind: "rest",
+      baseUrl: "https://old.example.com",
+      ops: entry.ops,
+    });
+    expect(conn.success).toBe(true);
   });
 
   it("rejects an id that would not be a safe filename", () => {

@@ -1,0 +1,78 @@
+[
+  {
+    "provider": "stockroom",
+    "objective": "low-stock",
+    "split": "heldout",
+    "integrator": "agent",
+    "interventions": {
+      "technical": 0,
+      "intent": 0,
+      "consent": 0,
+      "account": 0
+    },
+    "expected": 37,
+    "records": 260,
+    "modelCalls": 0,
+    "setup": "done",
+    "retrieval": "ok",
+    "completeness": "complete",
+    "metric": "correct",
+    "value": 37,
+    "recordsRead": 260,
+    "flagged": [],
+    "requests": 21,
+    "ms": 74,
+    "success": true
+  },
+  {
+    "provider": "helpline",
+    "objective": "august-urgent",
+    "split": "heldout",
+    "integrator": "agent",
+    "interventions": {
+      "technical": 0,
+      "intent": 0,
+      "consent": 0,
+      "account": 0
+    },
+    "expected": 29,
+    "records": 415,
+    "modelCalls": 0,
+    "setup": "done",
+    "retrieval": "ok",
+    "completeness": "complete",
+    "metric": "correct",
+    "value": 29,
+    "recordsRead": 415,
+    "flagged": [],
+    "requests": 14,
+    "ms": 28,
+    "success": true
+  },
+  {
+    "provider": "vaultbank",
+    "objective": "july-debits",
+    "split": "heldout",
+    "integrator": "agent",
+    "interventions": {
+      "technical": 1,
+      "intent": 0,
+      "consent": 0,
+      "account": 0
+    },
+    "expected": 123953.4,
+    "records": 640,
+    "modelCalls": 2,
+    "setup": "stopped:integrate",
+    "retrieval": "none",
+    "completeness": "n/a",
+    "metric": "n/a",
+    "value": null,
+    "recordsRead": null,
+    "flagged": [],
+    "error": "The API refused the request.",
+    "requests": 0,
+    "ms": 12,
+    "success": false
+  }
+]

@@ -1,0 +1,27 @@
+[
+  {
+    "provider": "vaultbank",
+    "objective": "july-debits",
+    "split": "dev",
+    "integrator": "agent",
+    "interventions": {
+      "technical": 0,
+      "intent": 0,
+      "consent": 0,
+      "account": 0
+    },
+    "expected": 123953.4,
+    "records": 640,
+    "modelCalls": 2,
+    "setup": "done",
+    "retrieval": "ok",
+    "completeness": "complete",
+    "metric": "correct",
+    "value": 123953.39999999997,
+    "recordsRead": 640,
+    "flagged": [],
+    "requests": 10,
+    "ms": 15733,
+    "success": true
+  }
+]

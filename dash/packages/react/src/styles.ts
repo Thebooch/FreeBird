@@ -921,6 +921,17 @@ export const DASH_REACT_STYLES = `
   font-size: var(--dash-text-xs); line-height: 1.45; color: var(--dash-ink-secondary);
 }
 .dash-widget[data-border="off"] .dash-widget__stale { margin-left: 0; margin-right: 0; }
+/* Quieter than the stale banner: the numbers are current, just not all of it. */
+.dash-widget__incomplete {
+  display: flex; align-items: flex-start; gap: 7px;
+  margin: 0 var(--dash-pad-x) var(--dash-cell-y);
+  padding: 6px 9px;
+  border-left: 3px solid var(--dash-border-strong, var(--dash-border));
+  border-radius: var(--dash-radius-sm);
+  background: var(--dash-wash);
+  font-size: var(--dash-text-xs); line-height: 1.45; color: var(--dash-ink-secondary);
+}
+.dash-widget[data-border="off"] .dash-widget__incomplete { margin-left: 0; margin-right: 0; }
 
 .dash-cost {
   display: flex; flex-wrap: wrap; gap: 4px 14px;

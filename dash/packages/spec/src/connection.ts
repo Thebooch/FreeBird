@@ -7,11 +7,18 @@ import {
   mappedFieldSchema,
 } from "./dialect.js";
 import {
+  MAX_PAGES,
   authSchema,
   authKeyRefs,
   idSchema,
   paginationSchema,
   paramDefSchema,
+  pagingParamNames,
+  graphqlReadsOnly,
+  readBodySchema,
+  readSafetySchema,
+  type ReadBody,
+  type ReadSafety,
   pathParamNames,
   queryValueSchema,
   resolveServerUrl,
@@ -19,6 +26,7 @@ import {
 } from "./primitives.js";
 import { resourceSchema } from "./resource.js";
 import { onboardingSchema } from "./category.js";
+import { connectorSchema } from "./connector.js";
 
 export { authSchema, paginationSchema } from "./primitives.js";
 export type { AuthSpec, PaginationSpec } from "./primitives.js";
@@ -29,7 +37,7 @@ export type { AuthSpec, PaginationSpec } from "./primitives.js";
  * inherited from the connection's dialect, so adding a second endpoint to a
  * known API costs one line rather than fifteen.
  */
-export const opDefSchema = z.object({
+const opDefObject = z.object({
   auth: authSchema.optional(),
   authRequired: z.boolean().optional(),
   fields: z.array(mappedFieldSchema).max(300).optional(),
@@ -37,14 +45,20 @@ export const opDefSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
   /**
-   * Read-only by construction: an op is always a GET, so no widget, binding,
-   * keeper target or query can ever change a connected account. Endpoints
-   * that do change things are a different list — `CatalogEntry.writes` — and
-   * only the write service can send one, after a person has reviewed it.
+   * An op is a read. Almost always a GET; a POST only for an API that reads
+   * with a body — a search, a report, a GraphQL query — and then only with a
+   * `readSafety` saying why it is believed to read (see `readSafetySchema`).
+   * Endpoints that change things are a different list — `CatalogEntry.writes`
+   * — and only the write service can send one, after a person has reviewed it.
    */
-  method: z.literal("GET").default("GET"),
+  method: z.enum(["GET", "POST"]).default("GET"),
   /** Appended to the connection's baseUrl. May contain `{{…}}` params. */
   path: z.string().min(1),
+  /** What a POST read sends. Never on a GET. */
+  body: readBodySchema.optional(),
+  readSafety: readSafetySchema.optional(),
+  /** Where the response states how many records match in all, e.g. `$.meta.total`. */
+  totalPath: z.string().max(200).optional(),
   archetype: archetypeSchema.optional(),
   /**
    * What this endpoint accepts. Describes inputs; it does not supply them —
@@ -55,36 +69,81 @@ export const opDefSchema = z.object({
   headers: z.record(z.string(), z.string()).default({}),
   /** Overrides the dialect. Omit to inherit. */
   pagination: paginationSchema.optional(),
-  maxPages: z.number().int().min(1).max(50).optional(),
+  /**
+   * How this endpoint pages was confirmed — by a probe that read its second
+   * page, or by a person — including that it does not page at all. Until
+   * then an imported connection's unconfirmed paging is warned about.
+   */
+  paginationChecked: z.boolean().optional(),
+  maxPages: z.number().int().min(1).max(MAX_PAGES).optional(),
   /** Path to the row array. Overrides the dialect. */
   rowsPath: z.string().optional(),
   /** Set false to skip the dialect's date filter on this one endpoint. */
   timeFiltered: z.boolean().optional(),
   /** Hash of the inferred response schema, for drift detection. */
   schemaHash: z.string().optional(),
+  /**
+   * Read by the connection's connector rather than by the request described
+   * here — a sign-in or a sequence of requests only code can perform. The
+   * path stays as the documentation gives it; the connector decides what is
+   * actually sent. See `connector.ts`.
+   */
+  servedBy: z.literal("connector").optional(),
 });
+
+/**
+ * The rules a read must keep, whatever wrote it — an importer, a repair, a
+ * person. A POST says why it reads; a GraphQL body can only query.
+ */
+const readRules = (op: {
+  method: "GET" | "POST";
+  body?: ReadBody | undefined;
+  readSafety?: ReadSafety | undefined;
+}, context: z.RefinementCtx): void => {
+  if (op.method === "GET" && op.body)
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["body"], message: "a GET read sends no body" });
+  if (op.method === "POST" && !op.readSafety)
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["readSafety"],
+      message: "a read sent with POST must say why it is believed to read",
+    });
+  if (op.body?.type === "graphql" && !graphqlReadsOnly(op.body.query))
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["body", "query"],
+      message: "a GraphQL read may only query; this document can change something",
+    });
+};
+
+export const opDefSchema = opDefObject.superRefine(readRules);
 
 export type OpDef = z.infer<typeof opDefSchema>;
 
 /** A fully-resolved endpoint: what the adapter actually executes. */
-export const opSchema = z.object({
+const opObject = z.object({
   auth: authSchema.optional(),
   authRequired: z.boolean().optional(),
   fields: z.array(mappedFieldSchema).max(300).optional(),
   id: idSchema,
   title: z.string().min(1),
   description: z.string().optional(),
-  method: z.literal("GET").default("GET"),
+  method: z.enum(["GET", "POST"]).default("GET"),
   path: z.string().min(1),
+  body: readBodySchema.optional(),
+  readSafety: readSafetySchema.optional(),
+  totalPath: z.string().max(200).optional(),
   /** Carried through resolution so the adapter and UI can ask what it needs. */
   params: z.array(paramDefSchema).max(60).default([]),
   query: z.record(z.string(), queryValueSchema).default({}),
   headers: z.record(z.string(), z.string()).default({}),
   pagination: paginationSchema.default({ kind: "none" }),
+  paginationChecked: z.boolean().optional(),
   /** Hard stop on pages fetched, whatever the strategy claims. */
-  maxPages: z.number().int().min(1).max(50).default(5),
+  maxPages: z.number().int().min(1).max(MAX_PAGES).default(5),
   rowsPath: z.string().optional(),
   schemaHash: z.string().optional(),
+  servedBy: z.literal("connector").optional(),
   /**
    * Whether anything this endpoint sends actually reads the time range.
    *
@@ -101,6 +160,8 @@ export const opSchema = z.object({
    */
   usesRange: z.boolean().default(false),
 });
+
+export const opSchema = opObject.superRefine(readRules);
 
 export type OpSpec = z.infer<typeof opSchema>;
 
@@ -139,6 +200,12 @@ export const connectionSchema = z.object({
   resources: z.array(resourceSchema).max(200).default([]),
   /** Op fired to prove a key works, so onboarding fails fast and clearly. */
   validateOpId: idSchema.optional(),
+  /**
+   * Code for what this API needs that a connection cannot describe in data —
+   * signed requests, a login for a session token, a multi-step read. Runs only
+   * in the sandbox, within its authority. See `connector.ts`.
+   */
+  connector: connectorSchema.optional(),
   /** Where the user gets a key, and what to tick. Shown during onboarding. */
   docsUrl: z.string().url().optional(),
   keyHelp: z.string().optional(),
@@ -158,6 +225,22 @@ export const connectionSchema = z.object({
    * or several, is theirs. Recorded so the question is asked once.
    */
   onboarding: onboardingSchema.optional(),
+  /**
+   * The last time the integration loop checked this connection, and how it
+   * went: what it changed, and what it could not get past.
+   *
+   * A summary for the setup screens only. What was actually observed about
+   * each endpoint is evidence, kept in the evidence store with the scope and
+   * configuration it was observed under.
+   */
+  integration: z
+    .object({
+      at: z.string().datetime(),
+      outcome: z.enum(["ready", "partial", "blocked"]),
+      changes: z.array(z.string().max(400)).max(20).default([]),
+      notes: z.array(z.string().max(400)).max(20).default([]),
+    })
+    .optional(),
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
 });
@@ -210,7 +293,11 @@ export const opUsesRange = (connection: ConnectionSpec, def: OpDef): boolean => 
   const declared = Object.values(def.query).some(
     (value) => typeof value === "string" && RANGE_TOKEN.test(value),
   );
-  if (declared || RANGE_TOKEN.test(def.path)) return true;
+  /* A body or a header can read the window as well as the query can. */
+  const elsewhere =
+    (def.body !== undefined && RANGE_TOKEN.test(JSON.stringify(def.body))) ||
+    Object.values(def.headers).some((value) => RANGE_TOKEN.test(value));
+  if (declared || elsewhere || RANGE_TOKEN.test(def.path)) return true;
 
   const timeFiltered = def.timeFiltered ?? ARCHETYPES[def.archetype ?? "list"].timeFiltered;
   return Boolean(timeFiltered && connection.dialect?.timeFilter);
@@ -225,12 +312,26 @@ export const resolveOp = (connection: ConnectionSpec, def: OpDef): OpSpec => {
   const dialect = connection.dialect;
   const archetype = ARCHETYPES[def.archetype ?? "list"];
 
+  const pagination = def.pagination ?? (archetype.paginates ? dialect?.pagination : undefined);
+
+  /*
+   * A documented default for a parameter the paging rule sets is the rule's
+   * to decide. Filling it in anyway put `limit=25` beside a rule asking for
+   * 100 on every request — which the adapter rightly refuses as a conflict —
+   * so an imported endpoint could never page once its paging was configured.
+   */
+  const pagingParams = new Set(pagingParamNames(pagination));
   const query: Record<string, string | number | boolean> = {
     ...(dialect?.query ?? {}),
     ...def.query,
   };
   for (const param of def.params) {
-    if (param.in === "query" && param.default !== undefined && query[param.name] === undefined)
+    if (
+      param.in === "query" &&
+      param.default !== undefined &&
+      query[param.name] === undefined &&
+      !pagingParams.has(param.name)
+    )
       query[param.name] = param.default;
   }
 
@@ -246,8 +347,6 @@ export const resolveOp = (connection: ConnectionSpec, def: OpDef): OpSpec => {
     }
   }
 
-  const pagination = def.pagination ?? (archetype.paginates ? dialect?.pagination : undefined);
-
   return opSchema.parse({
     auth: def.auth,
     authRequired: def.authRequired,
@@ -255,12 +354,16 @@ export const resolveOp = (connection: ConnectionSpec, def: OpDef): OpSpec => {
     id: def.id,
     title: def.title,
     ...(def.description ? { description: def.description } : {}),
-    method: "GET",
+    method: def.method,
     path: def.path,
+    ...(def.body ? { body: def.body } : {}),
+    ...(def.readSafety ? { readSafety: def.readSafety } : {}),
+    ...(def.totalPath ? { totalPath: def.totalPath } : {}),
     params: def.params,
     query,
     headers: { ...(dialect?.headers ?? {}), ...def.headers },
     pagination: pagination ?? { kind: "none" },
+    ...(def.paginationChecked ? { paginationChecked: true } : {}),
     // A dialect setting that only makes sense for a paginated collection must
     // not leak into an endpoint that fetches exactly one object.
     maxPages:
@@ -272,6 +375,7 @@ export const resolveOp = (connection: ConnectionSpec, def: OpDef): OpSpec => {
       (archetype.collection ? dialect?.rowsPath : undefined) ??
       archetype.defaultRowsPath,
     ...(def.schemaHash ? { schemaHash: def.schemaHash } : {}),
+    ...(def.servedBy ? { servedBy: def.servedBy } : {}),
     usesRange: opUsesRange(connection, def),
   });
 };
@@ -298,11 +402,23 @@ export { pathParamNames } from "./primitives.js";
  * fallback so an op written by hand still gets the check.
  */
 export const requiredInputs = (op: OpSpec | OpDef): string[] => {
+  /*
+   * A connector reads the endpoint its own way: the documented path's ids are
+   * values its requests produce, not ones a board supplies. Only what it
+   * declares as a required input is asked for.
+   */
+  if (op.servedBy === "connector")
+    return op.params
+      .filter((param) => param.in !== "path" && param.required && !(param.name in op.query))
+      .map((param) => param.name);
   const declared = op.params
     .filter((param) => {
       if (param.in === "path") return true;
       // A required query param the importer already seeded a value for is
-      // satisfied — asking the caller for it again would be wrong.
+      // satisfied — asking the caller for it again would be wrong. So is a
+      // header, cookie or body parameter with a documented default, which is
+      // sent with it (see `locateInputs`).
+      if (param.in !== "query" && param.default !== undefined) return false;
       return param.required && !(param.name in op.query);
     })
     .map((param) => param.name);

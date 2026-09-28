@@ -309,6 +309,22 @@ describe("compileBrief", () => {
     expect(result.errors.join(" ")).toContain("needs a field to add up");
   });
 
+  it("refuses to add percentages up", () => {
+    const result = compile(
+      { intent: "measure", measure: { agg: "sum", field: "Done" } },
+      {
+        fields: [
+          { path: "Id", visibility: "hidden" },
+          { path: "Title", label: "Summary", visibility: "primary" },
+          { path: "Status", label: "Status", visibility: "primary" },
+          { path: "Done", label: "Share done", semantic: "percent", visibility: "detail" },
+        ],
+      },
+    );
+    expect(result.widget).toBeNull();
+    expect(result.errors.join(" ")).toContain("is a percentage");
+  });
+
   it("refuses a record type this API cannot list", () => {
     const result = compileBrief({
       brief: { entity: "task", intent: "records" },

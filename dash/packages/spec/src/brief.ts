@@ -954,6 +954,14 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
     );
   }
 
+  const measured = measure.field ? byPath.get(measure.field) : undefined;
+  // What the values were read as, else what the docs or a person declared.
+  if (measure.agg === "sum" && measured && (fieldReading(measured).semantic ?? measured.semantic) === "percent") {
+    errors.push(
+      `"${measured.label ?? measure.field}" is a percentage, and adding percentages up does not give a total of anything.`,
+    );
+  }
+
   /** The column a comparison breaks its number down by, once resolved. */
   let groupColumn: string | null = null;
   /** The field the far rows are bucketed by, when two are being compared. */

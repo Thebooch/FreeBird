@@ -1,4 +1,5 @@
 import type { FetchMeta } from "@freebirdai/dash-adapters";
+import { incompleteNotes } from "./incomplete.js";
 import type {
   BindingValidation,
   ColumnMeta,
@@ -287,6 +288,16 @@ export interface WidgetData {
   /** The untransformed response. The inspector shows it so "is it us or them?" is answerable. */
   readonly raw: unknown;
   readonly binding: BindingValidation | null;
+  /**
+   * What the tile shows is not all of it, and why — one plain sentence each.
+   *
+   * Read from every request this widget made, not only the first: a joined
+   * or fanned-out widget whose second source stopped at its page cap is as
+   * incomplete as one whose first did, and used to say nothing. Kept apart
+   * from `errors`, because nothing here stops the tile drawing — it changes
+   * what the numbers mean.
+   */
+  readonly incomplete: readonly string[];
   readonly errors: readonly string[];
   readonly userMessage: string | null;
   /** HTTP status of the failure, where there was one. See `QueryEntry`. */
@@ -807,6 +818,23 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
   }, [heldRecord, primary?.meta, lastFetchedAt, derived.servingLastKnownGood, derived.failure]);
 
   /*
+   * Every reason what is drawn is not all of it, from every request made.
+   */
+  const incomplete = useMemo(
+    () =>
+      incompleteNotes({
+        metas: entries.map(({ entry }) => entry?.meta),
+        fanOut: {
+          truncated: fanned.truncated,
+          read: fanned.requests.length,
+          of: fanned.driverRows,
+          missing: derived.missingOptional,
+        },
+      }),
+    [entries, fanned, derived.missingOptional],
+  );
+
+  /*
    * The columns, wearing this API's names and carrying its links.
    *
    * Both stamped in one place for the same reason: this is the only spot that
@@ -1152,23 +1180,8 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
     fetchMeta: fetchMeta,
     raw: widget.sources.length > 0 ? bodies : primary?.body,
     binding: executed?.binding ?? null,
+    incomplete,
     errors: [
-      ...(fanned.truncated
-        ? [
-            `Only the first ${fanned.requests.length} of ${fanned.driverRows} record(s) were expanded, so this total is incomplete.`,
-          ]
-        : []),
-      /*
-       * A fan-out child that could not be read is stated rather than absorbed.
-       * The tile still draws — that is the whole point of treating these as
-       * optional — but a total quietly missing three of its twenty-five parts
-       * is a number somebody would act on, so it says which it is.
-       */
-      ...(derived.missingOptional > 0
-        ? [
-            `${derived.missingOptional} of ${fanned.requests.length} related record(s) could not be read, so this total is incomplete.`,
-          ]
-        : []),
       ...(executed?.errors ?? []),
       ...(executed?.binding?.errors ?? []).map((issue) => issue.message),
     ],

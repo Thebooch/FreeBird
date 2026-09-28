@@ -84,7 +84,12 @@ const categorical = (field: EntityField): boolean =>
   field.semantic !== "timestamp";
 
 /** A field a number can be totalled from. */
-const TOTALLABLE = new Set(["currency", "number", "count", "duration", "bytes", "percent"]);
+/*
+ * Not percentages: adding shares gives a number that is a share of nothing.
+ * An average of them is only right when every share is out of the same whole,
+ * which nothing here can know, so they are not offered as a total at all.
+ */
+const TOTALLABLE = new Set(["currency", "number", "count", "duration", "bytes"]);
 
 const numeric = (field: EntityField): boolean =>
   Boolean(field.semantic && TOTALLABLE.has(field.semantic)) &&

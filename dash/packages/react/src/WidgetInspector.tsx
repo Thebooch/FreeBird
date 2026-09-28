@@ -240,6 +240,17 @@ export const WidgetInspector = ({
             </>
           )}
 
+          {data.incomplete.length > 0 && (
+            <>
+              <h4>Not all of it</h4>
+              <ul className="dash-warnlist">
+                {data.incomplete.map((note, index) => (
+                  <li key={index}>{note}</li>
+                ))}
+              </ul>
+            </>
+          )}
+
           {data.errors.length > 0 && (
             <>
               <h4>Errors</h4>

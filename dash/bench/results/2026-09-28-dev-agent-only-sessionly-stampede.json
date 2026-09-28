@@ -1,0 +1,52 @@
+[
+  {
+    "provider": "sessionly",
+    "objective": "open-tickets",
+    "split": "dev",
+    "integrator": "agent",
+    "interventions": {
+      "technical": 0,
+      "intent": 0,
+      "consent": 0,
+      "account": 0
+    },
+    "expected": 59,
+    "records": 230,
+    "modelCalls": 1,
+    "setup": "done",
+    "retrieval": "ok",
+    "completeness": "complete",
+    "metric": "correct",
+    "value": 59,
+    "recordsRead": 230,
+    "flagged": [],
+    "requests": 8,
+    "ms": 1182,
+    "success": true
+  },
+  {
+    "provider": "stampede",
+    "objective": "paid-total",
+    "split": "dev",
+    "integrator": "agent",
+    "interventions": {
+      "technical": 0,
+      "intent": 0,
+      "consent": 0,
+      "account": 0
+    },
+    "expected": 17318.28,
+    "records": 180,
+    "modelCalls": 2,
+    "setup": "done",
+    "retrieval": "ok",
+    "completeness": "complete",
+    "metric": "correct",
+    "value": 17318.28,
+    "recordsRead": 180,
+    "flagged": [],
+    "requests": 15,
+    "ms": 3359,
+    "success": true
+  }
+]

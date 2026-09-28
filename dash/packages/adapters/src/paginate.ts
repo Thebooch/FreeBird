@@ -1,3 +1,4 @@
+import { INCOMPLETE } from "./incomplete.js";
 import { evalPath, parsePath } from "@freebirdai/dash-expr";
 import type { PaginationSpec } from "@freebirdai/dash-spec";
 
@@ -157,9 +158,7 @@ export const mergePages = (
   for (const page of pages) {
     const rows = rowsAt(page, rowsPath);
     if (rows === null) {
-      warnings.push(
-        "could not find the row list in a page, so only the first page was used — set rowsPath on this operation",
-      );
+      warnings.push(INCOMPLETE.unmerged);
       return pages[0];
     }
     collected.push(...rows);

@@ -5,6 +5,7 @@ import {
   AdapterRegistry,
   AdapterError,
   RestAdapter,
+  isIncompleteNote,
   type HttpFetch,
 } from "@freebirdai/dash-adapters";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
@@ -38,6 +39,7 @@ import type {
 } from "@freebirdai/dash-spec";
 import {
   catalogEntrySchema,
+  authTokenRefs,
   connectionKeyRefs,
   connectionNeedsAddress,
   connectionNeedsAuthSetup,
@@ -116,6 +118,7 @@ import { installIdentity } from "./identity/context.js";
 import { ownerPolicy, type Policy } from "./identity/policy.js";
 import { LOCAL_USER_ID, localOwner, type IdentityResolver } from "./identity/resolver.js";
 import { nullJournal, type WriteJournal } from "./writes/journal.js";
+import { JournalingAdapter, readEventFor } from "./writes/read-journal.js";
 import { Discovered, catalogForBrowser, preservedWrites } from "./writes/catalog-writes.js";
 import { WriteEndpointReader, type FetchDocument } from "./writes/read-writes.js";
 import { WriteService, describeFields } from "./writes/service.js";
@@ -191,6 +194,16 @@ import { ConnectionGate, Priority } from "./cache/gate.js";
 import { SpecStore } from "./store.js";
 import { GrantStore, approveWidget, dashboardApprovals, widgetGrantSubject } from "./grants.js";
 import { KeyStore } from "./vault.js";
+import { MemoryEvidenceStore, type EvidenceStore } from "./evidence/store.js";
+import { CredentialBroker, vaultApps, type OAuthAppRegistry } from "./auth/broker.js";
+import { MemoryCredentialMetaStore, type CredentialMetaStore } from "./auth/credential-meta.js";
+import { OAuthRetryAdapter } from "./auth/retry-adapter.js";
+import { ConnectorAdapter } from "./connector/adapter.js";
+import type { ConnectorTokenStore } from "./connector/host.js";
+import { QuickJsSandbox, type ConnectorSandbox } from "./connector/sandbox.js";
+import { VaultConnectorTokens } from "./connector/tokens.js";
+import { oauthRoutes } from "./routes/oauth.js";
+import { createIntegrationRunner, integrateRoutes, type IntegrateRouteDeps } from "./routes/integrate.js";
 
 export interface BuildServerOptions {
   readonly store: SpecStore;
@@ -282,6 +295,31 @@ export interface BuildServerOptions {
    * is the right default for a self-hoster and the wrong one for a fleet.
    */
   readonly cache?: CacheStore;
+  /**
+   * Where evidence about reading each endpoint is kept — what the
+   * integration loop observed, and under which configuration. Absent means
+   * in this process only, which is right for a test; the real entry point
+   * keeps it in the embedded database, and a hosted build in its own.
+   */
+  readonly evidence?: EvidenceStore;
+  /**
+   * Whether a connection is checked by itself as soon as it can be read —
+   * its key saved, its address known. **Off unless asked**, for the keeper's
+   * reason: a test must not spend somebody's requests by existing. The real
+   * entry point turns it on.
+   */
+  readonly autoIntegrate?: boolean;
+  /** What is known about OAuth tokens — when each expires. Absent means in memory. */
+  readonly credentialMeta?: CredentialMetaStore;
+  /** Where an OAuth app's client id and secret come from. Absent means what the person pasted. */
+  readonly oauthApps?: OAuthAppRegistry;
+  /**
+   * Where connector code runs. Absent means QuickJS in a worker thread
+   * (`QuickJsSandbox`); a hosted build supplies a process or microVM runner.
+   */
+  readonly connectorSandbox?: ConnectorSandbox;
+  /** Where a connector's session tokens are kept. Absent means the vault, with expiry in `credentialMeta`. */
+  readonly connectorTokens?: ConnectorTokenStore;
 }
 
 /** Re-exported: the constant lives with the identity it belongs to. */
@@ -538,8 +576,48 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   const discovered = new Discovered();
 
   /* One transport for reads and writes, so both go through the same SSRF guard and host pin. */
+  /*
+   * Every secret a request sends is asked of the broker: the vault's value
+   * for a static key, a live token for OAuth — fetched, renewed and retried
+   * without anybody's help. See `auth/broker.ts`.
+   */
+  const broker = new CredentialBroker({
+    vault: keys,
+    meta: options.credentialMeta ?? new MemoryCredentialMetaStore(),
+    apps: options.oauthApps ?? vaultApps(keys),
+    http: options.http ?? nodeHttp,
+    getConnection: (id) => store.getConnection(id),
+    listConnections: () => store.listConnections(),
+    now: Date.now,
+    log: (message) => app.log.warn(message),
+  });
+  const secretFor = broker.resolve;
   const rest = new RestAdapter(options.http ?? nodeHttp);
-  const registry = new AdapterRegistry().register(rest);
+  /*
+   * Connector code — for an API a connection cannot describe in data — runs
+   * in the sandbox, under its authority, with its session tokens in the vault.
+   * See `connector/`.
+   */
+  const connectors = {
+    sandbox: options.connectorSandbox ?? new QuickJsSandbox(),
+    tokens:
+      options.connectorTokens ??
+      new VaultConnectorTokens(keys, options.credentialMeta ?? new MemoryCredentialMetaStore()),
+  };
+  const reader = new ConnectorAdapter(options.http ?? nodeHttp, {
+    ...connectors,
+    onLog: (connection, line) => app.log.debug(`connector ${connection.id}: ${line}`),
+  });
+  /*
+   * Reads go through the journal first: a read sent with POST on the
+   * documentation's word is recorded each time it is sent. Reads go through
+   * the connector adapter, which is REST exactly for a connection with no
+   * connector. Writes use `rest` directly, through the write service, which
+   * journals them itself.
+   */
+  const registry = new AdapterRegistry().register(
+    new JournalingAdapter(new OAuthRetryAdapter(reader, broker), journal, (message) => app.log.warn(message)),
+  );
 
   /**
    * Everything a widget reads goes through here.
@@ -718,7 +796,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   const writes = new WriteService({
     store,
     catalog: options.catalog,
-    keys,
+    // Read through the broker, so a change to an OAuth account sends a current token.
+    keys: { get: secretFor },
     registry,
     rest,
     queries,
@@ -727,6 +806,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     journal,
     upstream,
   });
+  /** What has been observed about reading each endpoint. See `BuildServerOptions.evidence`. */
+  const evidence: EvidenceStore = options.evidence ?? new MemoryEvidenceStore();
   /** A published document — an API's specification — for reading its write endpoints. */
   const readDocument: FetchDocument =
     options.fetchDocument ??
@@ -734,6 +815,46 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       const response = await fetchPublicDocument(url);
       return { status: response.status, text: response.text, url: response.url };
     });
+
+  /*
+   * The integration loop: read what matters on a new connection, repair what
+   * its documentation got wrong, confirm how it pages, and keep the result.
+   * It starts by itself once a connection can be read — see `whenReady` at
+   * each place a key or an address is saved. Reads go through the same gate
+   * and cooldown as every other reader of the connection; a check that
+   * started by itself waits behind boards. See `routes/integrate.ts`.
+   */
+  const integrationDeps: IntegrateRouteDeps = {
+    getConnection: (id) => store.getConnection(id),
+    saveConnection: (next, changed) => {
+      store.putConnection(next);
+      if (changed) queries.invalidate(next.id);
+      registry.addConnection(next);
+    },
+    catalogEntry: (id) => options.catalog?.get(id),
+    hasSecret: (keyRef) => keys.has(keyRef),
+    resolveSecret: secretFor,
+    refresh: (connection) => broker.refresh(connection),
+    http: options.http ?? nodeHttp,
+    fetchDocument: readDocument,
+    llm: () => resolveLlm("repair"),
+    connectorLlm: () => resolveLlm("connector"),
+    evidence,
+    around: (connection, background) => (run) =>
+      upstream(connection, run, background ? Priority.Background : Priority.Interactive),
+    /* A read the check sends on the documentation's word is journalled like a board's. */
+    onRead: (connection, op, outcome) => {
+      const event = readEventFor(connection, op, "check", outcome, Date.now());
+      if (event)
+        Promise.resolve(journal.recordRead?.(event)).catch((error: unknown) =>
+          app.log.warn(`a check's read could not be journalled: ${String(error)}`),
+        );
+    },
+    auto: options.autoIntegrate ?? false,
+    log: (message) => app.log.info(message),
+    connectors,
+  };
+  const integration = createIntegrationRunner(integrationDeps);
   /** Read a connection's write endpoints if its entry never has had them read. Set below, once the reader exists. */
   let readWritesFor: (connection: ConnectionSpec) => void = () => {};
   const previews = new SetupPreviews(queries.store, (id) => store.getConnection(id));
@@ -862,7 +983,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         registry.fetch(connection.id, op.id, query, {
           params: { range: resolveRange({ preset: "30d", now: Date.now() }), filters },
           now: Date.now(),
-          resolveSecret: async (keyRef) => keys.get(keyRef),
+          resolveSecret: secretFor,
         }),
       );
       const shape = inferShape(result.body, op.rowsPath ? { rowsPath: op.rowsPath } : {});
@@ -1348,7 +1469,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           registry.fetch(target.connection, target.op, { ...target.overrides }, {
             params: target.resolved,
             now: Date.now(),
-            resolveSecret: async (keyRef) => keys.get(keyRef),
+            resolveSecret: secretFor,
             ...(validators ? { validators } : {}),
           }),
       });
@@ -2021,7 +2142,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
                   filters: params,
                 },
                 now: Date.now(),
-                resolveSecret: async (keyRef) => keys.get(keyRef),
+                resolveSecret: secretFor,
               }),
             );
             return { ok: true, body: fetched.body };
@@ -2276,11 +2397,13 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       for (const [ref, value] of Object.entries(supplied)) {
         if (refs.includes(ref)) keys.set(ref, value);
       }
-      store.putConnection({
-        ...connection,
-        credentialsRevision: (connection.credentialsRevision ?? 0) + 1,
-      });
+      const keyed = { ...connection, credentialsRevision: (connection.credentialsRevision ?? 0) + 1 };
+      /* A new app's values: tokens obtained with the old ones are not theirs. */
+      await broker.forget(connection);
+      store.putConnection(keyed);
       queries.invalidate(connection.id);
+      // The key is all a person should have to give: the rest is checked by itself.
+      integration.whenReady(keyed);
       // Echo only the fact that it worked. Never the key, not even truncated.
       return { ok: true, hasKey: true };
     },
@@ -2386,6 +2509,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       store.putConnection(next);
       queries.invalidate(next.id);
       registry.addConnection(next);
+      integration.whenReady(next);
       return publicConnection(next);
     },
   );
@@ -2440,7 +2564,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             {
               params,
               now: Date.now(),
-              resolveSecret: async (keyRef) => keys.get(keyRef),
+              resolveSecret: secretFor,
             },
           ),
         );
@@ -2600,7 +2724,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           registry.fetch(connection, op, overrides, {
             params: resolved,
             now: Date.now(),
-            resolveSecret: async (keyRef) => keys.get(keyRef),
+            resolveSecret: secretFor,
             ...(validators ? { validators } : {}),
           }),
       });
@@ -2761,8 +2885,16 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     const connection = store.getConnection(request.params.id);
     // Take the secret with it — an orphaned credential in the vault is a
     // liability nobody remembers is there.
-    if (connection) for (const ref of connectionKeyRefs(connection)) keys.delete(ref);
+    if (connection) {
+      for (const ref of [...connectionKeyRefs(connection), ...authTokenRefs(connection.auth)]) keys.delete(ref);
+      void broker.forget(connection).catch(() => undefined);
+    }
     store.deleteConnection(request.params.id);
+    // What was observed about it describes a connection that no longer exists.
+    // Never left to reject unhandled: a damaged database must not take the process down.
+    evidence.forget(request.params.id).catch((error: unknown) =>
+      app.log.warn(`evidence for ${request.params.id} could not be removed: ${String(error)}`),
+    );
     // The report describes an API this instance can no longer reach, and
     // leaving it behind would let a same-named connection inherit a stale one.
     store.deleteReport(request.params.id);
@@ -2922,7 +3054,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           {
             params: { range: resolveRange({ preset: "30d", now: Date.now() }), filters: {} },
             now: Date.now(),
-            resolveSecret: async (keyRef) => keys.get(keyRef),
+            resolveSecret: secretFor,
           },
         ),
       );
@@ -3168,6 +3300,21 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * and is shared with everybody who connects it, and which parts one person
    * picked is theirs. See `routes/onboarding.ts`.
    */
+  void app.register(integrateRoutes(integrationDeps, integration));
+  void app.register(
+    oauthRoutes({
+      getConnection: (id) => store.getConnection(id),
+      broker,
+      signedIn: (connection) => {
+        const next = { ...connection, credentialsRevision: (connection.credentialsRevision ?? 0) + 1 };
+        store.putConnection(next);
+        queries.invalidate(next.id);
+        registry.addConnection(next);
+        integration.whenReady(next);
+      },
+    }),
+  );
+
   void app.register(
     onboardingRoutes({
       catalog,
@@ -3204,7 +3351,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             registry.fetch(connection.id, op, request.overrides, {
               params: request.resolved,
               now: Date.now(),
-              resolveSecret: async (keyRef) => keys.get(keyRef),
+              resolveSecret: secretFor,
               ...(validators ? { validators } : {}),
             }),
         });
@@ -3214,7 +3361,14 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             ...(outcome.error.retryAfter ? { retryAfter: outcome.error.retryAfter } : {}),
           });
         }
-        return outcome.body;
+        const said = outcome.meta.warnings.filter(isIncompleteNote);
+        return {
+          body: outcome.body,
+          incomplete:
+            outcome.meta.truncated && said.length === 0
+              ? ["Not every page was read, so what is shown may exclude additional records."]
+              : said,
+        };
       },
       ensureDefaultBoard: (connection) => ensureBoardFor(connection, { evenWhenOnboarding: true }),
     }),
@@ -3419,6 +3573,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     ensureBoardFor(connection);
     registry.addConnection(connection);
     readWritesFor(connection);
+    // An API that needs no key can be checked straight away.
+    integration.whenReady(connection);
 
     const refs = connectionKeyRefs(connection);
     const ready = !connectionNeedsAuthSetup(connection) && refs.every((ref) => keys.has(ref));
@@ -4167,7 +4323,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             registry.fetch(input.connection, input.op, overrides, {
               params: scoped,
               now: Date.now(),
-              resolveSecret: async (keyRef) => keys.get(keyRef),
+              resolveSecret: secretFor,
               ...(validators ? { validators } : {}),
             }),
         });
@@ -4777,7 +4933,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
                                 filters: {},
                               },
                               now: Date.now(),
-                              resolveSecret: async (keyRef) => keys.get(keyRef),
+                              resolveSecret: secretFor,
                             },
                           ),
                         );

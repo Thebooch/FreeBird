@@ -1073,6 +1073,12 @@ export interface ColumnMeta {
    * renders exactly what it always did.
    */
   readonly reference?: ColumnReference;
+  /**
+   * Values a join repeated across rows: a left row that matched several
+   * records, or one record matched by several rows. A column total would count
+   * them more than once, so nothing totals a column carrying this.
+   */
+  readonly repeated?: boolean;
 }
 
 export interface BindingIssue {

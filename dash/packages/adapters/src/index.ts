@@ -5,7 +5,9 @@ export type { McpClient, McpClientFactory, McpTierInfo, McpToolInfo, McpToolResu
 export { ProxyAdapter } from "./proxy.js";
 export { AdapterRegistry } from "./registry.js";
 export { RestAdapter } from "./rest.js";
+export { fillTemplate, locateInputs, renderBody, setAtPath, setQueryValue } from "./request.js";
 export type { HttpFetch, HttpResponse } from "./rest.js";
+export { INCOMPLETE, isIncompleteNote } from "./incomplete.js";
 export { AdapterError, emptyMeta, parseRetryAfter } from "./types.js";
 export type {
   FetchContext,

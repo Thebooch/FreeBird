@@ -1,5 +1,5 @@
-import type { WidgetSpec } from "@freebirdai/dash-spec";
-import { widgetSources } from "@freebirdai/dash-spec";
+import type { ColumnMeta, PipelineStep, WidgetSpec } from "@freebirdai/dash-spec";
+import { parseAggregation, widgetSources } from "@freebirdai/dash-spec";
 import { compileWidget } from "./compile.js";
 import { runPipeline } from "./run.js";
 import type { CompileError, CompiledWidget, Row, RunContext, RunResult } from "./types.js";
@@ -88,6 +88,8 @@ const keysOf = (rows: readonly Row[]): string[] => {
 export interface JoinResult {
   readonly rows: Row[];
   readonly warnings: string[];
+  /** Columns whose values the join repeated, so a total would count them twice. */
+  readonly repeated: readonly string[];
 }
 
 /**
@@ -126,6 +128,8 @@ export const joinRows = (
   const rows: Row[] = [];
   let unmatched = 0;
   let multiplied = 0;
+  /* How many left rows each right record was matched by. */
+  const matchedBy = new Map<Row, number>();
 
   for (const row of left) {
     const value = row[options.leftField];
@@ -137,6 +141,7 @@ export const joinRows = (
       continue;
     }
     if (matches.length > 1) multiplied++;
+    for (const match of matches) matchedBy.set(match, (matchedBy.get(match) ?? 0) + 1);
     for (const match of matches) {
       if (rows.length >= options.maxRows) break;
       rows.push(merge(row, match, options.rightAs, rightKeys));
@@ -156,11 +161,25 @@ export const joinRows = (
   }
   if (multiplied > 0) {
     warnings.push(
-      `${multiplied} row(s) matched more than one ${options.rightAs} record, so they appear more than once`,
+      `${multiplied} row(s) matched more than one ${options.rightAs} record, so they appear more than once and their columns are not totalled`,
     );
   }
 
-  return { rows, warnings };
+  /*
+   * Which columns repeat. A left row matching several records repeats every
+   * left column; a record matched by several rows repeats every one of its own.
+   * The second is the ordinary lookup — leases joined to their property — and
+   * is exactly the case where totalling the property's value per lease counts
+   * each property once per lease.
+   */
+  const repeated = [
+    ...(multiplied > 0 ? keysOf(left) : []),
+    ...([...matchedBy.values()].some((count) => count > 1)
+      ? rightKeys.map((key) => `${options.rightAs}_${key}`)
+      : []),
+  ];
+
+  return { rows, warnings, repeated };
 };
 
 const DEFAULT_MAX_ROWS = 50_000;
@@ -205,6 +224,8 @@ export const runPlan = (
 
   // 2. Combine.
   let rows: Row[] = [];
+  /** Columns a join repeated; see `JoinResult.repeated`. */
+  let repeated: readonly string[] = [];
   const combine = spec.combine;
   if (combine?.op === "union") {
     /*
@@ -251,6 +272,7 @@ export const runPlan = (
       maxRows: ctx.maxRows ?? DEFAULT_MAX_ROWS,
     });
     rows = joined.rows;
+    repeated = joined.repeated;
     warnings.push(...joined.warnings);
     steps.push({
       op: "join", rowsIn: left.length, rowsOut: rows.length, note: `${combine.left}.${combine.on.left} = ${combine.right}.${combine.on.right}` });
@@ -261,6 +283,7 @@ export const runPlan = (
   // 3. The widget's own pipeline runs over the joined rows. Feeding them back
   //    in as a body works because seeding already accepts an array.
   const final = runPipeline(plan.widget, rows, ctx);
+  const marked = markRepeated(plan.widget.spec.pipeline, repeated, final.columns, warnings);
 
   /*
    * Highlights come back from that final `runPipeline` already evaluated
@@ -269,7 +292,7 @@ export const runPlan = (
    */
   return {
     rows: final.rows,
-    columns: final.columns,
+    columns: marked,
     meta: {
       steps: [...steps, ...final.meta.steps],
       warnings: [...warnings, ...final.meta.warnings],
@@ -280,6 +303,41 @@ export const runPlan = (
     },
     ...(final.highlights ? { highlights: final.highlights } : {}),
   };
+};
+
+/**
+ * Carry a join's repeated columns through the widget's own pipeline.
+ *
+ * A rename moves the mark with the column. A grouping ends it — its outputs
+ * are new values — but an aggregate reading a repeated column has already
+ * counted something twice, and that is said rather than drawn as a total.
+ */
+const markRepeated = (
+  pipeline: readonly PipelineStep[],
+  repeated: readonly string[],
+  columns: readonly ColumnMeta[],
+  warnings: string[],
+): readonly ColumnMeta[] => {
+  if (repeated.length === 0) return columns;
+  let names = new Set(repeated);
+  for (const step of pipeline) {
+    if (step.op === "rename") {
+      const next = new Set<string>();
+      for (const name of names) next.add(step.fields[name] ?? name);
+      names = next;
+    } else if (step.op === "group") {
+      for (const source of Object.values(step.agg)) {
+        const parsed = parseAggregation(source);
+        if (!parsed?.field || !names.has(parsed.field) || parsed.fn === "countDistinct") continue;
+        warnings.push(
+          `"${parsed.field}" repeats across the joined rows, so ${source} counts some of it more than once.`,
+        );
+      }
+      names = new Set();
+    }
+  }
+  if (names.size === 0) return columns;
+  return columns.map((column) => (names.has(column.name) ? { ...column, repeated: true } : column));
 };
 
 /** Which endpoints this widget reads, single- or multi-source alike. */

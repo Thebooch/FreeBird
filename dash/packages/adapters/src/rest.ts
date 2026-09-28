@@ -13,9 +13,12 @@ import {
   authKeyRefs,
   connectionNeedsAddress,
   interpolate,
+  interpolatePath,
   missingInputs,
   pathParamNames,
 } from "@freebirdai/dash-spec";
+import { INCOMPLETE } from "./incomplete.js";
+import { locateInputs, renderBody, setQueryValue } from "./request.js";
 import {
   AdapterError,
   type FetchContext,
@@ -43,9 +46,14 @@ export type HttpFetch = (
   init: {
     headers: Record<string, string>;
     signal?: AbortSignal;
-    /** Absent for every read, which is a GET. Set only by `write`. */
+    /** GET when absent. A read sends POST only for an API that reads with a body. */
     method?: string;
     body?: string;
+    /**
+     * Whether this request reads or changes. Absent means a GET reads and
+     * anything else changes — which a read sent with POST is not, so it says so.
+     */
+    purpose?: "read" | "write";
   },
   allowedHost: string | null,
 ) => Promise<HttpResponse>;
@@ -85,8 +93,11 @@ const prepareAuth = async (
   }
   // The single-secret styles read their own slot by name, never "the first
   // one": a Basic username is a secret too, and it comes first.
+  /* A connector's credentials are sent by its code, through the server — never from here. */
   const secret =
-    auth.type === "none" || auth.type === "headers" ? null : (secrets.get(auth.keyRef) ?? null);
+    auth.type === "none" || auth.type === "headers" || auth.type === "oauth2" || auth.type === "connector"
+      ? null
+      : (secrets.get(auth.keyRef) ?? null);
 
   const headers: Record<string, string> = {};
   const query: Array<readonly [string, string]> = [];
@@ -113,6 +124,23 @@ const prepareAuth = async (
         break;
       }
     }
+  }
+
+  /*
+   * OAuth sends the token the broker obtained, not anything pasted. None yet
+   * means nobody has signed in (or the sign-in was withdrawn): said as that,
+   * never as a wrong key.
+   */
+  if (auth.type === "oauth2") {
+    const token = (await resolveSecret?.(auth.keyRef)) ?? null;
+    if (!token) {
+      throw new AdapterError("sign-in needed", {
+        status: 401,
+        userMessage: `${connection.title} needs signing in before it can load anything.`,
+      });
+    }
+    secrets.set(auth.keyRef, token);
+    headers.authorization = `Bearer ${token}`;
   }
 
   // Multi-header auth is its own loop: each part carries its own secret, so
@@ -153,6 +181,33 @@ const errorDetail = (text: string, secrets: readonly string[]): string | undefin
     if (secret.length >= 4) clean = clean.split(secret).join("***");
   }
   return clean.length > 2000 ? `${clean.slice(0, 1999)}…` : clean;
+};
+
+/** How many times one read may renew its credential before the refusal stands. */
+const MAX_RENEWALS = 3;
+
+/**
+ * How many records the API says match, when it says: the endpoint's declared
+ * `totalPath`, else an `X-Total-Count` header. What a complete read is later
+ * checked against.
+ */
+const statedTotal = (op: OpSpec, body: unknown, response: HttpResponse): number | undefined => {
+  const raw = op.totalPath ? readPath(body, op.totalPath) : response.header("x-total-count");
+  const total = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
+  return Number.isInteger(total) && total >= 0 ? total : undefined;
+};
+
+/**
+ * What an API said about a refused read, for diagnosing it.
+ *
+ * Shorter than a write's detail and stripped of markup: an error page is
+ * HTML more often than not, and what matters is the sentence in it — the
+ * header it wanted, the parameter it could not read.
+ */
+const readDetail = (text: string, secrets: readonly string[]): string | undefined => {
+  const plain = errorDetail(text.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " "), secrets);
+  if (!plain) return undefined;
+  return plain.length > 300 ? `${plain.slice(0, 299)}…` : plain;
 };
 
 const base64 = (input: string): string => {
@@ -219,10 +274,8 @@ export class RestAdapter implements SourceAdapter {
     assertAuthConfigured(connection, op, auth);
     const started = ctx.now;
     const warnings: string[] = [];
-    if (connection.paginationPending && op.pagination.kind === "none")
-      warnings.push(
-        "Pagination has not been confirmed for this API; this response may contain only the first page.",
-      );
+    if (connection.paginationPending && op.pagination.kind === "none" && !op.paginationChecked)
+      warnings.push(INCOMPLETE.unconfirmed);
     const host = allowedHost(connection);
 
     const headers: Record<string, string> = {};
@@ -230,30 +283,51 @@ export class RestAdapter implements SourceAdapter {
       headers[name] = interpolate(value, ctx.params);
     }
 
-    const prepared = await prepareAuth(connection, auth, ctx.resolveSecret);
+    let prepared = await prepareAuth(connection, auth, ctx.resolveSecret);
     const redactQueryParam = prepared.redact;
 
-    const query = new URLSearchParams(firstPageParams(op.pagination));
+    /*
+     * Each supplied value goes where the endpoint declares it: the query
+     * string, a header, a cookie, or the body. Paging parameters go wherever
+     * the paging rule says — the query string, or into the body.
+     */
+    const pagingInBody = "in" in op.pagination && op.pagination.in === "body";
+    const located = locateInputs(op, overrides);
+    const byName = new Map(op.params.map((param) => [param.name, param]));
+    const query = new URLSearchParams(pagingInBody ? {} : firstPageParams(op.pagination));
     for (const [name, value] of Object.entries(op.query)) {
-      query.set(name, interpolate(String(value), ctx.params));
+      setQueryValue(query, name, interpolate(String(value), ctx.params), byName.get(name));
     }
-    for (const [name, value] of Object.entries(overrides)) {
+    for (const [name, value] of Object.entries(located.query)) {
       const resolved = typeof value === "string" ? interpolate(value, ctx.params) : String(value);
       // An empty override means "no filter", not "filter by empty string".
       if (resolved === "") query.delete(name);
-      else query.set(name, resolved);
+      else setQueryValue(query, name, resolved, byName.get(name));
     }
+    for (const [name, value] of Object.entries(located.header)) {
+      const resolved = interpolate(value, ctx.params);
+      if (resolved !== "") headers[name] = resolved;
+    }
+    const cookies = Object.entries(located.cookie)
+      .map(([name, value]) => [name, interpolate(value, ctx.params)] as const)
+      .filter(([, value]) => value !== "")
+      .map(([name, value]) => `${name}=${encodeURIComponent(value)}`);
+    if (cookies.length > 0) headers.cookie = cookies.join("; ");
 
-    for (const [name, value] of Object.entries(firstPageParams(op.pagination))) {
-      if (query.get(name) !== value)
-        throw new AdapterError(
-          `Pagination input ${name} conflicts with this endpoint's pagination settings. Update the endpoint settings before loading it.`,
-          { status: 400 },
-        );
-    }
+    if (!pagingInBody)
+      for (const [name, value] of Object.entries(firstPageParams(op.pagination))) {
+        if (query.get(name) !== value)
+          throw new AdapterError(
+            `Pagination input ${name} conflicts with this endpoint's pagination settings. Update the endpoint settings before loading it.`,
+            { status: 400 },
+          );
+      }
 
     Object.assign(headers, prepared.headers);
     for (const [name, value] of prepared.query) query.set(name, value);
+
+    /* The body's tokens read the supplied values, with body parameters' defaults beside them. */
+    const bodyParams = { ...ctx.params, filters: { ...ctx.params.filters, ...located.body } };
 
     /*
      * What this endpoint needs before it can be called, asked of the spec
@@ -261,7 +335,13 @@ export class RestAdapter implements SourceAdapter {
      * parameters *and* the path template — see its comment for why the path
      * case is the dangerous one.
      */
-    const supplied = { ...Object.fromEntries(query), ...ctx.params.filters };
+    const supplied = {
+      ...Object.fromEntries(query),
+      ...located.header,
+      ...located.cookie,
+      ...located.body,
+      ...ctx.params.filters,
+    };
     // Query values are validated where they are sent; path values come only
     // from path inputs, so a query parameter cannot satisfy a missing path id.
     for (const param of op.params) {
@@ -287,27 +367,37 @@ export class RestAdapter implements SourceAdapter {
       });
     }
 
-    const path = interpolate(op.path, ctx.params);
+    const path = interpolatePath(op.path, ctx.params);
     const base = connection.baseUrl.replace(/\/+$/, "");
     const first = `${base}${path.startsWith("/") ? path : `/${path}`}`;
 
     const pages: unknown[] = [];
     const seen = new Set<string>();
-    let nextUrl: string | null = withQuery(first, query);
+    /* The next request: its address, and the paging values its body carries. */
+    let next: { url: string; paging: Record<string, string> } | null = {
+      url: withQuery(first, query),
+      paging: pagingInBody ? firstPageParams(op.pagination) : {},
+    };
     let pageIndex = 0;
     let truncated = false;
-    let lastUrl = nextUrl;
+    let lastUrl = next.url;
     let lastStatus = 0;
     let etag: string | null = null;
     let lastModified: string | null = null;
+    let reportedTotal: number | undefined;
+    let renewals = 0;
+    const reads = op.method === "POST" && op.body !== undefined;
 
-    while (nextUrl && pageIndex < op.maxPages) {
-      if (seen.has(nextUrl)) {
+    while (next && pageIndex < op.maxPages) {
+      const sent = reads ? renderBody(op.body!, bodyParams, next.paging) : undefined;
+      /* A page is the same page when its address and its body are the same. */
+      const identity = `${next.url}\n${sent?.text ?? ""}`;
+      if (seen.has(identity)) {
         truncated = true;
-        warnings.push("pagination repeated a page and was stopped");
+        warnings.push(INCOMPLETE.repeatedPage);
         break;
       }
-      seen.add(nextUrl);
+      seen.add(identity);
 
       /*
        * Conditional headers ride on the first request only, and only when the
@@ -317,7 +407,7 @@ export class RestAdapter implements SourceAdapter {
        * it that way would quietly serve a stale collection.
        */
       const conditional =
-        pageIndex === 0 && ctx.validators
+        pageIndex === 0 && ctx.validators && !reads
           ? {
               ...(ctx.validators.etag ? { "if-none-match": ctx.validators.etag } : {}),
               ...(ctx.validators.lastModified
@@ -327,8 +417,12 @@ export class RestAdapter implements SourceAdapter {
           : {};
 
       const response = await this.http(
-        nextUrl,
-        { headers: { ...headers, ...conditional }, ...(ctx.signal ? { signal: ctx.signal } : {}) },
+        next.url,
+        {
+          headers: { ...headers, ...conditional, ...(sent ? { "content-type": sent.contentType } : {}) },
+          ...(sent ? { method: "POST", body: sent.text, purpose: "read" as const } : {}),
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
+        },
         host,
       );
 
@@ -347,6 +441,20 @@ export class RestAdapter implements SourceAdapter {
           },
         };
       }
+      /*
+       * Refused for its token part-way through: renew it and read this same
+       * page again. Bounded, and only when the caller can renew at all.
+       */
+      if (response.status === 401 && ctx.renew && renewals < MAX_RENEWALS) {
+        renewals++;
+        if (await ctx.renew()) {
+          prepared = await prepareAuth(connection, auth, ctx.resolveSecret);
+          Object.assign(headers, prepared.headers);
+          seen.delete(identity);
+          continue;
+        }
+      }
+
       lastUrl = response.url;
       lastStatus = response.status;
       if (pageIndex === 0) {
@@ -354,40 +462,43 @@ export class RestAdapter implements SourceAdapter {
         lastModified = response.header("last-modified");
       }
 
-      refusal(connection, host, response);
+      // What the API said, kept for whoever diagnoses a failure: tags out, secrets out, short.
+      refusal(connection, host, response, readDetail(response.text, prepared.secrets));
 
       const body = parseJson(response.text, response.url);
+      if (pageIndex === 0) reportedTotal = statedTotal(op, body, response);
       pages.push(body);
       pageIndex++;
       if (op.pagination.kind !== "none" && rowsAt(body, op.rowsPath) === null) {
         truncated = true;
-        warnings.push(
-          "The declared row list was not found; pagination completeness could not be checked.",
-        );
+        warnings.push(INCOMPLETE.rowsMissing);
         break;
       }
 
-      nextUrl = nextPageUrl({
-        pagination: op.pagination,
-        body,
-        response,
-        rowsPath: op.rowsPath,
-        base: first,
-        query,
-        pageIndex,
-      });
+      const decided = nextPageParams({ pagination: op.pagination, body, rowsPath: op.rowsPath, pageIndex });
+      if (decided.kind === "none") next = null;
+      else if (decided.kind === "link-header") {
+        const url = nextFromLinkHeader(response.header("link"));
+        next = url ? { url, paging: next.paging } : null;
+      } else if (pagingInBody) next = { url: next.url, paging: { ...next.paging, ...decided.params } };
+      else {
+        const params = new URLSearchParams(query);
+        for (const [name, value] of Object.entries(decided.params)) params.set(name, value);
+        next = { url: withQuery(first, params), paging: next.paging };
+      }
 
-      if (nextUrl && pageIndex >= op.maxPages) {
+      if (next && pageIndex >= op.maxPages) {
         // Say so loudly: a silently truncated result is a chart that is
         // quietly incomplete, which is worse than an error.
         truncated = true;
-        warnings.push(
-          `stopped after ${op.maxPages} page(s); there is more data behind this endpoint`,
-        );
+        warnings.push(INCOMPLETE.pageCap(op.maxPages));
       }
     }
 
+    const beforeMerge = warnings.length;
     const merged = pages.length === 1 ? pages[0] : mergePages(pages, op.rowsPath, warnings);
+    // A merge that fell back to the first page left the rest out.
+    if (warnings.length > beforeMerge) truncated = true;
 
     /*
      * Offered back only for a single-page result. Quoting a page-one validator
@@ -413,6 +524,7 @@ export class RestAdapter implements SourceAdapter {
         pages: pageIndex,
         truncated,
         warnings,
+        ...(reportedTotal !== undefined ? { reportedTotal } : {}),
       },
     };
   }
@@ -447,6 +559,17 @@ export class RestAdapter implements SourceAdapter {
     }
     const auth = op.auth ?? connection.auth;
     assertAuthConfigured(connection, op, auth);
+    /*
+     * A connector signs reads. A change through one would need the same code
+     * to sign it, under a write's review — not built yet, so refused plainly
+     * rather than sent unsigned.
+     */
+    if (auth.type === "connector")
+      throw new AdapterError("changes through a connector are not supported yet", {
+        status: 501,
+        userMessage: `${connection.title} signs in through connector code, which can read but cannot make changes yet. Nothing was sent.`,
+        outcome: "not-sent",
+      });
     const prepared = await prepareAuth(connection, auth, ctx.resolveSecret);
     const host = allowedHost(connection);
 
@@ -458,13 +581,20 @@ export class RestAdapter implements SourceAdapter {
         outcome: "not-sent",
       });
     }
-    // Encoded, unlike a read's path: a value with a slash in it must not become two segments.
+    // Encoded, as a read's path is (`interpolatePath`): a value with a slash in it must not become two segments.
     const path = op.path.replace(/\{\{\s*param\.([A-Za-z0-9_]+)[^}]*\}\}/g, (_token, name: string) =>
       encodeURIComponent(request.params[name] ?? ""),
     );
     const base = connection.baseUrl.replace(/\/+$/, "");
     const query = new URLSearchParams();
-    for (const [name, value] of Object.entries(op.query)) query.set(name, String(value));
+    /* The same `{{param.x}}` tokens a read's query carries, filled from this change's values. */
+    for (const [name, value] of Object.entries(op.query)) {
+      const filled = String(value).replace(
+        /\{\{\s*param\.([A-Za-z0-9_]+)[^}]*\}\}/g,
+        (_token, param: string) => request.params[param] ?? "",
+      );
+      if (filled !== "") query.set(name, filled);
+    }
     for (const [name, value] of prepared.query) query.set(name, value);
     const url = withQuery(`${base}${path.startsWith("/") ? path : `/${path}`}`, query);
 
@@ -480,6 +610,7 @@ export class RestAdapter implements SourceAdapter {
         {
           headers,
           method: op.method,
+          purpose: "write",
           ...(sending ? { body: JSON.stringify(request.body) } : {}),
           ...(ctx.signal ? { signal: ctx.signal } : {}),
         },
@@ -592,23 +723,3 @@ const redact = (url: string, param: string | null): string => {
   }
 };
 
-const nextPageUrl = (input: {
-  pagination: PaginationSpec;
-  body: unknown;
-  response: HttpResponse;
-  rowsPath: string | undefined;
-  base: string;
-  query: URLSearchParams;
-  pageIndex: number;
-}): string | null => {
-  const { pagination, body, response, rowsPath, base, query, pageIndex } = input;
-
-  // The decision is shared with MCP; only turning it into a URL is not.
-  const next = nextPageParams({ pagination, body, rowsPath, pageIndex });
-  if (next.kind === "none") return null;
-  if (next.kind === "link-header") return nextFromLinkHeader(response.header("link"));
-
-  const params = new URLSearchParams(query);
-  for (const [name, value] of Object.entries(next.params)) params.set(name, value);
-  return withQuery(base, params);
-};

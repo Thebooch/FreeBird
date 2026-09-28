@@ -3,6 +3,8 @@ import type { CatalogEntry, ServerVariable, WriteOpDef } from "@freebirdai/dash-
 import {
   IMPORT_VERSION,
   WRITES_VERSION,
+  type CapabilityId,
+  capabilityNote,
   catalogEntrySchema,
   writeOpDefSchema,
   serverTemplateSchema,
@@ -38,7 +40,9 @@ export const dialectProposalSchema = z.object({
 
   authType: z
     .string()
-    .describe("One of: none, bearer, header, query, basic. Say none if the docs do not mention a key."),
+    .describe(
+      "One of: none, bearer, header, query, basic. Say none if the docs do not mention a key. When the docs need something else, name it instead: oauth2, openid, signed, cookie, digest, certificate or login.",
+    ),
   authName: z
     .string()
     .optional()
@@ -166,6 +170,20 @@ const PAGINATION_KINDS = new Set(["none", "cursor", "offset", "page", "link-head
 const ARCHETYPES = new Set(["list", "summary", "timeseries"]);
 const TIME_FORMATS = new Set(["iso", "unix", "unix_ms", "date"]);
 
+/** Which unsupported sign-in a named style is, when the model named one. */
+const signInGapOf = (style: string): CapabilityId | null => {
+  const named = style.toLowerCase();
+  /* Prose names OAuth without the addresses to sign in at: a pasted token, for now. */
+  if (/oauth/.test(named)) return "auth.oauth2-token";
+  if (/openid|oidc/.test(named)) return "auth.oidc";
+  if (/sign|hmac|aws/.test(named)) return "auth.signing";
+  if (/cookie/.test(named)) return "auth.cookie";
+  if (/digest/.test(named)) return "auth.digest";
+  if (/cert|mtls|tls/.test(named)) return "auth.mtls";
+  if (/login|session/.test(named)) return "auth.token-exchange";
+  return null;
+};
+
 /** A label the model gave, trimmed to something that fits beside a field. */
 const label = (value: string | undefined): string | undefined => {
   const text = value?.trim().replace(/\s+/g, " ");
@@ -187,8 +205,19 @@ export const mapDialectProposal = (
   const id = slug(proposal.title);
   const keyRef = `${id}-key`;
 
-  const authType = AUTH_TYPES.has(proposal.authType) ? proposal.authType : "none";
-  if (authType !== proposal.authType) {
+  /*
+   * A sign-in the docs describe that no supported style covers is named in
+   * the manifest's words. OAuth stands in as a pasted token, exactly as the
+   * OpenAPI importer does, and says the token will expire.
+   */
+  const gap = signInGapOf(proposal.authType);
+  const authType = AUTH_TYPES.has(proposal.authType)
+    ? proposal.authType
+    : gap === "auth.oauth2-token"
+      ? "bearer"
+      : "none";
+  if (gap) warnings.push(capabilityNote(gap));
+  else if (authType !== proposal.authType) {
     warnings.push(`"${proposal.authType}" is not an authentication style we support; set to none.`);
   }
 
@@ -285,6 +314,17 @@ export const mapDialectProposal = (
     }
   }
 
+  /*
+   * Kept as a proposal, exactly as the OpenAPI importer keeps its own. A guess
+   * installed as the live setting fails quietly — a wrong cursor path reads one
+   * page and stops, which looks like a complete answer — so nothing read from
+   * prose runs until a probe or a person confirms it.
+   */
+  if (pagination.kind !== "none")
+    warnings.push(
+      "Pagination is an unconfirmed suggestion. Only one response will be read until an endpoint's pagination contract is confirmed.",
+    );
+
   const timeFormat = proposal.timeFormat && TIME_FORMATS.has(proposal.timeFormat)
     ? proposal.timeFormat
     : "iso";
@@ -327,13 +367,14 @@ export const mapDialectProposal = (
     ...(server ? { server } : {}),
     dialect: {
       auth: labelledAuth,
-      pagination,
+      pagination: { kind: "none" },
       ...(proposal.rowsPath ? { rowsPath: proposal.rowsPath } : {}),
       ...(proposal.timeParam ? { timeFilter: { param: proposal.timeParam, format: timeFormat } } : {}),
     },
     ops: endpoints,
     writes,
     writesVersion: WRITES_VERSION,
+    ...(pagination.kind !== "none" ? { paginationProposal: pagination } : {}),
     validateOpId: endpoints.find((endpoint) => endpoint.archetype === "list")?.id ?? endpoints[0]?.id,
     ...(proposal.keyHelp ? { keyHelp: proposal.keyHelp } : {}),
     origin: "docs",

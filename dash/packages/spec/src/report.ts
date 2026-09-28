@@ -201,6 +201,10 @@ export const fingerprintConnection = (connection: ConnectionSpec): string =>
       dialect: connection.dialect,
       ops: fingerprintOps(connection.ops),
       credentialsRevision: connection.credentialsRevision,
+      /* The code by its pin, and what it may do: either changing is a different configuration. */
+      connector: connection.connector
+        ? { hash: connection.connector.hash, authority: connection.connector.authority, serves: connection.connector.serves }
+        : undefined,
     }),
   );
 

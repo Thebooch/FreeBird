@@ -367,6 +367,87 @@ describe("parseOpenApi", () => {
       expect(authOf({ a: { type: "oauth2", flows: {} } })).toMatchObject({ type: "bearer" });
     });
 
+    const warningsFor = (securitySchemes: Record<string, unknown>) =>
+      parseOpenApi(spec({ components: { securitySchemes } }), SPEC_URL)!.warnings.join(" ");
+
+    it("says a hand-fetched OAuth token will expire, rather than presenting it as a key", () => {
+      expect(warningsFor({ oauth: { type: "oauth2", flows: {} } })).toMatch(
+        /"oauth" sign-in scheme uses OAuth 2\.0 without a flow Dash can run, which is only partly supported/,
+      );
+    });
+
+    it("names a sign-in only connector code can do, instead of treating the API as needing no key", () => {
+      const said = warningsFor({ sigv4: { type: "http", scheme: "aws4-hmac-sha256" } });
+      expect(said).toMatch(/"sigv4" sign-in scheme uses signed requests.*only partly supported\. Connector code signs/);
+      expect(said).not.toMatch(/does not declare a supported authentication setup/);
+    });
+
+    /* A key the API's own login issues is not one anybody can paste. */
+    it("does not ask for a session token its own login issues", () => {
+      const withLogin = (description: string) =>
+        parseOpenApi(
+          spec({
+            components: { securitySchemes: { session: { type: "apiKey", in: "header", name: "X-Session", description } } },
+            paths: {
+              ...spec().paths,
+              "/login": { post: { summary: "Log in", responses: { "200": { description: "A session" } } } },
+            },
+          }),
+          SPEC_URL,
+        )!;
+      const issued = withLogin("A session token from POST /login.");
+      expect(issued.entry.dialect.auth ?? { type: "none" }).toMatchObject({ type: "none" });
+      expect(issued.warnings.join(" ")).toMatch(/"session" sign-in scheme uses signing in for a session token, which is only partly supported/);
+      /* A key the description places on an account page is still a key; so is one naming a login the document lacks. */
+      expect(withLogin("Your key, from Settings after you log in.").entry.dialect.auth).toMatchObject({ type: "header" });
+      expect(withLogin("A token from POST /sessions.").entry.dialect.auth).toMatchObject({ type: "header" });
+    });
+
+    it("says nothing about OAuth when a key is offered beside it", () => {
+      expect(
+        warningsFor({
+          oauth: { type: "oauth2", flows: {} },
+          key: { type: "apiKey", in: "header", name: "X-Key" },
+        }),
+      ).not.toMatch(/OAuth/);
+    });
+
+    it("makes a client-credentials flow a real OAuth connection, renewed by itself", () => {
+      expect(
+        authOf({
+          oauth: {
+            type: "oauth2",
+            flows: { clientCredentials: { tokenUrl: "https://api.example.com/oauth/token", scopes: { read: "Read" } } },
+          },
+        }),
+      ).toMatchObject({ type: "oauth2", flow: "client_credentials", tokenUrl: "https://api.example.com/oauth/token", scopes: ["read"] });
+    });
+
+    it("makes a sign-in flow an OAuth connection with somewhere to keep its refresh token", () => {
+      expect(
+        authOf({
+          oauth: {
+            type: "oauth2",
+            flows: {
+              authorizationCode: {
+                authorizationUrl: "https://login.example.com/authorize",
+                tokenUrl: "https://login.example.com/token",
+                scopes: {},
+              },
+            },
+          },
+        }),
+      ).toMatchObject({ type: "oauth2", flow: "authorization_code", authorizeUrl: "https://login.example.com/authorize" });
+      expect(
+        warningsFor({
+          oauth: {
+            type: "oauth2",
+            flows: { authorizationCode: { authorizationUrl: "https://login.example.com/a", tokenUrl: "https://login.example.com/t", scopes: {} } },
+          },
+        }),
+      ).not.toMatch(/OAuth/);
+    });
+
     it("prefers a pasteable key over OAuth when a spec offers both", () => {
       // Petstore does exactly this, and lists OAuth first. OAuth needs a
       // registered app; an API key is something the user can actually provide.
@@ -412,6 +493,190 @@ describe("parseOpenApi", () => {
       expect(entry.dialect.auth).toMatchObject({ type: "header", header: "Authorization" });
       expect(entry.paginationProposal).toMatchObject({ kind: "page", param: "page" });
       expect(entry.ops[0]?.rowsPath).toBe("$.rows");
+    });
+
+    it("reads Swagger 2 Basic, which is its own type rather than an http scheme", () => {
+      const basic = { ...swagger, securityDefinitions: { login: { type: "basic" } } };
+      expect(parseOpenApi(basic, SPEC_URL)!.entry.dialect.auth).toMatchObject({ type: "basic" });
+    });
+  });
+
+  describe("what the importer cannot carry over yet, said rather than dropped", () => {
+    const withRefunds = (operation: Record<string, unknown>) =>
+      spec({
+        paths: {
+          ...spec().paths,
+          "/refunds": {
+            get: {
+              summary: "List refunds",
+              responses: { "200": { content: { "application/json": { schema: { type: "array" } } } } },
+              ...operation,
+            },
+          },
+        },
+      });
+
+    it("keeps a header parameter as an input, sends the one value it allows, and never the sign-in header", () => {
+      const { entry } = parseOpenApi(
+        withRefunds({
+          parameters: [
+            { name: "X-Api-Version", in: "header", required: true, schema: { type: "string", enum: ["2024-06-01"] } },
+            { name: "X-Account", in: "header", schema: { type: "string" } },
+            { name: "Authorization", in: "header", required: true, schema: { type: "string" } },
+          ],
+        }),
+        SPEC_URL,
+      )!;
+      const params = entry.ops.find((op) => op.title === "List refunds")!.params;
+      expect(params).toContainEqual(expect.objectContaining({ name: "X-Api-Version", in: "header", default: "2024-06-01" }));
+      expect(params).toContainEqual(expect.objectContaining({ name: "X-Account", in: "header" }));
+      expect(params.some((param) => param.name === "Authorization")).toBe(false);
+    });
+
+    it("writes a deepObject filter as the query parameters it sends", () => {
+      const { entry } = parseOpenApi(
+        withRefunds({
+          parameters: [
+            {
+              name: "filter",
+              in: "query",
+              style: "deepObject",
+              explode: true,
+              schema: { type: "object", properties: { account: { type: "string" }, year: { type: "integer" } } },
+            },
+          ],
+        }),
+        SPEC_URL,
+      )!;
+      const names = entry.ops.find((op) => op.title === "List refunds")!.params.map((param) => param.name);
+      expect(names).toEqual(expect.arrayContaining(["filter[account]", "filter[year]"]));
+    });
+
+    it("names an endpoint that answers in CSV", () => {
+      const { warnings } = parseOpenApi(
+        withRefunds({
+          responses: { "200": { content: { "text/csv": { schema: { type: "string" } } } } },
+        }),
+        SPEC_URL,
+      )!;
+      expect(warnings.join(" ")).toMatch(/1 endpoint uses CSV and TSV responses, which is only partly supported\. Read through connector code/);
+    });
+
+    it("says when parts of the specification live in other files", () => {
+      const { warnings } = parseOpenApi(
+        withRefunds({
+          responses: {
+            "200": {
+              content: { "application/json": { schema: { $ref: "schemas/refund.yaml" } } },
+            },
+          },
+        }),
+        SPEC_URL,
+      )!;
+      expect(warnings.join(" ")).toMatch(/refers to schemas\/refund\.yaml.*not supported yet/);
+    });
+  });
+
+  describe("a POST that reads", () => {
+    const withSearch = (operation: Record<string, unknown>) =>
+      spec({
+        paths: {
+          ...spec().paths,
+          "/charges/search": {
+            post: {
+              operationId: "searchCharges",
+              summary: "Search charges",
+              requestBody: {
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      properties: {
+                        status: { type: "string" },
+                        page: { type: "object", properties: { after: { type: "string" }, size: { type: "integer", default: 50 } } },
+                      },
+                    },
+                  },
+                },
+              },
+              responses: {
+                "200": {
+                  description: "ok",
+                  content: {
+                    "application/json": {
+                      schema: {
+                        type: "object",
+                        properties: {
+                          data: { type: "array", items: { $ref: "#/components/schemas/Charge" } },
+                          total_count: { type: "integer" },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+              ...operation,
+            },
+          },
+        },
+      });
+
+    it("is imported as a read, with the evidence it rests on and a body to send", () => {
+      const { entry, warnings } = parseOpenApi(withSearch({}), SPEC_URL)!;
+      const search = entry.ops.find((op) => op.path === "/charges/search")!;
+      expect(search).toMatchObject({
+        method: "POST",
+        readSafety: { basis: "docs-inferred" },
+        body: { type: "json", template: { status: "{{param.status}}", page: { size: "{{param.page.size}}" } } },
+        totalPath: "$.total_count",
+      });
+      // The paging field is the paging rule's, not an input anybody fills in.
+      expect(JSON.stringify(search.body)).not.toContain("page.after");
+      expect(search.params).toContainEqual(expect.objectContaining({ name: "page.size", in: "body", default: 50 }));
+      expect(entry.writes.some((write) => write.path === "/charges/search")).toBe(false);
+      expect(warnings.join(" ")).toMatch(/read only while somebody is looking/);
+    });
+
+    it("stays a change when its name says it changes something", () => {
+      const { entry } = parseOpenApi(
+        withSearch({ operationId: "createChargeSearchExport", summary: "Export charges" }),
+        SPEC_URL,
+      )!;
+      expect(entry.ops.some((op) => op.path === "/charges/search")).toBe(false);
+      expect(entry.writes.some((write) => write.path === "/charges/search")).toBe(true);
+    });
+  });
+
+  describe("an endpoint that names its own server", () => {
+    const withServers = (servers: unknown) =>
+      spec({
+        paths: {
+          ...spec().paths,
+          "/refunds": {
+            servers,
+            get: {
+              summary: "List refunds",
+              responses: { "200": { content: { "application/json": { schema: { type: "array" } } } } },
+            },
+          },
+        },
+      });
+
+    it("folds a server under the connection's address into the path", () => {
+      const { entry } = parseOpenApi(
+        withServers([{ url: "https://api.example.com/v1/beta" }]),
+        SPEC_URL,
+      )!;
+      expect(entry.ops.find((op) => op.title === "List refunds")?.path).toBe("/beta/refunds");
+    });
+
+    it("leaves out an endpoint on another host, and says so", () => {
+      const { entry, warnings } = parseOpenApi(
+        withServers([{ url: "https://files.example.net/v1" }]),
+        SPEC_URL,
+      )!;
+      expect(entry.ops.some((op) => op.title === "List refunds")).toBe(false);
+      expect(warnings.join()).toMatch(/files\.example\.net.*left out/);
     });
   });
 

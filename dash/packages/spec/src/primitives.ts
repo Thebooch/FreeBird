@@ -24,6 +24,15 @@ export const idSchema = z
  */
 const credentialLabel = z.string().min(1).max(80).optional();
 
+/**
+ * What a connector's code calls a credential: `secret`, `key_id`, `session`.
+ * A name, never a value — the code asks the server to use the credential of
+ * that name, and the server decides whether it may (see `connector.ts`).
+ */
+export const credentialNameSchema = z
+  .string()
+  .regex(/^[a-z][a-z0-9_]{0,31}$/, "credential names are lowercase [a-z0-9_], starting with a letter");
+
 export const authSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("none") }),
   z.object({ type: z.literal("bearer"), keyRef: idSchema, label: credentialLabel }),
@@ -89,9 +98,73 @@ export const authSchema = z.discriminatedUnion("type", [
       .min(1)
       .max(4),
   }),
+  /**
+   * OAuth 2.0: a token obtained, kept and renewed by the server.
+   *
+   * `authorization_code` is somebody signing in with the provider once, with
+   * PKCE; `client_credentials` is an app signing in as itself, with nobody
+   * involved. Either way the only values a person holds are the app's own —
+   * its client id and secret, from wherever they registered it (or supplied
+   * by a hosted build that registered it for them). The access and refresh
+   * tokens are the broker's: fetched, stored in the vault under `keyRef` and
+   * `refreshRef`, renewed before they expire and after a refusal, and never
+   * asked of anybody.
+   */
+  z.object({
+    type: z.literal("oauth2"),
+    flow: z.enum(["authorization_code", "client_credentials"]),
+    authorizeUrl: z.string().url().optional(),
+    tokenUrl: z.string().url(),
+    scopes: z.array(z.string().min(1).max(200)).max(50).default([]),
+    clientIdRef: idSchema,
+    clientSecretRef: idSchema.optional(),
+    /** Where the access token is kept. The broker's, never pasted. */
+    keyRef: idSchema,
+    /** Where the refresh token is kept, for the sign-in flow. */
+    refreshRef: idSchema.optional(),
+    /** How the app proves itself at the token endpoint: in the form, or as HTTP Basic. */
+    clientAuth: z.enum(["body", "basic"]).default("body"),
+    clientIdLabel: credentialLabel,
+    clientSecretLabel: credentialLabel,
+  }),
+  /**
+   * A sign-in only a connector's code can perform: a signed request, a login
+   * for a session token. The values the person pastes are listed here, each
+   * under the name the code uses for it; the code never receives one. It asks
+   * the server to sign with one, or to put one in a request, and the server
+   * does so only for the addresses the connector's authority binds it to.
+   *
+   * `tokens` are what a token exchange obtained — a session token kept in the
+   * vault like OAuth's, and never asked of anybody.
+   */
+  z.object({
+    type: z.literal("connector"),
+    credentials: z
+      .array(
+        z.object({
+          name: credentialNameSchema,
+          keyRef: idSchema,
+          label: credentialLabel,
+          hint: z.string().max(200).optional(),
+          /**
+           * False for an identifier rather than a secret — a key ID, an account
+           * number — which the code may read, to put in something it signs.
+           * Never a password, a secret or a token: the server refuses to hand
+           * over one named like one.
+           */
+          secret: z.boolean().optional(),
+        }),
+      )
+      .max(6)
+      .default([]),
+    tokens: z.array(z.object({ name: credentialNameSchema, keyRef: idSchema })).max(4).default([]),
+  }),
 ]);
 
 export type AuthSpec = z.infer<typeof authSchema>;
+
+/** The OAuth variant, by name. */
+export type OAuthSpec = Extract<AuthSpec, { type: "oauth2" }>;
 
 /** Stable, bounded vault names without collisions between long connection ids. */
 export const connectionKeyRef = (connection: string, part?: number): string => {
@@ -115,10 +188,27 @@ export const authKeyRefs = (auth: AuthSpec): string[] => {
       return auth.parts.map((part) => part.keyRef);
     case "basic":
       return auth.usernameRef ? [auth.usernameRef, auth.keyRef] : [auth.keyRef];
+    case "oauth2":
+      /* What a person holds: the app's own values. The tokens are `authTokenRefs`. */
+      return auth.clientSecretRef ? [auth.clientIdRef, auth.clientSecretRef] : [auth.clientIdRef];
+    case "connector":
+      return auth.credentials.map((credential) => credential.keyRef);
     default:
       return [auth.keyRef];
   }
 };
+
+/**
+ * Where a sign-in keeps what it obtained rather than what anybody pasted:
+ * OAuth's access and refresh tokens. Removed with the connection like any
+ * other secret, and never asked for.
+ */
+export const authTokenRefs = (auth: AuthSpec): string[] =>
+  auth.type === "oauth2"
+    ? [auth.keyRef, ...(auth.refreshRef ? [auth.refreshRef] : [])]
+    : auth.type === "connector"
+      ? auth.tokens.map((token) => token.keyRef)
+      : [];
 
 /**
  * The same auth with every vault name replaced, in `authKeyRefs` order.
@@ -150,6 +240,31 @@ export const rekeyAuth = (
             keyRef: name(auth.keyRef, 1, count),
           }
         : { ...auth, keyRef: name(auth.keyRef, 0, count) };
+    case "oauth2": {
+      /* The tokens follow the client id's new name, so every secret is this connection's own. */
+      const clientIdRef = name(auth.clientIdRef, 0, count);
+      const stem = clientIdRef.slice(0, 54);
+      return {
+        ...auth,
+        clientIdRef,
+        ...(auth.clientSecretRef ? { clientSecretRef: name(auth.clientSecretRef, 1, count) } : {}),
+        keyRef: `${stem}-token`,
+        ...(auth.refreshRef ? { refreshRef: `${stem}-refresh` } : {}),
+      };
+    }
+    case "connector": {
+      const credentials = auth.credentials.map((credential, index) => ({
+        ...credential,
+        keyRef: name(credential.keyRef, index, count),
+      }));
+      /* Tokens follow the first credential's new name, as OAuth's follow the client id's. */
+      const stem = (credentials[0]?.keyRef ?? auth.tokens[0]?.keyRef ?? "connector").slice(0, 40);
+      return {
+        ...auth,
+        credentials,
+        tokens: auth.tokens.map((token) => ({ ...token, keyRef: `${stem}-${token.name}`.slice(0, 64) })),
+      };
+    }
     default:
       return { ...auth, keyRef: name(auth.keyRef, 0, count) };
   }
@@ -216,6 +331,31 @@ export const authCredentials = (auth: AuthSpec): AuthCredential[] => {
         keyRef: part.keyRef,
         label: part.label ?? part.header,
         hint: `Sent as the ${part.header} header.`,
+      }));
+    case "oauth2":
+      return [
+        {
+          keyRef: auth.clientIdRef,
+          label: auth.clientIdLabel ?? "Client ID",
+          hint: "Your app's client ID, from where the app was registered with this service.",
+        },
+        ...(auth.clientSecretRef
+          ? [
+              {
+                keyRef: auth.clientSecretRef,
+                label: auth.clientSecretLabel ?? "Client secret",
+                hint: "Your app's client secret. Only ever sent to the service's own sign-in address.",
+              },
+            ]
+          : []),
+      ];
+    case "connector":
+      return auth.credentials.map((credential) => ({
+        keyRef: credential.keyRef,
+        label: credential.label ?? credential.name,
+        hint:
+          credential.hint ??
+          "Used to sign in on this connection's behalf. The connection's own code never sees it.",
       }));
   }
 };
@@ -332,6 +472,21 @@ export const resolveServerUrl = (
  * this product has. The agent may propose a strategy, but it is surfaced for
  * confirmation rather than applied silently.
  */
+/**
+ * The most pages one read may fetch, whatever its strategy claims.
+ *
+ * One constant, because the catalog, the dialect and the endpoint each carry a
+ * limit, and a catalog entry that allowed more than an endpoint does was
+ * copied into a connection the endpoint schema then refused.
+ */
+export const MAX_PAGES = 50;
+
+/**
+ * Where a paging rule's parameters go: the query string, or the read's body
+ * (a dotted path, `page.after`, into a JSON body or GraphQL's variables).
+ */
+const pagingLocation = z.enum(["query", "body"]).optional();
+
 export const paginationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("none") }),
   z.object({
@@ -343,12 +498,14 @@ export const paginationSchema = z.discriminatedUnion("kind", [
     cursorPath: z.string().min(1),
     param: z.string().min(1),
     hasMorePath: z.string().optional(),
+    in: pagingLocation,
   }),
   z.object({
     kind: z.literal("offset"),
     param: z.string().min(1),
     limitParam: z.string().min(1),
     pageSize: z.number().int().min(1).max(1000),
+    in: pagingLocation,
   }),
   z.object({
     kind: z.literal("page"),
@@ -356,11 +513,22 @@ export const paginationSchema = z.discriminatedUnion("kind", [
     startsAt: z.number().int().min(0).default(1),
     limitParam: z.string().optional(),
     pageSize: z.number().int().min(1).max(1000).optional(),
+    in: pagingLocation,
   }),
   z.object({ kind: z.literal("link-header") }),
 ]);
 
 export type PaginationSpec = z.infer<typeof paginationSchema>;
+
+/** The request parameters a paging rule sets itself, so nothing else may. */
+export const pagingParamNames = (pagination: PaginationSpec | undefined): string[] =>
+  pagination?.kind === "offset"
+    ? [pagination.param, pagination.limitParam]
+    : pagination?.kind === "page"
+      ? [pagination.param, ...(pagination.limitParam ? [pagination.limitParam] : [])]
+      : pagination?.kind === "cursor"
+        ? [pagination.param]
+        : [];
 
 export const queryValueSchema = z.union([z.string(), z.number(), z.boolean()]);
 
@@ -377,10 +545,26 @@ export const queryValueSchema = z.union([z.string(), z.number(), z.boolean()]);
  * `in` is limited to path and query on purpose: a secret belongs in the auth
  * config, not in a per-op header the UI would invite someone to fill in.
  */
+export const PARAM_LOCATIONS = ["path", "query", "header", "cookie", "body"] as const;
+
 export const paramDefSchema = z.object({
   name: z.string().min(1).max(120),
-  in: z.enum(["path", "query"]),
-  type: z.enum(["string", "number", "boolean", "date"]).default("string"),
+  /**
+   * Where the value goes. A header or cookie parameter is an ordinary input
+   * — a version, an account — never a secret, which belongs in the auth
+   * config. A body parameter is filled into the read's body template by its
+   * `{{param.x}}` token.
+   */
+  in: z.enum(PARAM_LOCATIONS),
+  /** An `array` takes several values, given as a list or as text separated by commas. */
+  type: z.enum(["string", "number", "boolean", "date", "array"]).default("string"),
+  /**
+   * How a list is written into the query string, OpenAPI's names:
+   * `form` (`a=1&a=2`, or `a=1,2` when not exploded), `spaceDelimited`,
+   * `pipeDelimited`. A default of `form`, exploded.
+   */
+  style: z.enum(["form", "spaceDelimited", "pipeDelimited"]).optional(),
+  explode: z.boolean().optional(),
   required: z.boolean().default(false),
   /** Human label for the field. Falls back to `name`. */
   label: z.string().max(120).optional(),
@@ -393,6 +577,123 @@ export const paramDefSchema = z.object({
 });
 
 export type ParamDef = z.infer<typeof paramDefSchema>;
+
+/* ── Reads sent with a body ─────────────────────────────────────────── */
+
+/**
+ * What a read sends as its body, when it sends one.
+ *
+ * `json` and `form` templates carry `{{param.x}}` and `{{range.…}}` tokens in
+ * their string values, filled when the request is built; a value that is
+ * exactly one token takes the parameter's own type, and one that resolves to
+ * nothing is left out. `graphql` is a query document and its variables.
+ */
+export const readBodySchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("json"), template: z.unknown() }),
+  z.object({ type: z.literal("form"), template: z.record(z.string(), z.string()) }),
+  z.object({
+    type: z.literal("graphql"),
+    query: z.string().min(1).max(20_000),
+    variables: z.record(z.string(), z.unknown()).default({}),
+    operationName: z.string().max(120).optional(),
+  }),
+]);
+export type ReadBody = z.infer<typeof readBodySchema>;
+
+/**
+ * Why a read that is not a GET is believed to be a read.
+ *
+ * `get` and `graphql-query` are safe by protocol — a GraphQL document is
+ * parsed, and one containing a mutation or subscription is refused. Every
+ * other basis is evidence of *intent*, not proof of safety: documentation, a
+ * name, a model's reading. A read on one of those is sent only while
+ * somebody is looking at it, never warmed in the background, never retried,
+ * and journalled. See `dash/RELIABILITY.md`.
+ */
+export const READ_SAFETY_BASES = [
+  "get",
+  "graphql-query",
+  "spec-declared",
+  "docs-inferred",
+  "model-inferred",
+  "person",
+] as const;
+export const readSafetySchema = z.object({
+  basis: z.enum(READ_SAFETY_BASES),
+  /** What the basis rests on, in words: "named searchDeals; returns a list". */
+  note: z.string().max(300).optional(),
+});
+export type ReadSafety = z.infer<typeof readSafetySchema>;
+
+/** Safe by protocol, rather than by anybody's reading of it. */
+export const safeByProtocol = (safety: ReadSafety | undefined): boolean =>
+  safety === undefined || safety.basis === "get" || safety.basis === "graphql-query";
+
+/**
+ * The kinds of operation a GraphQL document declares.
+ *
+ * Enough of the grammar to answer one question safely — could this document
+ * change anything? — without a GraphQL parser: strings and comments are
+ * removed, and every top-level definition is read by its first word. A
+ * document starting with `{` is a query by the specification's shorthand.
+ * A fragment is neither and is ignored.
+ */
+export const graphqlOperations = (document: string): string[] => {
+  const stripped = document
+    .replace(/"""[\s\S]*?"""/g, '""')
+    .replace(/"(?:[^"\\\n]|\\.)*"/g, '""')
+    .replace(/#[^\n]*/g, "");
+  const kinds: string[] = [];
+  let depth = 0;
+  let index = 0;
+  while (index < stripped.length) {
+    const char = stripped[index]!;
+    if (char === "{") {
+      if (depth === 0) kinds.push("query");
+      depth++;
+      index++;
+      continue;
+    }
+    if (char === "}") {
+      depth = Math.max(0, depth - 1);
+      index++;
+      continue;
+    }
+    if (depth === 0) {
+      const word = /^[A-Za-z_][A-Za-z0-9_]*/.exec(stripped.slice(index));
+      if (word) {
+        const kind = word[0];
+        if (kind === "query" || kind === "mutation" || kind === "subscription") {
+          kinds.push(kind);
+          /* Skip to this definition's own brace, so it is not counted twice. */
+          const open = stripped.indexOf("{", index);
+          if (open < 0) break;
+          index = open + 1;
+          depth = 1;
+          continue;
+        }
+        if (kind === "fragment") {
+          const open = stripped.indexOf("{", index);
+          if (open < 0) break;
+          index = open + 1;
+          depth = 1;
+          kinds.push("fragment");
+          continue;
+        }
+        index += kind.length;
+        continue;
+      }
+    }
+    index++;
+  }
+  return kinds.filter((kind) => kind !== "fragment");
+};
+
+/** A GraphQL document that can only read: at least one query, and nothing else. */
+export const graphqlReadsOnly = (document: string): boolean => {
+  const kinds = graphqlOperations(document);
+  return kinds.length > 0 && kinds.every((kind) => kind === "query");
+};
 
 /**
  * Every `{{param.x}}` token in a path, in the order it appears.

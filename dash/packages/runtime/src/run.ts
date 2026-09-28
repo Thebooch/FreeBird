@@ -79,7 +79,20 @@ const compareForSort = (a: unknown, b: unknown, dir: "asc" | "desc"): number => 
   return dir === "asc" ? compareValues(a, b) : -compareValues(a, b);
 };
 
-const aggregate = (fn: Aggregation, field: string | null, rows: readonly Row[]): unknown => {
+/**
+ * Values a sum or an average could not read as numbers, per aggregation.
+ *
+ * They used to be skipped without a word, so "1,200" or "$5" left a total
+ * short and nothing on screen said so.
+ */
+type Skipped = { count: number };
+
+const aggregate = (
+  fn: Aggregation,
+  field: string | null,
+  rows: readonly Row[],
+  skipped?: Skipped,
+): unknown => {
   switch (fn) {
     case "count":
       return field === null ? rows.length : rows.filter((row) => !nullish(row[field])).length;
@@ -102,6 +115,7 @@ const aggregate = (fn: Aggregation, field: string | null, rows: readonly Row[]):
       for (const row of rows) {
         const n = toNumber(row[field]);
         if (n !== null) total += n;
+        else if (skipped && !nullish(row[field])) skipped.count++;
       }
       return total;
     }
@@ -115,7 +129,7 @@ const aggregate = (fn: Aggregation, field: string | null, rows: readonly Row[]):
         if (n !== null) {
           total += n;
           count++;
-        }
+        } else if (skipped && !nullish(row[field])) skipped.count++;
       }
       return count === 0 ? null : total / count;
     }
@@ -188,7 +202,7 @@ const runGroup = (
 
   const aggregations = Object.entries(step.agg).map(([name, source]) => {
     const parsed = parseAggregation(source);
-    return { name, parsed };
+    return { name, parsed, skipped: { count: 0 } as Skipped };
   });
 
   const build = (key: readonly unknown[], groupRows: readonly Row[]): Row => {
@@ -196,8 +210,8 @@ const runGroup = (
     keyDefs.forEach((def, index) => {
       out[def.as] = key[index] ?? null;
     });
-    for (const { name, parsed } of aggregations) {
-      out[name] = parsed ? aggregate(parsed.fn, parsed.field, groupRows) : null;
+    for (const { name, parsed, skipped } of aggregations) {
+      out[name] = parsed ? aggregate(parsed.fn, parsed.field, groupRows, skipped) : null;
     }
     return out;
   };
@@ -224,6 +238,15 @@ const runGroup = (
   let result = emptyTotals
     ? [build([], [])]
     : [...groups.values()].map((group) => build(group.key, group.rows));
+
+  for (const { parsed, skipped } of aggregations) {
+    if (!parsed?.field || skipped.count === 0) continue;
+    warnings.push(
+      `${skipped.count} value(s) in "${parsed.field}" were not numbers, so this ${
+        parsed.fn === "avg" ? "average" : "total"
+      } leaves them out.`,
+    );
+  }
 
   // Grouped output is always ordered by its key. A time series that comes back
   // in hash order looks like a bug even when the numbers are right; an

@@ -1,0 +1,28 @@
+[
+  {
+    "provider": "vaultbank",
+    "objective": "july-debits",
+    "split": "heldout",
+    "integrator": "agent",
+    "interventions": {
+      "technical": 1,
+      "intent": 0,
+      "consent": 0,
+      "account": 0
+    },
+    "expected": 123953.4,
+    "records": 640,
+    "modelCalls": 0,
+    "setup": "stopped:integrate",
+    "retrieval": "none",
+    "completeness": "n/a",
+    "metric": "n/a",
+    "value": null,
+    "recordsRead": null,
+    "flagged": [],
+    "error": "The \"signed\" sign-in scheme uses signed requests (AWS Signature, HMAC), which is not supported yet. Requests cannot be signed yet.",
+    "requests": 0,
+    "ms": 35,
+    "success": false
+  }
+]

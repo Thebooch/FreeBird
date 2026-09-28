@@ -10,6 +10,8 @@ import { bodyFieldsFromSchema, isJsonBody } from "./body-fields.js";
 import {
   IMPORT_VERSION,
   WRITES_VERSION,
+  type CapabilityId,
+  capabilityNote,
   catalogEntrySchema,
   deriveResourceModel,
   fnv1a,
@@ -292,6 +294,53 @@ export const addressFrom = (doc: Json, specUrl: string): ApiAddress | undefined 
 };
 
 /**
+ * Where one operation lives, when it names a server of its own.
+ *
+ * OpenAPI 3 lets a path or an operation override the document's servers.
+ * Ignoring that sends the request to the document's address, where the
+ * endpoint does not exist. A server under the connection's own address is
+ * folded into the path; one elsewhere cannot be read by a connection pinned
+ * to one host, so the caller leaves the endpoint out and says so.
+ */
+export const operationPath = (
+  doc: Json,
+  rawPath: string,
+  operation: Json,
+  pathItem: Json,
+  baseUrl: string,
+  specUrl: string,
+): { path: string } | { elsewhere: string } => {
+  if (specVersionOf(doc) === 2) return { path: rawPath };
+  const servers = [operation.servers, pathItem.servers].find(
+    (list): list is unknown[] => Array.isArray(list) && list.length > 0,
+  );
+  if (!servers) return { path: rawPath };
+  const fixed = servers
+    .filter(isObject)
+    .map((server) => str(server.url))
+    .find((url): url is string => !!url && !url.includes("{"));
+  // A templated override cannot be resolved here; the document's address stands.
+  if (!fixed) return { path: rawPath };
+  let server: URL;
+  let base: URL;
+  try {
+    server = new URL(fixed, specUrl);
+    base = new URL(baseUrl);
+  } catch {
+    return { path: rawPath };
+  }
+  const basePath = base.pathname.replace(/\/+$/, "");
+  const serverPath = server.pathname.replace(/\/+$/, "");
+  if (
+    server.origin !== base.origin ||
+    !(serverPath === basePath || serverPath.startsWith(`${basePath}/`))
+  )
+    return { elsewhere: `${server.origin}${serverPath}` };
+  const rest = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
+  return { path: `${serverPath.slice(basePath.length)}${rest}` };
+};
+
+/**
  * What the documentation says about getting in, in a reader's words.
  *
  * The security scheme's own description first, then a section headed like
@@ -390,15 +439,302 @@ type DialectAuth = NonNullable<CatalogEntry["dialect"]["auth"]>;
 type DialectPagination = NonNullable<CatalogEntry["dialect"]["pagination"]>;
 type DialectTimeFilter = NonNullable<CatalogEntry["dialect"]["timeFilter"]>;
 
+/**
+ * Every security scheme the document declares, by name.
+ *
+ * Both homes are read, the document's own version first. A document merged
+ * from per-page fragments can carry schemes in either, and reading only the
+ * one its version names is how a merged Swagger 2 reference lost every scheme
+ * it had and came out as needing no key at all.
+ */
+const schemesOf = (doc: Json): Json => {
+  const v2 = isObject(doc.securityDefinitions) ? doc.securityDefinitions : {};
+  const v3 =
+    isObject(doc.components) && isObject(doc.components.securitySchemes)
+      ? doc.components.securitySchemes
+      : {};
+  return specVersionOf(doc) === 2 ? { ...v3, ...v2 } : { ...v2, ...v3 };
+};
+
+/**
+ * A key the API issues itself, through a login it documents.
+ *
+ * "A session token from POST /login" is not something anybody copies from a
+ * settings page: asking a person to paste it asks them for a value they do not
+ * have. Recognised narrowly — the scheme's own description names a POST
+ * operation this document declares — so a key described as coming from an
+ * account page is still a key.
+ */
+const issuedByLogin = (doc: Json, scheme: Json): boolean => {
+  const description = str(scheme.description) ?? "";
+  if (description === "") return false;
+  const paths = isObject(doc.paths) ? doc.paths : {};
+  for (const match of description.matchAll(/\bPOST\s+`?(\/[A-Za-z0-9_\-./{}]+)/g)) {
+    const item = paths[match[1]!.replace(/[.,;:]+$/, "")];
+    if (isObject(item) && isObject(item.post)) return true;
+  }
+  return false;
+};
+
+/** The capability a scheme needs that no supported auth type covers, if any. */
+const schemeGap = (scheme: Json, doc: Json): CapabilityId | null => {
+  const type = str(scheme.type)?.toLowerCase();
+  const httpScheme = str(scheme.scheme)?.toLowerCase();
+  if ((type === "apikey" || (type === "http" && httpScheme === "bearer")) && issuedByLogin(doc, scheme))
+    return "auth.token-exchange";
+  if (type === "oauth2") return oauthFlowOf(scheme, "probe") ? null : "auth.oauth2-token";
+  if (type === "openidconnect") return "auth.oidc";
+  if (type === "mutualtls") return "auth.mtls";
+  if (type === "apikey" && str(scheme.in)?.toLowerCase() === "cookie") return "auth.cookie";
+  if (type === "http" && httpScheme === "digest") return "auth.digest";
+  if (type === "http" && httpScheme && httpScheme !== "bearer" && httpScheme !== "basic")
+    return "auth.signing";
+  return null;
+};
+
+/**
+ * What the document's sign-in needs that Dash cannot do, in plain words.
+ *
+ * Said only when it matters: when nothing supported was found, or when the
+ * key being asked for is an OAuth token somebody must fetch by hand. A spec
+ * that offers an API key *and* OAuth needs no sentence about OAuth.
+ */
+const signInGaps = (doc: Json, chosen: DialectAuth): string[] => {
+  const byGap = new Map<CapabilityId, string>();
+  let bearer = false;
+  for (const [name, raw] of Object.entries(schemesOf(doc))) {
+    const scheme = deref(doc, raw);
+    if (!isObject(scheme)) continue;
+    if (str(scheme.type) === "http" && str(scheme.scheme)?.toLowerCase() === "bearer") bearer = true;
+    const gap = schemeGap(scheme, doc);
+    if (gap && !byGap.has(gap)) byGap.set(gap, name);
+  }
+  const fromOAuth = chosen.type === "bearer" && !bearer && byGap.has("auth.oauth2-token");
+  if (chosen.type !== "none" && !fromOAuth) return [];
+  return [...byGap]
+    .filter(([gap]) => chosen.type === "none" || gap === "auth.oauth2-token")
+    .map(([gap, name]) => capabilityNote(gap, `The "${name}" sign-in scheme`));
+};
+
+/**
+ * Every sign-in a document declares that Dash cannot send, in plain words.
+ *
+ * For explaining, after the fact, why a connection made from it has no
+ * sign-in: the integration loop says this instead of reporting a refusal
+ * when nothing was ever sent.
+ */
+export const signInGapNotes = (doc: unknown): string[] =>
+  isObject(doc) ? signInGaps(doc, { type: "none" }) : [];
+
+/** Words that name a read, and words that name a change, in an operation's id, summary or path. */
+const READ_WORDS = /\b(search|query|queries|list|find|filter|report|reports|lookup|retrieve|fetch|browse)\b/i;
+const CHANGE_WORDS =
+  /\b(create|add|new|update|edit|delete|remove|send|submit|cancel|approve|close|upload|import|export|batch|bulk|start|run|trigger|charge|refund|pay|void)\b/i;
+const PAGING_WORDS = new Set([
+  ...["cursor", "starting_after", "after", "page_token", "next_cursor", "next"],
+  ...["page", "page_number", "pagenum"],
+  ...["offset", "skip", "start"],
+]);
+
+/**
+ * Whether a POST reads, and what it would send.
+ *
+ * A POST is a read only on the specification's own word (`x-read-only`) or
+ * when its name says it reads — search, list, query, report — and nothing in
+ * it says it changes something, and it answers with a list of records. That
+ * is evidence of intent, not proof, so it is recorded as such (`readSafety`)
+ * and such a read is only ever sent while somebody is looking at it.
+ *
+ * Its body is a template: each field of the request becomes a `{{param.x}}`
+ * input (left out when empty), except the fields a paging rule will set,
+ * and fields with a documented default, which are sent with it.
+ */
+export const postReadOf = (
+  doc: Json,
+  operation: Json,
+  rawPath: string,
+): {
+  readonly body: { type: "json"; template: Record<string, unknown> };
+  readonly params: ImportedParam[];
+  readonly readSafety: { basis: "spec-declared" | "docs-inferred"; note: string };
+} | null => {
+  const declared = operation["x-read-only"] === true || operation["x-readonly"] === true;
+  const name = str(operation.operationId)?.replace(/([a-z])([A-Z])/g, "$1 $2");
+  const words = [name, str(operation.summary), rawPath.split("/").filter(Boolean).pop()].filter(Boolean).join(" ");
+  if (!declared && (!READ_WORDS.test(words) || CHANGE_WORDS.test(words))) return null;
+  if (!declared && shapeOf(doc, successSchema(doc, operation), false).archetype !== "list") return null;
+
+  const requestBody = deref(doc, operation.requestBody);
+  const content = isObject(requestBody) && isObject(requestBody.content) ? requestBody.content : {};
+  const media = Object.entries(content).find(([type]) => /json/i.test(type))?.[1];
+  const schema = isObject(media) ? deref(doc, media.schema) : undefined;
+
+  const template: Record<string, unknown> = {};
+  const params: ImportedParam[] = [];
+  const walk = (node: unknown, path: string[], depth: number) => {
+    const object = deref(doc, node);
+    if (!isObject(object) || !isObject(object.properties) || depth > 2) return;
+    for (const [key, raw] of Object.entries(object.properties)) {
+      const property = deref(doc, raw);
+      const here = [...path, key];
+      if (isObject(property) && isObject(property.properties)) {
+        walk(property, here, depth + 1);
+        continue;
+      }
+      const dotted = here.join(".");
+      const paging = PAGING_WORDS.has(key.toLowerCase());
+      const fixed = isObject(property) ? scalar(property.default) : undefined;
+      params.push({
+        name: dotted,
+        in: "body",
+        type: paramType(property),
+        required: false,
+        ...(isObject(property) && str(property.description) ? { description: str(property.description)!.slice(0, 300) } : {}),
+        ...(fixed !== undefined ? { default: fixed } : {}),
+        ...(paging ? {} : { role: "filter" as const }),
+        value: fixed,
+      });
+      if (paging) continue;
+      let cursor = template;
+      for (const step of path) {
+        if (!isObject(cursor[step])) cursor[step] = {};
+        cursor = cursor[step] as Record<string, unknown>;
+      }
+      cursor[key] = `{{param.${dotted}}}`;
+    }
+  };
+  walk(schema, [], 0);
+
+  const title = str(operation.summary) ?? str(operation.operationId) ?? rawPath;
+  return {
+    body: { type: "json", template },
+    params,
+    readSafety: declared
+      ? { basis: "spec-declared", note: "The specification marks it read-only." }
+      : { basis: "docs-inferred", note: `Named “${title.slice(0, 120)}”, and answers with a list of records.` },
+  };
+};
+
+/** Where a response states how many records match in all, when its schema has a count beside the list. */
+const totalPathOf = (doc: Json, schema: unknown): string | undefined => {
+  const TOTAL = /^(total|total_?count|totalCount|total_?results|total_?items|total_?entries)$/i;
+  const walk = (node: unknown, path: string, depth: number): string | undefined => {
+    const object = deref(doc, node);
+    if (!isObject(object) || !isObject(object.properties) || depth > 2) return undefined;
+    for (const [key, raw] of Object.entries(object.properties)) {
+      const property = deref(doc, raw);
+      if (TOTAL.test(key) && isObject(property) && (property.type === "integer" || property.type === "number"))
+        return `${path}.${key}`;
+    }
+    for (const [key, raw] of Object.entries(object.properties)) {
+      const found = walk(raw, `${path}.${key}`, depth + 1);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  return walk(schema, "$", 0);
+};
+
+/** What a success response is declared as, when it is declared as something other than JSON. */
+const responseGap = (doc: Json, operation: Json): CapabilityId | null => {
+  let types: string[] = [];
+  if (specVersionOf(doc) === 2) {
+    const produces = Array.isArray(operation.produces) ? operation.produces : doc.produces;
+    types = Array.isArray(produces) ? produces.map(String) : [];
+  } else {
+    const responses = isObject(operation.responses) ? operation.responses : {};
+    for (const code of ["200", "201", "2XX", "default"]) {
+      const response = deref(doc, responses[code]);
+      if (isObject(response) && isObject(response.content)) {
+        types = Object.keys(response.content);
+        break;
+      }
+    }
+  }
+  if (types.length === 0) return null;
+  const lowered = types.map((type) => type.toLowerCase());
+  const lines = (type: string) => /nd-?json|jsonl|json-seq/.test(type);
+  if (lowered.some((type) => /json/.test(type) && !lines(type)) || lowered.includes("*/*")) return null;
+  if (lowered.some(lines)) return "response.ndjson";
+  if (lowered.some((type) => /csv|tab-separated|tsv/.test(type))) return "response.csv";
+  if (lowered.some((type) => /xml/.test(type))) return "response.xml";
+  if (lowered.every((type) => type.startsWith("text/plain"))) return null;
+  return "response.binary";
+};
+
+/** The first `$ref` pointing into another file, if the document has any. */
+const externalRef = (doc: Json): string | null => {
+  let budget = 200_000;
+  const walk = (node: unknown): string | null => {
+    if (--budget < 0) return null;
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        const found = walk(item);
+        if (found) return found;
+      }
+      return null;
+    }
+    if (!isObject(node)) return null;
+    const ref = node.$ref;
+    if (typeof ref === "string" && !ref.startsWith("#")) return ref;
+    for (const value of Object.values(node)) {
+      const found = walk(value);
+      if (found) return found;
+    }
+    return null;
+  };
+  return walk(doc);
+};
+
+/**
+ * The OAuth flow a scheme declares that the broker can run, as a connection's
+ * sign-in: client credentials first (nobody has to be there), then signing in
+ * with the provider. Swagger 2 names them `application` and `accessCode`.
+ * Addresses must be absolute; anything else is left for a pasted token.
+ */
+const oauthFlowOf = (scheme: Json, keyRef: string): DialectAuth | null => {
+  const absolute = (value: unknown): string | undefined => {
+    const text = str(value);
+    return text && /^https:\/\//i.test(text) ? text : undefined;
+  };
+  const scopesOf = (flow: Json): string[] =>
+    isObject(flow.scopes) ? Object.keys(flow.scopes).slice(0, 50) : [];
+  const refs = { clientIdRef: `${keyRef}-client`, clientSecretRef: `${keyRef}-secret`, keyRef: `${keyRef}-token` };
+
+  const flows = isObject(scheme.flows) ? scheme.flows : {};
+  const client = isObject(flows.clientCredentials)
+    ? flows.clientCredentials
+    : str(scheme.flow) === "application"
+      ? scheme
+      : undefined;
+  const clientToken = client ? absolute(client.tokenUrl) : undefined;
+  if (client && clientToken)
+    return { type: "oauth2", flow: "client_credentials", tokenUrl: clientToken, scopes: scopesOf(client), pkce: true, clientAuth: "body", ...refs } as DialectAuth;
+
+  const code = isObject(flows.authorizationCode)
+    ? flows.authorizationCode
+    : str(scheme.flow) === "accessCode"
+      ? scheme
+      : undefined;
+  const authorizeUrl = code ? absolute(code.authorizationUrl) : undefined;
+  const codeToken = code ? absolute(code.tokenUrl) : undefined;
+  if (code && authorizeUrl && codeToken)
+    return {
+      type: "oauth2",
+      flow: "authorization_code",
+      authorizeUrl,
+      tokenUrl: codeToken,
+      scopes: scopesOf(code),
+      pkce: true,
+      clientAuth: "body",
+      ...refs,
+      refreshRef: `${keyRef}-refresh`,
+    } as DialectAuth;
+  return null;
+};
+
 const authFrom = (doc: Json, keyRef: string): DialectAuth => {
-  const schemes =
-    specVersionOf(doc) === 2
-      ? isObject(doc.securityDefinitions)
-        ? doc.securityDefinitions
-        : {}
-      : isObject(doc.components) && isObject(doc.components.securitySchemes)
-        ? doc.components.securitySchemes
-        : {};
+  const schemes = schemesOf(doc);
 
   /**
    * Rank the candidates rather than taking the first one declared.
@@ -469,12 +805,15 @@ const authFrom = (doc: Json, keyRef: string): DialectAuth => {
     const preferred = declared.has(name_) ? DECLARED_BONUS : 0;
     const scheme = deref(doc, raw);
     if (!isObject(scheme)) continue;
+    /* A token the API's own login issues is not a key to ask anybody for. See `issuedByLogin`. */
+    if (schemeGap(scheme, doc) === "auth.token-exchange") continue;
     const type = str(scheme.type)?.toLowerCase();
     const inWhere = str(scheme.in)?.toLowerCase();
     const name = str(scheme.name);
 
-    if (type === "http") {
-      const httpScheme = str(scheme.scheme)?.toLowerCase();
+    // Swagger 2.0 names Basic as its own type rather than an http scheme.
+    const httpScheme = type === "basic" ? "basic" : str(scheme.scheme)?.toLowerCase();
+    if (type === "http" || type === "basic") {
       if (httpScheme === "bearer") {
         candidates.push({ rank: 0 - preferred, auth: { type: "bearer", keyRef } });
       }
@@ -496,7 +835,17 @@ const authFrom = (doc: Json, keyRef: string): DialectAuth => {
       }
     }
     if (type === "oauth2") {
-      candidates.push({ rank: 9 - preferred, auth: { type: "bearer", keyRef } });
+      /*
+       * A flow the broker can run becomes a real OAuth connection: signed in
+       * once (or, for client credentials, never), renewed by itself. Still
+       * ranked after a key somebody can simply paste, since OAuth also needs
+       * an app registered with the provider. Only a flow nothing here can run
+       * — implicit, password — falls back to a pasted token.
+       */
+      const flow = oauthFlowOf(scheme, keyRef);
+      candidates.push(
+        flow ? { rank: 8 - preferred, auth: flow } : { rank: 9 - preferred, auth: { type: "bearer", keyRef } },
+      );
     }
   }
 
@@ -596,6 +945,7 @@ const paramType = (schema: unknown): ParamDef["type"] => {
   if (format === "date" || format === "date-time") return "date";
   if (raw === "integer" || raw === "number") return "number";
   if (raw === "boolean") return "boolean";
+  if (raw === "array") return "array";
   return "string";
 };
 
@@ -607,7 +957,7 @@ const paramType = (schema: unknown): ParamDef["type"] => {
  */
 const paramRole = (
   name: string,
-  where: "path" | "query",
+  where: ParamDef["in"],
   type: ParamDef["type"],
 ): ParamDef["role"] | undefined => {
   const lower = name.toLowerCase();
@@ -644,7 +994,13 @@ const paramRole = (
  * an id is the single most useful thing to know about an API, because it is
  * what makes a list row expandable into the record behind it.
  */
-const operationParams = (doc: Json, operation: Json, pathItem: Json): ImportedParam[] => {
+const operationParams = (
+  doc: Json,
+  operation: Json,
+  pathItem: Json,
+  /** Header names a sign-in scheme carries: those are the key, never a parameter. */
+  signInHeaders: ReadonlySet<string> = new Set(["authorization"]),
+): ImportedParam[] => {
   const collect = (raw: unknown): ImportedParam[] => {
     if (!Array.isArray(raw)) return [];
     return raw.flatMap((entry): ImportedParam[] => {
@@ -652,24 +1008,61 @@ const operationParams = (doc: Json, operation: Json, pathItem: Json): ImportedPa
       if (!isObject(parameter)) return [];
 
       const where = str(parameter.in)?.toLowerCase();
-      // Header and cookie params are not modelled: a secret belongs in the
-      // auth config, not a per-op field the UI would invite someone to fill.
-      if (where !== "query" && where !== "path") return [];
+      if (where !== "query" && where !== "path" && where !== "header" && where !== "cookie") return [];
 
       const name = str(parameter.name);
       if (!name) return [];
+      /*
+       * A header or cookie parameter is an ordinary input — a version, an
+       * account — and is kept. The one that carries the key is the auth
+       * config's, and never becomes a field somebody is invited to fill in.
+       */
+      if (where === "header" && signInHeaders.has(name.toLowerCase())) return [];
 
       // Swagger 2.0 puts the type inline; 3.x nests it under `schema`.
       const schema = isObject(parameter.schema) ? deref(doc, parameter.schema) : parameter;
+
+      /*
+       * `deepObject` writes an object as `filter[account]=4000`. Each property
+       * becomes its own query parameter under that name, which is exactly
+       * what is sent and needs no serialiser of its own.
+       */
+      if (where === "query" && str(parameter.style) === "deepObject" && isObject(schema) && isObject(schema.properties)) {
+        return Object.entries(schema.properties).flatMap(([property, raw]): ImportedParam[] => {
+          const inner = deref(doc, raw);
+          const innerDefault = isObject(inner) ? scalar(inner.default) : undefined;
+          return [
+            {
+              name: `${name}[${property}]`,
+              in: "query",
+              type: paramType(inner),
+              required: false,
+              ...(isObject(inner) && str(inner.description)
+                ? { description: str(inner.description)!.slice(0, 300) }
+                : {}),
+              ...(innerDefault !== undefined ? { default: innerDefault } : {}),
+              role: "filter",
+              value: innerDefault,
+            },
+          ];
+        });
+      }
       const enumValues = (isObject(schema) && Array.isArray(schema.enum) ? schema.enum : [])
         .map(scalar)
         .filter((value): value is string | number | boolean => value !== undefined);
 
-      const declaredDefault = isObject(schema) ? scalar(schema.default) : undefined;
+      /* A header allowed exactly one value — a version, usually — is sent with it. */
+      const onlyValue = where !== "query" && where !== "path" && enumValues.length === 1 ? enumValues[0] : undefined;
+      const declaredDefault = (isObject(schema) ? scalar(schema.default) : undefined) ?? onlyValue;
       const declaredExample =
         scalar(parameter.example) ?? (isObject(schema) ? scalar(schema.example) : undefined);
       const type = paramType(schema);
       const required = where === "path" || parameter.required === true;
+      const style = str(parameter.style);
+      const listStyle =
+        type === "array" && (style === "form" || style === "spaceDelimited" || style === "pipeDelimited")
+          ? style
+          : undefined;
 
       return [
         {
@@ -677,6 +1070,8 @@ const operationParams = (doc: Json, operation: Json, pathItem: Json): ImportedPa
           in: where,
           type,
           required,
+          ...(listStyle ? { style: listStyle } : {}),
+          ...(type === "array" && typeof parameter.explode === "boolean" ? { explode: parameter.explode } : {}),
           ...(str(parameter.description)
             ? { description: str(parameter.description)!.slice(0, 300) }
             : {}),
@@ -866,17 +1261,42 @@ export const parseOpenApi = (
     (doc.security.length === 0 ||
       doc.security.some((entry) => isObject(entry) && Object.keys(entry).length === 0));
   const authRequired = auth.type === "none" && !explicitlyPublic;
-  if (authRequired) {
+  /* Named when found, instead of carrying on as if there were nothing to say. */
+  const gaps = authRequired || auth.type !== "none" ? signInGaps(doc, auth) : [];
+  if (authRequired && gaps.length === 0) {
     warnings.push(
       "The specification does not declare a supported authentication setup. Confirm how this API authenticates before connecting.",
     );
   }
+  warnings.push(...gaps);
+  const reference = externalRef(doc);
+  if (reference)
+    warnings.push(
+      capabilityNote(
+        "discovery.external-ref",
+        `This specification (it refers to ${reference.slice(0, 80)})`,
+      ),
+    );
+
+  /* Headers a sign-in scheme carries: those are the key, not a missing parameter. */
+  const signInHeaders = new Set<string>(["authorization"]);
+  for (const raw of Object.values(schemesOf(doc))) {
+    const scheme = deref(doc, raw);
+    const name = isObject(scheme) && str(scheme.in)?.toLowerCase() === "header" ? str(scheme.name) : undefined;
+    if (name) signInHeaders.add(name.toLowerCase());
+  }
+  /* Per-gap tallies across every read, said once at the end. */
+  const unreadable = new Map<CapabilityId, number>();
+  /* Paths whose POST is a read: not offered as a change. */
+  const postReads = new Set<string>();
 
   const paths = isObject(doc.paths) ? doc.paths : {};
   const collectedParams: string[] = [];
   const ops: CatalogEntry["ops"] = [];
   let total = 0;
   const usedIds = new Set<string>();
+  // Addresses some endpoints named for themselves that this connection cannot reach.
+  const elsewhere = new Set<string>();
 
   /** An endpoint's own security, where it overrides the document's. */
   const endpointAuthOf = (
@@ -907,13 +1327,33 @@ export const parseOpenApi = (
   for (const [rawPath, rawItem] of Object.entries(paths)) {
     const pathItem = deref(doc, rawItem);
     if (!isObject(pathItem)) continue;
-    // Reads are GET by construction; writes are read below, into their own list.
-    const operation = deref(doc, pathItem.get);
+    /*
+     * Reads are GET — and POST only for an endpoint that reads with a body, a
+     * search or a report (`postReadOf`), which then says why it is believed to
+     * read. Everything else that is not a GET is a write, read below into its
+     * own list.
+     */
+    for (const verb of ["get", "post"] as const) {
+    const operation = deref(doc, pathItem[verb]);
     if (!isObject(operation)) continue;
+    const postRead = verb === "post" ? postReadOf(doc, operation, rawPath) : null;
+    if (verb === "post" && !postRead) continue;
     if (operation.deprecated === true) continue;
     total++;
+    const located = operationPath(doc, rawPath, operation, pathItem, baseUrl, specUrl);
+    if ("elsewhere" in located) {
+      elsewhere.add(located.elsewhere);
+      continue;
+    }
+    if (postRead) postReads.add(rawPath);
 
-    const params = operationParams(doc, operation, pathItem);
+    const format = responseGap(doc, operation);
+    if (format) unreadable.set(format, (unreadable.get(format) ?? 0) + 1);
+
+    const params = [
+      ...operationParams(doc, operation, pathItem, signInHeaders),
+      ...(postRead?.params ?? []),
+    ];
     // Dialect inference is about query conventions; a path segment named `id`
     // says nothing about how this API paginates.
     collectedParams.push(
@@ -985,29 +1425,52 @@ export const parseOpenApi = (
         `"${str(operation.summary) ?? rawPath}" declares authentication that needs manual setup.`,
       );
 
+    const totalPath = totalPathOf(doc, responseSchema);
     ops.push({
       ...(endpointAuth ? { auth: endpointAuth, authRequired: endpointNeedsSetup } : {}),
       id: identifier,
+      method: postRead ? "POST" : "GET",
+      ...(postRead ? { body: postRead.body, readSafety: postRead.readSafety } : {}),
       title: str(operation.summary) ?? str(operation.operationId) ?? rawPath,
       ...(detail ? { description: detail.slice(0, 400) } : {}),
       ...(fields.length > 0 ? { fields } : {}),
-      path: templatePath(rawPath),
+      path: templatePath(located.path),
       archetype: shape.archetype,
       ...(shape.rowsPath ? { rowsPath: shape.rowsPath } : {}),
+      ...(totalPath ? { totalPath } : {}),
       // Strip the seeding-only field; the rest is the declared contract.
       params: params.map(({ value: _seed, ...param }) => param),
       query,
     });
+    }
   }
 
   if (ops.length === 0) return null;
+
+  const endpoints = (count: number) => `${count} endpoint${count === 1 ? "" : "s"}`;
+  for (const [format, count] of unreadable) warnings.push(capabilityNote(format, endpoints(count)));
+  if (postReads.size > 0)
+    warnings.push(
+      `${endpoints(postReads.size)} read${postReads.size === 1 ? "s" : ""} with POST — a search or a report. ${postReads.size === 1 ? "It is" : "They are"} read only while somebody is looking, never in the background, and never retried.`,
+    );
 
   /*
    * The endpoints that change things, read after every read id is taken so
    * that adding them can never rename a GET a binding already uses. Their ids
    * are their own namespace; nothing that names an op can name one of these.
    */
-  const writes = writeOpsFrom(doc, paths, endpointAuthOf);
+  const writes = writeOpsFrom(doc, paths, endpointAuthOf, (rawPath, operation, pathItem, verb) => {
+    // A POST that reads is a read, never offered as a change.
+    if (verb === "post" && postReads.has(rawPath)) return { elsewhere: "read" };
+    const located = operationPath(doc, rawPath, operation, pathItem, baseUrl, specUrl);
+    if ("elsewhere" in located) elsewhere.add(located.elsewhere);
+    return located;
+  });
+  elsewhere.delete("read");
+  if (elsewhere.size > 0)
+    warnings.push(
+      `Some endpoints are served from another address (${[...elsewhere].slice(0, 3).join(", ")}) and were left out: a connection reads from one address.`,
+    );
   if (writes.truncated.length > 0) {
     const named = writes.truncated.slice(0, 3).join(", ");
     const more = writes.truncated.length > 3 ? ", and others" : "";
@@ -1104,6 +1567,13 @@ export const writeOpsFrom = (
     endpointAuth: DialectAuth | undefined;
     endpointNeedsSetup: boolean;
   },
+  /** Where each operation lives; absent means at its own path. See `operationPath`. */
+  locate: (
+    rawPath: string,
+    operation: Json,
+    pathItem: Json,
+    verb: string,
+  ) => { path: string } | { elsewhere: string } = (rawPath) => ({ path: rawPath }),
 ): { ops: WriteOpDef[]; truncated: string[] } => {
   const ops: WriteOpDef[] = [];
   const truncated: string[] = [];
@@ -1115,6 +1585,8 @@ export const writeOpsFrom = (
     for (const verb of WRITE_VERBS) {
       const operation = deref(doc, pathItem[verb]);
       if (!isObject(operation) || operation.deprecated === true) continue;
+      const located = locate(rawPath, operation, pathItem, verb);
+      if ("elsewhere" in located) continue;
 
       const base = opId(rawPath, str(operation.operationId));
       let id = used.has(base) ? `${verb}_${base}` : base;
@@ -1137,7 +1609,7 @@ export const writeOpsFrom = (
         title: title.slice(0, 200),
         ...(detail ? { description: detail.slice(0, 400) } : {}),
         method: verb.toUpperCase(),
-        path: templatePath(rawPath),
+        path: templatePath(located.path),
         params,
         ...(endpointAuth ? { auth: endpointAuth, authRequired: endpointNeedsSetup } : {}),
         ...(body ? { body: body.body } : {}),
@@ -1321,4 +1793,50 @@ export const specLinksIn = (html: string, pageUrl: string): string[] => {
     }
   }
   return [...found].slice(0, 5);
+};
+
+/**
+ * The header parameters a specification requires for the operation at a
+ * path, with the value it documents where it documents exactly one.
+ *
+ * For the integration loop, which reads the specification again when an API
+ * refuses a request for want of a header: a version header declared with one
+ * allowed value is something a person should never be asked for.
+ */
+export const requiredHeadersFor = (
+  doc: unknown,
+  path: string,
+  method = "get",
+): Array<{ name: string; value?: string }> => {
+  if (!isObject(doc) || !isObject(doc.paths)) return [];
+  const shape = (value: string) => value.replace(/\{\{[^}]*\}\}|\{[^}]*\}/g, "{}").replace(/\/+$/, "");
+  const wanted = shape(path);
+  const match = Object.entries(doc.paths).find(([candidate]) => {
+    const one = shape(candidate);
+    return one === wanted || wanted.endsWith(one) || one.endsWith(wanted);
+  });
+  if (!match) return [];
+  const pathItem = deref(doc, match[1]);
+  if (!isObject(pathItem)) return [];
+  const operation = deref(doc, pathItem[method.toLowerCase()]);
+  if (!isObject(operation)) return [];
+  const found: Array<{ name: string; value?: string }> = [];
+  for (const raw of [
+    ...(Array.isArray(pathItem.parameters) ? pathItem.parameters : []),
+    ...(Array.isArray(operation.parameters) ? operation.parameters : []),
+  ]) {
+    const parameter = deref(doc, raw);
+    if (!isObject(parameter) || str(parameter.in)?.toLowerCase() !== "header") continue;
+    if (parameter.required !== true) continue;
+    const name = str(parameter.name);
+    if (!name) continue;
+    const schema = isObject(parameter.schema) ? deref(doc, parameter.schema) : parameter;
+    const enumValues = isObject(schema) && Array.isArray(schema.enum) ? schema.enum.map(scalar) : [];
+    const documented =
+      enumValues.length === 1
+        ? enumValues[0]
+        : (isObject(schema) ? scalar(schema.default) : undefined) ?? scalar(parameter.example);
+    found.push({ name, ...(documented !== undefined ? { value: String(documented) } : {}) });
+  }
+  return found;
 };

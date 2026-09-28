@@ -4,7 +4,7 @@ import { authSchema, idSchema, paramDefSchema, queryValueSchema } from "./primit
 /**
  * What an API accepts, as opposed to what it returns.
  *
- * Reads are GET by construction — `opDefSchema.method` is a literal — and
+ * Reads are GET — or POST only with a recorded `readSafety` — and
  * that guarantee stays exactly as it was: every widget, keeper target, brief
  * and query names an op from `ops`, and none of them can name one of these.
  * An endpoint that changes something lives here instead, in its own list on

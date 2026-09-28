@@ -29,6 +29,7 @@
     "eval:entities": "pnpm --filter @freebirdai/dash-server eval:entities",
     "eval:steps": "pnpm --filter @freebirdai/dash-server eval:steps",
     "eval:models": "pnpm --filter @freebirdai/dash-server eval:models",
+    "bench": "pnpm --filter @freebirdai/dash-server bench --",
     "lint": "eslint .",
     "format": "prettier --write .",
     "clean": "pnpm -r exec rimraf dist .turbo node_modules/.cache",

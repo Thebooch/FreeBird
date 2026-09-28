@@ -3,6 +3,10 @@ import { fileURLToPath } from "node:url";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
 import { CatalogStore } from "./catalog.js";
 import { openChatDb } from "./chat/db.js";
+import { DbEvidenceStore, type EvidenceStore } from "./evidence/store.js";
+import { openDashDb } from "./platform/db.js";
+import { DbWriteJournal } from "./writes/journal-db.js";
+import { DbCredentialMetaStore } from "./auth/credential-meta.js";
 import type { SearchProvider } from "./discovery/search.js";
 import { searchFromEnv } from "./discovery/search.js";
 import { loadEnvFile } from "./env.js";
@@ -142,12 +146,44 @@ try {
   );
 }
 
+/*
+ * Dash's own relational state — evidence about each endpoint, for now. The
+ * same arrangement as chat (Postgres when DATABASE_URL is set, embedded
+ * otherwise), in its own directory so losing one never costs the other. If
+ * it cannot open, evidence is kept in memory for this run and said so: the
+ * checks still work, they are just not remembered across a restart.
+ */
+const dashDir = join(stateDir, "dash-db");
+let evidence: EvidenceStore | undefined;
+let dashDb: Awaited<ReturnType<typeof openDashDb>> | undefined;
+try {
+  dashDb = await openDashDb({ dataDir: dashDir });
+  evidence = new DbEvidenceStore(dashDb);
+} catch (cause) {
+  const reason = cause instanceof Error ? cause.message : String(cause);
+  console.error(
+    [
+      "",
+      "  Dash's database could not be opened, so what connection checks observe is",
+      "  kept in memory for this run only.",
+      "",
+      `    ${reason}`,
+      "",
+      `  It lives at ${dashDir}. The same two causes as chat's apply: a second`,
+      "  instance holding it, or a process killed while it was open.",
+      "",
+    ].join("\n"),
+  );
+}
+
 const app = buildServer({
   // The keeper: see `keeper/keeper.ts`. On here, off in tests.
   keeper: true,
   // Every connection can change records; one whose write endpoints were never
   // read has them read from its published specification. Off in tests.
   autoReadWrites: true,
+  // A connection is checked by itself once its key is saved. Off in tests.
+  autoIntegrate: true,
   rhythms,
   store,
   keys,
@@ -159,9 +195,36 @@ const app = buildServer({
   llm,
   search,
   chat,
+  ...(evidence ? { evidence } : {}),
+  // Every change, and every read that might not be one, kept in Dash's database.
+  ...(dashDb ? { journal: new DbWriteJournal(dashDb) } : {}),
+  // When each OAuth token expires, so it is renewed before it does.
+  ...(dashDb ? { credentialMeta: new DbCredentialMetaStore(dashDb) } : {}),
   logger: true,
 });
 const port = Number(process.env.PORT ?? 4600);
+
+/*
+ * Close the embedded databases on the way out. A process killed while one is
+ * open can leave its files damaged — the failure both database notices above
+ * describe — and Ctrl+C or a service manager's stop is the ordinary way this
+ * server ends. A hard kill still cannot be caught; this covers every stop that
+ * can be.
+ */
+let stopping = false;
+const shutdown = (signal: string) => {
+  if (stopping) return;
+  stopping = true;
+  app.log.info(`${signal}: closing`);
+  void (async () => {
+    await app.close().catch(() => undefined);
+    await chat?.close().catch(() => undefined);
+    await dashDb?.close().catch(() => undefined);
+    process.exit(0);
+  })();
+};
+process.once("SIGINT", () => shutdown("SIGINT"));
+process.once("SIGTERM", () => shutdown("SIGTERM"));
 
 app
   .listen({ port, host: "127.0.0.1" })

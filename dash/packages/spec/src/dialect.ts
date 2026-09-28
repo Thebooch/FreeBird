@@ -5,13 +5,17 @@ import { entitySchema } from "./entity.js";
 import { CATEGORIES_MAX, categorySchema, profileSchema } from "./category.js";
 import { apiRhythmSchema } from "./rhythm.js";
 import {
+  MAX_PAGES,
   authSchema,
+  readBodySchema,
+  readSafetySchema,
   paginationSchema,
   paramDefSchema,
   queryValueSchema,
   serverTemplateSchema,
 } from "./primitives.js";
 import { resourceSchema } from "./resource.js";
+import { connectorSchema } from "./connector.js";
 
 /**
  * A dialect is "how this vendor does things", declared once per API.
@@ -55,7 +59,7 @@ export const dialectSchema = z.object({
   headers: z.record(z.string(), z.string()).default({}),
   /** Merged into every request's query, e.g. a fixed page size. */
   query: z.record(z.string(), queryValueSchema).default({}),
-  maxPages: z.number().int().min(1).max(50).optional(),
+  maxPages: z.number().int().min(1).max(MAX_PAGES).optional(),
 });
 
 export type DialectSpec = z.infer<typeof dialectSchema>;
@@ -219,6 +223,12 @@ export const catalogEntrySchema = z.object({
   dialect: dialectSchema,
   /** Unconfirmed import hint. Never executed until explicitly declared. */
   paginationProposal: paginationSchema.optional(),
+  /**
+   * Connector code a connection made from this entry carries, pinned by its
+   * hash. Shared like the rest of the entry: it holds no credential, only the
+   * names of the ones it asks the server to use.
+   */
+  connector: connectorSchema.optional(),
   /** Suggested endpoints, so a new connection starts useful rather than empty. */
   ops: z
     .array(
@@ -227,11 +237,28 @@ export const catalogEntrySchema = z.object({
         auth: authSchema.optional(),
         authRequired: z.boolean().optional(),
         title: z.string().min(1),
+        /** See `opDefSchema.method`: a POST here is a read, with its `readSafety`. */
+        method: z.enum(["GET", "POST"]).default("GET"),
         path: z.string().min(1),
+        body: readBodySchema.optional(),
+        readSafety: readSafetySchema.optional(),
+        totalPath: z.string().max(200).optional(),
+        /** See `opDefSchema.servedBy`. */
+        servedBy: z.literal("connector").optional(),
         archetype: archetypeSchema.default("list"),
         rowsPath: z.string().optional(),
         pagination: paginationSchema.optional(),
-        maxPages: z.number().int().min(1).max(100).optional(),
+        /**
+         * Entries written before the limit was shared allowed up to 100. They
+         * still parse, and are clamped so the connection copied from them does.
+         */
+        maxPages: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .transform((pages) => Math.min(pages, MAX_PAGES))
+          .optional(),
         headers: z.record(z.string()).optional(),
         /** Mirrors `opDefSchema.params` — see primitives.ts. */
         params: z.array(paramDefSchema).max(60).default([]),
