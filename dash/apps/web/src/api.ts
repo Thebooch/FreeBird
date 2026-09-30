@@ -1,3 +1,4 @@
+import type { EachAnswer, EachRequest } from "@freebirdai/dash-react";
 import type {
   ApiProfile,
   CatalogEntry,
@@ -709,6 +710,38 @@ export interface MapRunResult extends MapState {
 }
 
 export const api = {
+  /** What a number tile was, day by day, since the server began keeping it. Free: nothing is asked of the API. */
+  widgetHistory: async (dashboardId: string, widgetId: string): Promise<readonly { day: string; value: number }[]> =>
+    (
+      await request<{ points: { day: string; value: number }[] }>(
+        `/api/dashboards/${encodeURIComponent(dashboardId)}/widgets/${encodeURIComponent(widgetId)}/history`,
+      )
+    ).points,
+  /**
+   * The rest of a tile's per-record reads, read by the server in the
+   * background; asked again until it answers "done". See `/api/query/each`.
+   */
+  readEach: (each: EachRequest): Promise<EachAnswer> => {
+    const range = each.resolved.range;
+    return request<EachAnswer>(
+      "/api/query/each",
+      json({
+        connection: each.connection,
+        op: each.op,
+        params: each.params,
+        input: each.input,
+        values: each.values,
+        range: {
+          preset: range.preset,
+          grain: range.grain,
+          start: range.start,
+          end: range.end,
+          ...(range.all ? { all: true } : {}),
+        },
+        filters: each.resolved.filters,
+      }),
+    );
+  },
   checkSetupPreview: (
     dashboardId: string,
     widget: WidgetSpec,
@@ -1063,7 +1096,7 @@ export const api = {
    */
   setAddress: (
     connectionId: string,
-    input: { values: Record<string, string> } | { baseUrl: string },
+    input: ({ values: Record<string, string> } | { baseUrl: string }) & { privateNetwork?: boolean },
   ): Promise<ConnectionSummary> =>
     request(`/api/connections/${connectionId}/address`, {
       method: "PUT",

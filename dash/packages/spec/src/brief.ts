@@ -3,7 +3,8 @@ import type { Coercion } from "./coercion.js";
 import { fieldCoercion, fieldReading } from "./observe.js";
 import type { BuiltinComponentId } from "./contracts.js";
 import type { WidgetSpec } from "./dashboard.js";
-import { parseWidget } from "./dashboard.js";
+import { FAN_OUT_WHOLE_MAX, parseWidget } from "./dashboard.js";
+import { describeMetric, type MetricDefinition, type ReconcileRule } from "./metric.js";
 import type { EntityField, EntitySpec } from "./entity.js";
 import { entityById, fieldPathSchema } from "./entity.js";
 import { entityGraph, linkColumn } from "./entity-graph.js";
@@ -81,6 +82,20 @@ export interface CompileBriefInput {
    */
   readonly rowsPathOf?: ((op: string) => string | undefined) | undefined;
   /**
+   * The query parameter a read confirmed narrows an endpoint by a field
+   * (`filterParamsOf`). A number or chart narrowed to one value asks the API
+   * for those records alone, rather than reading pages until the cap: 11,848
+   * breweries were read five pages deep to count Oregon's 295 (checkpoint 2).
+   * The local narrowing stays as well, so the API's filter only ever reads less.
+   */
+  readonly filterParamOf?: ((op: string, field: string) => string | undefined) | undefined;
+  /**
+   * Whether an endpoint reads the board's time range (`readsRangeOf`). A
+   * number over one, whose request named no time, is only what falls in the
+   * board's range, and its metric says so.
+   */
+  readonly readsRange?: ((op: string) => boolean) | undefined;
+  /**
    * The rest of the API, for a brief that names a second record type.
    *
    * Only `alongside` reads it, and its absence costs nothing else: a caller
@@ -129,6 +144,60 @@ export const columnForPath = (path: string): string => path.replace(/\./g, "_");
 
 /** Words that ask for a flag to be unset: "not VIP", "no", "false". */
 const NO_WORDS = /^(false|no|n|0|off|none|not\b.*|without\b.*|non-?\w.*)$/i;
+
+/** A field that says which currency a record's amounts are in: `currency`, `currency_code`, `ccy`. */
+const CURRENCY_CODE = /(^|[._])(currency(_?code)?|ccy|iso_?currency)$|currencyCode$/i;
+
+/** The column a total counts the currencies it added in. */
+const CURRENCIES = "_currencies";
+
+/** A field that holds a year, by its name: `year`, `fiscal_year`, `modelYear`. */
+const YEAR_NAME = /(^|[._])year$|Year$/i;
+/** The year a moment falls in. */
+const yearOf = (moment: number): number => new Date(moment).getUTCFullYear();
+/** The first year entirely after an exclusive end: before 1 January 2027 is before 2027, before 3 March 2027 is before 2028. */
+const yearAfter = (end: number): number => {
+  const day = new Date(end);
+  const whole = day.getUTCMonth() === 0 && day.getUTCDate() === 1 && end % 86_400_000 === 0;
+  return whole ? day.getUTCFullYear() : day.getUTCFullYear() + 1;
+};
+
+/** A field's name as words joined by `_`: `subTotal` and `sub_total` alike. */
+const snake = (path: string): string => path.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+
+/** A record's total, by name. */
+const TOTAL_NAME = /(^|_)(total|grand_total|total_amount|amount_total)$/;
+
+/** Its parts, by name, and whether each adds or takes away. The first is required. */
+const PART_NAMES: readonly (readonly [RegExp, 1 | -1])[] = [
+  [/(^|_)(sub_?total|net_amount|amount_net)$/, 1],
+  [/(^|_)(tax|tax_amount|total_tax|vat|sales_tax)$/, 1],
+  [/(^|_)(shipping|shipping_amount|freight|delivery_fee)$/, 1],
+  [/(^|_)(discount|discount_amount|total_discount)$/, -1],
+];
+
+/**
+ * The parts a total should be the sum of, read from the record type's field
+ * names: a subtotal and at least one of tax, shipping and discount, beside a
+ * field named as the total. Top-level numbers only; nothing when the total is
+ * not named as one.
+ */
+const inferredChecks = (entity: EntitySpec, totalPath: string): ReconcileRule[] => {
+  if (totalPath.includes(".") || !TOTAL_NAME.test(snake(totalPath))) return [];
+  const numbers = entity.fields.filter(
+    (field) =>
+      field.path !== totalPath &&
+      !field.path.includes(".") &&
+      !field.kinds.some((kind) => kind === "object" || kind === "array" || kind === "boolean"),
+  );
+  const parts = PART_NAMES.flatMap(([name, sign]) => {
+    const found = numbers.find((field) => name.test(snake(field.path)));
+    return found ? [{ field: found.path, sign }] : [];
+  });
+  const subtotal = parts.find((part) => PART_NAMES[0]![0].test(snake(part.field)));
+  if (!subtotal || parts.length < 2) return [];
+  return [{ total: totalPath, parts, tolerance: 0.01, basis: "inferred" }];
+};
 
 /** How many fields a list shows before it stops being readable. */
 const MAX_COLUMNS = 6;
@@ -664,6 +733,11 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
   }
 
   const byPath = new Map(entity.fields.map((field) => [field.path, field]));
+  /** Whether a field holds years: named as one, and not declared a date. */
+  const holdsYears = (path: string): boolean => {
+    const field = byPath.get(path);
+    return YEAR_NAME.test(path) && field !== undefined && field.semantic !== "timestamp" && field.format === undefined;
+  };
   const known = (path: string): boolean => byPath.has(path);
 
   /**
@@ -811,6 +885,72 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
   }
 
   /*
+   * Ranges the request named: "more than $100", "in July 2026".
+   *
+   * Applied as part of the calculation for every kind of widget — a strip
+   * narrows by values, and has no way to hold a range — and said on the
+   * widget. A request that had no way to say "in July" counted every record
+   * there was (measurement 1).
+   */
+  const ranges: { path: string; above?: number; below?: number; from?: number; to?: number; label: string; said: string }[] = [];
+  for (const asked of askedFilters) {
+    const hasNumbers = asked.above !== undefined || asked.below !== undefined;
+    const hasTimes = asked.from !== undefined || asked.to !== undefined;
+    if (!hasNumbers && !hasTimes) continue;
+    const bound = bind(asked.field, "filters");
+    if (!bound) continue;
+    const field = entity.fields.find((one) => one.path === bound);
+    const label = field?.label ?? bound;
+    /*
+     * A time range needs a field that can hold a time. Put on a true/false
+     * flag — "closed this year" on `closed` — every record compared as 1970
+     * and the count came out 0 (measurement 1). Refused, and said.
+     */
+    const kinds = [...(field?.kinds ?? []), ...(field?.observed?.kinds ?? [])];
+    if (hasTimes && kinds.length > 0 && !kinds.some((kind) => kind === "string" || kind === "number")) {
+      notes.push(`${label} does not hold a date, so the time range asked for on it was left out.`);
+      continue;
+    }
+    const from = asked.from !== undefined ? Date.parse(asked.from) : undefined;
+    const to = asked.to !== undefined ? Date.parse(asked.to) : undefined;
+    if ((from !== undefined && Number.isNaN(from)) || (to !== undefined && Number.isNaN(to))) {
+      notes.push(`The dates asked for on ${label} could not be read, so that range was left out.`);
+      continue;
+    }
+    const said = [
+      asked.above !== undefined ? `more than ${asked.above}` : "",
+      asked.below !== undefined ? `less than ${asked.below}` : "",
+      asked.from !== undefined ? `from ${asked.from}` : "",
+      asked.to !== undefined ? `before ${asked.to}` : "",
+    ]
+      .filter(Boolean)
+      .join(" and ");
+    ranges.push({
+      path: bound,
+      ...(asked.above !== undefined ? { above: asked.above } : {}),
+      ...(asked.below !== undefined ? { below: asked.below } : {}),
+      ...(from !== undefined ? { from } : {}),
+      ...(to !== undefined ? { to } : {}),
+      label,
+      said,
+    });
+  }
+
+  /*
+   * Whether a field holds anything: "leave out cancelled orders" is a
+   * cancelled date that holds nothing. With no way to say it, the narrowing
+   * was dropped and a total kept the cancelled orders, silently (checkpoint
+   * 4). Applied for every kind of widget, like a range, and said.
+   */
+  const presences: { path: string; empty: boolean; label: string }[] = [];
+  for (const asked of askedFilters) {
+    if (asked.empty === undefined) continue;
+    const bound = bind(asked.field, "filters");
+    if (!bound) continue;
+    presences.push({ path: bound, empty: asked.empty, label: entity.fields.find((one) => one.path === bound)?.label ?? bound });
+  }
+
+  /*
    * Columns read through a reference.
    *
    * Only where the field really points at another record: following something
@@ -899,7 +1039,7 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
            * cap that truncates in silence is the outcome this product refuses.
            */
           notes.push(
-            `${side.value.entity.name.many} are listed one ${entity.name.one} at a time, so the first ${FAN_OUT_MAX_ROWS} ${entity.name.many} are read for theirs — ${FAN_OUT_MAX_ROWS} extra requests, and any ${entity.name.one} past them shows none.`,
+            `${side.value.entity.name.many} are listed one ${entity.name.one} at a time, so each ${entity.name.one} is read for theirs — one extra request each: the first ${FAN_OUT_MAX_ROWS} at once, the rest in the background, up to ${FAN_OUT_WHOLE_MAX}. Until they are read, what is shown excludes them.`,
           );
         }
       }
@@ -1160,12 +1300,16 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
           ...throughPaths,
           /* The field the join matches on is a column before it is a key. */
           ...(pair?.on ? [pair.on.left] : []),
+          ...ranges.map((range) => range.path),
+          ...presences.map((presence) => presence.path),
         ]
       : [
           ...(groupColumn ? [groupColumn] : []),
           ...(measure.field ? [measure.field] : []),
           /* A narrowing on a number reads its field before the number is taken. */
           ...preselect.keys(),
+          ...ranges.map((range) => range.path),
+          ...presences.map((presence) => presence.path),
         ];
   const nested = [...new Set(mentioned.filter((path) => path.includes(".")))];
   const deriveFields: Record<string, string> = Object.fromEntries(
@@ -1244,6 +1388,20 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
 
   const own = readingOf(entity, mentioned, columnForPath);
   const coercions = { ...own.coercions, ...axisAsLabel(entity, groupColumn) };
+  for (const range of ranges) {
+    const column = columnForPath(range.path);
+    const existing = coercions[column];
+    /* A year is a number, compared as one: read as a moment, 2026 was 2026 seconds after 1970. */
+    if (holdsYears(range.path) && (range.from !== undefined || range.to !== undefined)) {
+      coercions[column] = "->number";
+    } else if (range.from !== undefined || range.to !== undefined) {
+      /* Whatever the API sends — an ISO day, a timestamp, unix seconds — compared as a moment. */
+      if (!existing || !existing.endsWith("->datetime")) coercions[column] = "auto->datetime";
+    } else if (!existing) {
+      const field = entity.fields.find((one) => one.path === range.path);
+      if (!field?.kinds.includes("number")) coercions[column] = "->number";
+    }
+  }
   const readAs = own.format;
   const coerce: PipelineStep[] =
     Object.keys(coercions).length > 0 ? [{ op: "coerce", fields: coercions }] : [];
@@ -1258,6 +1416,66 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
     );
     return Object.keys(fields).length > 0 ? [{ op: "derive", fields }] : [];
   };
+
+  /*
+   * Amounts in more than one currency, added up as if they were one. A total
+   * of dollars and euros is valid arithmetic and the wrong answer, and nothing
+   * about the number says so (plan, track E). Where the records carry a
+   * currency code and the request did not narrow to one, the total also
+   * counts the codes it added, and the tile says so when there is more than
+   * one. A single number only: a chart would draw the count as a series.
+   */
+  let currencyCaveat: PipelineStep | null = null;
+  /** Where the total's currency comes from, for the metric. */
+  let metricCurrency: MetricDefinition["currency"];
+  if (brief.intent === "measure" && !pair && measure.agg === "sum" && measured) {
+    const code = entity.fields.find(
+      (field) =>
+        CURRENCY_CODE.test(field.path) &&
+        field.path !== measured.path &&
+        !field.path.includes(".") &&
+        !field.kinds.some((kind) => kind === "object" || kind === "array" || kind === "number" || kind === "boolean"),
+    );
+    const narrowedTo = code ? preselect.get(code.path) : undefined;
+    if (code && narrowedTo?.length === 1) metricCurrency = { kind: "code", code: narrowedTo[0]!.toUpperCase() };
+    else if (code) metricCurrency = { kind: "field", field: code.path };
+    if (code && (preselect.get(code.path)?.length ?? 0) !== 1) {
+      shape.measures = [...shape.measures, { as: CURRENCIES, agg: "countDistinct", field: columnForPath(code.path) }];
+      currencyCaveat = {
+        op: "caveat",
+        when: `${CURRENCIES} > 1`,
+        say: `This adds up amounts in more than one ${(code.label ?? "currency").toLowerCase()} as if they were one. Narrow it to one to read it as money.`,
+      };
+    }
+  }
+
+  /*
+   * Fields that should add up to the total being added: subtotal, tax,
+   * shipping and discount beside a total. Read from the fields' names, so a
+   * mismatch is a question the tile asks — the total may hold something the
+   * parts do not name — never an error, and never a correction (plan, track E).
+   */
+  const checks: ReconcileRule[] =
+    brief.intent === "measure" && !pair && measure.agg === "sum" && measured
+      ? inferredChecks(entity, measured.path)
+      : [];
+  const checkSteps: PipelineStep[] = checks.map((rule) => {
+    const labelOf = (path: string) => entity.fields.find((field) => field.path === path)?.label ?? path;
+    const sum = rule.parts
+      .map((part, index) => {
+        const term = `coalesce(${columnForPath(part.field)}, 0)`;
+        return index === 0 ? (part.sign === 1 ? term : `0 - ${term}`) : `${part.sign === 1 ? "+" : "-"} ${term}`;
+      })
+      .join(" ");
+    const said = rule.parts
+      .map((part, index) => `${index === 0 ? (part.sign === 1 ? "" : "− ") : part.sign === 1 ? " + " : " − "}${labelOf(part.field)}`)
+      .join("");
+    return {
+      op: "caveat" as const,
+      when: `abs((${sum}) - ${columnForPath(rule.total)}) > ${rule.tolerance}`,
+      say: `On {count} of the {of} ${entity.name.many} read, ${said} is not ${labelOf(rule.total)}. The total may include something the parts do not name.`,
+    };
+  });
 
   const shaped = shapeSteps({
     groupBy: shape.groupBy,
@@ -1280,9 +1498,52 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
    * widget, so a reader knows what the number counts.
    */
   const narrowing: PipelineStep[] = [];
-  if (brief.intent !== "records") {
+  /** Each narrowing in words, for the metric: "status is delivered". */
+  const whereSaid: string[] = [];
+  /**
+   * What the request asked to narrow by that nothing here expresses: the
+   * brief's own `unmet`, and anything that could not be applied. Said on the
+   * widget, every time it is read, never dropped in silence (checkpoint 4).
+   */
+  const unmet: string[] = [...(brief.unmet ?? [])];
+  /** What the API itself is asked to narrow by: a confirmed filter parameter and the one value wanted. */
+  const asked: Record<string, string> = {};
+  {
     const clauses: string[] = [];
-    for (const [path, values] of preselect) {
+    for (const range of ranges) {
+      const column = columnForPath(range.path);
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(column)) {
+        notes.push(`The range on ${range.label} cannot be applied here, so it was left out.`);
+        continue;
+      }
+      if (range.above !== undefined) clauses.push(`${column} > ${range.above}`);
+      if (range.below !== undefined) clauses.push(`${column} < ${range.below}`);
+      /*
+       * A field that holds years is compared in years: from 1 January 2026 up
+       * to 1 January 2027 is 2026. A time range on it compared as moments
+       * counted nothing, silently (2026-09-30, filterly).
+       */
+      const years = holdsYears(range.path);
+      if (range.from !== undefined) clauses.push(`${column} >= ${years ? yearOf(range.from) : range.from}`);
+      if (range.to !== undefined) clauses.push(`${column} < ${years ? yearAfter(range.to) : range.to}`);
+      notes.push(`Only ${entity.name.many} whose ${range.label} is ${range.said} are ${brief.intent === "records" ? "shown" : "counted"}.`);
+      whereSaid.push(`${range.label} is ${range.said}`);
+    }
+    for (const presence of presences) {
+      const column = columnForPath(presence.path);
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(column)) {
+        notes.push(`Whether ${presence.label} is empty cannot be checked here, so that was left out.`);
+        unmet.push(`${presence.label} ${presence.empty ? "empty" : "set"}`);
+        continue;
+      }
+      clauses.push(`trim(coalesce(string(${column}), "")) ${presence.empty ? "==" : "!="} ""`);
+      notes.push(
+        `Only ${entity.name.many} whose ${presence.label} is ${presence.empty ? "empty" : "set"} are ${brief.intent === "records" ? "shown" : "counted"}.`,
+      );
+      whereSaid.push(`${presence.label} is ${presence.empty ? "empty" : "set"}`);
+    }
+    /* By value on a list is its strip's to do; on a number or a chart, the calculation's. */
+    for (const [path, values] of brief.intent === "records" ? [] : preselect) {
       const column = columnForPath(path);
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(column)) {
         notes.push(`The request narrowed ${entity.name.many} by "${path}", which cannot be applied to a number here; this counts all of them.`);
@@ -1300,10 +1561,17 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
         const unset = values.length > 0 && values.every((value) => NO_WORDS.test(value.trim()));
         clauses.push(`${column} == ${unset ? "false" : "true"}`);
         notes.push(`Only ${entity.name.many} ${unset ? "without" : "with"} ${label} are counted.`);
+        whereSaid.push(`${label} is ${unset ? "not set" : "set"}`);
         continue;
       }
       clauses.push(`lower(string(${column})) in [${values.map((value) => JSON.stringify(value.toLowerCase())).join(", ")}]`);
       notes.push(`Only ${entity.name.many} whose ${label} is ${values.join(" or ")} are counted.`);
+      whereSaid.push(`${label} is ${values.join(" or ")}`);
+      const param = values.length === 1 && listOp ? input.filterParamOf?.(listOp, path) : undefined;
+      if (param && values[0]) {
+        asked[param] = values[0];
+        notes.push(`The API is asked for those ${entity.name.many} alone (${param}=${values[0]}), so only they are read.`);
+      }
     }
     if (clauses.length > 0) narrowing.push({ op: "filter", where: clauses.join(" && ") });
   }
@@ -1336,7 +1604,7 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
         as: leftAs,
         connection,
         op: listOp,
-        params: {},
+        params: { ...asked },
         label: entity.name.many,
         pipeline: [{ op: "extract", path: rowsOf(listOp) }, ...derive, ...coerce],
       },
@@ -1439,7 +1707,7 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
         as: leftAs,
         connection,
         op: listOp,
-        params: {},
+        params: { ...asked },
         label: entity.name.many,
         pipeline: side(
           groupColumn,
@@ -1474,7 +1742,16 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
      * come after the derive that produces one — and before the grouping, or a
      * date would be bucketed as the string it arrived as.
      */
-    pipeline = [{ op: "extract", path: rowsOf(listOp) }, ...derive, ...coerce, ...narrowing, ...shaped];
+    pipeline = [
+      { op: "extract", path: rowsOf(listOp) },
+      ...derive,
+      /* On the values as the API sent them: a coerced total beside uncoerced parts would never agree. */
+      ...checkSteps,
+      ...coerce,
+      ...narrowing,
+      ...shaped,
+      ...(currencyCaveat ? [currencyCaveat] : []),
+    ];
   }
 
   if (errors.length > 0) return { widget: null, errors, notes };
@@ -1514,6 +1791,118 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
         })
       : [];
 
+  /*
+   * A time the request named is the window the widget reads, not only a
+   * narrowing of what the board's window returned. Narrowed within the board's
+   * thirty days, "since 1 June" counted one month of it and said nothing
+   * (checkpoint 3). One time range only: two on different fields have no one
+   * window that is right for both, and the board's stays.
+   */
+  const timed = ranges.filter((range) => range.from !== undefined || range.to !== undefined);
+  const timeWindow =
+    timed.length === 1
+      ? {
+          from: new Date(timed[0]!.from ?? 0).toISOString(),
+          ...(timed[0]!.to !== undefined ? { to: new Date(timed[0]!.to).toISOString() } : {}),
+        }
+      : undefined;
+  if (timeWindow) notes.push(`Reads ${timed[0]!.said}, whatever window the board shows.`);
+
+  /*
+   * "How many", answered by the API's own count, where a read confirmed it
+   * counts these records (`ResourceSpec.count`) — and confirmed it honours
+   * every narrowing asked for. One request, however many records there are;
+   * a list read page by page stops at its ceiling (plan, track D). Anything
+   * the count cannot say — a range, a flag, a value it was not checked
+   * under — reads the records instead.
+   */
+  const counted = input.resource.count;
+  const byCount =
+    counted !== undefined &&
+    brief.intent === "measure" &&
+    measure.agg === "count" &&
+    !measure.field &&
+    !pair &&
+    sources.length === 0 &&
+    ranges.length === 0 &&
+    [...preselect].every(([path, values]) => {
+      const param = values.length === 1 && listOp ? input.filterParamOf?.(listOp, path) : undefined;
+      return param !== undefined && counted.filters.includes(param);
+    });
+  if (byCount) {
+    pipeline = [
+      { op: "extract", path: "$" },
+      { op: "derive", fields: { value: counted.field } },
+      { op: "coerce", fields: { value: "->number" } },
+    ];
+    notes.push(`Counted by the API itself, in one request, rather than by reading every one of the ${entity.name.many}.`);
+  }
+
+  /*
+   * A number or a breakdown whose request named no time counts every record,
+   * whatever the board's range: "how many refunded payments" means ever, and
+   * read within the board's thirty days it counted 46 of 1,840 (checkpoint 4,
+   * the owner's decision). Only where the endpoint reads the range at all;
+   * lists and charts over time keep the board's, which is what their axis is.
+   */
+  const allTime =
+    !timeWindow &&
+    !byCount &&
+    !pair &&
+    (brief.intent === "measure" || (brief.intent === "compare" && !bucket)) &&
+    input.readsRange?.(listOp) === true;
+  if (allTime) notes.push("Counts every record, whatever range the board shows: the request named no time.");
+
+  /* Asked for and not applied: said on every read, however the widget is built. */
+  if (unmet.length > 0) {
+    notes.push(`This does not narrow by what was asked but cannot be expressed here: ${unmet.join("; ")}.`);
+    pipeline = [
+      ...pipeline,
+      {
+        op: "caveat",
+        when: "true",
+        say: `This does not leave out what was asked, because nothing here can express it: ${unmet.join("; ")}.`.slice(0, 400),
+      },
+    ];
+  }
+
+  /*
+   * What the number means, stated (plan, track E): shown on the tile where the
+   * widget has no description of its own, so a reader can check a number
+   * against what it counts before acting on it. Numbers and charts only; a
+   * list's records speak for themselves.
+   */
+  const metric: MetricDefinition | undefined =
+    brief.intent !== "records" && combine?.op !== "union"
+      ? (() => {
+          const base = {
+            measure: {
+              agg: measure.agg,
+              ...(measured ? { field: measured.path, label: measured.label ?? measured.path } : {}),
+            },
+            of: { entity: entity.id, many: entity.name.many },
+            ...(measure.agg === "sum" && measured?.format === "minor_units" && !measured.coercion
+              ? { unit: "minor" as const }
+              : {}),
+            where: whereSaid.slice(0, 8),
+            ...(timed.length === 1 ? { dateBasis: { field: timed[0]!.path, label: timed[0]!.label } } : {}),
+            ...(timeWindow
+              ? { window: "own" as const }
+              : allTime
+                ? { window: "all" as const }
+                : input.readsRange?.(byCount ? counted.op : listOp)
+                  ? { window: "board" as const }
+                  : {}),
+            ...(metricCurrency ? { currency: metricCurrency } : {}),
+            countedBy: byCount ? ("api" as const) : ("records" as const),
+            checks,
+            unmet: unmet.slice(0, 4),
+            ...(brief.reading ? { reading: brief.reading } : {}),
+          };
+          return { ...base, says: describeMetric(base) };
+        })()
+      : undefined;
+
   const parsed = parseWidget({
     id: input.id,
     title: brief.title?.trim() || entity.name.many,
@@ -1524,15 +1913,17 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
      * what made a finished widget uneditable.
      */
     brief,
+    ...(timeWindow ? { timeWindow } : allTime ? { timeWindow: { all: true as const } } : {}),
+    ...(metric ? { metric } : {}),
     /*
      * Stacked rows are two record types at once, so naming either of them
      * would be a claim about rows that are not its own — and every one of
      * them is a bucket rather than a record in any case.
      */
-    ...(combine?.op === "union" ? {} : { entity: entity.id }),
+    ...(combine?.op === "union" || byCount ? {} : { entity: entity.id }),
     ...(sources.length > 0
       ? { sources, ...(combine ? { combine } : {}) }
-      : { source: { connection, op: listOp, params: {} } }),
+      : { source: { connection, op: byCount ? counted.op : listOp, params: { ...asked } } }),
     pipeline,
     roles,
     /*

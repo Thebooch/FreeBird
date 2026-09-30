@@ -350,7 +350,15 @@ export const entityFromProposal = (input: {
     return {
       path: field.name,
       ...(label ? { label } : {}),
-      ...(said?.description ? { description: said.description.slice(0, 300) } : {}),
+      /*
+       * What the field holds: the description pass's words, or else the
+       * specification's own. The specification's were dropped where the pass
+       * said nothing, and with them the one sentence saying a status of
+       * "refunded" means refunded in full (2026-09-30).
+       */
+      ...((said?.description ?? field.description)
+        ? { description: (said?.description ?? field.description)!.slice(0, 300) }
+        : {}),
       visibility,
       ...(said?.group ? { group: said.group.slice(0, 60) } : {}),
       /*

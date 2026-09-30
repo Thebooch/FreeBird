@@ -13,8 +13,8 @@ describe("the compatibility manifest", () => {
   });
 
   it("says a gap in words a person connecting an API can act on", () => {
-    expect(capabilityNote("auth.signing", 'The "sigv4" sign-in scheme')).toBe(
-      'The "sigv4" sign-in scheme uses signed requests (AWS Signature, HMAC), which is only partly supported. Connector code signs each request: the server makes the signature with your key, and the code never sees the key. Each API\'s signing is written from its documentation and proven by a read.',
+    expect(capabilityNote("auth.signing", 'The "signed" sign-in scheme')).toBe(
+      'The "signed" sign-in scheme uses signed requests (AWS Signature, HMAC), which is only partly supported. Connector code signs each request: the server makes the signature with your key, and the code never sees the key. Each API\'s signing is written from its documentation and proven by a read. AWS Signature Version 4 needs no code: it is built in, signing each request with your secret access key for the region its address or documentation names.',
     );
     expect(capabilityNote("response.csv", "3 endpoints")).toMatch(/^3 endpoints use CSV/);
     expect(capabilityNote("auth.oauth2-token")).toMatch(

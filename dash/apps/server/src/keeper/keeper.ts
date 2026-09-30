@@ -115,12 +115,17 @@ export interface KeeperDeps {
   readonly idleMs?: number;
   /** Told when a pass finishes, for the status panel and the tests. */
   readonly onPass?: (report: KeeperPass) => void;
+  /**
+   * Whether this server may refresh a connection this pass: the lease a fleet
+   * of servers shares (`platform/lease.ts`). Absent, it always may.
+   */
+  readonly lease?: (connection: string) => Promise<boolean>;
 }
 
 export interface KeeperPass {
   readonly at: number;
   readonly refreshed: readonly string[];
-  readonly skipped: readonly { key: string; reason: "idle" | "denied" | "cooling" }[];
+  readonly skipped: readonly { key: string; reason: "idle" | "denied" | "cooling" | "elsewhere" }[];
   readonly failed: readonly { key: string; reason: string }[];
 }
 
@@ -294,7 +299,9 @@ export class Keeper {
     this.running = true;
 
     const refreshed: string[] = [];
-    const skipped: { key: string; reason: "idle" | "denied" | "cooling" }[] = [];
+    const skipped: { key: string; reason: "idle" | "denied" | "cooling" | "elsewhere" }[] = [];
+    /* Connections another server's keeper holds this pass, and those this one does. */
+    const leased = new Map<string, boolean>();
     const failed: { key: string; reason: string }[] = [];
     /* Connections that asked us to wait during this pass. */
     const cooling = new Set<string>();
@@ -328,6 +335,15 @@ export class Keeper {
         if (cooling.has(target.connection) || (until !== null && until > now)) {
           skipped.push({ key: target.key, reason: "cooling" });
           continue;
+        }
+
+        /* One keeper per connection across every server sharing the database: the one holding its lease. */
+        if (this.deps.lease) {
+          if (!leased.has(target.connection)) leased.set(target.connection, await this.deps.lease(target.connection).catch(() => false));
+          if (!leased.get(target.connection)) {
+            skipped.push({ key: target.key, reason: "elsewhere" });
+            continue;
+          }
         }
 
         let status: number | undefined;

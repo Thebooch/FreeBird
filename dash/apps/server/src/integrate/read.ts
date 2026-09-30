@@ -1,6 +1,7 @@
 import { AdapterError, RestAdapter, type FetchMeta, type HttpFetch, type SourceAdapter } from "@freebirdai/dash-adapters";
 import { extractRows, parsePath } from "@freebirdai/dash-expr";
 import { getOp, pagingParamNames, resolveRange, type ConnectionSpec, type OpSpec } from "@freebirdai/dash-spec";
+import { ENVELOPE_KEY } from "../discovery/openapi.js";
 
 /**
  * One experiment: read an endpoint the way a board would, with no cache, and
@@ -84,6 +85,13 @@ export interface ReadDeps {
    * board will. Handed the counted transport, so its requests are budgeted.
    */
   readonly adapter?: (http: HttpFetch) => SourceAdapter;
+  /**
+   * Waiting, for a short rate limit: an API that says "try again in 10s" is
+   * waited for and the page read again by the reader (`FetchContext.sleep`),
+   * rather than the check stopping there (checkpoint 2, Rick and Morty).
+   * Absent, a rate limit ends the read.
+   */
+  readonly sleep?: (ms: number) => Promise<void>;
   /** Told of each read sent, and how it went — for the journal. */
   readonly onRead?: (
     connection: ConnectionSpec,
@@ -103,11 +111,26 @@ const counted = (http: HttpFetch, budget: Budget): HttpFetch => async (url, init
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 
-/** A single object that holds a list of records: an envelope nobody unwrapped. */
-const looksLikeEnvelope = (rows: readonly unknown[]): boolean =>
-  rows.length === 1 &&
-  isRecord(rows[0]) &&
-  Object.values(rows[0]).some((value) => Array.isArray(value) && value.length > 0 && isRecord(value[0]));
+const listOfRecords = (value: unknown): boolean => Array.isArray(value) && value.length > 0 && isRecord(value[0]);
+
+/**
+ * A single object that holds a list of records: an envelope nobody unwrapped.
+ * One level down, or two where the key between names a wrapper
+ * (`_embedded.vehicles`, `d.results`).
+ */
+const looksLikeEnvelope = (rows: readonly unknown[]): boolean => {
+  if (rows.length !== 1 || !isRecord(rows[0])) return false;
+  const entries = Object.entries(rows[0]);
+  /* An XML document's one top element is packaging too: `{ orders: { order: [...] } }`. */
+  const soleWrapper = entries.length === 1 && isRecord(entries[0]![1]) && Object.values(entries[0]![1]).some(listOfRecords);
+  return (
+    soleWrapper ||
+    entries.some(
+      ([key, value]) =>
+        listOfRecords(value) || (ENVELOPE_KEY.test(key) && isRecord(value) && Object.values(value).some(listOfRecords)),
+    )
+  );
+};
 
 export const rowsOf = (body: unknown, rowsPath: string | undefined): unknown[] => {
   try {
@@ -115,6 +138,79 @@ export const rowsOf = (body: unknown, rowsPath: string | undefined): unknown[] =
   } catch {
     return [];
   }
+};
+
+const ERROR_ROOT = /^(error|errors|fault|exception)$|(error|fault|exception)(_?response|_?result)?$/i;
+const MESSAGE_KEY = /^(message|text|description|detail|details|reason|error|faultstring|title)$/i;
+const FAILED_VALUE = /^(error|errors|fail|failed|failure)$/i;
+
+/** The first sentence an error answer says about itself, a few levels down. */
+const messageIn = (node: unknown, depth = 0): string | null => {
+  if (typeof node === "string") return node.trim() === "" ? null : node.trim();
+  if (depth > 4 || node === null || typeof node !== "object") return null;
+  if (Array.isArray(node)) return node.length > 0 ? messageIn(node[0], depth + 1) : null;
+  const entries = Object.entries(node);
+  for (const [key, value] of entries) if (MESSAGE_KEY.test(key) && typeof value === "string" && value.trim() !== "") return value.trim();
+  for (const [, value] of entries) {
+    const found = typeof value === "string" ? null : messageIn(value, depth + 1);
+    if (found) return found;
+  }
+  return null;
+};
+
+const holdsRecords = (node: unknown, depth = 0): boolean => {
+  if (listOfRecords(node)) return true;
+  if (depth > 3 || !isRecord(node)) return false;
+  return Object.values(node).some((value) => holdsRecords(value, depth + 1));
+};
+
+/**
+ * What an answer that is only an error says, whatever its status — or null
+ * when it is not one.
+ *
+ * - GraphQL: `{ errors: [...] }` with no `data`.
+ * - One top element named for an error (`ErrorResponse`, `error`, `Fault`):
+ *   what an XML API answers with a 200, once XML is read at all.
+ * - An answer that says of itself that it failed (`success: false`,
+ *   `status: "error"`, `resultCode: "Error"`) and holds no records.
+ *
+ * Read as one record, each of these made an endpoint nothing had read look
+ * ready: a record type of "error responses" was described and offered
+ * (2026-09-30).
+ */
+const onlyErrors = (body: unknown): string | null => {
+  if (!isRecord(body)) return null;
+  const answer = body as { errors?: unknown; data?: unknown };
+  if (Array.isArray(answer.errors) && answer.errors.length > 0 && (answer.data === undefined || answer.data === null)) {
+    const first = answer.errors[0] as { message?: unknown } | string;
+    const said = typeof first === "string" ? first : typeof first?.message === "string" ? first.message : JSON.stringify(first);
+    return said.slice(0, 300);
+  }
+  if (holdsRecords(body)) return null;
+  const entries = Object.entries(body);
+  const sole = entries.length === 1 ? entries[0]![1] : undefined;
+  const named =
+    entries.length === 1 &&
+    ERROR_ROOT.test(entries[0]![0]) &&
+    sole !== null &&
+    sole !== false &&
+    sole !== "" &&
+    !(Array.isArray(sole) && sole.length === 0);
+  const failed = (node: unknown, depth: number): boolean =>
+    isRecord(node) &&
+    (node.success === false ||
+      node.ok === false ||
+      ["status", "resultCode", "result", "result_code"].some((key) => typeof node[key] === "string" && FAILED_VALUE.test(node[key] as string)) ||
+      (depth < 2 && Object.values(node).some((value) => failed(value, depth + 1))));
+  if (named) return (messageIn(body) ?? "The API answered with an error.").slice(0, 300);
+  /*
+   * A record can have failed without the answer being a failure: a payment
+   * whose status is "failed" is a record. So only an answer that is small,
+   * names no record, and says why.
+   */
+  const aRecord = entries.length > 8 || entries.some(([key]) => /^(id|uuid)$|_id$|Id$/.test(key));
+  const said = messageIn(body);
+  return !aRecord && said && failed(body, 0) ? said.slice(0, 300) : null;
 };
 
 export const tryRead = async (
@@ -155,11 +251,27 @@ export const tryRead = async (
         params: { range: resolveRange({ preset: "30d", now }), filters: {} },
         now,
         resolveSecret: deps.resolveSecret,
+        /* A short rate limit part-way through is waited out, as boards do. */
+        ...(deps.sleep ? { sleep: deps.sleep } : {}),
         /* A token refused part-way through is renewed and the page read again, as boards do. */
         ...(refresh && connection.auth.type === "oauth2" ? { renew: () => refresh(connection) } : {}),
       });
     const result = await (deps.around ? deps.around(send) : send());
     deps.onRead?.(connection, op, { status: "succeeded", upstreamStatus: result.meta.status, pages: result.meta.pages });
+    /*
+     * An answer that is only an error, whatever its status: GraphQL answers
+     * 200 with `errors` and no `data`. Read as one record, it made a check of
+     * an endpoint nothing had read say "ready" (2026-09-30).
+     */
+    const refused = onlyErrors(result.body);
+    if (refused)
+      return {
+        kind: "failed",
+        status: result.meta.status,
+        body: result.body,
+        message: `${op.title}: the API answered with an error: ${refused}`,
+        said: refused,
+      };
     const rows = rowsOf(result.body, op.rowsPath);
     return {
       kind: looksLikeEnvelope(rows) ? "noRows" : "ok",

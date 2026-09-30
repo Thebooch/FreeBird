@@ -3,6 +3,7 @@ import type { CatalogEntry, WidgetSpec } from "@freebirdai/dash-spec";
 import {
   VERIFY_BUDGET_DEFAULT,
   authCredentials,
+  connectionCredentials,
   parseWidget,
   connectionAuths,
   connectionNeedsAddress,
@@ -548,14 +549,13 @@ export const ConnectionManager = ({
      * found them — "Access key", "Secret" — so nobody is asked for one "API
      * key" when they hold two values.
      */
-    const rows = connectionAuths(draft).flatMap((auth) =>
-      authCredentials(auth).map((credential) => ({
-        keyRef: credential.keyRef,
-        nameValue: null,
-        valueLabel: credential.label,
-        hint: credential.hint,
-      })),
-    );
+    /* The sign-in's values, endpoint by endpoint, and a client certificate's where the API asks for one. */
+    const rows = connectionCredentials(draft).map((credential) => ({
+      keyRef: credential.keyRef,
+      nameValue: null,
+      valueLabel: credential.label,
+      hint: credential.hint,
+    }));
     return [...new Map(rows.map((row) => [row.keyRef, row])).values()];
   })();
 
@@ -1178,7 +1178,8 @@ export const ConnectionManager = ({
                     <div className="dash-conn-list__text">
                       <div className="dash-conn-list__title">{connection.title}</div>
                       <div className="dash-conn-list__meta">
-                        {connection.baseUrl} · {connection.ops.length} endpoint(s) ·{" "}
+                        {connection.baseUrl}
+                        {connection.privateNetwork ? " · private network" : ""} · {connection.ops.length} endpoint(s) ·{" "}
                         {connection.auth.type === "none"
                           ? "no key needed"
                           : connection.hasKey

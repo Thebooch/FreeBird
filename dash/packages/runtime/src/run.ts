@@ -435,6 +435,19 @@ export const runPipeline = (
         break;
       }
 
+      case "caveat": {
+        /*
+         * Said once, if any row shows it; the rows are untouched. `{count}` and
+         * `{of}` say how many rows showed it, of how many.
+         */
+        const ast = resolveAst(compiled.when, ctx.params);
+        const showing = rows.filter((row) => evalPredicate(ast, row, { now: ctx.now })).length;
+        const said = compiled.say.replace("{count}", String(showing)).replace("{of}", String(rows.length));
+        if (showing > 0 && !warnings.includes(said)) warnings.push(said);
+        note = compiled.when.source;
+        break;
+      }
+
       case "annotate":
         // Purely a compile-time hint about meaning; the rows are untouched.
         note = Object.entries(compiled.step.fields)

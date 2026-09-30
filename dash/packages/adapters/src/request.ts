@@ -157,6 +157,17 @@ export const renderBody = (
     for (const [name, value] of Object.entries(paging)) form.set(name, value);
     return { text: form.toString(), contentType: "application/x-www-form-urlencoded" };
   }
+  if (body.type === "xml") {
+    const escape = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    /* An element holding only an input nobody gave is left out, not sent empty. */
+    const text = body.template
+      .replace(/<([A-Za-z_][\w.:-]*)>\s*(\{\{[^}]+\}\})\s*<\/\1>/g, (_whole, tag: string, token: string) => {
+        const value = interpolate(token, params);
+        return value === "" ? "" : `<${tag}>${escape(value)}</${tag}>`;
+      })
+      .replace(/\{\{[^}]+\}\}/g, (token) => escape(interpolate(token, params)));
+    return { text, contentType: body.contentType };
+  }
   if (body.type === "graphql") {
     const variables = (fillTemplate(body.variables, params) ?? {}) as Record<string, unknown>;
     for (const [name, value] of Object.entries(paging)) setAtPath(variables, name, pagingValue(value));

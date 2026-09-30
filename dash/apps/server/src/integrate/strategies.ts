@@ -197,6 +197,45 @@ export const authStrategy: RepairStrategy = {
   },
 };
 
+/* ── What an AWS signature is scoped to ───────────────────────────────── */
+
+const AWS_REGION_RE = /\b(?:us|eu|ap|sa|ca|me|af|il|cn)(?:-gov)?-(?:north|south|east|west|central|northeast|southeast|southwest|northwest)-\d\b/g;
+
+/**
+ * A signature made for the wrong region or service is refused, and AWS's
+ * refusal often names the right one (“expecting 'eu-west-1'”, “scoped to
+ * correct service: 'execute-api'”). Otherwise the documentation does: a
+ * region it names is tried, most mentioned first. Never a region nobody
+ * stated.
+ */
+export const awsScopeStrategy: RepairStrategy = {
+  id: "aws-scope",
+  /* `failed`: no region to sign for, so nothing was sent at all. */
+  handles: ["unauthorized", "forbidden", "badRequest", "failed"],
+  async propose({ connection, attempt, docs }) {
+    const auth = connection.auth;
+    if (auth.type !== "sigv4") return [];
+    const said = attempt.said ?? attempt.message;
+    const out: Candidate[] = [];
+    const service = /scoped to (?:the )?correct service:?\s*'([a-z0-9-]+)'/i.exec(said)?.[1];
+    if (service && service !== auth.service)
+      out.push({ patch: { auth: { ...auth, service } }, because: `the API says its signatures are for the ${service} service` });
+    const expected = /expecting\s+'([a-z0-9-]+)'/i.exec(said)?.[1];
+    if (expected && expected !== auth.region) {
+      out.push({ patch: { auth: { ...auth, region: expected } }, because: `the API says its signatures are for ${expected}` });
+      return out;
+    }
+    if (!/region/i.test(said)) return out;
+    const counts = new Map<string, number>();
+    for (const match of (await docs.text()).match(AWS_REGION_RE) ?? []) counts.set(match, (counts.get(match) ?? 0) + 1);
+    for (const [region] of [...counts].sort((a, b) => b[1] - a[1]).slice(0, 4)) {
+      if (region !== auth.region)
+        out.push({ patch: { auth: { ...auth, region } }, because: `the documentation names the ${region} region` });
+    }
+    return out;
+  },
+};
+
 /* ── A header the API requires ────────────────────────────────────────── */
 
 const MENTIONED_HEADER_RE = /\b([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+)\b(?=[^.]{0,40}\bheader\b)|\bheader\s+["'`]?([A-Za-z][A-Za-z0-9-]+)/gi;
@@ -276,6 +315,7 @@ export const rowsStrategy: RepairStrategy = {
 export const DEFAULT_STRATEGIES: readonly RepairStrategy[] = [
   addressStrategy,
   authStrategy,
+  awsScopeStrategy,
   headerStrategy,
   rowsStrategy,
 ];

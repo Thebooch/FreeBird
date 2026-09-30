@@ -114,6 +114,7 @@ Rules:
 - A request that changes the account (creating or deleting a record, sending a payment) is not allowed. POST only for what a read needs — a search, a login, a report or file being prepared for reading.
 - Read everything the endpoint holds, however many requests that takes, and bound every loop (pages, waiting) so it ends.
 - Records are flat objects with numbers as numbers.
+- Return every field the documentation gives a record, not only those an example shows: any of them may be what a board counts, adds up or narrows by — a date that says whether it was cancelled, a flag, a status. Where the API makes you choose fields (a GraphQL selection, a fields parameter), choose all of the record's own plain fields, within any cost limit the documentation states.
 - Never put a credential's value, or anything that looks like one, in the code.
 - Where the documentation leaves a detail unsaid, make the most reasonable choice, write the code, and name the choice in "assumptions".
 - Only if the documentation does not say enough to write working code at all, say so in "cannot" rather than guess.

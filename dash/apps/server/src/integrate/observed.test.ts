@@ -45,6 +45,30 @@ describe("observed fields", () => {
     expect(withObservedFields(filled!, { things: shape })).toBeNull();
   });
 
+  /* Checkpoint 3: connector code read a manifest's files, and the manifest's own fields described the shipments in them. */
+  it("replaces declared fields the records hold none of", () => {
+    const manifest = entry([
+      { name: "files", kinds: ["array"] },
+      { name: "columns", kinds: ["array"] },
+    ]);
+    const shipments = observedShape(
+      [
+        { shipment_id: "SH-1", status: "delivered", weight_kg: 12.5 },
+        { shipment_id: "SH-2", status: "returned", weight_kg: 3 },
+      ],
+      "$",
+    )!;
+    const replaced = withObservedFields(manifest, { things: shipments });
+    expect(replaced?.ops[0]).toMatchObject({ fieldsFrom: "observed" });
+    expect(replaced?.ops[0]?.fields?.map((field) => field.name)).toEqual(["shipment_id", "status", "weight_kg"]);
+    /* One declared field the records do hold is enough to keep the declaration. */
+    const partly = entry([
+      { name: "status", kinds: ["string"] },
+      { name: "files", kinds: ["array"] },
+    ]);
+    expect(withObservedFields(partly, { things: shipments })?.ops[0]?.fieldsFrom).toBeUndefined();
+  });
+
   /* Measurement 1: an export read through code answered with 640 records, and belonged to no resource. */
   it("makes an endpoint a read showed answering with many records a collection", () => {
     const exportEntry = catalogEntrySchema.parse({

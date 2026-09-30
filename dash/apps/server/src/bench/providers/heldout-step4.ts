@@ -5,7 +5,7 @@ import type { BenchRequest, BenchResponse, MockProvider } from "../types.js";
 
 /**
  * The held-out replacement for vaultbank, written at the end of plan step 4
- * — after vaultbank's failure was written up (`checkpoint-step-4.md`) and
+ * — after vaultbank's failure was written up and
  * **before** the defect it exposed was fixed — so the fix cannot have been
  * tuned against it.
  *
@@ -189,6 +189,27 @@ export const harborline: MockProvider = {
   docsUrl: `https://${HL_HOST}/openapi.json`,
   credentials: [HL_KEY_ID, HL_SECRET],
   credentialLabels: ["Key ID", "Secret key"],
+  /*
+   * A dev scenario since 2026-09-29 (PROTOCOL.md): its scripted connector code
+   * is the reference's, for CI's mechanics.
+   */
+  scriptedModel: {
+    propose_connector: {
+      summary:
+        "Signs a short-lived sign-in with the secret key, reads the manifest with the token it gets, and reads every file the manifest lists without it.",
+      credentials: [
+        { name: "key_id", label: "Key ID", secret: false },
+        { name: "secret", label: "Secret key" },
+      ],
+      exchanges: [{ name: "token" }],
+      destinations: [
+        { host: HL_HOST, role: "api", methods: ["GET", "POST"], credentials: ["key_id", "secret", "token"] },
+        { host: HL_FILES, role: "download", methods: ["GET"], credentials: [] },
+      ],
+      serves: true,
+      code: HARBORLINE_REFERENCE_CODE,
+    },
+  },
   reset() {
     tokens.clear();
   },

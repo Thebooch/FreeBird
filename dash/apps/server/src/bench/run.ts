@@ -41,6 +41,18 @@ export interface SuiteOptions {
   readonly only?: readonly string[];
 }
 
+/**
+ * The account address the scenario's person would type, when asked for one:
+ * the provider's own, or its reference connection's — the address of the
+ * account the answer key was computed from. An account value, allowed and
+ * counted (PROTOCOL.md); nothing else of the reference reaches an integrator.
+ */
+const accountAddressOf = (provider: MockProvider): string | undefined => {
+  if (provider.accountAddress) return provider.accountAddress;
+  const baseUrl = provider.reference?.connection.baseUrl;
+  return typeof baseUrl === "string" ? baseUrl : undefined;
+};
+
 export const runSuite = async (options: SuiteOptions): Promise<ScenarioScore[]> => {
   const scores: ScenarioScore[] = [];
   const providers = providersIn(options.split).filter(
@@ -81,6 +93,7 @@ export const runSuite = async (options: SuiteOptions): Promise<ScenarioScore[]> 
           docsUrl: provider.docsUrl,
           credentials: provider.credentials,
           ...(provider.credentialLabels ? { credentialLabels: provider.credentialLabels } : {}),
+          ...(accountAddressOf(provider) ? { accountAddress: accountAddressOf(provider)! } : {}),
           objective: {
             id: objective.id,
             request: objective.request,
@@ -138,6 +151,8 @@ export const reportMarkdown = (
     `| Incomplete, and said so | ${count((one) => one.completeness === "incomplete-flagged")} |`,
     `| Incomplete, silently | ${count((one) => one.completeness === "incomplete-silent")} |`,
     `| Metric correct | ${count((one) => one.metric === "correct")} |`,
+    `| Wrong, and said why | ${count((one) => one.metric === "wrong" && (one.flagged.length > 0 || (one.said?.length ?? 0) > 0))} |`,
+    `| Wrong, silently | ${count((one) => one.metric === "wrong" && one.flagged.length === 0 && (one.said?.length ?? 0) === 0)} |`,
     "",
     "| Provider | Objective | Setup | Tech. int. | Retrieval | Completeness | Read / held | Metric | Value / expected | Requests | Model calls | Note |",
     "|---|---|---|---|---|---|---|---|---|---|---|---|",
@@ -154,7 +169,7 @@ export const reportMarkdown = (
         `${cell(one.value)} / ${cell(one.expected)}`,
         one.requests,
         one.modelCalls,
-        one.error ?? one.flagged[0] ?? "",
+        one.error ?? one.flagged[0] ?? one.said?.[0] ?? "",
       ]
         .map(cell)
         .join(" | ")

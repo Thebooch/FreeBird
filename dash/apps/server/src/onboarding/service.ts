@@ -26,6 +26,7 @@ import type {
 import {
   CATEGORY_VERSION,
   dashboardSchema,
+  paramsForWidget,
   fingerprintConnection,
   fnv1a,
   getOp,
@@ -732,10 +733,11 @@ export class OnboardingService {
 
       /* Try each widget. */
       const params = boardParams(dashboardSchema.parse({ id: "preview", title: "Preview", widgets: [] }), this.now());
-      const checker = this.checker(connection, params);
       const checked: Checked[] = [];
       for (const part of compiled) {
         for (const built of part.built) {
+          /* Each read with its own time, where its brief named one. */
+          const checker = this.checker(connection, paramsForWidget(built.widget, params, this.now()));
           checked.push({ built, ...(await checker(built.widget)) });
         }
       }

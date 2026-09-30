@@ -84,6 +84,14 @@ export const widgetBriefSchema = z.object({
       z.object({
         field: fieldPathSchema,
         values: z.array(z.string().max(120)).max(20).optional(),
+        /** A number range: more than `above`, less than `below`. Both exclusive. */
+        above: z.number().finite().optional(),
+        below: z.number().finite().optional(),
+        /** A time range by this field: on or after `from`, before `to`. Days or moments, ISO 8601. */
+        from: z.string().max(40).optional(),
+        to: z.string().max(40).optional(),
+        /** Only records where this field holds nothing (`true`) or something (`false`): "not cancelled". */
+        empty: z.boolean().optional(),
       }),
     )
     .max(4)
@@ -107,6 +115,10 @@ export const widgetBriefSchema = z.object({
   alongside: z
     .object({ entity: idSchema, as: z.enum(ALONGSIDE_MODES).optional() })
     .optional(),
+  reading: z
+    .object({ term: z.string().min(1).max(60), as: z.string().min(1).max(160) })
+    .optional(),
+  unmet: z.array(z.string().min(1).max(160)).max(4).optional(),
 });
 
 export interface WidgetBrief {
@@ -140,7 +152,23 @@ export interface WidgetBrief {
    * approximate value safe to carry: the worst case is the unnarrowed list the
    * reader would otherwise have got.
    */
-  readonly filters?: readonly { readonly field: string; readonly values?: readonly string[] }[];
+  readonly filters?: readonly {
+    readonly field: string;
+    readonly values?: readonly string[];
+    /** More than this, less than this: a number range. See `widgetBriefSchema`. */
+    readonly above?: number;
+    readonly below?: number;
+    /** On or after, before: a time range by this field, ISO 8601. */
+    readonly from?: string;
+    readonly to?: string;
+    /**
+     * Only records where this field holds nothing (`true`) or something
+     * (`false`). "Leave out cancelled orders" is a cancelled date that is
+     * empty; with no way to say it, it was dropped, and a total counted the
+     * cancelled ones silently (checkpoint 4).
+     */
+    readonly empty?: boolean;
+  }[];
   /**
    * Columns read *through* a reference — a task's vendor's phone number.
    *
@@ -174,4 +202,17 @@ export interface WidgetBrief {
    * record type is the whole of what a request adds.
    */
   readonly alongside?: { readonly entity: string; readonly as?: AlongsideMode } | undefined;
+  /**
+   * A word in the request that reads several ways, and the reading built:
+   * "revenue", read as invoiced totals. Said on the widget, so a reader sees
+   * which "revenue" the number is before acting on it (plan, track E). The
+   * other reading is offered beside it, as `alternative`.
+   */
+  readonly reading?: { readonly term: string; readonly as: string } | undefined;
+  /**
+   * What the request asked to narrow by that nothing here can express, in its
+   * words. Said on the widget, never dropped in silence: a total that quietly
+   * keeps what somebody asked to leave out is a number they would act on.
+   */
+  readonly unmet?: readonly string[] | undefined;
 }

@@ -2,6 +2,7 @@ import type { LlmAdapter } from "@freebirdai/dash-agent";
 import {
   ALL_ROWS,
   authCredentials,
+  connectionCredentials,
   connectionNeedsAddress,
   connectionSchema,
   parseWidget,
@@ -11,14 +12,15 @@ import {
   type WidgetSpec,
 } from "@freebirdai/dash-spec";
 import { connectionFromCatalog } from "../catalog.js";
-import { discover } from "../discovery/index.js";
+import { AUTO_INDEX_PAGES, discover } from "../discovery/index.js";
 import { integrate } from "../integrate/agent.js";
 import { RestAdapter } from "@freebirdai/dash-adapters";
-import { getOp, resolveRange } from "@freebirdai/dash-spec";
-import { OAuthRetryAdapter } from "../auth/retry-adapter.js";
+import { getOp, paramsForWidget, resolveRange } from "@freebirdai/dash-spec";
+import { OAuthRetryAdapter, RateLimitWaitAdapter } from "../auth/retry-adapter.js";
 import { ConnectorAdapter } from "../connector/adapter.js";
-import { withEntryResources, withObservedFields } from "../integrate/observed.js";
-import { integrationTargets } from "../routes/integrate.js";
+import { withAddedReads, withEntryResources, withObservedFields } from "../integrate/observed.js";
+import type { SeenSet } from "../integrate/values.js";
+import { integrationTargets, samplingTargets } from "../routes/integrate.js";
 import { chooseByBrief, observeFirstRead } from "./brief-choice.js";
 import { benchConnectors } from "./connectors.js";
 import { benchCredentials, signInAsThePerson } from "./oauth.js";
@@ -66,8 +68,20 @@ export const widgetFor = (
 };
 
 /** An op whose path is the scripted one. */
-const opAt = (connection: ConnectionSpec, path: string): string | null =>
-  connection.ops.find((op) => op.path === path)?.id ?? null;
+/**
+ * The op at a path, as the endpoint's own path or its whole path from the host
+ * root: an importer may put `/api` in the base address or in each path, and
+ * which it chose is not what a scripted choice is measuring.
+ */
+const opAt = (connection: ConnectionSpec, path: string): string | null => {
+  let base = "";
+  try {
+    base = new URL(connection.baseUrl ?? "").pathname.replace(/\/$/, "");
+  } catch {
+    /* An address with a blank in it: its own paths only. */
+  }
+  return connection.ops.find((op) => op.path === path || `${base}${op.path}` === path)?.id ?? null;
+};
 
 /** A model that counts its calls, so a run's cost is reported. */
 const countingModel = (llm: LlmAdapter | null): { llm: LlmAdapter | null; calls: () => number } => {
@@ -133,7 +147,7 @@ export const pasteInto = (
  * technical question the person cannot answer from their settings page.
  */
 const countAsked = (connection: ConnectionSpec, input: ScenarioInput, interventions: Intervention[]) => {
-  const slots = authCredentials(connection.auth);
+  const slots = connectionCredentials(connection);
   if (slots.length !== input.credentials.length)
     interventions.push({
       kind: "technical",
@@ -175,19 +189,28 @@ const connectFromDocs = async (
       modelCalls: modelCalls(),
     } satisfies IntegrationOutcome,
   });
-  const found = await discover(input.docsUrl, { fetchDocument: env.fetchDocument, llm, search: null });
+  /* As the product discovers: a small documentation section is read by itself when nothing else answered. */
+  const found = await discover(input.docsUrl, {
+    fetchDocument: env.fetchDocument,
+    llm,
+    search: null,
+    readIndexUpTo: AUTO_INDEX_PAGES,
+  });
   notes.push(found.note, ...found.warnings);
   if (!found.entry) return stop("discover", "Discovery found nothing to connect to.");
 
-  const connection = connectionFromCatalog(found.entry, { id: input.provider });
+  let connection = connectionFromCatalog(found.entry, { id: input.provider });
   if (connectionNeedsAddress(connection)) {
-    /* The person's own account address is theirs to give; nobody here has one to give. */
+    /* The person's own account address is theirs to give: asked, and counted, as the product asks. */
     interventions.push({ kind: "account", what: "which account the address is for" });
-    return stop("address", "The connection needs its account address.", connection);
+    if (!input.accountAddress) return stop("address", "The connection needs its account address.", connection);
+    const { server: _server, addressPending: _pending, ...rest } = connection;
+    connection = connectionSchema.parse({ ...rest, baseUrl: input.accountAddress.replace(/\/+$/, "") });
+    notes.push(`Asked which address the account is at: ${connection.baseUrl}.`);
   }
 
   if (!countLater) countAsked(connection, input, interventions);
-  const secrets = Object.fromEntries(pasteInto(authCredentials(connection.auth), input));
+  const secrets = Object.fromEntries(pasteInto(connectionCredentials(connection), input));
   return { connection, entry: found.entry, secrets };
 };
 
@@ -301,10 +324,10 @@ export const agentIntegrator = (options: { llm?: LlmAdapter | null; requests?: n
     let chosen: WidgetSpec | null = null;
     let compiledFrom: { brief: import("@freebirdai/dash-spec").WidgetBrief; entity: import("@freebirdai/dash-spec").EntitySpec } | null = null;
     /** The integration loop over some endpoints, with this scenario's credentials and connector kit. */
-    const settleOps = (ops: readonly string[], requests: number) =>
+    const settleOps = (ops: readonly string[], requests: number, sample: readonly string[] = []) =>
       integrate(
         connection,
-        { targets: ops, entry, docsUrl: input.docsUrl, requests, traverseUpTo: 50 },
+        { targets: ops, entry, docsUrl: input.docsUrl, requests, traverseUpTo: 50, sample },
         {
           http: env.http,
           resolveSecret: broker.resolve,
@@ -313,6 +336,8 @@ export const agentIntegrator = (options: { llm?: LlmAdapter | null; requests?: n
           now: () => env.now,
           llm: model.llm,
           connectors,
+          /* A short rate limit is waited out, as the product's check does. */
+          sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
         },
       );
     if (choice) {
@@ -328,23 +353,36 @@ export const agentIntegrator = (options: { llm?: LlmAdapter | null; requests?: n
        * described from — the same order the product runs in.
        */
       let described = entry;
+      let seen: Readonly<Record<string, SeenSet>> = {};
       const own = integrationTargets(connection, { canWriteCode: true });
       if (own.length > 0) {
-        let precheck = await settleOps(own, 60);
+        /* And a first page of the other collections nothing declared fields for, as the product's check reads them. */
+        const sample = samplingTargets(connection, entry, own);
+        let precheck = await settleOps(own, 60, sample);
         notes.push(...precheck.changes.map((change) => `Changed by the first check: ${change}`), ...precheck.log);
         connection = precheck.connection;
         if (precheck.needsCredentials) {
           for (const [keyRef, value] of pasteInto(precheck.needsCredentials, input)) vault.set(keyRef, value);
-          precheck = await settleOps(own, 60);
+          precheck = await settleOps(own, 60, sample);
           notes.push(...precheck.log);
           connection = precheck.connection;
         }
-        described = withObservedFields(entry, precheck.observed) ?? entry;
+        /* Reads written from a GraphQL schema the API answered with, then what the reads showed. */
+        const read = withAddedReads(entry, precheck.added) ?? entry;
+        described = withObservedFields(read, precheck.observed) ?? read;
+        seen = precheck.values;
         connection = withEntryResources(connection, described);
         if (described !== entry)
           notes.push(`The first check read fields the documentation did not declare, for ${Object.keys(precheck.observed).join(", ")}.`);
       }
-      const brief = await chooseByBrief({ connection, entry: described, request: input.objective.request, llm: model.llm });
+      const brief = await chooseByBrief({
+        connection,
+        entry: described,
+        request: input.objective.request,
+        llm: model.llm,
+        today: new Date(env.now).toISOString().slice(0, 10),
+        seen,
+      });
       notes.push(...brief.notes);
       if ("stop" in brief) return stop(brief.stop, brief.why);
       chosen = brief.widget;
@@ -373,12 +411,14 @@ export const agentIntegrator = (options: { llm?: LlmAdapter | null; requests?: n
     /* The product's first read, observed: a widget compiled from a brief is rebuilt if the records are not where the docs said. */
     if (chosen && compiledFrom && targets[0]) {
       try {
-        const rest = connection.connector ? new ConnectorAdapter(env.http, connectors) : new RestAdapter(env.http);
+        const rest = connection.connector
+          ? new ConnectorAdapter(env.http, connectors)
+          : new RateLimitWaitAdapter(new RestAdapter(env.http));
         const adapter = new OAuthRetryAdapter(rest, broker);
         const op = getOp(connection, targets[0]);
         if (op) {
           const read = await adapter.fetch(connection, op, {}, {
-            params: { range: resolveRange({ preset: "30d", now: env.now }), filters: {} },
+            params: paramsForWidget(chosen, { range: resolveRange({ preset: "30d", now: env.now }), filters: {} }, env.now),
             now: env.now,
             resolveSecret: broker.resolve,
           });

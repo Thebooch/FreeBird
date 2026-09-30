@@ -1,9 +1,9 @@
 import { AdapterError, RestAdapter, isIncompleteNote, type FetchMeta, type SourceAdapter } from "@freebirdai/dash-adapters";
-import { OAuthRetryAdapter } from "../auth/retry-adapter.js";
+import { OAuthRetryAdapter, RateLimitWaitAdapter } from "../auth/retry-adapter.js";
 import { ConnectorAdapter } from "../connector/adapter.js";
 import { benchConnectors } from "./connectors.js";
 import { executeWidget } from "@freebirdai/dash-runtime";
-import { getOp, resolveRange } from "@freebirdai/dash-spec";
+import { getOp, paramsForWidget, resolveRange } from "@freebirdai/dash-spec";
 import type { BenchTransport } from "./transport.js";
 import type {
   Completeness,
@@ -96,7 +96,8 @@ export const scoreOutcome = async (input: {
     });
   }
 
-  const params = { range: resolveRange({ preset: "30d", now: input.now }), filters: {} };
+  /* The board's window, or the widget's own where its request named a time — as a board reads it. */
+  const params = paramsForWidget(outcome.widget, { range: resolveRange({ preset: "30d", now: input.now }), filters: {} }, input.now);
   let body: unknown;
   let meta: FetchMeta;
   try {
@@ -108,9 +109,10 @@ export const scoreOutcome = async (input: {
     const kit = benchConnectors(input.now);
     const rest = connection.connector
       ? new ConnectorAdapter(input.transport.http, kit)
-      : new RestAdapter(input.transport.http);
+      : new RateLimitWaitAdapter(new RestAdapter(input.transport.http));
     const adapter: SourceAdapter = outcome.broker ? new OAuthRetryAdapter(rest, outcome.broker) : rest;
-    const result = await adapter.fetch(connection, op, {}, {
+    /* With what the widget asks of the API, as a board sends it: a confirmed filter, say. */
+    const result = await adapter.fetch(connection, op, source?.params ?? {}, {
       params,
       now: input.now,
       resolveSecret: outcome.broker
@@ -139,8 +141,38 @@ export const scoreOutcome = async (input: {
   const extracted = executed.meta?.steps.find((step) => step.op === "extract")?.rowsOut ?? null;
   const said = meta.warnings.filter(isIncompleteNote);
   const flagged = meta.truncated && said.length === 0 ? ["Not every page was read."] : said;
+  /*
+   * A read the widget narrows through the API's own filter holds fewer records
+   * than the collection by design. It is complete when nothing cut it short
+   * and any count the API gave matches; whether it read the right records is
+   * the answer key's to say (checkpoint 2, PROTOCOL.md).
+   */
+  const askedApi = Object.keys(source?.params ?? {}).length > 0;
+  const wholeScope =
+    askedApi &&
+    extracted !== null &&
+    !meta.truncated &&
+    flagged.length === 0 &&
+    (meta.reportedTotal === undefined || meta.reportedTotal === extracted);
+  /*
+   * The API's own count, where a read confirmed the endpoint counts these
+   * records: one answer, complete when nothing cut it short (PROTOCOL.md).
+   */
+  const counted =
+    connection.resources.some((resource) => resource.count?.op === op.id) &&
+    !meta.truncated &&
+    flagged.length === 0;
   const completeness: Completeness =
-    extracted === objective.records ? "complete" : flagged.length > 0 ? "incomplete-flagged" : "incomplete-silent";
+    extracted === objective.records || wholeScope || counted
+      ? "complete"
+      : flagged.length > 0
+        ? "incomplete-flagged"
+        : "incomplete-silent";
+  const caveats = [
+    ...(executed.meta?.warnings ?? []).filter((warning) => !isIncompleteNote(warning)),
+    /* The tile's own sentence says a number is only what falls in the board's range. */
+    ...(outcome.widget.metric?.window === "board" ? [outcome.widget.metric.says] : []),
+  ];
   const raw = executed.rows[0]?.value;
   const value = typeof raw === "number" ? raw : null;
 
@@ -152,6 +184,7 @@ export const scoreOutcome = async (input: {
     value,
     recordsRead: extracted,
     flagged,
+    ...(caveats.length > 0 ? { said: caveats } : {}),
     ...(executed.ok ? {} : { error: executed.errors.join("; ") }),
   });
 };

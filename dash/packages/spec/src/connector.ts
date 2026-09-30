@@ -132,7 +132,8 @@ export const CONNECTOR_CONTRACT = `A connector is plain JavaScript (no imports, 
     Called for every request before it is sent — your own http.request calls, and every request the connection's declared endpoints send. Receives { method, url, headers, body } and returns it, changed as the API's sign-in requires (usually headers added). body is a string or undefined.
 
   async function read(ctx)
-    Reads one endpoint the connector serves: every record it holds, however many requests that takes. Returns { rows: [...records], total?: number, complete?: boolean }. Set complete: false when you know records were left out — the read is then not accepted.
+    Reads one endpoint the connector serves: every record it holds, however many requests that takes. Returns { rows: [...records], total?: number, complete?: boolean, resume?: any }. Set complete: false when you know records were left out — the read is then not accepted.
+    One run may send about 100 requests and last about a minute. When every record needs more than that, do not stop short and do not return complete: false: count your requests, and before the allowance runs out return the records read so far with resume set to a small JSON value saying where you got to (a page number, a date, a cursor, a list of ids still to read). read() is then called again in a new run, with a new allowance, and ctx.resume holds that value: carry on from there and return only the records not yet returned. Leave resume out when everything has been read.
 
   async function paginate(page, ctx)
     Used only when there is no read(): given { request, response, rows, index } for the page just read, returns the next request ({ method?, url, headers?, body? }) or null when there are no more.
@@ -140,12 +141,13 @@ export const CONNECTOR_CONTRACT = `A connector is plain JavaScript (no imports, 
   async function parse(response, ctx)
     Used only when there is no read(): turns one response into { rows, total? } (or an array of records).
 
-ctx is { op: { id, title, path, method, query, params }, baseUrl, inputs, range: { start, end }, maxPages }. maxPages is the most pages one run may read, not a page size or a place to stop.
+ctx is { op: { id, title, path, method, query, params }, baseUrl, inputs, range: { start, end }, maxPages, resume? }. maxPages is the most pages one run may read, not a page size or a place to stop.
+ctx.range is the window the widget reads: start and end are ISO 8601 strings (new Date(ctx.range.start) reads one; end is exclusive), or ctx.range is null when no window applies. When it is given, read every record in it: where the API allows only a shorter window per request, ask window by window until the whole range is covered. Never replace it with a window of your own.
 
 What the environment provides (everything else is absent — no fetch, no timers, no Date of your own):
 
   await http.request({ method, url, headers?, query?, body?, as? })
-    Sends one request through the server. method is GET, HEAD or POST. query is an object of values appended to the url. body is a string, or an object sent as JSON. as is "json" | "text" | "csv" | "ndjson" | "auto" (default "auto": by content type). Answers { status, headers, body, url } where headers are lower-cased and body is parsed per "as". It does not throw on an error status; check status. A request to an address or with a method your authority does not allow throws.
+    Sends one request through the server. method is GET, HEAD or POST. query is an object of values appended to the url. body is a string, or an object sent as JSON. as is "json" | "text" | "csv" | "ndjson" | "xml" | "auto" (default "auto": by content type). Answers { status, headers, body, url } where headers are lower-cased and body is parsed per "as". It does not throw on an error status; check status. A request to an address or with a method your authority does not allow throws.
 
   Credentials are used by name and never seen. In a header, query value or body, write {{secret:NAME}} and the server puts the value in, only for an address allowed to receive it.
   await credentials.identifier(NAME)  — the value of a credential declared as an identifier (secret: false): a key ID or account number the API treats as public, which the code needs inside something it builds or signs. Never available for a secret, password or token.
@@ -164,7 +166,8 @@ What the environment provides (everything else is absent — no fetch, no timers
   clock.now()  — milliseconds since 1970, from the server.
   await sleep(ms)  — waits, within the run's allowance.
   CSV.parse(text, { header?: true, delimiter?: "," }) and NDJSON.parse(text)  — synchronous, like JSON.parse. CSV cells that are plain numbers become numbers.
+  await XML.parse(text)  — an XML document as plain values: { root: … }. An element holding only text is that text (a number where it plainly is one); an element holding elements is an object; a name that repeats is an array, and one that appears once is NOT an array, so wrap it: [].concat(value ?? []). Attributes are fields too (id="7" is id: 7), and text beside attributes is "value"; namespace prefixes are dropped; a SOAP Envelope is opened to what its Body holds, and a Fault throws. Never read XML with regular expressions.
   log(message)  — a line for whoever reviews the run. Never log anything secret; there is nothing secret to log.
-  base64.encode(text), base64.decode(text), encodeURIComponent, JSON, Math.
+  base64.encode(text), base64.decode(text), encodeURIComponent, URL and URLSearchParams (for building and reading addresses), JSON, Math.
 
 Rules: records are plain objects. Keep numbers as numbers. Read every page or part there is; if you must stop early, say complete: false.`;

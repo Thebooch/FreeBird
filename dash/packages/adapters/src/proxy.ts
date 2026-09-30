@@ -42,6 +42,8 @@ export class ProxyAdapter implements SourceAdapter {
             grain: ctx.params.range.grain,
             start: ctx.params.range.start,
             end: ctx.params.range.end,
+            /* Every record: the server asks the API without date bounds. */
+            ...(ctx.params.range.all ? { all: true } : {}),
           },
           filters: ctx.params.filters,
           /*

@@ -114,6 +114,48 @@ const chunk = (text: string): string[] => {
   return chunks;
 };
 
+/** Past this a page is naming something other than its own endpoints. */
+const MAX_NAMED = 300;
+
+/**
+ * Every endpoint a page names, read off the whole of it rather than the part
+ * that fits in a prompt.
+ *
+ * Ranking keeps the passages that look most like an API, which is right for
+ * learning how one signs in and pages, and wrong for learning what it holds:
+ * on a 570 KB page the model saw 18 of 158 sections, and the collection the
+ * request was about was never imported (checkpoint 2). A read the page names
+ * — `GET /v1/things`, or an address on the API's own host — is found here
+ * whatever its rank. The caller keeps only those under the API's address.
+ */
+export const endpointsNamed = (analysis: PageAnalysis): string[] => {
+  const found = new Set<string>();
+  const text = [analysis.text, ...analysis.codeBlocks].join("\n");
+  const clean = (raw: string) => raw.replace(/[),.;:'"`\]]+$/, "");
+  /* A read said to be one — "GET …" — keeps the word, so it counts wherever it points on the API's host. */
+  for (const match of text.matchAll(/\bGET\s+((?:https?:\/\/)?[^\s"'<>`]+)/g)) {
+    const cleaned = clean(match[1]!);
+    if (cleaned.length > 1 && cleaned.length <= 200) found.add(`GET ${cleaned}`);
+  }
+  for (const match of text.matchAll(/\bhttps?:\/\/[^\s"'<>`]+/g)) {
+    const cleaned = clean(match[0]);
+    if (cleaned.length <= 200 && !found.has(`GET ${cleaned}`)) found.add(cleaned);
+  }
+  /*
+   * A path written on its own — a table of resources reading `/todos`, `/users`
+   * — with no method and no address beside it. Marked, so only a path under
+   * the API's own address is taken; the check reads each before it counts,
+   * and a page that is not the API answers with no records. A to-do list was
+   * missed when the model left the table out (checkpoint 2).
+   */
+  /* Never the end of a markup tag — `</name>` in an XML sample is not a path. */
+  for (const match of text.matchAll(/(?<![\w/.:<-])(\/[A-Za-z][A-Za-z0-9_-]{1,40}(?:\/[A-Za-z0-9_{}:.,-]+)*\/?)(?![\w/.>])/g)) {
+    const cleaned = clean(match[1]!);
+    if (!found.has(`GET ${cleaned}`)) found.add(`PATH ${cleaned}`);
+  }
+  return [...found].slice(0, MAX_NAMED);
+};
+
 export interface RankedContext {
   readonly content: string;
   readonly chunksKept: number;

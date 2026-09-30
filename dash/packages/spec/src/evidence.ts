@@ -96,3 +96,47 @@ export const EVIDENCE_WORDS: Record<EvidenceLevel, string> = {
   "count-reconciled": "Every record the API says it holds was read.",
   "metric-reconciled": "This number matches one worked out independently.",
 };
+
+/** How far one read of a tile got, from what the read itself shows. */
+export interface ReadCoverage {
+  readonly level: Extract<EvidenceLevel, "accepted" | "traversed" | "count-reconciled">;
+  /** A few words for beside a row count. */
+  readonly said: string;
+  /** The whole claim, and the limit of it, for a title or a reader who asks. */
+  readonly detail: string;
+}
+
+/**
+ * The strongest claim a tile's own read supports, in plain words — the ladder
+ * on the tile, not only in the check's records (plan, track D).
+ *
+ * Only what this read shows: its pages, whether the cap stopped it, and the
+ * API's own count where it gave one. Null when the read was cut short, which
+ * is said elsewhere, in the words that say what was left out.
+ */
+export const readCoverage = (
+  read: { readonly pages: number; readonly truncated: boolean; readonly reportedTotal?: number | undefined },
+  records: number,
+): ReadCoverage | null => {
+  if (read.truncated) return null;
+  const n = records.toLocaleString("en-US");
+  if (read.reportedTotal !== undefined && read.reportedTotal === records) {
+    return {
+      level: "count-reconciled",
+      said: `all ${n} read`,
+      detail: `All ${n} records were read — as many as the API says it holds.`,
+    };
+  }
+  if (read.pages > 1) {
+    return {
+      level: "traversed",
+      said: "every page read",
+      detail: `Every page was read, to the last: ${n} records. The API did not say how many it holds, so nothing checks the count.`,
+    };
+  }
+  return {
+    level: "accepted",
+    said: "read in one request",
+    detail: "Read in one request. Nothing in the answer says whether the API holds more.",
+  };
+};

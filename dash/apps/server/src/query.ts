@@ -47,6 +47,8 @@ export interface RequestedRange {
   readonly grain?: TimeRange["grain"] | undefined;
   readonly start?: number | undefined;
   readonly end?: number | undefined;
+  /** Every record, whatever its dates (`TimeRange.all`). */
+  readonly all?: boolean | undefined;
 }
 
 /**
@@ -60,15 +62,18 @@ export interface RequestedRange {
  * made every cache key unique, since the window shifted by a millisecond on
  * each request.
  */
-export const resolveRequestedRange = (range: RequestedRange, now: number): TimeRange =>
-  range.start !== undefined && range.end !== undefined
-    ? {
-        start: range.start,
-        end: range.end,
-        grain: range.grain ?? defaultGrainFor(range.start, range.end),
-        preset: range.preset,
-      }
-    : resolveRange({ preset: range.preset, now, ...(range.grain ? { grain: range.grain } : {}) });
+export const resolveRequestedRange = (range: RequestedRange, now: number): TimeRange => {
+  const resolved: TimeRange =
+    range.start !== undefined && range.end !== undefined
+      ? {
+          start: range.start,
+          end: range.end,
+          grain: range.grain ?? defaultGrainFor(range.start, range.end),
+          preset: range.preset,
+        }
+      : resolveRange({ preset: range.preset, now, ...(range.grain ? { grain: range.grain } : {}) });
+  return range.all ? { ...resolved, all: true } : resolved;
+};
 
 export interface QueryRequest {
   /** The cache key this request reads and writes. */

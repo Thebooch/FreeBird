@@ -62,6 +62,11 @@ export const authSchema = z.discriminatedUnion("type", [
    */
   z.object({
     type: z.literal("basic"),
+    /**
+     * HTTP Digest rather than Basic: the password is never sent, only a
+     * response to the server's challenge (plan, track B). The same two values.
+     */
+    digest: z.literal(true).optional(),
     username: z.string().min(1).optional(),
     usernameRef: idSchema.optional(),
     keyRef: idSchema,
@@ -87,16 +92,52 @@ export const authSchema = z.discriminatedUnion("type", [
     parts: z
       .array(
         z.object({
+          /** The name it is sent under: a header's, or a query parameter's or cookie's where `in` says so. */
           header: z.string().min(1),
           keyRef: idSchema,
           /** What to call this field in the UI, e.g. "Client ID". */
           label: z.string().optional(),
           /** e.g. "Token {{key}}" — `{{key}}` is the only token allowed. */
           template: z.string().optional(),
+          /**
+           * Where it goes: a header (absent), the query string, or a cookie. Keys
+           * an API wants in a cookie, or in two places at once, are parts here
+           * (plan, track B).
+           */
+          in: z.enum(["header", "query", "cookie"]).optional(),
         }),
       )
       .min(1)
       .max(4),
+  }),
+  /**
+   * AWS Signature Version 4: every request signed with the account's secret
+   * access key, by a reviewed signer in this repository, never sent (plan,
+   * track B). APIs behind AWS API Gateway with IAM, and AWS's own services.
+   */
+  z.object({
+    type: z.literal("sigv4"),
+    /** The access key id: an identifier, named in each signature. */
+    accessKeyRef: idSchema,
+    /** The secret access key: it signs, and is never sent. */
+    keyRef: idSchema,
+    /** A session token, for temporary credentials. */
+    sessionTokenRef: idSchema.optional(),
+    /**
+     * What each signature is scoped to. Left out where the address says it
+     * (`abc.execute-api.eu-west-1.amazonaws.com`), so an account at another
+     * region's address is signed for that region; stated for an API served
+     * from its own domain.
+     */
+    region: z.string().regex(/^[a-z0-9-]+$/).max(40).optional(),
+    service: z.string().regex(/^[a-z0-9-]+$/).max(60).optional(),
+    /**
+     * A key sent in a header beside the signature: API Gateway asks for one
+     * (`x-api-key`) as well, where an API meters each caller.
+     */
+    apiKey: z.object({ header: z.string().min(1), keyRef: idSchema, label: credentialLabel }).optional(),
+    accessKeyLabel: credentialLabel,
+    label: credentialLabel,
   }),
   /**
    * OAuth 2.0: a token obtained, kept and renewed by the server.
@@ -188,6 +229,13 @@ export const authKeyRefs = (auth: AuthSpec): string[] => {
       return auth.parts.map((part) => part.keyRef);
     case "basic":
       return auth.usernameRef ? [auth.usernameRef, auth.keyRef] : [auth.keyRef];
+    case "sigv4":
+      return [
+        auth.accessKeyRef,
+        auth.keyRef,
+        ...(auth.sessionTokenRef ? [auth.sessionTokenRef] : []),
+        ...(auth.apiKey ? [auth.apiKey.keyRef] : []),
+      ];
     case "oauth2":
       /* What a person holds: the app's own values. The tokens are `authTokenRefs`. */
       return auth.clientSecretRef ? [auth.clientIdRef, auth.clientSecretRef] : [auth.clientIdRef];
@@ -240,6 +288,16 @@ export const rekeyAuth = (
             keyRef: name(auth.keyRef, 1, count),
           }
         : { ...auth, keyRef: name(auth.keyRef, 0, count) };
+    case "sigv4":
+      return {
+        ...auth,
+        accessKeyRef: name(auth.accessKeyRef, 0, count),
+        keyRef: name(auth.keyRef, 1, count),
+        ...(auth.sessionTokenRef ? { sessionTokenRef: name(auth.sessionTokenRef, 2, count) } : {}),
+        ...(auth.apiKey
+          ? { apiKey: { ...auth.apiKey, keyRef: name(auth.apiKey.keyRef, auth.sessionTokenRef ? 3 : 2, count) } }
+          : {}),
+      };
     case "oauth2": {
       /* The tokens follow the client id's new name, so every secret is this connection's own. */
       const clientIdRef = name(auth.clientIdRef, 0, count);
@@ -314,7 +372,7 @@ export const authCredentials = (auth: AuthSpec): AuthCredential[] => {
               {
                 keyRef: auth.usernameRef,
                 label: auth.usernameLabel ?? "Username",
-                hint: "Sent as the username in HTTP Basic authentication.",
+                hint: `Sent as the username in ${auth.digest ? "HTTP Digest" : "HTTP Basic"} authentication.`,
               },
             ]
           : []),
@@ -322,15 +380,39 @@ export const authCredentials = (auth: AuthSpec): AuthCredential[] => {
           keyRef: auth.keyRef,
           label: auth.label ?? "Password",
           hint: auth.usernameRef
-            ? "Sent as the password in HTTP Basic authentication."
-            : `Sent as the password in HTTP Basic authentication, with the username "${auth.username ?? ""}".`,
+            ? `Sent as the password in ${auth.digest ? "HTTP Digest" : "HTTP Basic"} authentication.`
+            : `Sent as the password in ${auth.digest ? "HTTP Digest" : "HTTP Basic"} authentication, with the username "${auth.username ?? ""}".`,
         },
+      ];
+    case "sigv4":
+      return [
+        {
+          keyRef: auth.accessKeyRef,
+          label: auth.accessKeyLabel ?? "Access key ID",
+          hint: `Named in each request's AWS signature${auth.region ? ` (${auth.region})` : ""}.`,
+        },
+        {
+          keyRef: auth.keyRef,
+          label: auth.label ?? "Secret access key",
+          hint: "Signs each request, and is never sent.",
+        },
+        ...(auth.sessionTokenRef
+          ? [{ keyRef: auth.sessionTokenRef, label: "Session token", hint: "For temporary credentials; sent with each signed request." }]
+          : []),
+        ...(auth.apiKey
+          ? [{ keyRef: auth.apiKey.keyRef, label: auth.apiKey.label ?? "API key", hint: `Sent as the ${auth.apiKey.header} header, beside the signature.` }]
+          : []),
       ];
     case "headers":
       return auth.parts.map((part) => ({
         keyRef: part.keyRef,
         label: part.label ?? part.header,
-        hint: `Sent as the ${part.header} header.`,
+        hint:
+          part.in === "cookie"
+            ? `Sent as the ${part.header} cookie.`
+            : part.in === "query"
+              ? `Sent as the ${part.header} query parameter.`
+              : `Sent as the ${part.header} header.`,
       }));
     case "oauth2":
       return [
@@ -516,6 +598,12 @@ export const paginationSchema = z.discriminatedUnion("kind", [
     in: pagingLocation,
   }),
   z.object({ kind: z.literal("link-header") }),
+  /**
+   * The next page's address, handed back in the answer itself: `$.links.next`,
+   * `$._links.next.href`, `$["@odata.nextLink"]`. Followed as given — its
+   * path and query — on the API's own address, until an answer gives none.
+   */
+  z.object({ kind: z.literal("next-url"), path: z.string().min(1) }),
 ]);
 
 export type PaginationSpec = z.infer<typeof paginationSchema>;
@@ -574,6 +662,14 @@ export const paramDefSchema = z.object({
   default: queryValueSchema.optional(),
   example: queryValueSchema.optional(),
   role: z.enum(["id", "search", "rangeStart", "rangeEnd", "sort", "filter"]).optional(),
+  /**
+   * The field this parameter narrows the records by, where a read confirmed
+   * it: sent with a value the records held, every record came back holding
+   * it. Set by the integration check, never from a name alone — a guessed
+   * filter that means something else answers with the wrong records, and
+   * looks complete doing it.
+   */
+  filters: z.string().min(1).max(200).optional(),
 });
 
 export type ParamDef = z.infer<typeof paramDefSchema>;
@@ -596,6 +692,16 @@ export const readBodySchema = z.discriminatedUnion("type", [
     query: z.string().min(1).max(20_000),
     variables: z.record(z.string(), z.unknown()).default({}),
     operationName: z.string().max(120).optional(),
+  }),
+  /**
+   * An XML document — a SOAP envelope — with `{{param.x}}` inputs in it. An
+   * element whose whole content is an input nobody gave is left out rather
+   * than sent empty; every value is escaped. Read from a WSDL (plan, track A).
+   */
+  z.object({
+    type: z.literal("xml"),
+    template: z.string().min(1).max(20_000),
+    contentType: z.string().max(100).default("text/xml; charset=utf-8"),
   }),
 ]);
 export type ReadBody = z.infer<typeof readBodySchema>;

@@ -27,8 +27,8 @@ import type { CatalogStore } from "../catalog.js";
 import { scopeOpAuth } from "../catalog.js";
 import type { Policy } from "../identity/policy.js";
 import type { LastSeen } from "../keeper/keeper.js";
-import type { SpecStore } from "../store.js";
-import type { KeyStore } from "../vault.js";
+import type { SpecRepository } from "../store.js";
+import type { SecretRepository } from "../vault.js";
 import { buildBody, currentValue, labelOf, settable, type FieldError } from "./body.js";
 import type { WriteEvent, WriteJournal, WriteReversal } from "./journal.js";
 import { PENDING_TTL_MS, PendingWrites, type PendingWrite, type WriteIntent, type WriteReview } from "./pending.js";
@@ -83,10 +83,10 @@ export class WriteError extends Error {
 }
 
 export interface WriteServiceDeps {
-  readonly store: SpecStore;
+  readonly store: SpecRepository;
   readonly catalog: CatalogStore | undefined;
   /** Only read, and through the credential broker, so an OAuth token is always current. */
-  readonly keys: Pick<KeyStore, "get"> | { get(keyRef: string): Promise<string | null> };
+  readonly keys: Pick<SecretRepository, "get"> | { get(keyRef: string): Promise<string | null> };
   readonly registry: AdapterRegistry;
   readonly rest: RestAdapter;
   readonly queries: QueryCache;

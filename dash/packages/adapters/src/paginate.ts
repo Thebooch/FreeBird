@@ -74,7 +74,9 @@ export type NextPage =
   /** Merge these into the next request's params or arguments. */
   | { readonly kind: "params"; readonly params: Record<string, string> }
   /** The next page lives in a response header; only HTTP can answer this. */
-  | { readonly kind: "link-header" };
+  | { readonly kind: "link-header" }
+  /** The answer gave the next page's address; only HTTP can follow one. */
+  | { readonly kind: "url"; readonly url: string };
 
 /** The declared page size must also be requested on page one. */
 export const firstPageParams = (pagination: PaginationSpec): Record<string, string> => {
@@ -101,6 +103,11 @@ export const nextPageParams = (input: {
   readonly body: unknown;
   readonly rowsPath: string | undefined;
   readonly pageIndex: number;
+  /** How many records the first page held: the page size, where none is declared. */
+  readonly firstPageRows?: number | undefined;
+  /** Records read so far, this page included, and how many the API said it holds. */
+  readonly collected?: number | undefined;
+  readonly reportedTotal?: number | undefined;
 }): NextPage => {
   const { pagination, body, rowsPath, pageIndex } = input;
   const rows = rowsAt(body, rowsPath);
@@ -111,6 +118,18 @@ export const nextPageParams = (input: {
 
     case "link-header":
       return { kind: "link-header" };
+
+    case "next-url": {
+      /* An empty page is the end, whatever address it still offers. */
+      if (rows !== null && rows.length === 0) return { kind: "none" };
+      const found = readPath(body, pagination.path);
+      /* HAL writes it as an object: `{ "href": "…" }`. */
+      const address =
+        found !== null && typeof found === "object" ? (found as { href?: unknown }).href : found;
+      return typeof address === "string" && address.trim() !== ""
+        ? { kind: "url", url: address.trim() }
+        : { kind: "none" };
+    }
 
     case "cursor": {
       if (pagination.hasMorePath && !truthy(readPath(body, pagination.hasMorePath))) {
@@ -137,6 +156,20 @@ export const nextPageParams = (input: {
     case "page": {
       if (rows === null || rows.length === 0) return { kind: "none" };
       if (pagination.limitParam && pagination.pageSize && rows.length < pagination.pageSize)
+        return { kind: "none" };
+      /*
+       * No page size declared: the first page shows it. A page shorter than
+       * the first is the last, unless the API's own count says there is more.
+       * Asking past it met a 404 on an API that answers that way, which failed
+       * the whole read (checkpoint 2, Rick and Morty).
+       */
+      if (
+        !pagination.pageSize &&
+        input.firstPageRows !== undefined &&
+        pageIndex > 1 &&
+        rows.length < input.firstPageRows &&
+        (input.reportedTotal === undefined || (input.collected ?? 0) >= input.reportedTotal)
+      )
         return { kind: "none" };
       const params: Record<string, string> = {
         [pagination.param]: String(pagination.startsAt + pageIndex),

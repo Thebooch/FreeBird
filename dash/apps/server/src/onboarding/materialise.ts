@@ -12,6 +12,8 @@ import {
   compileBrief,
   dashboardSchema,
   entityById,
+  filterParamsOf,
+  readsRangeOf,
   getOp,
   parseDashboard,
   solveLayout,
@@ -189,6 +191,8 @@ export const buildCategory = (input: {
       id,
       listPath: pathOf(source.connection, resource.listOp),
       rowsPathOf: (op: string) => getOp(source.connection, op)?.rowsPath,
+      filterParamOf: filterParamsOf(source.connection),
+      readsRange: readsRangeOf(source.connection),
       related: relatedFor(source),
     });
 

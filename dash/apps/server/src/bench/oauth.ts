@@ -60,8 +60,29 @@ export const signInAsThePerson = async (
   url.searchParams.set("code_challenge_method", "S256");
   if (auth.scopes.length > 0) url.searchParams.set("scope", auth.scopes.join(" "));
   const page = await env.http(url.toString(), { headers: {} }, url.hostname);
-  const location = page.header("location");
-  const code = location ? new URL(location).searchParams.get("code") : null;
+  let location = page.header("location");
+  /*
+   * A consent page rather than a redirect: the person reads it and presses
+   * Allow, which submits its form — here, the form is submitted as their
+   * browser would. Never a login form: a password is theirs to type, and
+   * nothing here types it.
+   */
+  if (!location && page.status === 200) {
+    const form = consentForm(page.text, url.toString());
+    if (form) {
+      const answer = await env.http(
+        form.action,
+        {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams(form.fields).toString(),
+        },
+        new URL(form.action).hostname,
+      );
+      location = answer.header("location");
+    }
+  }
+  const code = location ? new URL(location, url).searchParams.get("code") : null;
   if (!code) return { ok: false, why: `the provider did not sign in (${page.status})` };
   try {
     await broker.exchangeCode(connection, { code, verifier, redirectUri });
@@ -69,4 +90,38 @@ export const signInAsThePerson = async (
   } catch (error) {
     return { ok: false, why: error instanceof Error ? error.message : String(error) };
   }
+};
+
+/**
+ * A consent page's form: where it posts, its hidden fields, and the button
+ * that allows. Null for a page with a password to type, or no allowing button.
+ */
+export const consentForm = (
+  html: string,
+  pageUrl: string,
+): { readonly action: string; readonly fields: Record<string, string> } | null => {
+  for (const match of html.matchAll(/<form\b([^>]*)>([\s\S]*?)<\/form>/gi)) {
+    const attributes = match[1]!;
+    const inner = match[2]!;
+    if (!/method\s*=\s*["']?post/i.test(attributes)) continue;
+    if (/type\s*=\s*["']?password/i.test(inner)) return null;
+    const action = /action\s*=\s*["']([^"']*)["']/i.exec(attributes)?.[1] ?? pageUrl;
+    const fields: Record<string, string> = {};
+    for (const input of inner.matchAll(/<input\b([^>]*)>/gi)) {
+      const name = /name\s*=\s*["']([^"']+)["']/i.exec(input[1]!)?.[1];
+      const type = /type\s*=\s*["']([^"']+)["']/i.exec(input[1]!)?.[1]?.toLowerCase() ?? "text";
+      const value = /value\s*=\s*["']([^"']*)["']/i.exec(input[1]!)?.[1] ?? "";
+      if (name && (type === "hidden" || type === "text")) fields[name] = value;
+    }
+    /* The button that allows, and its value: not the one that denies. */
+    const allow = [...inner.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>|<input\b([^>]*type\s*=\s*["']?submit[^>]*)>/gi)].find((button) =>
+      /allow|approve|authori[sz]e|accept|grant|continue/i.test(`${button[1] ?? button[3] ?? ""} ${button[2] ?? ""}`),
+    );
+    if (!allow) continue;
+    const attrs = allow[1] ?? allow[3] ?? "";
+    const name = /name\s*=\s*["']([^"']+)["']/i.exec(attrs)?.[1];
+    if (name) fields[name] = /value\s*=\s*["']([^"']*)["']/i.exec(attrs)?.[1] ?? "";
+    return { action: new URL(action, pageUrl).toString(), fields };
+  }
+  return null;
 };

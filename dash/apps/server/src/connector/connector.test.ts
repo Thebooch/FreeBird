@@ -181,6 +181,19 @@ describe("connector: reading", () => {
     ]);
   });
 
+  it("builds and reads addresses with URL, as code written for the web expects", async () => {
+    const { http } = transport(() => ({ status: 200, body: [] }));
+    const code = `async function read() {
+      const url = new URL("/exports/7/file?sig=a%20b", "https://api.example.test/v1/");
+      url.searchParams.set("page", 2);
+      return [{ href: url.href, host: url.hostname, path: url.pathname, sig: url.searchParams.get("sig") }];
+    }`;
+    const { result } = await read(connectionWith(code), http);
+    expect(result.body).toEqual([
+      { href: "https://api.example.test/exports/7/file?sig=a%20b&page=2", host: "api.example.test", path: "/exports/7/file", sig: "a b" },
+    ]);
+  });
+
   it("parses CSV the way a spreadsheet would", async () => {
     const csv = '﻿id,amount,note,when\r\n1,12.50,"a, ""quoted"" b",2026-07-01\r\n2,0.75,,007\r\n\r\n';
     const { http } = transport(() => ({ status: 200, body: csv, headers: { "content-type": "text/csv" } }));
@@ -190,6 +203,57 @@ describe("connector: reading", () => {
       { id: 1, amount: 12.5, note: 'a, "quoted" b', when: "2026-07-01" },
       { id: 2, amount: 0.75, note: null, when: "007" },
     ]);
+  });
+
+  /* Plan, track A: XML, read by the server rather than picked apart by the code. */
+  it("reads XML by its content type, and on request", async () => {
+    const xml = `<?xml version="1.0"?><batch id="7"><tx><id>1</id><amount>12.50</amount></tx><tx><id>2</id><amount>3</amount></tx></batch>`;
+    const { http } = transport(() => ({ status: 200, body: xml, headers: { "content-type": "text/xml" } }));
+    const code = `async function read() {
+      const answer = await http.request({ url: "/batch" });
+      const again = await XML.parse("<a><b>1</b><b>2</b></a>");
+      return [].concat(answer.body.batch.tx).map((one) => ({ ...one, batch: answer.body.batch.id, again: again.a.b.length }));
+    }`;
+    const { result } = await read(connectionWith(code), http);
+    expect(result.body).toEqual([
+      { id: 1, amount: 12.5, batch: 7, again: 2 },
+      { id: 2, amount: 3, batch: 7, again: 2 },
+    ]);
+  });
+
+  /* 2026-09-30: a read that needed 151 requests stopped at a run's allowance, and said it was incomplete. */
+  it("carries a read on in another run, with a fresh allowance, from where the code says it got to", async () => {
+    const { http, sent } = transport((request) => {
+      const page = Number(new URL(request.url).searchParams.get("page"));
+      return { status: 200, body: { items: page <= 45 ? [{ id: page }] : [] } };
+    });
+    /* Twenty requests a run (the authority's allowance here); forty-five pages to read. */
+    const code = `async function read(ctx) {
+      const rows = [];
+      let page = ctx.resume ? ctx.resume.page : 1;
+      for (let sent = 0; sent < 18; sent++, page++) {
+        const answer = await http.request({ url: "/items", query: { page } });
+        if (answer.body.items.length === 0) return { rows };
+        rows.push(...answer.body.items);
+      }
+      return { rows, resume: { page } };
+    }`;
+    const { result } = await read(connectionWith(code), http);
+    expect((result.body as { id: number }[]).map((one) => one.id)).toEqual(Array.from({ length: 45 }, (_, index) => index + 1));
+    expect(result.meta).toMatchObject({ truncated: false, warnings: [] });
+    expect(sent).toHaveLength(46);
+  });
+
+  it("stops a read that is not moving on, or that would take more runs than a read is given, and says so", async () => {
+    const { http } = transport(() => ({ status: 200, body: { items: [{ id: 1 }] } }));
+    const stuck = `async function read(ctx) { await http.request({ url: "/items" }); return { rows: [{ id: 1 }], resume: { page: 1 } }; }`;
+    const first = await read(connectionWith(stuck), http);
+    expect(first.result.meta.truncated).toBe(true);
+    expect(first.result.body).toHaveLength(2);
+    const endless = `async function read(ctx) { const n = (ctx.resume || 0) + 1; return { rows: [{ n }], resume: n }; }`;
+    const second = await read(connectionWith(endless), http);
+    expect(second.result.body).toHaveLength(10);
+    expect(second.result.meta.warnings.join(" ")).toMatch(/connector stopped before the end/);
   });
 
   it("says so when the code stopped short", async () => {

@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { EntityKind, EntitySpec, WidgetBrief, WidgetIntent } from "@freebirdai/dash-spec";
 import { facetsFromRecipe, ownFields, recipeFor } from "@freebirdai/dash-spec";
 import type { LlmAdapter, LlmTool } from "./llm.js";
+import { unitCarrier, unitCarriers } from "./units.js";
 
 /**
  * Turning a request into a brief, over record types rather than endpoints.
@@ -32,17 +33,42 @@ import type { LlmAdapter, LlmTool } from "./llm.js";
 export interface BriefField {
   readonly path: string;
   readonly label: string;
-  /** `narrow` filters or groups; `total` is a number worth adding up. */
-  readonly role: "narrow" | "total";
   /**
-   * The values this field is allowed to hold, where the API declares them.
+   * `narrow` filters or groups; `total` is a number worth adding up; `when`
+   * dates the record; `other` is any other plain field, named so a request
+   * about it can reach it — its values are too many to list.
+   */
+  readonly role: "narrow" | "total" | "when" | "other";
+  /**
+   * The values this field holds: the API's declared set, or, where it declares
+   * none, what this account's records were seen to hold.
    *
-   * Carried so a narrowing phrase can be written in the API's own spelling
-   * rather than the user's. Empty on every field of a real API today — nothing
-   * has captured the specification's enums yet — which is why an approximate
-   * value has to stay safe rather than merely unlikely.
+   * Carried so a narrowing phrase can be written in the data's own spelling
+   * rather than the user's — "USD", not "US dollars". A total narrowed by a
+   * word the records never hold counts nothing and looks right.
    */
   readonly values?: readonly string[];
+  /**
+   * The values are what the records were seen to hold, not a set the API
+   * declares: `all` where the read saw every record, `some` where it did not —
+   * a first page shows the values near the start of the list, not all of them.
+   */
+  readonly seen?: "all" | "some";
+  /**
+   * The documentation says this number is in the smallest currency unit
+   * (12500 is $125.00). An amount a request names is written in that unit:
+   * "more than $250" compared 250 cents, and counted the wrong payments
+   * (checkpoint 4). The values are never rescaled on this claim alone.
+   */
+  readonly minor?: true;
+  /**
+   * What the documentation says the field means, in its own words and short.
+   * Two fields can answer to the same word — a flag that is true only when
+   * something happened in full, and an amount that says how much of it did —
+   * and only the documentation tells them apart. A count of "refunded, in full
+   * or in part" read the flag, and missed every part refund (2026-09-30).
+   */
+  readonly note?: string;
 }
 
 /** One API's described record types, as one source to choose from. */
@@ -51,6 +77,22 @@ export interface BriefSource {
   /** The API's own name, so two of them can be told apart in the roster. */
   readonly title: string;
   readonly entities: readonly EntitySpec[];
+  /**
+   * What this account's records were seen to hold, by record type id and
+   * field path — for fields the API declares no values for. Never from the
+   * catalog: these are the account's own words.
+   */
+  readonly seen?: Readonly<
+    Record<
+      string,
+      {
+        readonly fields: Readonly<Record<string, readonly string[]>>;
+        readonly everyRecord?: boolean;
+        /** Fields whose every value was different — names and titles, never offered to narrow by. */
+        readonly unique?: readonly string[];
+      }
+    >
+  >;
 }
 
 /** One record type the model may choose. */
@@ -81,12 +123,22 @@ export interface BriefCandidate {
    */
   readonly starting: boolean;
   readonly fields: readonly BriefField[];
+  /**
+   * Every field the record type has, listed or not. What tells a name the
+   * roster left out from a name no record has — only the second is sent back.
+   */
+  readonly paths?: readonly string[];
 }
 
 export interface WriteBriefInput {
   /** What the user asked for, in their own words. */
   readonly intent: string;
   readonly candidates: readonly BriefCandidate[];
+  /**
+   * Today, as YYYY-MM-DD, so "this year" or "last month" can be turned into
+   * dates. Absent, a request naming only relative time has nothing to go on.
+   */
+  readonly today?: string | undefined;
 }
 
 export interface WriteBriefResult {
@@ -115,15 +167,36 @@ export interface WriteBriefResult {
    */
   readonly plus: readonly WidgetBrief[];
   readonly error: string | null;
+  /**
+   * Set when no record type is what the request is about: the model's words
+   * for which records are missing. Said, never built — asked how many Pokémon
+   * there were, with no such record type, the nearest one was counted instead
+   * and looked like an answer (checkpoint 2).
+   */
+  readonly unmatched?: string;
 }
 
 /** How many fields of each kind are worth putting in front of the model. */
 const MAX_NARROW = 5;
 const MAX_TOTAL = 3;
+const MAX_WHEN = 4;
+/** Values shown per field. Declared sets are complete, so fewer say enough; seen ones are what a request will copy. */
+const MAX_DECLARED_VALUES = 8;
+const MAX_SEEN_VALUES = 12;
+/** Other plain fields named, without values. */
+const MAX_OTHER = 12;
+
+/** A field whose name says it dates the record: `created_at`, `bookedOn`, `date`, `posted`. */
+const DATE_NAME = /(^|[._])(date|day|time|at|on)$|(^|[._])(created|updated|booked|posted|issued|closed|opened|due|paid|delivered)(_?(at|on|date))?$|Date$|At$|On$/;
+
+/** A field that names or describes a record rather than sorting it into a kind: `title`, `description`, `sku`. */
+const NAMING_PATH = /(^|[._])(title|name|description|summary|body|text|content|notes?|comments?|sku|slug|email|url|phone|image|thumbnail)$/i;
 
 /** A path that names an identity rather than a quantity: `id`, `userId`, `account_id`. */
 const IDENTIFIER_PATH = /(^|[._])id$|Id$|_ids?$/;
 const DESCRIPTION_CHARS = 100;
+/** How much of the documentation's sentence about one field the roster carries. */
+const FIELD_NOTE_CHARS = 90;
 
 /** Numbers worth totalling, as opposed to identifiers that happen to be numeric. */
 /*
@@ -181,12 +254,31 @@ export const briefCandidates = (sources: readonly BriefSource[]): BriefCandidate
     const labelOf = (path: string): string =>
       entity.fields.find((field) => field.path === path)?.label ?? path;
 
-    /* A flag's values are true and false, whatever it is called: "VIP" is a name, not a value. */
-    const valuesOf = (path: string): readonly string[] => {
+    const seenSet = source.seen?.[entity.id];
+    const seen = seenSet?.fields ?? {};
+    /*
+     * A flag's values are true and false, whatever it is called: "VIP" is a
+     * name, not a value. A field the API declares no set for offers what the
+     * records were seen to hold: "money out" is `debit`, and nothing else
+     * said so (measurement 1, vaultbank).
+     */
+    /* The documentation's sentence about a field, where it has one that says more than the label. */
+    const noteOf = (path: string): { note?: string } => {
       const field = entity.fields.find((one) => one.path === path);
-      if (!field) return [];
-      if ((field.values?.length ?? 0) > 0) return field.values ?? [];
-      return field.kinds.includes("boolean") ? ["true", "false"] : [];
+      const said = field?.description?.split(/(?<=[.!?])\s/)[0]?.replace(/\s+/g, " ").trim().replace(/[.]+$/, "") ?? "";
+      const label = (field?.label ?? "").toLowerCase();
+      return said.length >= 8 && said.toLowerCase() !== label ? { note: said.slice(0, FIELD_NOTE_CHARS) } : {};
+    };
+
+    const valuesOf = (path: string): { values: readonly string[]; seen?: "all" | "some" } => {
+      const field = entity.fields.find((one) => one.path === path);
+      if (!field) return { values: [] };
+      if ((field.values?.length ?? 0) > 0) return { values: (field.values ?? []).slice(0, MAX_DECLARED_VALUES) };
+      if (field.kinds.includes("boolean")) return { values: ["true", "false"] };
+      const held = seen[path] ?? [];
+      return held.length > 0
+        ? { values: held.slice(0, MAX_SEEN_VALUES), seen: seenSet?.everyRecord ? "all" : "some" }
+        : { values: [] };
     };
 
     /*
@@ -200,15 +292,21 @@ export const briefCandidates = (sources: readonly BriefSource[]): BriefCandidate
       .filter(
         (field) =>
           !narrowPaths.includes(field.path) &&
-          (field.kinds.includes("boolean") || (field.values?.length ?? 0) > 0),
+          (field.kinds.includes("boolean") ||
+            (field.values?.length ?? 0) > 0 ||
+            (seen[field.path]?.length ?? 0) > 0),
       )
       .map((field) => field.path);
-    const narrow: BriefField[] = [...narrowPaths, ...closed].slice(0, MAX_NARROW).map((path) => ({
-      path,
-      label: labelOf(path),
-      role: "narrow" as const,
-      ...(valuesOf(path).length > 0 ? { values: valuesOf(path).slice(0, 8) } : {}),
-    }));
+    const narrow: BriefField[] = [...narrowPaths, ...closed].slice(0, MAX_NARROW).map((path) => {
+      const held = valuesOf(path);
+      return {
+        path,
+        label: labelOf(path),
+        role: "narrow" as const,
+        ...(held.values.length > 0 ? { values: held.values, ...(held.seen ? { seen: held.seen } : {}) } : {}),
+        ...noteOf(path),
+      };
+    });
 
     /*
      * Numbers worth adding up: first what the record type says is money or a
@@ -223,7 +321,59 @@ export const briefCandidates = (sources: readonly BriefSource[]): BriefCandidate
     );
     const total: BriefField[] = [...tagged, ...untagged]
       .slice(0, MAX_TOTAL)
-      .map((field) => ({ path: field.path, label: field.label ?? field.path, role: "total" as const }));
+      .map((field) => ({
+        path: field.path,
+        label: field.label ?? field.path,
+        role: "total" as const,
+        ...(field.format === "minor_units" ? { minor: true as const } : {}),
+        ...noteOf(field.path),
+      }));
+
+    /*
+     * What dates the records, so a request can say when: "in July", "this
+     * year". None was ever offered, and asked for July's debits the model
+     * could only count every transaction there was (measurement 1).
+     */
+    const when: BriefField[] = visible
+      .filter(
+        (field) =>
+          field.semantic === "timestamp" ||
+          (field.format !== undefined && /date|time|unix|iso/i.test(String(field.format))) ||
+          (!field.semantic && DATE_NAME.test(field.path)),
+      )
+      .slice(0, MAX_WHEN)
+      .map((field) => ({ path: field.path, label: field.label ?? field.path, role: "when" as const }));
+
+    /*
+     * Every other plain field, by name only. "Breeds from the United States"
+     * is a question about `country`, which holds too many values to list;
+     * offered nothing but `origin`, the model narrowed that, and counted 0
+     * (checkpoint 2).
+     */
+    const listed = new Set([...narrow, ...total, ...when].map((field) => field.path));
+    /*
+     * Never what names or describes a record: narrowed to "smartphones", a
+     * product's title matched none (checkpoint 2). Known from the check's read
+     * where there was one, and from the name where there was not.
+     */
+    const naming = new Set(seenSet?.unique ?? []);
+    const other: BriefField[] = visible
+      .filter(
+        (field) =>
+          !listed.has(field.path) &&
+          !naming.has(field.path) &&
+          !NAMING_PATH.test(field.path) &&
+          !IDENTIFIER_PATH.test(field.path) &&
+          field.kinds.some((kind) => kind === "string" || kind === "number") &&
+          !field.kinds.some((kind) => kind === "object" || kind === "array"),
+      )
+      .slice(0, MAX_OTHER)
+      .map((field) => ({
+        path: field.path,
+        label: field.label ?? field.path,
+        role: "other" as const,
+        ...(field.format === "minor_units" ? { minor: true as const } : {}),
+      }));
 
     return {
       entity:
@@ -235,11 +385,30 @@ export const briefCandidates = (sources: readonly BriefSource[]): BriefCandidate
       kind: entity.kind,
       ...(entity.description ? { description: entity.description } : {}),
       starting: recipe.starting,
-      fields: [...narrow, ...total],
+      fields: [...narrow, ...total, ...when, ...other],
+      paths: entity.fields.map((field) => field.path),
     };
     }),
   );
 };
+
+/** How the roster introduces a field's values, by where they came from. */
+const VALUES_SAID = { declared: "one of", all: "in the records", some: "in some records" } as const;
+
+/** A roster field by its path, or by its label where the model copied that. */
+const fieldNamed = (fields: readonly BriefField[], named: string): BriefField | undefined =>
+  fields.find((field) => field.path === named) ??
+  fields.find((field) => field.label.toLowerCase() === named.trim().toLowerCase());
+
+/** The listed spelling of a value, ignoring case and surrounding space; undefined if none matches. */
+const listedAs = (listed: readonly string[], value: string): string | undefined => {
+  const wanted = value.trim().toLowerCase();
+  return listed.find((one) => one.trim().toLowerCase() === wanted);
+};
+
+/** A flag's values stand for true and false, and the compiler reads "yes" and "no" as those. */
+const isFlag = (values: readonly string[]): boolean =>
+  values.length === 2 && values.includes("true") && values.includes("false");
 
 /**
  * The fields of a brief as a model states them, flat.
@@ -310,7 +479,11 @@ export const resolveCandidate = (
 ): BriefCandidate | null => candidates.find((one) => one.entity === named) ?? null;
 
 export const briefSchema = z.object({
-  entity: z.string().describe("The id of the record type this is about. Copy it exactly."),
+  entity: z
+    .string()
+    .describe(
+      'The id of the record type this is about. Copy it exactly. "none" when no record type here is the kind of thing the request is about.',
+    ),
   intent: z
     .enum(["records", "measure", "compare"])
     .describe(
@@ -335,6 +508,17 @@ export const briefSchema = z.object({
               "where it lists any; otherwise use the user's own word. A value matching nothing " +
               "is ignored and the reader simply sees everything, so an approximate word is " +
               "safe here — an invented FIELD is not.",
+          ),
+        above: z.number().optional().describe("Only records whose number in this field is more than this."),
+        below: z.number().optional().describe("Only records whose number in this field is less than this."),
+        from: z.string().optional().describe("Only records dated on or after this day, YYYY-MM-DD, by this field."),
+        to: z.string().optional().describe("Only records dated before this day, YYYY-MM-DD, by this field (exclusive)."),
+        empty: z
+          .boolean()
+          .optional()
+          .describe(
+            "true: only records where this field holds nothing (not cancelled = the cancelled date is empty). " +
+              "false: only records where it holds something.",
           ),
       }),
     )
@@ -443,6 +627,29 @@ export const briefSchema = z.object({
         "answer a DIFFERENT question — never to hedge between two readings that show the " +
         "same thing.",
     ),
+  unmet: z
+    .array(z.string())
+    .max(4)
+    .optional()
+    .describe(
+      "Anything the request asked to leave out or narrow by that no filter here can express, in its " +
+        "own words. The widget says it. Never drop a narrowing in silence, and never say in reason " +
+        "that something was left out unless a filter does it.",
+    ),
+  reading: z
+    .object({
+      term: z.string().describe('The word, as the request wrote it: "revenue".'),
+      as: z
+        .string()
+        .describe('The reading you built, in a few plain words: "billed totals, by the date billed".'),
+    })
+    .optional()
+    .describe(
+      "Only when a business word in the request could be worked out more than one way from " +
+        "these fields — revenue, sales, active: billed or collected, before or after refunds. " +
+        "Name the word and the reading you built; offer the other reading as `alternative`. " +
+        "Leave it out when the words mean one thing.",
+    ),
   reason: z
     .string()
     .describe(
@@ -490,17 +697,32 @@ export const BRIEF_SYSTEM_PROMPT = [
   "  the value. Put the field in `filters` and the word in that filter's `values`.",
   "- Never leave the word out and hand back the unnarrowed list: they asked for a subset.",
   "- Never answer it with a count either. They want to see the ones that match.",
-  "- Copy the value from the ones the record type lists where it lists any; otherwise use their",
-  "  own word. A value matching nothing is ignored and they simply see everything, so an",
-  "  approximate word is worth writing and a wrong field is not.",
+  "- Copy the value from the ones the field lists where it lists any — \"one of\" is every value",
+  "  it can hold, \"in the records\" is what every record holds, \"in some records\" is what some",
+  "  hold and there may be more. Write the listed value that means",
+  '  what they said, spelled as listed ("urgent" might be P1). Otherwise use their own word.',
+  "  A value the records never hold matches nothing, so a wrong field is worse than an",
+  "  approximate word.",
+  '- "in some records" lists only the values near the start of the list — there are more. A word',
+  "  of the same kind as the listed values (another category, another status) still belongs to",
+  "  that field, spelled the way the listed ones are.",
+  '- "also" names the record type\'s other fields, whose values are too many to list. Narrow by',
+  "  one of them only when the request is about that field and no field above could hold the word.",
   "",
   "Choosing the records:",
   "- Answer with a RECORD TYPE ID — the first token on its line. Copy it exactly. One you",
   "  invent or abbreviate is a failure, not an approximation.",
   "- Read the descriptions. People describe what they want in their own words, and the",
   "  records that answer it are often named something else.",
+  "- A field's own words, after its path, say what it holds. Where two fields could answer",
+  "  to the same word, choose by those: a yes-or-no that is true only when something",
+  "  happened in full does not find the records where it happened in part.",
   "- Pick the records the user wants to see. A request to see work grouped by who it is",
   "  assigned to is about the work, not about the people.",
+  '- When NONE of the record types is the kind of thing the request is about, answer entity',
+  '  "none" and say in the reason which records are missing. Never answer with a different',
+  "  kind of record instead: a count of the wrong records looks like an answer and is wrong.",
+  "  Records that only mention the thing — a link to it, a field naming it — are not it.",
   "- Some record types are marked as reference lists. Those are things other records point",
   "  at — a set of categories, a set of statuses. Somebody almost never wants a board of",
   "  them; pick one only if the request is plainly about the list itself.",
@@ -511,6 +733,26 @@ export const BRIEF_SYSTEM_PROMPT = [
   "  the records the noun names, put the field in filters, and put the word in its values.",
   "- Never leave a narrowing invisible. Somebody who cannot see what was narrowed cannot",
   "  widen it, and will believe they are looking at everything there is.",
+  "",
+  "Ranges — a number or a time the request names:",
+  '- "more than 100", "over $50", "under 10": a filter on that number field with `above` or',
+  "  `below` (both exclusive). No values.",
+  '- "in July 2026", "this year", "since March", "last month": a filter on the field the record',
+  "  type is dated by, with `from` (inclusive) and `to` (exclusive), as YYYY-MM-DD. July 2026 is",
+  "  from 2026-07-01 to 2026-08-01. Work relative words out from TODAY.",
+  "- A range goes with any narrowing by value on other fields: debits in July is two filters.",
+  "- A field marked \"in the smallest currency unit\" holds 100 for 1.00: write an amount the",
+  "  request names in that unit. More than $250 is above 25000.",
+  "",
+  "Whether a field holds anything:",
+  '- "not cancelled", "leave out archived ones", "without a due date": a filter with `empty` on the',
+  "  field that records it, usually a date (a cancelled, archived or closed date) listed under",
+  '  "dated by" or "also". true: it holds nothing (never cancelled); false: it holds something. No values.',
+  "- Such a field is the answer even when nothing else in the list is about it. Put a narrowing in",
+  "  unmet only when no listed field records it at all.",
+  "- Every narrowing the request states goes in filters. One nothing here can express goes in",
+  "  unmet, in the request's words: the widget says so. Never leave one out in silence, and never",
+  "  say in reason that something was left out unless a filter does it.",
   "",
   "SEVERAL THINGS AT ONCE.",
   "",
@@ -523,6 +765,12 @@ export const BRIEF_SYSTEM_PROMPT = [
   "  is not — that is one widget with the other's fields on it.",
   "- Never use `plus` to hedge. If you are unsure which of two readings they meant, that is",
   "  `alternative` and it is one widget either way.",
+  "",
+  "A word that reads several ways:",
+  "- Revenue, sales, active and the like can be worked out more than one way from the same",
+  "  records: billed or collected, before or after refunds. Build the likeliest, say which in",
+  "  `reading` (the word, and your reading in a few plain words), and offer the other as the",
+  "  alternative. The reader sees which one the number is. Leave `reading` out otherwise.",
   "",
   "Offering the other reading:",
   "- When the words genuinely read two ways, build the better one and offer the other as an",
@@ -577,13 +825,26 @@ export const buildBriefPrompt = (input: WriteBriefInput): string => {
         `      narrow by: ${narrow
           .map(
             (f) =>
-              `${f.label} (${f.path})${f.values && f.values.length > 0 ? ` one of: ${f.values.join(" / ")}` : ""}`,
+              `${f.label} (${f.path}${f.note ? `: ${f.note}` : ""})${
+                f.values && f.values.length > 0 ? ` ${VALUES_SAID[f.seen ?? "declared"]}: ${f.values.join(" / ")}` : ""
+              }`,
           )
           .join(", ")}`,
       );
     }
+    /* A number the documentation says is in the smallest currency unit says so. */
+    const named = (f: BriefField) =>
+      `${f.label} (${f.path}${f.minor ? ", in the smallest currency unit" : ""}${f.note ? `: ${f.note}` : ""})`;
     if (total.length > 0) {
-      lines.push(`      total by: ${total.map((f) => `${f.label} (${f.path})`).join(", ")}`);
+      lines.push(`      total by: ${total.map(named).join(", ")}`);
+    }
+    const dated = candidate.fields.filter((field) => field.role === "when");
+    if (dated.length > 0) {
+      lines.push(`      dated by: ${dated.map((f) => `${f.label} (${f.path})`).join(", ")}`);
+    }
+    const others = candidate.fields.filter((field) => field.role === "other");
+    if (others.length > 0) {
+      lines.push(`      also: ${others.map(named).join(", ")}`);
     }
     return lines.join("\n");
   };
@@ -619,6 +880,7 @@ export const buildBriefPrompt = (input: WriteBriefInput): string => {
         ]
       : []),
     "",
+    ...(input.today ? [`TODAY: ${input.today}`, ""] : []),
     "THE REQUEST:",
     input.intent,
   ].join("\n");
@@ -649,6 +911,9 @@ export const writeBrief = async (
   if (input.candidates.length === 0) {
     return none("this API has no record types described yet");
   }
+  /* "none", unless a record type is really called that. */
+  const isNone = (entity: string): boolean =>
+    entity.trim().toLowerCase() === "none" && !input.candidates.some((candidate) => candidate.entity === entity);
 
   /*
    * Asked twice at most. A brief that breaks a rule its own schema states — a
@@ -688,6 +953,11 @@ export const writeBrief = async (
       problem = "no brief was written with the write_brief tool.";
       continue;
     }
+    /* Nothing here is what was asked about: taken as said, and never sent back over a brief's rules. */
+    if (isNone(parsed.data.entity)) {
+      accepted = parsed.data;
+      break;
+    }
     const wanted = (one: { measureAgg?: string | undefined; measureField?: string | undefined; intent: string }) =>
       one.intent !== "records" && one.measureAgg === "sum" && !one.measureField;
     if (wanted(parsed.data) || (parsed.data.alternative && wanted(parsed.data.alternative))) {
@@ -696,8 +966,11 @@ export const writeBrief = async (
     }
     /*
      * A field written as words — "total amount" — that is neither a path nor
-     * any field's label is a description, not a name. Sent back once rather
-     * than compiled into nothing.
+     * any field's label is a description, not a name. So is a unit —
+     * "kilograms" for `weight_kg` — where no one field carries it (a unit one
+     * field does carry is that field; see `pathOf`), and any other name the
+     * record type does not have. Sent back once rather than compiled into
+     * nothing (checkpoint 3).
      */
     const roster = input.candidates.find((candidate) => candidate.entity === parsed.data.entity);
     const named = [
@@ -710,19 +983,74 @@ export const writeBrief = async (
     const described = roster
       ? named.filter(
           (name) =>
-            /\s/.test(name) &&
+            (/\s/.test(name) || roster.paths !== undefined) &&
+            !roster.paths?.includes(name) &&
             !roster.fields.some(
               (field) => field.path === name || field.label.toLowerCase() === name.trim().toLowerCase(),
-            ),
+            ) &&
+            unitCarrier(roster.fields, name) === undefined,
         )
       : [];
     if (described.length > 0) {
-      problem = `${described.map((name) => `"${name}"`).join(", ")} ${described.length === 1 ? "is" : "are"} not a field: use a field path exactly as the list shows it in parentheses.`;
+      const said = [...new Set(described)].map((name) => {
+        const carriers = roster ? unitCarriers(roster.fields, name) : [];
+        return carriers.length > 0
+          ? `"${name}" is a unit, not a field (${carriers.map((field) => field.path).join(" or ")} ${carriers.length === 1 ? "holds" : "hold"} it)`
+          : `"${name}" is not a field`;
+      });
+      problem = `${said.join("; ")}: use a field path exactly as the list shows it in parentheses.`;
+      continue;
+    }
+    /*
+     * A value the field lists none of, where it lists some: "US dollars" on a
+     * field whose records hold USD and EUR. Narrowed by it, a total counts
+     * nothing and looks right, so it goes back once with the values. A second
+     * answer is taken as meant: what the records were seen to hold may not be
+     * every value there is.
+     */
+    const unlisted =
+      roster && attempt === 1
+        ? (parsed.data.filters ?? []).flatMap((one) => {
+            const field = fieldNamed(roster.fields, one.field);
+            /* Only a complete set can say a value is not there: what some records held is not all there is. */
+            if (!field?.values || field.values.length === 0 || isFlag(field.values) || field.seen === "some") return [];
+            const missing = (one.values ?? []).filter((value) => listedAs(field.values ?? [], value) === undefined);
+            return missing.length > 0
+              ? [`${missing.map((value) => `"${value}"`).join(", ")} for ${field.path}, which ${field.seen ? "the records hold as" : "is one of"} ${field.values.join(" / ")}`]
+              : [];
+          })
+        : [];
+    if (unlisted.length > 0) {
+      problem = `a value is not one the field lists: ${unlisted.join("; ")}. Write the listed value that means what the request said, or keep the word if none does.`;
       continue;
     }
     accepted = parsed.data;
   }
   if (!accepted) return none(problem ? `the model did not write a usable brief: ${problem}` : "the model did not write a brief");
+  if (isNone(accepted.entity)) {
+    const missing = accepted.reason.trim() || "None of these record types is what the request is about.";
+    return { brief: null, reason: missing, alternative: null, plus: [], error: null, unmatched: missing };
+  }
+  /*
+   * Still a value that every record was seen not to hold, after being shown
+   * what they do hold: it can only match nothing, so it is said rather than
+   * counted as 0 (checkpoint 2). A declared set stays lenient — a
+   * specification's list can be out of date.
+   */
+  const chosen = input.candidates.find((candidate) => candidate.entity === accepted!.entity);
+  const impossible = chosen
+    ? (accepted.filters ?? []).flatMap((one) => {
+        const field = fieldNamed(chosen.fields, one.field);
+        if (field?.seen !== "all" || !field.values || isFlag(field.values)) return [];
+        return (one.values ?? [])
+          .filter((value) => listedAs(field.values ?? [], value) === undefined)
+          .map((value) => `No ${chosen.many.toLowerCase()} have ${field.label} "${value}": every one holds ${field.values!.join(", ")}.`);
+      })
+    : [];
+  if (impossible.length > 0) {
+    const said = impossible.join(" ");
+    return { brief: null, reason: said, alternative: null, plus: [], error: null, unmatched: said };
+  }
   let args: BriefArgs = accepted;
   const found = input.candidates.find((candidate) => candidate.entity === args.entity);
   if (!found) return none(`the model chose "${args.entity}", which is not a record type here`);
@@ -738,11 +1066,27 @@ export const writeBrief = async (
   const pathOf = (named: string | undefined): string | undefined => {
     if (named === undefined || found.fields.some((field) => field.path === named)) return named;
     const labelled = found.fields.filter((field) => field.label.toLowerCase() === named.trim().toLowerCase());
-    return labelled.length === 1 ? labelled[0]!.path : named;
+    if (labelled.length === 1) return labelled[0]!.path;
+    if (found.paths?.includes(named)) return named;
+    /* A unit written for the one field that carries it: "kilograms" is `weight_kg`. */
+    return unitCarrier(found.fields, named)?.path ?? named;
+  };
+  /* A listed value written in other letters is the listed value: "usd" is USD. */
+  const spelled = (path: string, values: string[] | undefined): string[] | undefined => {
+    const listed = found.fields.find((field) => field.path === path)?.values ?? [];
+    return values?.map((value) => listedAs(listed, value) ?? value);
   };
   args = {
     ...args,
-    ...(args.filters ? { filters: args.filters.map((one) => ({ ...one, field: pathOf(one.field)! })) } : {}),
+    ...(args.filters
+      ? {
+          filters: args.filters.map((one) => {
+            const field = pathOf(one.field)!;
+            const values = spelled(field, one.values);
+            return { ...one, field, ...(values ? { values } : {}) };
+          }),
+        }
+      : {}),
     ...(args.columns ? { columns: args.columns.map((one) => pathOf(one)!) } : {}),
     ...(args.groupBy ? { groupBy: pathOf(args.groupBy) } : {}),
     ...(args.measureField ? { measureField: pathOf(args.measureField) } : {}),
@@ -759,6 +1103,11 @@ export const writeBrief = async (
           filters: args.filters.map((one) => ({
             field: one.field,
             ...(one.values && one.values.length > 0 ? { values: one.values } : {}),
+            ...(one.above !== undefined ? { above: one.above } : {}),
+            ...(one.below !== undefined ? { below: one.below } : {}),
+            ...(one.from ? { from: one.from } : {}),
+            ...(one.to ? { to: one.to } : {}),
+            ...(one.empty !== undefined ? { empty: one.empty } : {}),
           })),
         }
       : {}),
@@ -798,6 +1147,14 @@ export const writeBrief = async (
           },
         }
       : {}),
+    /* Asked for and not expressible: said on the widget, never dropped (checkpoint 4). */
+    ...((args.unmet ?? []).some((one) => one.trim())
+      ? { unmet: (args.unmet ?? []).map((one) => one.trim().slice(0, 160)).filter(Boolean).slice(0, 4) }
+      : {}),
+    /* Which "revenue" this is, said on the widget (plan, track E). Only on a number or a chart. */
+    ...(args.reading?.term.trim() && args.reading.as.trim() && args.intent !== "records"
+      ? { reading: { term: args.reading.term.trim().slice(0, 60), as: args.reading.as.trim().slice(0, 160) } }
+      : {}),
   };
 
   /*
@@ -813,7 +1170,18 @@ export const writeBrief = async (
     const entity = other.entity
       ? input.candidates.find((candidate) => candidate.entity === other.entity)?.entity
       : found.entity;
-    const differs = entity !== found.entity || other.intent !== args.intent;
+    /*
+     * Another record type or intent, or — for a word that reads several ways —
+     * another measure or narrowing of the same records: "revenue" collected
+     * rather than invoiced is the same records added up differently.
+     */
+    const differs =
+      entity !== found.entity ||
+      other.intent !== args.intent ||
+      (other.measureField !== undefined && pathOf(other.measureField) !== args.measureField) ||
+      (other.filters !== undefined &&
+        JSON.stringify(other.filters.map((one) => [pathOf(one.field), one.values ?? []])) !==
+          JSON.stringify((args.filters ?? []).map((one) => [one.field, one.values ?? []])));
     if (entity && differs) {
       alternative = {
         label: other.label.trim(),

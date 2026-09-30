@@ -6,6 +6,7 @@ import {
   authKeyRefs,
   connectionKeyRef,
   getOp,
+  pathParamNames,
   type AuthSpec,
   type ConnectionSpec,
   type ConnectorSpec,
@@ -51,7 +52,7 @@ const shortFeedback = (attempt: Attempt): string =>
   [
     `It read ${attempt.rows?.length ?? 0} record(s) and then stopped before the end of them.`,
     ...(attempt.meta?.warnings ?? []).map((warning) => `The read said: ${warning}`),
-    `A dashboard total over part of the records is wrong. Read every record the endpoint holds: a read() may send as many requests as it needs, up to the run's allowance of 100, and ctx.maxPages (${MAX_PAGES}) is the most pages to read in one run, not a size to stop at.`,
+    `A dashboard total over part of the records is wrong. Read every record the endpoint holds: ctx.maxPages (${MAX_PAGES}) is the most pages to read in one run, not a size to stop at. Where that takes more than one run's allowance of about 100 requests, return what was read with resume set to where you got to, and carry on from ctx.resume in the next run; never return complete: false for want of allowance.`,
   ].join(" ");
 
 /** What running connector code needs. The server's; the benchmark's own in a run. */
@@ -125,6 +126,18 @@ const describeEndpoint = (connection: ConnectionSpec, opId: string): string => {
       ? `Parameters: ${op.params.map((param) => `${param.name} (${param.in}${param.required ? ", required" : ""})`).join(", ")}`
       : "Parameters: none",
     `What a board needs from it: every record it holds, as a list.`,
+    /*
+     * A board has nothing to give an id in the path. Told only "id (path,
+     * required)", a model wrote code waiting for an export id somebody else
+     * would supply, and read nothing (measurement 1).
+     */
+    ...(pathParamNames(op.path).length > 0
+      ? [
+          `Nobody will supply ${pathParamNames(op.path)
+            .map((name) => `"${name}"`)
+            .join(" or ")}: ctx.inputs is empty. The code must obtain it from the API itself, as the documentation describes — by listing, searching or starting what it names — and read everything there is.`,
+        ]
+      : []),
   ].join("\n");
 };
 

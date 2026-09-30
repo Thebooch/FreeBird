@@ -13,7 +13,17 @@ import { AdapterError, type FetchContext, type FetchResult, type SourceAdapter }
  */
 export interface McpToolInfo {
   readonly name: string;
+  /** What to call it where a person reads the name. */
+  readonly title?: string;
   readonly description?: string;
+  /**
+   * The server's own word on whether the tool only reads (`readOnlyHint`).
+   * A hint, not a guarantee — but without it nothing says a call is a read at
+   * all, and a tool that is not said to read is never called for a board.
+   */
+  readonly readOnly?: boolean;
+  /** The server's word that the tool may destroy something (`destructiveHint`). */
+  readonly destructive?: boolean;
   readonly inputSchema?: unknown;
   /**
    * The whole reason MCP is a first-class source: a declared output schema is
@@ -185,7 +195,7 @@ export class McpAdapter implements SourceAdapter {
      * meaning at all — there are no headers — so it is reported rather than
      * silently treated as a single page.
      */
-    if (op.pagination.kind === "link-header") {
+    if (op.pagination.kind === "link-header" || op.pagination.kind === "next-url") {
       warnings.push(INCOMPLETE.linkHeader);
     }
 
@@ -222,7 +232,7 @@ export class McpAdapter implements SourceAdapter {
       }
 
       const next =
-        op.pagination.kind === "link-header"
+        op.pagination.kind === "link-header" || op.pagination.kind === "next-url"
           ? ({ kind: "none" } as const)
           : nextPageParams({
               pagination: op.pagination,

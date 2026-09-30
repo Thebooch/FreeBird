@@ -3,6 +3,37 @@ import type { ConnectionSpec, OpSpec } from "@freebirdai/dash-spec";
 import type { CredentialBroker } from "./broker.js";
 
 /**
+ * Every read may wait out a short rate limit and carry on.
+ *
+ * A read of forty-two pages behind a limit of about thirty requests was
+ * refused at page thirty-one every time it was tried, and started again from
+ * page one (checkpoint 2). The reader waits where the API says to — only for
+ * reads safe to send twice, and only briefly (`RestAdapter`); this hands it
+ * the clock to wait on.
+ */
+export class RateLimitWaitAdapter implements SourceAdapter {
+  readonly kind: SourceAdapter["kind"];
+  readonly transport: SourceAdapter["transport"];
+
+  constructor(
+    private readonly inner: SourceAdapter,
+    private readonly sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  ) {
+    this.kind = inner.kind;
+    this.transport = inner.transport;
+  }
+
+  fetch(
+    connection: ConnectionSpec,
+    op: OpSpec,
+    overrides: Readonly<Record<string, string | number | boolean>>,
+    ctx: FetchContext,
+  ): Promise<FetchResult> {
+    return this.inner.fetch(connection, op, overrides, ctx.sleep ? ctx : { ...ctx, sleep: this.sleep });
+  }
+}
+
+/**
  * A read refused for its token is read once more with a new one.
  *
  * Providers end tokens early — revoked, rotated, or simply shorter-lived than

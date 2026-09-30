@@ -272,3 +272,29 @@ describe("declared values", () => {
     expect(byName("Notes")?.values).toBeUndefined();
   });
 });
+
+/* Checkpoint 4: "more than $250" compared 250 cents, on a field the documentation said is in cents. */
+describe("a number the documentation says is in the smallest currency unit", () => {
+  const rows = {
+    type: "array",
+    items: {
+      type: "object",
+      properties: {
+        amount: { type: "integer", description: "The amount, in the smallest currency unit: 12500 is $125.00." },
+        fee: { type: "integer", description: "Fees charged, in cents." },
+        quantity: { type: "integer", description: "How many units were sold." },
+        note: { type: "string", description: "Anything in the smallest currency unit." },
+      },
+    },
+  };
+  const fields = fieldsFromSchema(rows, (node) => node, "$");
+  const byName = (name: string) => fields.find((field) => field.name === name);
+
+  it("is recorded as the documentation's claim, and nothing more", () => {
+    expect(byName("amount")?.format).toBe("minor_units");
+    expect(byName("fee")?.format).toBe("minor_units");
+    /* "Units" of a product are not currency units, and only a number can be money. */
+    expect(byName("quantity")?.format).toBeUndefined();
+    expect(byName("note")?.format).toBeUndefined();
+  });
+});

@@ -1,6 +1,6 @@
 # Writing held-out providers
 
-From checkpoint 1 on (`results/checkpoint-1.md`), the benchmark's held-out providers are written by a **separate agent session**, not by whoever builds the integration loop. The loop's author wires them in and runs them at checkpoints. It does not read their patterns: an examiner who is also the author tests only what they thought of.
+The benchmark's held-out providers are written by a **separate agent session**, not by whoever builds the integration loop. The loop's author wires them in and runs them at checkpoints. It does not read their patterns: an examiner who is also the author tests only what they thought of.
 
 This file is the brief for that session.
 

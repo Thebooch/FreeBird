@@ -50,28 +50,28 @@ export const CAPABILITIES = [
     area: "transport",
     name: "GraphQL APIs",
     status: "partial",
-    note: "A GraphQL query can be read, and paged through its variables; one that could change anything is refused. Setting one up from the API's schema is not done yet.",
+    note: "A GraphQL query can be read, and paged through its variables; one that could change anything is refused. Reads are set up from the API's schema: published by its documentation, or asked of the API itself.",
   },
   {
     id: "transport.mcp",
     area: "transport",
     name: "MCP servers",
-    status: "planned",
-    note: "The server does not connect to MCP servers yet.",
+    status: "partial",
+    note: "An MCP server reached over HTTP is a connection: the tools it marks read-only become endpoints, and so do tools named for reading where it says nothing either way. Any other tool is never called for a board. A server that signs clients in through OAuth's dynamic registration needs a token pasted for now; servers started as a local process are not reached.",
   },
   {
     id: "transport.soap",
     area: "transport",
     name: "SOAP web services",
-    status: "planned",
-    note: "SOAP requests are XML sent with POST, and neither is read yet.",
+    status: "partial",
+    note: "A SOAP service is set up from its WSDL (1.1, document/literal): each operation named for reading becomes an endpoint that posts its envelope, and the answer is read as XML. A sign-in in the envelope, and RPC-style services, are for connector code.",
   },
   {
     id: "transport.stream",
     area: "transport",
     name: "Streams (server-sent events, WebSocket)",
-    status: "planned",
-    note: "Only requests that answer once can be read.",
+    status: "partial",
+    note: "A stream of server-sent events is read for a window — up to a hundred events or five seconds by default — and the tile says it shows only what arrived in it. WebSocket streams are not read.",
   },
   {
     id: "transport.binary",
@@ -151,22 +151,22 @@ export const CAPABILITIES = [
     id: "response.csv",
     area: "response",
     name: "CSV and TSV responses",
-    status: "partial",
-    note: "Read through connector code, which turns the file into records. An endpoint that answers with a spreadsheet file is not read without it.",
+    status: "supported",
+    note: "An endpoint that answers with a table of rows is read as records: the first row names the columns.",
   },
   {
     id: "response.xml",
     area: "response",
     name: "XML responses",
-    status: "planned",
-    note: "An endpoint answering in XML cannot be read yet.",
+    status: "supported",
+    note: "An endpoint that answers in XML is read as records: elements and attributes become fields, repeated elements a list, and a SOAP envelope is opened. Requests that must themselves be XML (SOAP calls) are sent by connector code.",
   },
   {
     id: "response.ndjson",
     area: "response",
     name: "Newline-delimited JSON",
-    status: "partial",
-    note: "Read through connector code, one record per line. An endpoint that answers this way is not read without it.",
+    status: "supported",
+    note: "An endpoint that answers one record a line is read as records.",
   },
   {
     id: "response.binary",
@@ -237,36 +237,36 @@ export const CAPABILITIES = [
     id: "auth.oidc",
     area: "auth",
     name: "OpenID Connect",
-    status: "planned",
-    note: "Signing in through an identity provider is not supported yet.",
+    status: "partial",
+    note: "A specification that signs in with OpenID Connect has its provider's discovery document read, where it can be: somebody signs in once with the provider, or an app signs in as itself, and the token is kept and renewed.",
   },
   {
     id: "auth.cookie",
     area: "auth",
     name: "API keys in a cookie",
-    status: "planned",
-    note: "A key the API expects as a cookie cannot be sent yet.",
+    status: "supported",
+    note: "An API key sent in a cookie, alone or beside keys in headers or the address, is sent where the API wants each.",
   },
   {
     id: "auth.digest",
     area: "auth",
     name: "HTTP Digest",
-    status: "planned",
-    note: "Digest sign-in is not supported yet.",
+    status: "supported",
+    note: "A username and password answered to the server's challenge, with MD5 or SHA-256; the password itself is never sent.",
   },
   {
     id: "auth.mtls",
     area: "auth",
     name: "Client certificates (mutual TLS)",
-    status: "planned",
-    note: "A certificate cannot be presented with requests yet.",
+    status: "supported",
+    note: "The account's client certificate and key, pasted once, are presented to the API's own host and nowhere else, over https only, beside whatever key it also asks for.",
   },
   {
     id: "auth.signing",
     area: "auth",
     name: "Signed requests (AWS Signature, HMAC)",
     status: "partial",
-    note: "Connector code signs each request: the server makes the signature with your key, and the code never sees the key. Each API's signing is written from its documentation and proven by a read.",
+    note: "Connector code signs each request: the server makes the signature with your key, and the code never sees the key. Each API's signing is written from its documentation and proven by a read. AWS Signature Version 4 needs no code: it is built in, signing each request with your secret access key for the region its address or documentation names.",
   },
   {
     id: "auth.token-exchange",
@@ -306,6 +306,13 @@ export const CAPABILITIES = [
     note: "The next page's address is read from the response headers.",
   },
   {
+    id: "pagination.next-url",
+    area: "pagination",
+    name: "Next-page addresses in the answer",
+    status: "supported",
+    note: "The next page's address is read from each answer (`links.next`, `_links.next.href`, `@odata.nextLink`) and followed on the API's own address until an answer gives none.",
+  },
+  {
     id: "pagination.body",
     area: "pagination",
     name: "Page tokens sent in a request body",
@@ -333,7 +340,7 @@ export const CAPABILITIES = [
     area: "limits",
     name: "Records expanded per widget",
     status: "partial",
-    note: "A widget reading each record's related records reads at most 25 records' worth, and says so when there were more.",
+    note: "A widget reading each record's related records reads the first 25 at once and the rest in the background, up to 500, and says what it has not read yet.",
   },
 
   /* ── discovery ─────────────────────────────────────────────────────── */
@@ -348,8 +355,8 @@ export const CAPABILITIES = [
     id: "discovery.external-ref",
     area: "discovery",
     name: "Specifications split across several files",
-    status: "planned",
-    note: "References to other files are not followed, so the parts described there are missing.",
+    status: "partial",
+    note: "References to other files on the specification's own site are followed and put back together, up to 40 files. A reference to another organisation's site is not followed, and is named.",
   },
   {
     id: "discovery.embedded",
@@ -383,8 +390,8 @@ export const CAPABILITIES = [
     id: "discovery.graphql",
     area: "discovery",
     name: "GraphQL schemas",
-    status: "planned",
-    note: "Depends on GraphQL support.",
+    status: "partial",
+    note: "A schema published as SDL, in the documentation or a file it links to, or asked of the API (introspection, a type at a time where queries are limited in depth), becomes one read per list: its records' fields selected, paged by cursor, page or offset as the schema says. A list that needs an input nobody supplies is left out and said.",
   },
   {
     id: "discovery.wsdl",
@@ -406,8 +413,8 @@ export const CAPABILITIES = [
     id: "network.private",
     area: "network",
     name: "APIs on a private or internal network",
-    status: "planned",
-    note: "Private and internal addresses are refused, whatever the documentation says.",
+    status: "supported",
+    note: "Reached only when the server's operator allows the address (DASH_PRIVATE_EGRESS) and the connection says it is on a private network; the address checked is the one connected to. Cloud metadata addresses are never reached. A hosted build reaches a customer's network through an agent they run, as the server's transport.",
   },
 
   /* ── data ──────────────────────────────────────────────────────────── */
@@ -463,8 +470,8 @@ export const capabilityNote = (id: CapabilityId, subject = "This API"): string =
       : found.status === "supported"
         ? "is supported"
         : "is not supported yet";
-  // "Signed requests" reads mid-sentence as "signed requests"; "OAuth" and "CSV" stay as they are.
-  const name = /^[A-Z][a-z]/.test(found.name)
+  // "Signed requests" reads mid-sentence as "signed requests"; "OAuth", "OpenID" and "CSV" stay as they are.
+  const name = /^[A-Z][a-z]+(\s|$)/.test(found.name)
     ? `${found.name.charAt(0).toLowerCase()}${found.name.slice(1)}`
     : found.name;
   // "3 endpoints use", "This API uses".

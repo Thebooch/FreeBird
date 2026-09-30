@@ -18,10 +18,43 @@ export const incompleteNotes = (input: {
     readonly of: number;
     /** Children that could not be read at all. */
     readonly missing: number;
+    /**
+     * The host's read of every record, past the ones the tile read itself.
+     * While it reads, the tile's own notes stand and its progress is said;
+     * once done, its answer replaces the tile's, and so do its notes.
+     */
+    readonly whole?: {
+      readonly status: "reading" | "done";
+      readonly read: number;
+      /** Records asked about. */
+      readonly asked: number;
+      /** Records past the ceiling, never asked about. */
+      readonly beyond: number;
+      readonly failed: number;
+      /** What the records' own reads said they left out, once each. */
+      readonly notes: readonly string[];
+      /** Why the read stopped, when the API stopped it. */
+      readonly stopped?: string;
+    };
   };
 }): readonly string[] => {
   const notes: string[] = [];
   const fanOut = input.fanOut;
+  const whole = fanOut?.whole;
+  if (whole?.status === "done") {
+    const total = whole.asked + whole.beyond;
+    if (whole.stopped !== undefined || whole.beyond > 0)
+      notes.push(
+        `Only ${whole.read} of ${total} records were read in full, so what is shown excludes the rest.`,
+      );
+    if (whole.stopped !== undefined) notes.push(`The rest were not read: ${whole.stopped}`);
+    if (whole.failed > 0)
+      notes.push(
+        `${whole.failed} of ${whole.asked} related records could not be read, so what is shown excludes them.`,
+      );
+    notes.push(...whole.notes);
+    return [...new Set([...notes, ...metaNotes(input.metas)])];
+  }
   if (fanOut?.truncated)
     notes.push(
       `Only ${fanOut.read} of ${fanOut.of} records were read in full, so what is shown excludes the rest.`,
@@ -36,12 +69,20 @@ export const incompleteNotes = (input: {
     notes.push(
       `${fanOut.missing} of ${fanOut.read} related records could not be read, so what is shown excludes them.`,
     );
-  for (const meta of input.metas) {
+  if (whole?.status === "reading")
+    notes.push(`The rest are being read: ${whole.read} of ${whole.asked} so far.`);
+  return [...new Set([...notes, ...metaNotes(input.metas)])];
+};
+
+/** What each read said about the rows it left out. */
+const metaNotes = (metas: readonly (FetchMeta | undefined)[]): string[] => {
+  const notes: string[] = [];
+  for (const meta of metas) {
     if (!meta) continue;
     const said = meta.warnings.filter(isIncompleteNote);
     notes.push(...said);
     if (meta.truncated && said.length === 0)
       notes.push("Not every page was read, so what is shown may exclude additional records.");
   }
-  return [...new Set(notes)];
+  return notes;
 };

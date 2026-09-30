@@ -36,6 +36,7 @@ export const ConnectionAddress = ({
   const [values, setValues] = useState<Record<string, string>>(() => ({ ...(server?.values ?? {}) }));
   const [whole, setWhole] = useState(!server);
   const [address, setAddress] = useState(connection.baseUrl ?? "");
+  const [privateNetwork, setPrivateNetwork] = useState(connection.privateNetwork === true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,7 +49,7 @@ export const ConnectionAddress = ({
     try {
       const updated = await api.setAddress(
         connection.id,
-        whole ? { baseUrl: address.trim() } : { values },
+        { ...(whole ? { baseUrl: address.trim() } : { values }), privateNetwork },
       );
       onSaved(updated);
     } catch (caught) {
@@ -161,6 +162,15 @@ export const ConnectionAddress = ({
           </span>
         </div>
       )}
+
+      {/* A private address is reached only where this server's operator allows it; said here, not buried. */}
+      <label className="dash-field dash-field--inline" data-testid="address-private">
+        <input type="checkbox" checked={privateNetwork} onChange={(event) => setPrivateNetwork(event.target.checked)} />
+        <span>
+          This API is on our own network — a server in the office, or on a VPN.
+          <span className="dash-hint"> It can be reached only if whoever runs this server has allowed its address.</span>
+        </span>
+      </label>
 
       <div className="dash-row dash-row--end" style={{ marginTop: 12, gap: 8 }}>
         {server && (

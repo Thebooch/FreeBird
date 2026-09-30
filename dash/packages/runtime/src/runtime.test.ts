@@ -574,3 +574,59 @@ describe("highlights", () => {
     expect(result.meta.highlightCounts).toEqual({ late: 0 });
   });
 });
+
+/* Plan, track E: a total of dollars and euros is valid arithmetic and the wrong answer. */
+describe("a caveat the rows show", () => {
+  const total = widget({
+    component: "stat",
+    pipeline: [
+      { op: "extract", path: "$" },
+      { op: "derive", fields: { _all: "1" } },
+      { op: "group", by: [{ field: "_all" }], agg: { value: "sum(amount)", _currencies: "countDistinct(currency)" } },
+      { op: "caveat", when: "_currencies > 1", say: "This adds up amounts in more than one currency." },
+    ],
+  });
+
+  it("is said when a row meets it, once, and the rows are untouched", () => {
+    const result = run(total, [
+      { amount: 10, currency: "USD" },
+      { amount: 5, currency: "EUR" },
+    ]);
+    expect(result.meta.warnings).toEqual(["This adds up amounts in more than one currency."]);
+    expect(result.rows[0]).toMatchObject({ value: 15, _currencies: 2 });
+  });
+
+  it("says nothing when no row meets it", () => {
+    const result = run(total, [
+      { amount: 10, currency: "USD" },
+      { amount: 5, currency: "USD" },
+    ]);
+    expect(result.meta.warnings).toEqual([]);
+  });
+
+  it("says how many rows showed it, of how many", () => {
+    /* Parts that do not add up to a total: a question about three of four invoices, not an error. */
+    const parts = widget({
+      component: "stat",
+      pipeline: [
+        { op: "extract", path: "$" },
+        {
+          op: "caveat",
+          when: "abs((coalesce(sub, 0) + coalesce(tax, 0)) - total) > 0.01",
+          say: "On {count} of the {of} invoices read, Subtotal + Tax is not Total.",
+        },
+        { op: "derive", fields: { _all: "1" } },
+        { op: "group", by: [{ field: "_all" }], agg: { value: "sum(total)" } },
+      ],
+    });
+    const result = run(parts, [
+      { sub: 10, tax: 1, total: 11 },
+      { sub: 10, tax: 1, total: 12 },
+      { sub: 10, total: 10.5 },
+      /* No total: nothing to check. */
+      { sub: 10, tax: 1 },
+    ]);
+    expect(result.meta.warnings).toEqual(["On 2 of the 4 invoices read, Subtotal + Tax is not Total."]);
+    expect(result.rows[0]).toMatchObject({ value: 33.5 });
+  });
+});

@@ -120,6 +120,41 @@ describe("parseOpenApi", () => {
     expect(entry.dialect.timeFilter).toEqual({ param: "created[gte]", format: "unix" });
   });
 
+  /* 2026-09-30: a list that took both ends of a range was only ever sent the start, so it could not be read in parts. */
+  it("reads both ends of a time range where the endpoint declares them, and sends a range only where it is taken", () => {
+    const list = (parameters: unknown[]) => ({
+      get: {
+        parameters,
+        responses: { "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/ChargeList" } } } } },
+      },
+    });
+    const since = { name: "created[gte]", in: "query", schema: { type: "integer" } };
+    const before = { name: "created[lt]", in: "query", schema: { type: "integer" } };
+    const both = parseOpenApi(spec({ paths: { "/charges": list([since, before]), "/plans": list([]) } }), SPEC_URL)!.entry;
+    expect(both.dialect.timeFilter).toEqual({ param: "created[gte]", endParam: "created[lt]", format: "unix" });
+    /* Plans take no range: nothing about time is sent there. */
+    expect(both.ops.map((op) => [op.path, op.timeFiltered])).toEqual([
+      ["/charges", undefined],
+      ["/plans", false],
+    ]);
+    /* One endpoint takes the start alone: the end is sent to none, rather than to one that never declared it. */
+    const mixed = parseOpenApi(spec({ paths: { "/charges": list([since, before]), "/refunds": list([since]) } }), SPEC_URL)!.entry;
+    expect(mixed.dialect.timeFilter).toEqual({ param: "created[gte]", format: "unix" });
+    /* A date's last day may be left out by an API that excludes it: only the start is sent. */
+    const dated = parseOpenApi(
+      spec({
+        paths: {
+          "/charges": list([
+            { name: "date_from", in: "query", schema: { type: "string" } },
+            { name: "date_to", in: "query", schema: { type: "string" } },
+          ]),
+        },
+      }),
+      SPEC_URL,
+    )!.entry;
+    expect(dated.dialect.timeFilter).toEqual({ param: "date_from", format: "date" });
+  });
+
   it("warns that a spec cannot reveal which field feeds the cursor", () => {
     // The request parameter is declared; the response field never is.
     const { warnings } = parseOpenApi(spec(), SPEC_URL)!;
@@ -346,6 +381,33 @@ describe("parseOpenApi", () => {
     expect(parseOpenApi(enveloped, SPEC_URL)!.entry.ops[0]?.rowsPath).toBe("$.data");
   });
 
+  /* 2026-09-30: 214 vehicles under `_embedded.vehicles` were read as one record a page. */
+  it("finds the records inside a wrapper inside the answer, and leaves a record's own nested list alone", () => {
+    const answering = (properties: Record<string, unknown>) =>
+      parseOpenApi(
+        spec({
+          paths: {
+            "/vehicles": {
+              get: {
+                responses: {
+                  "200": { description: "ok", content: { "application/hal+json": { schema: { type: "object", properties } } } },
+                },
+              },
+            },
+          },
+        }),
+        SPEC_URL,
+      )!.entry.ops[0];
+    const list = { type: "array", items: { type: "object", properties: { id: { type: "string" } } } };
+    expect(answering({ _embedded: { type: "object", properties: { vehicles: list } }, _links: { type: "object" } })).toMatchObject({
+      archetype: "list",
+      rowsPath: "$._embedded.vehicles",
+    });
+    expect(answering({ d: { type: "object", properties: { results: list, __count: { type: "string" } } } })?.rowsPath).toBe("$.d.results");
+    /* A plan with its features is one plan. */
+    expect(answering({ id: { type: "string" }, plan: { type: "object", properties: { features: list } } })?.rowsPath).toBeUndefined();
+  });
+
   describe("auth schemes", () => {
     const authOf = (securitySchemes: Record<string, unknown>) =>
       parseOpenApi(spec({ components: { securitySchemes } }), SPEC_URL)!.entry.dialect.auth;
@@ -361,6 +423,65 @@ describe("parseOpenApi", () => {
         type: "query",
         param: "api_key",
       });
+      /* Plan, track B: the same two values, answered to a challenge. */
+      expect(authOf({ a: { type: "http", scheme: "digest" } })).toMatchObject({ type: "basic", digest: true });
+    });
+
+    /* Plan, track B: a key in a cookie, and keys that go in different places together. */
+    it("sends a key in a cookie, and keeps every key a requirement asks for together, wherever each goes", () => {
+      expect(authOf({ a: { type: "apiKey", in: "cookie", name: "session_key" } })).toMatchObject({
+        type: "headers",
+        parts: [{ header: "session_key", in: "cookie" }],
+      });
+      const both = parseOpenApi(
+        spec({
+          components: {
+            securitySchemes: {
+              app: { type: "apiKey", in: "header", name: "X-App-Id" },
+              token: { type: "apiKey", in: "query", name: "token" },
+            },
+          },
+          security: [{ app: [], token: [] }],
+        }),
+        SPEC_URL,
+      )!.entry.dialect.auth;
+      expect(both).toMatchObject({
+        type: "headers",
+        parts: [{ header: "X-App-Id" }, { header: "token", in: "query" }],
+      });
+    });
+
+    /* Plan, track B: AWS Signature V4, as API Gateway's own exports mark it. */
+    it("signs for AWS where the specification marks its Authorization key as awsSigv4", () => {
+      const sigv4 = { type: "apiKey", in: "header", name: "Authorization", "x-amazon-apigateway-authtype": "awsSigv4" };
+      /* Never a header somebody pastes a value into: two keys, and a signature made here. */
+      const signed = { type: "sigv4", accessKeyRef: "billing-api-key-access", keyRef: "billing-api-key" };
+      expect(authOf({ sigv4 })).toEqual(signed);
+      /* The same signature, named as the HTTP scheme it is. */
+      expect(authOf({ aws: { type: "http", scheme: "AWS4-HMAC-SHA256" } })).toEqual(signed);
+      const metered = parseOpenApi(
+        spec({
+          components: { securitySchemes: { sigv4, api_key: { type: "apiKey", in: "header", name: "x-api-key" } } },
+          security: [{ sigv4: [], api_key: [] }],
+        }),
+        SPEC_URL,
+      )!.entry.dialect.auth;
+      expect(metered).toEqual({ ...signed, apiKey: { header: "x-api-key", keyRef: "billing-api-key-api" } });
+    });
+
+    /* Plan, track B: a client certificate, alone or beside a key. */
+    it("asks for a client certificate where a requirement names mutual TLS", () => {
+      const entry = parseOpenApi(
+        spec({
+          components: {
+            securitySchemes: { cert: { type: "mutualTLS" }, key: { type: "apiKey", in: "header", name: "X-Key" } },
+          },
+          security: [{ cert: [], key: [] }],
+        }),
+        SPEC_URL,
+      )!.entry;
+      expect(entry.clientCertificate).toMatchObject({ certRef: expect.stringMatching(/-cert$/), keyRef: expect.stringMatching(/-cert-key$/) });
+      expect(parseOpenApi(spec(), SPEC_URL)!.entry.clientCertificate).toBeUndefined();
     });
 
     it("stands OAuth in as a bearer token, since there is no consent flow yet", () => {
@@ -377,8 +498,8 @@ describe("parseOpenApi", () => {
     });
 
     it("names a sign-in only connector code can do, instead of treating the API as needing no key", () => {
-      const said = warningsFor({ sigv4: { type: "http", scheme: "aws4-hmac-sha256" } });
-      expect(said).toMatch(/"sigv4" sign-in scheme uses signed requests.*only partly supported\. Connector code signs/);
+      const said = warningsFor({ signed: { type: "http", scheme: "hmac-sha256" } });
+      expect(said).toMatch(/"signed" sign-in scheme uses signed requests.*only partly supported\. Connector code signs/);
       expect(said).not.toMatch(/does not declare a supported authentication setup/);
     });
 
@@ -552,14 +673,13 @@ describe("parseOpenApi", () => {
       expect(names).toEqual(expect.arrayContaining(["filter[account]", "filter[year]"]));
     });
 
-    it("names an endpoint that answers in CSV", () => {
-      const { warnings } = parseOpenApi(
-        withRefunds({
-          responses: { "200": { content: { "text/csv": { schema: { type: "string" } } } } },
-        }),
-        SPEC_URL,
-      )!;
-      expect(warnings.join(" ")).toMatch(/1 endpoint uses CSV and TSV responses, which is only partly supported\. Read through connector code/);
+    /* Plan, track A: a table of rows, a record a line and XML are read as they are. */
+    it("says nothing against an endpoint that answers in CSV or XML, and names one that answers with a file of bytes", () => {
+      const warningsFor = (type: string) =>
+        parseOpenApi(withRefunds({ responses: { "200": { content: { [type]: { schema: { type: "string" } } } } } }), SPEC_URL)!.warnings.join(" ");
+      expect(warningsFor("text/csv")).not.toMatch(/CSV/);
+      expect(warningsFor("application/xml")).not.toMatch(/XML/);
+      expect(warningsFor("application/pdf")).toMatch(/1 endpoint uses /);
     });
 
     /* Measurement 1: read as one summary, a file of records was never a resource, so never askable. */
@@ -571,6 +691,13 @@ describe("parseOpenApi", () => {
         )!;
         expect(entry.ops.find((op) => op.title === "List refunds")).toMatchObject({ archetype: "list", rowsPath: "$" });
       }
+      /* XML is a collection too; where its records are is found by reading it. */
+      const xml = parseOpenApi(
+        withRefunds({ responses: { "200": { content: { "application/xml": { schema: { type: "object" } } } } } }),
+        SPEC_URL,
+      )!.entry.ops.find((op) => op.title === "List refunds");
+      expect(xml).toMatchObject({ archetype: "list" });
+      expect(xml?.rowsPath).toBeUndefined();
     });
 
     it("says when parts of the specification live in other files", () => {
@@ -584,7 +711,8 @@ describe("parseOpenApi", () => {
         }),
         SPEC_URL,
       )!;
-      expect(warnings.join(" ")).toMatch(/refers to schemas\/refund\.yaml.*not supported yet/);
+      /* Parsed alone, a reference is still named; discovery follows it first (`external-refs.ts`). */
+      expect(warnings.join(" ")).toMatch(/refers to schemas\/refund\.yaml.*only partly supported/);
     });
   });
 
@@ -1573,10 +1701,21 @@ describe("where the API lives, and what it asks for", () => {
     expect(entry.keyHelp).not.toMatch(/curl/);
   });
 
-  it("says when it had to guess where the API lives", () => {
-    const entry = parseOpenApi(spec({ servers: [] }), SPEC_URL)!.entry;
-    expect(entry.baseUrlGuessed).toBe(true);
+  /* Checkpoint 2: a public API whose document names no server was asked for an address the specification had given. */
+  it("takes a document that names no server at its word — the host that serves it — and says so", () => {
+    const { entry, warnings } = parseOpenApi(spec({ servers: [] }), SPEC_URL)!;
+    expect(entry.baseUrlGuessed).toBeUndefined();
     expect(entry.baseUrl).toBe("https://api.example.com");
+    expect(warnings.join(" ")).toMatch(/names no server/);
+    const unset = spec();
+    delete (unset as Record<string, unknown>).servers;
+    expect(parseOpenApi(unset, SPEC_URL)!.entry.baseUrlGuessed).toBeUndefined();
+  });
+
+  it("still says when it had to guess where the API lives", () => {
+    /* Servers named, and not one with an address in it. */
+    const entry = parseOpenApi(spec({ servers: [{ description: "Production" }] }), SPEC_URL)!.entry;
+    expect(entry.baseUrlGuessed).toBe(true);
   });
 
   it("prefers a fixed address, and asks nothing, when the spec gives one", () => {

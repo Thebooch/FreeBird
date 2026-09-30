@@ -68,6 +68,40 @@ describe("the loop writes connector code", () => {
     expect(llm.calls).toHaveLength(1);
   });
 
+  /* 2026-09-30: code written before the key was pasted gave up on an export and answered with nothing, and the check took that as an empty account. */
+  it("revises code that reads nothing once the key is pasted, rather than keeping it", async () => {
+    const { transport, entry, connection } = await setUp(sessionly);
+    const opId = connection.ops.find((op) => op.path === "/tickets")!.id;
+    const secrets: Record<string, string> = {};
+    const good = proposalOf(sessionly);
+    const empty = {
+      ...good,
+      serves: true,
+      code: `${String(good.code)}
+async function read(ctx) {
+  return { rows: [], complete: true };
+}`,
+    };
+    const llm = fakeLlm([{ args: empty }, { args: good }]);
+    const deps = {
+      http: transport.http,
+      resolveSecret: async (ref: string) => secrets[ref] ?? null,
+      fetchDocument: transport.fetchDocument,
+      now: () => NOW,
+      llm,
+      connectors: benchConnectors(NOW),
+    };
+    const draft = await integrate(connection, { targets: [opId], entry, docsUrl: sessionly.docsUrl }, deps);
+    const [email, password] = authCredentials(draft.connection.auth);
+    secrets[email!.keyRef] = sessionly.credentials[0]!;
+    secrets[password!.keyRef] = sessionly.credentials[1]!;
+    const proven = await integrate(draft.connection, { targets: [opId], entry, docsUrl: sessionly.docsUrl }, deps);
+    expect(proven.outcome).toBe("ready");
+    expect(proven.ops[0]?.note).toMatch(/230 record/);
+    const revision = llm.calls[1]!.messages.map((message) => String(message.content)).join("\n");
+    expect(revision).toMatch(/produced no records/);
+  });
+
   it("revises code that failed, shown what happened and never a credential", async () => {
     const { transport, entry, connection } = await setUp(stampede);
     const opId = connection.ops[0]!.id;

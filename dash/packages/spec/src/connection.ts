@@ -9,6 +9,7 @@ import {
 import {
   MAX_PAGES,
   authSchema,
+  authCredentials,
   authKeyRefs,
   idSchema,
   paginationSchema,
@@ -17,6 +18,7 @@ import {
   graphqlReadsOnly,
   readBodySchema,
   readSafetySchema,
+  type AuthCredential,
   type ReadBody,
   type ReadSafety,
   pathParamNames,
@@ -89,6 +91,18 @@ const opDefObject = z.object({
    * actually sent. See `connector.ts`.
    */
   servedBy: z.literal("connector").optional(),
+  /**
+   * The endpoint is a stream of server-sent events, never finished: it is read
+   * for a window — this many events, or this many seconds, whichever comes
+   * first — and what arrived in it is the answer. Always said on the tile: a
+   * window of a stream is not everything the stream has ever carried.
+   */
+  stream: z
+    .object({
+      events: z.number().int().min(1).max(1000).default(100),
+      seconds: z.number().int().min(1).max(30).default(5),
+    })
+    .optional(),
 });
 
 /**
@@ -144,6 +158,8 @@ const opObject = z.object({
   rowsPath: z.string().optional(),
   schemaHash: z.string().optional(),
   servedBy: z.literal("connector").optional(),
+  /** See `opDefSchema.stream`. */
+  stream: z.object({ events: z.number().int().min(1).max(1000), seconds: z.number().int().min(1).max(30) }).optional(),
   /**
    * Whether anything this endpoint sends actually reads the time range.
    *
@@ -168,6 +184,12 @@ export type OpSpec = z.infer<typeof opSchema>;
 export const connectionSchema = z.object({
   credentialsRevision: z.number().int().min(0).optional(),
   paginationPending: z.boolean().optional(),
+  /**
+   * The API is on a private network — an office server, a VPN — and this
+   * connection may reach it, where the server's operator has allowed that
+   * address (`DASH_PRIVATE_EGRESS`). Both are needed; see `EgressPolicy`.
+   */
+  privateNetwork: z.boolean().optional(),
   specVersion: z.literal(1).default(1),
   id: idSchema,
   title: z.string().min(1),
@@ -191,6 +213,22 @@ export const connectionSchema = z.object({
    */
   addressPending: z.boolean().optional(),
   auth: authSchema.default({ type: "none" }),
+  /**
+   * A client certificate the API asks for (mutual TLS), beside whatever the
+   * sign-in sends: the certificate and its private key, both in the vault,
+   * sent with every request to this connection's host and nowhere else
+   * (plan, track B). PEM, as the provider issued them.
+   */
+  clientCertificate: z
+    .object({
+      certRef: idSchema,
+      keyRef: idSchema,
+      /** The provider's own certificate authority, where its server is not signed by a public one. */
+      caRef: idSchema.optional(),
+      certLabel: z.string().max(80).optional(),
+      keyLabel: z.string().max(80).optional(),
+    })
+    .optional(),
   /** How this vendor does things, stated once. */
   dialect: dialectSchema.optional(),
   /** Catalog entry this connection was created from, for provenance. */
@@ -252,8 +290,51 @@ export const connectionAuths = (connection: ConnectionSpec) =>
     ? connection.ops.map((op) => op.auth ?? connection.auth)
     : [connection.auth];
 export const connectionKeyRefs = (connection: ConnectionSpec): string[] => [
-  ...new Set(connectionAuths(connection).flatMap(authKeyRefs)),
+  ...new Set([
+    ...connectionAuths(connection).flatMap(authKeyRefs),
+    ...(connection.clientCertificate
+      ? [
+          connection.clientCertificate.certRef,
+          connection.clientCertificate.keyRef,
+          ...(connection.clientCertificate.caRef ? [connection.clientCertificate.caRef] : []),
+        ]
+      : []),
+  ]),
 ];
+
+/**
+ * Every value a person pastes for this connection, once each: the sign-in's,
+ * endpoint by endpoint, and a client certificate's where it asks for one.
+ */
+export const connectionCredentials = (connection: ConnectionSpec): AuthCredential[] => {
+  const rows = [
+    ...connectionAuths(connection).flatMap(authCredentials),
+    ...(connection.clientCertificate
+      ? [
+          {
+            keyRef: connection.clientCertificate.certRef,
+            label: connection.clientCertificate.certLabel ?? "Client certificate",
+            hint: "The certificate the provider issued for your account, in PEM (-----BEGIN CERTIFICATE-----).",
+          },
+          {
+            keyRef: connection.clientCertificate.keyRef,
+            label: connection.clientCertificate.keyLabel ?? "Client certificate key",
+            hint: "The certificate's private key, in PEM (-----BEGIN PRIVATE KEY-----). Sent to nobody: it signs the connection.",
+          },
+          ...(connection.clientCertificate.caRef
+            ? [
+                {
+                  keyRef: connection.clientCertificate.caRef,
+                  label: "Provider's certificate authority",
+                  hint: "The certificate authority the provider's server is signed by, in PEM, where the provider gives one.",
+                },
+              ]
+            : []),
+        ]
+      : []),
+  ];
+  return [...new Map(rows.map((row) => [row.keyRef, row])).values()];
+};
 /**
  * Whether this connection still needs to be told where the API lives.
  *
@@ -298,6 +379,12 @@ export const opUsesRange = (connection: ConnectionSpec, def: OpDef): boolean => 
     (def.body !== undefined && RANGE_TOKEN.test(JSON.stringify(def.body))) ||
     Object.values(def.headers).some((value) => RANGE_TOKEN.test(value));
   if (declared || elsewhere || RANGE_TOKEN.test(def.path)) return true;
+  /*
+   * Code that reads the window itself (`ctx.range`): its answer depends on
+   * the window, so the window is part of what it is cached under — or a
+   * thirty-day read stands in for one since June.
+   */
+  if (def.servedBy === "connector" && /\brange\b/.test(connection.connector?.code ?? "")) return true;
 
   const timeFiltered = def.timeFiltered ?? ARCHETYPES[def.archetype ?? "list"].timeFiltered;
   return Boolean(timeFiltered && connection.dialect?.timeFilter);
@@ -376,6 +463,7 @@ export const resolveOp = (connection: ConnectionSpec, def: OpDef): OpSpec => {
       archetype.defaultRowsPath,
     ...(def.schemaHash ? { schemaHash: def.schemaHash } : {}),
     ...(def.servedBy ? { servedBy: def.servedBy } : {}),
+    ...(def.stream ? { stream: def.stream } : {}),
     usesRange: opUsesRange(connection, def),
   });
 };
@@ -444,6 +532,27 @@ export const getOp = (connection: ConnectionSpec, opId: string): OpSpec | undefi
   const def = getOpDef(connection, opId);
   return def ? resolveOp(connection, def) : undefined;
 };
+
+/**
+ * The query parameter a read confirmed narrows an endpoint's records by a
+ * field (`ParamDef.filters`), for asking the API for only the records a
+ * number counts rather than reading every page to find them.
+ */
+export const filterParamsOf =
+  (connection: ConnectionSpec) =>
+  (opId: string, field: string): string | undefined =>
+    getOpDef(connection, opId)?.params?.find((param) => param.in === "query" && param.filters === field)?.name;
+
+/**
+ * Whether an endpoint reads the board's time range: what a number over it is
+ * scoped to when its request named no time of its own.
+ */
+export const readsRangeOf =
+  (connection: ConnectionSpec) =>
+  (opId: string): boolean => {
+    const def = getOpDef(connection, opId);
+    return def ? opUsesRange(connection, def) : false;
+  };
 
 /**
  * The only hostname a connection is ever allowed to reach. Combined with the

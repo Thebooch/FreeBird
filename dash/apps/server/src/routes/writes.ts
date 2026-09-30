@@ -7,7 +7,7 @@ import { z } from "zod";
 import type { CatalogStore } from "../catalog.js";
 import { requirePermission } from "../identity/context.js";
 import type { Policy } from "../identity/policy.js";
-import type { SpecStore } from "../store.js";
+import type { SpecRepository } from "../store.js";
 import { readWriteEndpoints, type FetchDocument } from "../writes/read-writes.js";
 import { WriteError, WriteService, describeFields } from "../writes/service.js";
 
@@ -37,7 +37,7 @@ import { WriteError, WriteService, describeFields } from "../writes/service.js";
 
 export interface WriteRouteDeps {
   readonly service: WriteService;
-  readonly store: SpecStore;
+  readonly store: SpecRepository;
   readonly catalog: CatalogStore | undefined;
   readonly policy: Policy;
   readonly llm: () => { adapter: LlmAdapter; model?: string } | null;

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CatalogStore } from "../catalog.js";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
+import { MemorySeenValueStore } from "../values/store.js";
 import { KeyStore, LocalAesVault } from "../vault.js";
 
 /**
@@ -205,6 +206,32 @@ describe("POST /api/connections/:id/brief", () => {
     expect(body.alternative.widget.component).toBe("bar");
     // Its own id, so either can be added without colliding with the other.
     expect(body.alternative.widget.id).not.toBe(body.widget.id);
+  });
+
+  /* Measurement 1: a request narrowed in its own words counted the wrong records, as nothing said which words they use. */
+  it("offers what the records were seen to hold, from this connection's own store", async () => {
+    connect();
+    const seenValues = new MemorySeenValueStore();
+    await seenValues.put("works", "tasks", { fields: { Status: ["Open", "Done"] }, everyRecord: true });
+    const llm = scripted();
+    const app = buildServer({ store, keys, catalog, llm, http: noNetwork, seenValues });
+    const result = await app.inject({ method: "POST", url: "/api/connections/works/brief", payload: { intent: "open jobs" } });
+    expect(result.statusCode).toBe(200);
+    expect(String(llm.calls[0]!.messages.at(-1)!.content)).toContain("Status (Status) in the records: Open / Done");
+    /* And never in the catalog, which is shared. */
+    expect(JSON.stringify(catalog.get("records"))).not.toContain("Done");
+    await app.close();
+  });
+
+  /* Checkpoint 2: with no such record type, the nearest one was counted and looked like an answer. */
+  it("says so when no record type is what was asked about, and builds nothing", async () => {
+    connect();
+    const result = await ask(
+      { intent: "how many invoices" },
+      fakeLlm([{ args: { entity: "none", intent: "measure", reason: "This API has jobs, not invoices." } }]),
+    );
+    expect(result.statusCode).toBe(422);
+    expect(result.json().error).toBe("None of Works's record types is what that asks for. This API has jobs, not invoices.");
   });
 
   it("says so when this API's records have not been described", async () => {

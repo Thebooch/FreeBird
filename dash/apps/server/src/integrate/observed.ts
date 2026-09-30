@@ -36,9 +36,27 @@ export const observedShape = (body: unknown, rowsPath: string | undefined): Obse
 };
 
 /**
- * The entry with observed fields on every endpoint that declared none. Null
- * when nothing changed: an endpoint the specification described keeps its own
- * account of itself, whatever a read showed.
+ * Declared fields the records read hold none of: they describe something
+ * else. Connector code that reads a manifest, then the files it lists, returns
+ * the shipments in the files; the specification describes the manifest — its
+ * `files` and `columns` — and a record type described from that had no weight
+ * to add up, so "kilograms delivered" had nothing to reach (checkpoint 3).
+ */
+const describesOther = (
+  declared: readonly { readonly name: string }[],
+  observed: readonly { readonly name: string }[],
+): boolean => {
+  if (declared.length === 0 || observed.length === 0) return false;
+  const top = (name: string) => name.split(".")[0]!.split("[")[0]!;
+  const held = new Set(observed.map((field) => top(field.name)));
+  return !declared.some((field) => held.has(top(field.name)));
+};
+
+/**
+ * The entry with observed fields on every endpoint that declared none, or
+ * declared only fields its records were read not to hold. Null when nothing
+ * changed: an endpoint the specification described, and whose records hold
+ * what it described, keeps its own account of itself.
  */
 export const withObservedFields = (
   entry: CatalogEntry,
@@ -47,7 +65,11 @@ export const withObservedFields = (
   let changed = false;
   const ops = entry.ops.map((op) => {
     const shape = observed[op.id];
-    if (!shape || (op.fields && op.fields.length > 0 && op.fieldsFrom !== "observed")) return op;
+    if (
+      !shape ||
+      (op.fields && op.fields.length > 0 && op.fieldsFrom !== "observed" && !describesOther(op.fields, shape.fields))
+    )
+      return op;
     if (op.fieldsFrom === "observed" && JSON.stringify(op.fields) === JSON.stringify(shape.fields)) return op;
     changed = true;
     return { ...op, fields: [...shape.fields], fieldsFrom: "observed" as const };
@@ -73,6 +95,30 @@ export const withObservedFields = (
     changed = true;
   }
   return changed ? { ...entry, ops, resources } : null;
+};
+
+/**
+ * The entry with the reads a check wrote from a GraphQL schema the API
+ * answered with, in place of the endpoint each replaced — so every connection
+ * made from it reads the same way, and its record types can be described.
+ * Null when there were none.
+ */
+export const withAddedReads = (
+  entry: CatalogEntry,
+  added: { readonly ops: readonly CatalogEntry["ops"][number][]; readonly resources: readonly CatalogEntry["resources"][number][]; readonly replaced: readonly string[] } | undefined,
+): CatalogEntry | null => {
+  if (!added || added.ops.length === 0) return null;
+  const replaced = new Set(added.replaced);
+  const kept = entry.ops.filter((op) => !replaced.has(op.id));
+  const taken = new Set(kept.map((op) => op.id));
+  const ops = added.ops.filter((op) => !taken.has(op.id));
+  const remaining = entry.resources.filter((one) => !one.listOp || !replaced.has(one.listOp));
+  const listed = new Set(remaining.map((one) => one.id));
+  return {
+    ...entry,
+    ops: [...kept, ...ops],
+    resources: [...remaining, ...added.resources.filter((one) => !listed.has(one.id) && ops.some((op) => op.id === one.listOp))],
+  };
 };
 
 /**

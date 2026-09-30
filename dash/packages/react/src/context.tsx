@@ -100,6 +100,10 @@ export interface DashboardContextValue {
    * deployment did before approvals existed.
    */
   readonly approvals: Readonly<Record<string, ApprovalVerdict>> | undefined;
+  /** What a number tile was, day by day, where the host keeps it. See `DashboardProviderProps.history`. */
+  readonly history: HistorySource | undefined;
+  /** Every record's related records, where the host reads them. See `DashboardProviderProps.readEach`. */
+  readonly readEach: EachSource | undefined;
   /**
    * What each widget's filter strip is currently narrowed to, in words.
    *
@@ -122,6 +126,48 @@ export interface DashboardContextValue {
 }
 
 const DashboardContext = createContext<DashboardContextValue | null>(null);
+
+/** One day's value of a number tile. */
+export interface HistoryPoint {
+  /** YYYY-MM-DD. */
+  readonly day: string;
+  readonly value: number;
+}
+
+/** Where a number tile's history comes from: the host's store, by board and widget. */
+export type HistorySource = (dashboard: string, widget: string) => Promise<readonly HistoryPoint[]>;
+
+/** One read per record, for every record a tile's per-record source names. */
+export interface EachRequest {
+  readonly connection: string;
+  readonly op: string;
+  /** What every read sends, whatever the record. */
+  readonly params: Readonly<Record<string, string | number | boolean>>;
+  /** The input each record's value goes into. */
+  readonly input: string;
+  /** Each record's value, once each, at most `FAN_OUT_WHOLE_MAX`. */
+  readonly values: readonly (string | number | boolean)[];
+  readonly resolved: ResolvedParams;
+}
+
+/** How far the host has got. */
+export interface EachAnswer {
+  readonly status: "reading" | "done";
+  readonly read: number;
+  readonly of: number;
+  /** Records whose own read failed. */
+  readonly failed: number;
+  /** What the records' own reads said they left out, once each. */
+  readonly notes: readonly string[];
+  /** Why the rest were not read, when the API stopped the read. */
+  readonly stopped?: string;
+  /** One answer per record read, in the order asked. Only when done. */
+  readonly bodies?: readonly unknown[];
+  readonly fetchedAt?: number;
+}
+
+/** Where the rest of a tile's per-record reads are read: the host, in the background. */
+export type EachSource = (request: EachRequest) => Promise<EachAnswer>;
 
 export interface DashboardProviderProps {
   readonly dashboard: DashboardSpec;
@@ -146,6 +192,18 @@ export interface DashboardProviderProps {
   readonly rangeOps?: Readonly<Record<string, readonly string[]>>;
   /** widget id → approval verdict, from `GET /api/dashboards/:id`. */
   readonly approvals?: Readonly<Record<string, ApprovalVerdict>>;
+  /**
+   * A number tile's history, where the host keeps one (Dash's server keeps
+   * each one's value once a day). Absent, tiles show no history.
+   */
+  readonly history?: HistorySource;
+  /**
+   * Reads every record's related records past the ones a tile reads itself,
+   * where the host can (Dash's server does, in the background). Absent, a
+   * tile reads its per-record source's first `fanOut.maxRows` and says the
+   * rest are missing.
+   */
+  readonly readEach?: EachSource;
   /**
    * connection id → its `credentialsRevision`, from `GET /api/connections`.
    *
@@ -185,6 +243,8 @@ export const DashboardProvider = ({
   entityLinks,
   rangeOps,
   approvals,
+  history,
+  readEach,
   credentialRevisions,
   changes,
   children,
@@ -396,6 +456,8 @@ export const DashboardProvider = ({
       entityLinks,
       usesRange,
       approvals,
+      history,
+      readEach,
       facetSummaries,
       setPreset,
       setGrain,
@@ -417,6 +479,8 @@ export const DashboardProvider = ({
       labels,
       entityLinks,
       approvals,
+      history,
+      readEach,
       facetSummaries,
       reportFacets,
       setPreset,

@@ -11,7 +11,27 @@ import { writeJsonAtomic } from "./json-file.js";
  * Secrets never appear here — a connection carries only a `keyRef` naming an
  * entry in the encrypted vault.
  */
-export class SpecStore {
+/**
+ * Where boards, connections and their capability reports are kept (plan,
+ * track G). The server depends on this, not on the file store below, so a
+ * hosted build can keep the same shapes in its own database.
+ */
+export interface SpecRepository {
+  listDashboards(): DashboardSpec[];
+  getDashboard(id: string): DashboardSpec | null;
+  putDashboard(spec: DashboardSpec): void;
+  deleteDashboard(id: string): void;
+  listConnections(): ConnectionSpec[];
+  getConnection(id: string): ConnectionSpec | null;
+  putConnection(spec: ConnectionSpec): void;
+  deleteConnection(id: string): void;
+  listReports(): CapabilityReport[];
+  getReport(connectionId: string): CapabilityReport | null;
+  putReport(report: CapabilityReport): CapabilityReport;
+  deleteReport(connectionId: string): void;
+}
+
+export class SpecStore implements SpecRepository {
   constructor(
     private readonly dashboardsDir: string,
     private readonly connectionsDir: string,

@@ -1,10 +1,16 @@
+import type { HttpFetch } from "@freebirdai/dash-adapters";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
 import type { CatalogEntry } from "@freebirdai/dash-spec";
 import type { z } from "zod";
 import type { CatalogStore } from "../catalog.js";
-import { analysePage, rankContext } from "./docs.js";
+import { analysePage, endpointsNamed, rankContext } from "./docs.js";
 import { refreshOutdatedConnectDetails } from "./connect-details.js";
+import { resolveExternalRefs } from "./external-refs.js";
 import { extractInlineSpec } from "./inline-spec.js";
+import { withGraphqlReads } from "./graphql.js";
+import { withOidc } from "./oidc.js";
+import { discoverMcp, looksLikeMcpAddress } from "../mcp/discover.js";
+import { looksLikeWsdl, parseWsdl } from "./wsdl.js";
 import {
   WELL_KNOWN_SPEC_PATHS,
   indexLinksIn,
@@ -18,7 +24,7 @@ import { type SpecFragment, mergeSpecDocuments } from "./merge-specs.js";
 import { proposeDialect } from "./propose-dialect.js";
 import { type SearchProvider, buildSearchQueries, rankSearchResults } from "./search.js";
 
-export type DiscoverySource = "catalog" | "openapi" | "docs" | "none";
+export type DiscoverySource = "catalog" | "openapi" | "wsdl" | "docs" | "mcp" | "none";
 
 export interface DiscoveryResult {
   readonly source: DiscoverySource;
@@ -55,7 +61,35 @@ export interface DiscoveryDeps {
   readonly catalog?: CatalogStore | undefined;
   readonly llm?: LlmAdapter | null | undefined;
   readonly search?: SearchProvider | null | undefined;
+  /**
+   * When nothing else answered, read a documentation section page by page by
+   * itself, if it has no more pages than this. Absent, the read is offered
+   * and a person decides. The product sets it: somebody who gives a docs link
+   * expects the API found, not a count of pages to approve (plan, track C).
+   */
+  readonly readIndexUpTo?: number | undefined;
+  /**
+   * Draws a documentation page that is rendered in the browser, so its text
+   * can be read. A plug-in point: absent locally, where such a page is said
+   * to be unreadable; a hosted build supplies a rendering service. It must
+   * reach public addresses only, as every other reader here does.
+   */
+  readonly renderDocs?: DocsRenderer | undefined;
+  /**
+   * For asking an address whether it is an MCP server: that is a POST, which
+   * a documentation reader never sends. Absent, the question is not asked.
+   */
+  readonly http?: HttpFetch | undefined;
 }
+
+/** See `DiscoveryDeps.renderDocs`. */
+export interface DocsRenderer {
+  /** The page as a browser draws it, or null when it could not be drawn. */
+  render(url: string): Promise<{ readonly html: string; readonly url: string } | null>;
+}
+
+/** A documentation section small enough to read by itself when nothing else answered. */
+export const AUTO_INDEX_PAGES = 60;
 
 /**
  * One key, not two. Rung 3 already needs an AI key, and search rides on the
@@ -289,8 +323,21 @@ const attemptUrl = async (
       ctx.msPerPage = Math.min(ctx.msPerPage ?? Infinity, Date.now() - startedAt);
       const asJson = parseSpecDocument(response.text);
 
+      /* A SOAP service describes itself in a WSDL: each operation named for reading is an endpoint. */
+      if (response.status < 400 && looksLikeWsdl(response.text)) {
+        const described = parseWsdl(response.text, response.url);
+        if (described)
+          return {
+            source: "wsdl",
+            entry: described.entry,
+            note: `Set up ${described.entry.ops.length} operation(s) from the WSDL at ${response.url}.`,
+            warnings: [...ctx.warnings, ...described.warnings],
+            tried: ctx.tried,
+          };
+      }
+
       if (looksLikeOpenApi(asJson)) {
-        const parsed = parseOpenApi(asJson, response.url);
+        const parsed = parseOpenApi(await wholeSpec(asJson, response.url, deps, ctx.warnings), response.url);
         if (parsed) {
           return {
             source: "openapi",
@@ -417,7 +464,7 @@ const attemptUrl = async (
       if (response.status >= 400) continue;
       const doc = parseSpecDocument(response.text);
       if (!looksLikeOpenApi(doc)) continue;
-      const parsed = parseOpenApi(doc, response.url);
+      const parsed = parseOpenApi(await wholeSpec(doc, response.url, deps, ctx.warnings), response.url);
       if (!parsed) continue;
       return {
         source: "openapi",
@@ -436,7 +483,22 @@ const attemptUrl = async (
 
   if (!pageHtml || !options.allowDocs) return null;
 
-  const analysis = analysePage(pageHtml);
+  let analysis = analysePage(pageHtml);
+  /*
+   * A page drawn in the browser is drawn, where something can: the
+   * `DocsRenderer` plug-in point. Without one, it is said plainly — a page
+   * with nothing in it is never handed to a model to invent an API from.
+   */
+  if (analysis.isClientRendered && deps.renderDocs) {
+    const rendered = await deps.renderDocs.render(pageUrl).catch(() => null);
+    if (rendered) {
+      const drawn = analysePage(rendered.html);
+      if (!drawn.isClientRendered) {
+        analysis = drawn;
+        ctx.warnings.push(`The documentation is drawn in the browser, so it was read as drawn (${rendered.url}).`);
+      }
+    }
+  }
   if (analysis.isClientRendered) {
     ctx.blocked = `${analysis.reason} Try linking directly to an OpenAPI spec instead, or describe the API by hand.`;
     return null;
@@ -453,17 +515,23 @@ const attemptUrl = async (
     return null;
   }
 
-  const proposed = await proposeDialect({ llm: deps.llm, url: pageUrl, context });
+  const proposed = await proposeDialect({ llm: deps.llm, url: pageUrl, context, named: endpointsNamed(analysis) });
   if (!proposed.entry) {
     ctx.warnings.push(...proposed.warnings);
     return null;
   }
 
+  /*
+   * A GraphQL API whose documentation publishes its schema: the reads are
+   * written from the schema, not guessed from prose (plan, track A).
+   */
+  const graphql = await withGraphqlReads(proposed.entry, { html: pageHtml, url: pageUrl }, deps.fetchDocument);
+
   return {
     source: "docs",
-    entry: proposed.entry,
-    note: `Read ${context.chunksKept} of ${context.chunksTotal} sections of the documentation at ${pageUrl}. Everything here is a guess until you test it.`,
-    warnings: [...ctx.warnings, ...proposed.warnings],
+    entry: graphql?.entry ?? proposed.entry,
+    note: `Read ${context.chunksKept} of ${context.chunksTotal} sections of the documentation at ${pageUrl}.${graphql ? ` ${graphql.note}` : ""} Everything here is a guess until you test it.`,
+    warnings: [...ctx.warnings, ...proposed.warnings, ...(graphql?.warnings ?? [])],
     tried: ctx.tried,
   };
 };
@@ -477,7 +545,64 @@ const attemptUrl = async (
  * *proposal* — the oracle is the validate-and-sample step that follows,
  * because documentation lies and a live 200 does not.
  */
+/** A specification with its references into other files followed, and what that took, said. */
+const wholeSpec = async (doc: unknown, url: string, deps: DiscoveryDeps, warnings: string[]): Promise<unknown> => {
+  const { doc: whole, read, unresolved } = await resolveExternalRefs(doc, url, deps.fetchDocument);
+  if (read > 0) warnings.push(`The specification is split across files; ${read} more were read to put it together.`);
+  if (unresolved.length > 0)
+    warnings.push(`Some of its references could not be followed: ${unresolved.slice(0, 3).join(", ")}.`);
+  return whole;
+};
+
 export const discover = async (input: string, deps: DiscoveryDeps): Promise<DiscoveryResult> => {
+  /* An address that says it is an MCP server is asked as one before it is read as documentation. */
+  const first = looksLikeMcpAddress(input) ? await asMcp(input, deps) : null;
+  if (first) return first;
+  const found = await withOidcSignIn(await discoverIndexed(input, deps), deps);
+  if (found.entry || looksLikeMcpAddress(input)) return found;
+  /* Nothing here read as documentation: it may be a server to talk to rather than a page to read. */
+  return (await asMcp(input, deps)) ?? found;
+};
+
+/** The address as an MCP server (plan, track A), or null when it does not answer as one. */
+const asMcp = async (input: string, deps: DiscoveryDeps): Promise<DiscoveryResult | null> => {
+  if (!deps.http) return null;
+  const url = /^https?:\/\//i.test(input.trim()) ? input.trim() : `https://${input.trim()}`;
+  const found = await discoverMcp(url, { http: deps.http }).catch(() => null);
+  return found ? { source: "mcp", entry: found.entry, note: found.note, warnings: found.warnings, tried: [url] } : null;
+};
+
+/**
+ * A specification that signs in with OpenID Connect names a discovery
+ * document; read, it is the OAuth sign-in the broker runs (plan, track B).
+ * Only where the import said it could not sign in that way.
+ */
+const withOidcSignIn = async (found: DiscoveryResult, deps: DiscoveryDeps): Promise<DiscoveryResult> => {
+  const entry = found.entry;
+  if (!entry?.specUrl || !found.warnings.some((warning) => /OpenID Connect/i.test(warning))) return found;
+  const spec = await deps.fetchDocument(entry.specUrl).catch(() => null);
+  if (!spec || spec.status < 200 || spec.status >= 300) return found;
+  const signed = await withOidc(entry, parseSpecDocument(spec.text), spec.url || entry.specUrl, deps.fetchDocument);
+  if (!signed) return found;
+  return {
+    ...found,
+    entry: signed.entry,
+    note: `${found.note} ${signed.note}`,
+    warnings: found.warnings.filter((warning) => !/OpenID Connect/i.test(warning)),
+  };
+};
+
+const discoverIndexed = async (input: string, deps: DiscoveryDeps): Promise<DiscoveryResult> => {
+  const found = await discoverOnce(input, deps);
+  const index = found.index;
+  if (found.entry || !index || !deps.readIndexUpTo || index.pages > deps.readIndexUpTo) return found;
+  /* Nothing answered, and the section is small: read it, as a person offered the count would have. */
+  const deep = await readIndex(new URL(index.section, index.url).toString(), deps);
+  if (!deep.entry) return found;
+  return { ...deep, warnings: [...found.warnings, ...deep.warnings], tried: [...found.tried, ...deep.tried] };
+};
+
+const discoverOnce = async (input: string, deps: DiscoveryDeps): Promise<DiscoveryResult> => {
   const ctx: AttemptContext = { tried: [], warnings: [], blocked: null };
 
   /*

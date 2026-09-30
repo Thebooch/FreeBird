@@ -4,7 +4,9 @@ import {
   type ConnectionSpec,
   type ConnectorSpec,
   type PaginationSpec,
+  type CatalogEntry,
   type ReadSafety,
+  type ResourceSpec,
 } from "@freebirdai/dash-spec";
 
 /**
@@ -17,6 +19,8 @@ import {
 export interface ConnectionPatch {
   readonly baseUrl?: string;
   readonly auth?: AuthSpec;
+  /** The API answers without signing in, where the specification declared no sign-in. */
+  readonly authRequired?: false;
   /** Sent on every request: merged into the connection's shared headers. */
   readonly headers?: Readonly<Record<string, string>>;
   /** Sent on every request: merged into the connection's shared query. */
@@ -34,10 +38,52 @@ export interface ConnectionPatch {
         readonly paginationChecked?: boolean;
         readonly servedBy?: "connector";
         readonly readSafety?: ReadSafety;
+        /** Query parameters a read confirmed narrow the records by a field: parameter → field. */
+        readonly filterParams?: Readonly<Record<string, string>>;
+        /**
+         * Values a read must send that no board supplies, from the documentation:
+         * a search that matches everything, the earliest start time. A query
+         * parameter's goes on the query string; a body, header or cookie
+         * parameter's becomes its default; one the endpoint does not declare
+         * goes into the body it already sends.
+         */
+        readonly inputs?: Readonly<Record<string, string | number | boolean>>;
       }
     >
   >;
+  /** Per record type: an endpoint a read confirmed counts it. */
+  readonly resources?: Readonly<Record<string, { readonly count: NonNullable<ResourceSpec["count"]> }>>;
+  /**
+   * A GraphQL endpoint read as if it were REST, replaced by the reads written
+   * from the schema it answered with (`discovery/graphql.ts`).
+   */
+  readonly reads?: {
+    /** The endpoint the reads stand in for. Absent, they are added beside what is there (an MCP server's tools). */
+    readonly replace?: string;
+    readonly ops: readonly CatalogEntry["ops"][number][];
+    readonly resources: readonly ResourceSpec[];
+  };
 }
+
+type OpDef = ConnectionSpec["ops"][number];
+
+/** An endpoint sending the values a read must send: see `ConnectionPatch.ops[].inputs`. */
+const withInputs = (op: OpDef, inputs: Readonly<Record<string, string | number | boolean>>): OpDef => {
+  let next: OpDef = op;
+  for (const [name, value] of Object.entries(inputs)) {
+    const param = next.params.find((one) => one.name === name);
+    if (param && param.in !== "query" && param.in !== "path") {
+      next = { ...next, params: next.params.map((one) => (one.name === name ? { ...one, default: value } : one)) };
+    } else if (!param && next.body?.type === "json" && next.body.template && typeof next.body.template === "object") {
+      next = { ...next, body: { ...next.body, template: { ...(next.body.template as Record<string, unknown>), [name]: value } } };
+    } else if (!param && next.body?.type === "graphql") {
+      next = { ...next, body: { ...next.body, variables: { ...next.body.variables, [name]: value } } };
+    } else if (!param || param.in === "query") {
+      next = { ...next, query: { ...next.query, [name]: value } };
+    }
+  }
+  return next;
+};
 
 export const applyPatch = (connection: ConnectionSpec, patch: ConnectionPatch): ConnectionSpec | null => {
   const dialect = connection.dialect ?? { headers: {}, query: {} };
@@ -45,6 +91,7 @@ export const applyPatch = (connection: ConnectionSpec, patch: ConnectionPatch): 
     ...connection,
     ...(patch.baseUrl ? { baseUrl: patch.baseUrl, addressPending: false } : {}),
     ...(patch.auth ? { auth: patch.auth } : {}),
+    ...(patch.authRequired === false ? { authRequired: false } : {}),
     ...(patch.connector ? { connector: patch.connector } : {}),
     dialect: {
       ...dialect,
@@ -54,10 +101,43 @@ export const applyPatch = (connection: ConnectionSpec, patch: ConnectionPatch): 
     },
     ops: connection.ops.map((op) => {
       const change = patch.ops?.[op.id];
-      return change ? { ...op, ...change } : op;
+      if (!change) return op;
+      const { filterParams, inputs, ...rest } = change;
+      const withFilters = {
+        ...op,
+        ...rest,
+        ...(filterParams
+          ? {
+              params: (op.params ?? []).map((param) =>
+                filterParams[param.name] ? { ...param, filters: filterParams[param.name] } : param,
+              ),
+            }
+          : {}),
+      };
+      return inputs ? withInputs(withFilters, inputs) : withFilters;
+    }),
+    resources: connection.resources.map((resource) => {
+      const change = patch.resources?.[resource.id];
+      return change ? { ...resource, count: change.count } : resource;
     }),
   };
-  const parsed = connectionSchema.safeParse(next);
+  /* Written as data for the schema to read: a catalog's op is a connection's, once parsed. */
+  const withReads = (): unknown => {
+    if (!patch.reads) return next;
+    const { replace, ops, resources } = patch.reads;
+    const kept = next.ops.filter((op) => op.id !== replace);
+    const taken = new Set(kept.map((op) => op.id));
+    const added = ops.filter((op) => !taken.has(op.id));
+    const remaining = next.resources.filter((one) => one.listOp !== replace);
+    const listed = new Set(remaining.map((one) => one.id));
+    return {
+      ...next,
+      ops: [...kept, ...added],
+      resources: [...remaining, ...resources.filter((one) => !listed.has(one.id) && added.some((op) => op.id === one.listOp))],
+      ...(next.validateOpId === replace && added[0] ? { validateOpId: added[0].id } : {}),
+    };
+  };
+  const parsed = connectionSchema.safeParse(withReads());
   return parsed.success ? parsed.data : null;
 };
 
@@ -78,9 +158,12 @@ export const describePatch = (patch: ConnectionPatch, titleOf: (op: string) => s
               ? "sign in with a username and password"
               : auth.type === "connector"
                 ? `sign in through the connector with ${auth.credentials.map((one) => one.label ?? one.name).join(" and ") || "no pasted value"}`
-                : `sign in: ${auth.type}`,
+                : auth.type === "sigv4"
+                  ? `sign each request for AWS${auth.region ? ` (${[auth.service, auth.region].filter(Boolean).join(", ")})` : ""}`
+                  : `sign in: ${auth.type}`,
     );
   }
+  if (patch.authRequired === false) parts.push("read without signing in");
   for (const [name, value] of Object.entries(patch.headers ?? {})) parts.push(`send ${name}: ${value}`);
   for (const [name, value] of Object.entries(patch.query ?? {})) parts.push(`send ${name}=${value}`);
   if (patch.connector)
@@ -96,7 +179,21 @@ export const describePatch = (patch: ConnectionPatch, titleOf: (op: string) => s
           ? `read ${titleOf(op)} in one response`
           : `read every page of ${titleOf(op)}`,
       );
+    for (const [param, field] of Object.entries(change.filterParams ?? {}))
+      parts.push(`ask ${titleOf(op)} for records by ${field} with ${param}`);
+    for (const [name, value] of Object.entries(change.inputs ?? {})) parts.push(`send ${name}=${String(value)} to ${titleOf(op)}`);
   }
+  if (patch.reads)
+    parts.push(
+      `read ${patch.reads.ops.length} list(s) from the GraphQL schema: ${patch.reads.ops
+        .slice(0, 6)
+        .map((op) => op.title)
+        .join(", ")}${patch.reads.ops.length > 6 ? ", …" : ""}`,
+    );
+  for (const [resource, change] of Object.entries(patch.resources ?? {}))
+    parts.push(
+      `count ${resource} with ${titleOf(change.count.op)}${change.count.filters.length > 0 ? `, narrowed by ${change.count.filters.join(", ")}` : ""}`,
+    );
   return parts.join("; ") || "no change";
 };
 

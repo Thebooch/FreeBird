@@ -5,7 +5,7 @@ import { fakeLlm } from "@freebirdai/dash-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CatalogStore } from "../catalog.js";
 import { discover, rankSearchResults } from "./index.js";
-import { analysePage, rankContext } from "./docs.js";
+import { analysePage, endpointsNamed, rankContext } from "./docs.js";
 import { mapDialectProposal } from "./propose-dialect.js";
 
 let dir: string;
@@ -445,6 +445,29 @@ describe("bare domains and names", () => {
   });
 });
 
+describe("documentation drawn in the browser", () => {
+  const shell = `<html><head><script src="/app.js"></script></head><body><div id="root"></div>${"<script>window.__x=1</script>".repeat(200)}</body></html>`;
+  const drawnHtml = `<html><body><h1>Widgets API</h1>${"<p>GET https://api.widgets.dev/v1/widgets returns every widget. Authenticate with a bearer token.</p>".repeat(20)}</body></html>`;
+
+  it("is read as drawn where a renderer is plugged in, and said to be unreadable where not", async () => {
+    const docs = documents({ "https://docs.widgets.dev/": { text: shell } });
+    const plain = await discover("https://docs.widgets.dev/", { fetchDocument: docs.fetchDocument, llm: null, search: null });
+    expect(plain.entry).toBeNull();
+    expect(plain.note + plain.warnings.join(" ")).toMatch(/rendered in the browser/);
+
+    const asked: string[] = [];
+    const drawn = await discover("https://docs.widgets.dev/", {
+      fetchDocument: docs.fetchDocument,
+      llm: null,
+      search: null,
+      renderDocs: { render: async (url) => (asked.push(url), { html: drawnHtml, url }) },
+    });
+    expect(asked).toEqual(["https://docs.widgets.dev/"]);
+    /* Past the renderer, the page reaches the next rung: reading it needs a model, and says so. */
+    expect(drawn.note + drawn.warnings.join(" ")).toMatch(/needs an AI key/);
+  });
+});
+
 describe("mapDialectProposal", () => {
   const base = {
     title: "Thing API",
@@ -459,10 +482,129 @@ describe("mapDialectProposal", () => {
     expect(entry?.origin).toBe("docs");
   });
 
+  /* Plan, track B: sign-ins prose names that used to be "not supported". */
+  it("reads a cookie key, a Digest login and an AWS signature from prose as sign-ins it can send", () => {
+    expect(mapDialectProposal({ ...base, authType: "cookie", authName: "session_key" }).entry?.dialect.auth).toEqual({
+      type: "headers",
+      parts: [{ header: "session_key", keyRef: "thing-api-key", in: "cookie" }],
+    });
+    expect(mapDialectProposal({ ...base, authType: "digest" }).entry?.dialect.auth).toMatchObject({ type: "basic", digest: true });
+    const signed = mapDialectProposal({ ...base, authType: "AWS Signature Version 4", authRegion: "eu-west-1", authService: "execute-api" });
+    expect(signed.entry?.dialect.auth).toEqual({
+      type: "sigv4",
+      accessKeyRef: "thing-api-key-access",
+      keyRef: "thing-api-key",
+      region: "eu-west-1",
+      service: "execute-api",
+    });
+    expect(signed.warnings.join(" ")).not.toMatch(/not supported|not an authentication style/i);
+    /* A region the docs did not state is left out, never guessed; an AWS address says its own. */
+    expect(mapDialectProposal({ ...base, authType: "aws", authRegion: "the default one" }).entry?.dialect.auth).toEqual({
+      type: "sigv4",
+      accessKeyRef: "thing-api-key-access",
+      keyRef: "thing-api-key",
+    });
+    /* Any other signing is still named as what it is. */
+    expect(mapDialectProposal({ ...base, authType: "signed" }).entry?.dialect.auth).toEqual({ type: "none" });
+  });
+
+  /* Measurement 1: a "modified after" filter as every read's window counted 33 of 194 products. */
+  it("does not make a changed-since parameter every read's time window, and says why", () => {
+    const { entry, warnings } = mapDialectProposal({ ...base, timeParam: "modifiedAfter" });
+    expect(entry?.dialect.timeFilter).toBeUndefined();
+    expect(warnings.join(" ")).toMatch(/"modifiedAfter" selects records changed since a time/);
+    expect(mapDialectProposal({ ...base, timeParam: "created_after" }).entry?.dialect.timeFilter).toMatchObject({
+      param: "created_after",
+    });
+  });
+
   /* Measurement 1: an API documented in prose had no resources, so no request could reach it. */
   it("reads the record structure off the paths the prose named, as a specification's are", () => {
     const { entry } = mapDialectProposal(base);
     expect(entry?.resources).toEqual([expect.objectContaining({ id: "thing", listOp: "things" })]);
+  });
+
+  /* Checkpoint 2: 18 of 158 sections were read, and the collection a request was about was never imported. */
+  it("adds the reads the whole page names under the API's address, and the collections their records belong to", () => {
+    const { entry, warnings } = mapDialectProposal(base, [
+      "GET https://api.thing.dev/things/{id}",
+      "GET https://api.thing.dev/widgets/:widgetId",
+      "GET /gadgets",
+      "https://api.thing.dev/parts",
+      "https://docs.thing.dev/guide",
+      "GET https://elsewhere.dev/things",
+    ]);
+    const paths = entry?.ops.map((op) => op.path) ?? [];
+    expect(paths).toEqual([
+      "/things",
+      "/things/{{param.id}}",
+      "/widgets/{{param.widgetid}}",
+      "/widgets",
+      "/gadgets",
+      "/parts",
+    ]);
+    expect(entry?.ops.find((op) => op.path === "/widgets")).toMatchObject({ archetype: "list", title: "List widgets" });
+    expect(warnings.join(" ")).toMatch(/5 endpoint\(s\) the documentation names were added/);
+  });
+
+  /* Checkpoint 2: a page's examples — /character/361, an avatar image — became twenty collections of their own. */
+  it("reads an example id in a named address as the record's id, and skips files", () => {
+    const { entry } = mapDialectProposal(base, [
+      "https://api.thing.dev/episodes/27",
+      "https://api.thing.dev/episodes/1,2,3",
+      "https://api.thing.dev/episodes/0b7c7f9e-8f4e-4c2a-9a3b-1e2d3c4b5a69",
+      "https://api.thing.dev/characters/avatar/361.jpeg",
+    ]);
+    expect(entry?.ops.map((op) => op.path)).toEqual(["/things", "/episodes/{{param.id}}", "/episodes"]);
+  });
+
+  /* Checkpoint 2: a table of resources read `/todos`, and the to-dos were never imported. */
+  it("takes a path written on its own, under the API's own address", () => {
+    const named = endpointsNamed(analysePage("<table><tr><td>/posts</td><td>100 posts</td></tr><tr><td>/todos</td><td>200 todos</td></tr></table><p>See 1/2 of it.</p>"));
+    expect(named).toEqual(expect.arrayContaining(["PATH /posts", "PATH /todos"]));
+    expect(named.some((one) => one.includes("1/2"))).toBe(false);
+    /* The end of a markup tag in a sample is not a path. */
+    expect(endpointsNamed(analysePage("<pre>&lt;name&gt;x&lt;/name&gt;</pre>")).some((one) => one.includes("/name"))).toBe(false);
+    /* An API whose base address is its one endpoint. */
+    const single = mapDialectProposal({ ...base, baseUrl: "https://api.thing.dev/xml/v1/request.api", endpoints: [] }, ["https://api.thing.dev/xml/v1/request.api"]);
+    expect(single.entry?.ops.map((op) => op.path)).toEqual(["/"]);
+    const { entry } = mapDialectProposal(base, named);
+    expect(entry?.ops.map((op) => op.path)).toEqual(expect.arrayContaining(["/posts", "/todos"]));
+    /* Under an API with a path of its own, only paths beneath it. */
+    const prefixed = mapDialectProposal({ ...base, baseUrl: "https://api.thing.dev/api" }, ["PATH /documentation", "PATH /api/todos"]);
+    expect(prefixed.entry?.ops.map((op) => op.path)).toEqual(["/things", "/todos"]);
+  });
+
+  it("finds every read a page names, however far down it is", () => {
+    const filler = "<p>Words about the product.</p>".repeat(2000);
+    const html = `<html><body>${filler}<p>List them with GET https://api.thing.dev/v1/things?page=2.</p><p>See https://api.thing.dev/v1/status</p></body></html>`;
+    const named = endpointsNamed(analysePage(html));
+    expect(named).toContain("GET https://api.thing.dev/v1/things?page=2");
+    expect(named).toContain("https://api.thing.dev/v1/status");
+    expect(named).not.toContain("https://api.thing.dev/v1/things?page=2");
+  });
+
+  /* Checkpoint 2: an API that filters by state and type was imported with no way to ask it to. */
+  it("keeps the parameters an endpoint documents for narrowing, as optional inputs, and never paging ones", () => {
+    const { entry } = mapDialectProposal({
+      ...base,
+      paginationKind: "page",
+      paginationParam: "page",
+      limitParam: "per_page",
+      endpointParams: [
+        { endpoint: "things", name: "by_state", description: "Filter by state." },
+        { endpoint: "things", name: "by_type" },
+        { endpoint: "things", name: "per_page" },
+        { endpoint: "things", name: "sort" },
+        { endpoint: "things", name: "not a name!" },
+        { endpoint: "elsewhere", name: "status" },
+      ],
+    });
+    const params = entry?.ops[0]?.params ?? [];
+    expect(params.map((one) => one.name)).toEqual(["by_state", "by_type"]);
+    expect(params[0]).toMatchObject({ in: "query", required: false, role: "filter", description: "Filter by state." });
+    /* Nothing is asked of a person for them. */
+    expect(params.every((one) => !one.required && one.default === undefined)).toBe(true);
   });
 
   it("refuses a pagination scheme that arrived without its parameter", () => {

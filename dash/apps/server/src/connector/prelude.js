@@ -183,6 +183,11 @@
     },
   });
 
+  /* Read by the server (`xml.parse`): elements become fields, repeats a list, a SOAP envelope is opened. */
+  globalThis.XML = Object.freeze({
+    parse: (text) => call("xml.parse", String(text)),
+  });
+
   globalThis.NDJSON = Object.freeze({
     parse(text) {
       return String(text)
@@ -191,6 +196,89 @@
         .map((line) => JSON.parse(line));
     },
   });
+
+  /* ── addresses ──────────────────────────────────────────────────────── */
+
+  /*
+   * QuickJS has no URL, and code written for the web reaches for one first:
+   * `new URL(...)` failed a connector before it sent anything (measurement 1).
+   * Enough of it for building and reading addresses; nothing it does reaches
+   * the network.
+   */
+  class SandboxSearchParams {
+    constructor(query) {
+      this.pairs = [];
+      const text = String(query || "").replace(/^\?/, "");
+      if (text !== "")
+        for (const part of text.split("&")) {
+          const at = part.indexOf("=");
+          const name = at < 0 ? part : part.slice(0, at);
+          const value = at < 0 ? "" : part.slice(at + 1);
+          this.pairs.push([decodeURIComponent(name.replace(/\+/g, " ")), decodeURIComponent(value.replace(/\+/g, " "))]);
+        }
+    }
+    get(name) {
+      const found = this.pairs.find((pair) => pair[0] === name);
+      return found ? found[1] : null;
+    }
+    getAll(name) {
+      return this.pairs.filter((pair) => pair[0] === name).map((pair) => pair[1]);
+    }
+    has(name) {
+      return this.pairs.some((pair) => pair[0] === name);
+    }
+    set(name, value) {
+      this.delete(name);
+      this.pairs.push([String(name), String(value)]);
+    }
+    append(name, value) {
+      this.pairs.push([String(name), String(value)]);
+    }
+    delete(name) {
+      this.pairs = this.pairs.filter((pair) => pair[0] !== name);
+    }
+    forEach(callback) {
+      for (const [name, value] of this.pairs) callback(value, name, this);
+    }
+    toString() {
+      return this.pairs.map(([name, value]) => `${encodeURIComponent(name)}=${encodeURIComponent(value)}`).join("&");
+    }
+  }
+
+  class SandboxURL {
+    constructor(input, base) {
+      let text = String(input);
+      if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) {
+        if (base === undefined) throw new TypeError(`Invalid URL: ${text}`);
+        const root = new SandboxURL(base);
+        text = text.startsWith("/") ? `${root.origin}${text}` : `${root.origin}${root.pathname.replace(/[^/]*$/, "")}${text}`;
+      }
+      const match = /^([a-z][a-z0-9+.-]*:)\/\/([^/?#]*)([^?#]*)(\?[^#]*)?(#.*)?$/i.exec(text);
+      if (!match) throw new TypeError(`Invalid URL: ${text}`);
+      this.protocol = match[1].toLowerCase();
+      this.host = match[2].toLowerCase();
+      this.hostname = this.host.replace(/:\d+$/, "");
+      this.port = (/:(\d+)$/.exec(this.host) || [])[1] || "";
+      this.pathname = match[3] || "/";
+      this.searchParams = new SandboxSearchParams(match[4] || "");
+      this.hash = match[5] || "";
+    }
+    get origin() {
+      return `${this.protocol}//${this.host}`;
+    }
+    get search() {
+      const query = this.searchParams.toString();
+      return query === "" ? "" : `?${query}`;
+    }
+    get href() {
+      return `${this.origin}${this.pathname}${this.search}${this.hash}`;
+    }
+    toString() {
+      return this.href;
+    }
+  }
+  globalThis.URL = SandboxURL;
+  globalThis.URLSearchParams = SandboxSearchParams;
 
   /* ── requests ───────────────────────────────────────────────────────── */
 
@@ -253,7 +341,10 @@
         return CSV.parse(text);
       case "ndjson":
         return NDJSON.parse(text);
+      case "xml":
+        return answer.xml;
       default:
+        if (answer.xml !== undefined) return answer.xml;
         if (/json/.test(type) && !/ndjson|x-jsonlines/.test(type)) return json();
         if (/csv|comma-separated/.test(type)) return CSV.parse(text);
         if (/tab-separated/.test(type)) return CSV.parse(text, { delimiter: "\t" });
@@ -279,6 +370,10 @@
       const as = request && request.as;
       const ready = await signed(normalize(request), request && request.sign);
       const answer = await call("http.request", ready);
+      /* XML is read by the server, with the same reader a plain endpoint's answer gets. */
+      const type = (answer.headers["content-type"] || "").toLowerCase();
+      if (as === "xml" || ((as === undefined || as === "auto") && /xml/.test(type) && !/xhtml/.test(type)))
+        answer.xml = await call("xml.parse", answer.text);
       const response = { status: answer.status, headers: answer.headers, url: answer.url };
       response.body = answer.status === 204 || ready.method === "HEAD" ? null : decode(answer, as);
       return response;

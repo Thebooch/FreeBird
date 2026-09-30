@@ -341,7 +341,7 @@ async function read(ctx) {
 
 /*
  * Moved to the dev set at the end of plan step 4, once its failure there was
- * written up (`bench/results/checkpoint-step-4.md`): from then on it is tuned
+ * written up: from then on it is tuned
  * against, and `harborline` is the held-out replacement.
  */
 export const vaultbank: MockProvider = {

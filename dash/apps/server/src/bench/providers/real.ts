@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { HttpFetch } from "@freebirdai/dash-adapters";
-import { REAL_SOURCES, minimal } from "../real/sources.js";
+import { REAL_SOURCES, readSource } from "../real/sources.js";
 import type { MockProvider } from "../types.js";
 
 /**
@@ -33,10 +33,21 @@ const freshnessOf =
   async (http: HttpFetch): Promise<string | null> => {
     for (const id of ids) {
       const source = sourceOf(id);
-      const url = new URL(source.url);
-      const answer = await http(source.url, { headers: { accept: "application/json" } }, url.hostname);
-      if (answer.status !== 200) return `the reference read of ${id} answered ${answer.status}`;
-      const live = minimal(source, JSON.parse(answer.text));
+      let live: Record<string, unknown>[];
+      /* A short rate limit is waited out, as a board's read does: a stale key must mean changed data, not a busy API. */
+      const get = async (url: string) => {
+        for (let waits = 0; ; waits++) {
+          const answer = await http(url, { headers: { accept: "application/json" } }, new URL(url).hostname);
+          const wait = Number(answer.header("retry-after") ?? 5);
+          if (answer.status !== 429 || waits >= 3 || !(wait <= 30)) return answer;
+          await new Promise((resolve) => setTimeout(resolve, wait * 1000));
+        }
+      };
+      try {
+        live = await readSource(source, get);
+      } catch (error) {
+        return `the reference read of ${id} failed: ${error instanceof Error ? error.message : String(error)}`;
+      }
       if (JSON.stringify(live) !== JSON.stringify(snapshot(id)))
         return `${id} has changed since its snapshot was taken (${live.length} record(s) now); retake it with real/snapshot.mts`;
     }
@@ -132,6 +143,154 @@ export const jsonplaceholderTodos: MockProvider = {
       tolerance: 0,
       records: todos.length,
       scripted: { path: "/todos", measure: { agg: "count", where: "completed == true" } },
+    },
+  ],
+};
+
+/*
+ * Added 2026-09-29, after every dev and real scenario passed: five more public
+ * APIs, their answer keys fixed from snapshots before any integrator ran
+ * against them (PROTOCOL.md). Chosen for what they differ in, not for being
+ * easy: prose documentation spread over a large page, a list read in
+ * forty-odd pages behind a rate limit, dates written as words, a collection of
+ * eleven thousand records the API itself can filter, and an OpenAPI document.
+ */
+
+const characters = snapshot("rickandmorty-characters");
+const episodes = snapshot("rickandmorty-episodes");
+const pokemon = snapshot("pokeapi-pokemon");
+const breweryCounts = snapshot("openbrewerydb-counts");
+const breeds = snapshot("catfact-breeds");
+const facts = snapshot("catfact-facts");
+
+const countOf = (id: string): number => Number(breweryCounts.find((one) => one.id === id)?.count ?? Number.NaN);
+
+export const rickandmortyCharacters: MockProvider = {
+  id: "rickandmorty-characters",
+  split: "real",
+  pattern:
+    "Real API, documented in HTML: 826 characters in pages of 20 found by following the answer's own next link, under a rate limit",
+  hosts: ["rickandmortyapi.com"],
+  live: true,
+  freshness: freshnessOf(["rickandmorty-characters"]),
+  docsUrl: "https://rickandmortyapi.com/documentation",
+  credentials: [],
+  handle: unreachable,
+  objectives: [
+    {
+      id: "dead",
+      request: "How many characters are dead?",
+      answer: characters.filter((one) => one.status === "Dead").length,
+      tolerance: 0,
+      records: characters.length,
+      scripted: { path: "/api/character", measure: { agg: "count", where: 'status == "Dead"' } },
+    },
+  ],
+};
+
+export const rickandmortyEpisodes: MockProvider = {
+  id: "rickandmorty-episodes",
+  split: "real",
+  pattern: "Real API, documented in HTML: episodes dated in words (\"December 2, 2013\"), in pages of 20",
+  hosts: ["rickandmortyapi.com"],
+  live: true,
+  freshness: freshnessOf(["rickandmorty-episodes"]),
+  docsUrl: "https://rickandmortyapi.com/documentation",
+  credentials: [],
+  handle: unreachable,
+  objectives: [
+    {
+      id: "aired-2017",
+      request: "How many episodes aired in 2017?",
+      answer: episodes.filter((one) => String(one.air_date).endsWith("2017")).length,
+      tolerance: 0,
+      records: episodes.length,
+      scripted: { path: "/api/episode", measure: { agg: "count", where: 'endsWith(air_date, "2017")' } },
+    },
+  ],
+};
+
+export const pokeapiPokemon: MockProvider = {
+  id: "pokeapi-pokemon",
+  split: "real",
+  pattern:
+    "Real API, documented in one large HTML page: 1,351 entries of a name and an address, in pages of 20 by offset and limit, with a count",
+  hosts: ["pokeapi.co"],
+  live: true,
+  freshness: freshnessOf(["pokeapi-pokemon"]),
+  docsUrl: "https://pokeapi.co/docs/v2",
+  credentials: [],
+  handle: unreachable,
+  objectives: [
+    {
+      id: "count",
+      request: "How many Pokémon are there?",
+      answer: pokemon.length,
+      tolerance: 0,
+      records: pokemon.length,
+      scripted: { path: "/api/v2/pokemon", measure: { agg: "count" } },
+    },
+  ],
+};
+
+export const openbrewerydb: MockProvider = {
+  id: "openbrewerydb",
+  split: "real",
+  pattern:
+    "Real API, documented in HTML on a separate host: 11,848 breweries in pages of at most 200, which the API can filter by state and type itself",
+  hosts: ["api.openbrewerydb.org", "www.openbrewerydb.org"],
+  live: true,
+  /* The API's own counts are the key: a reference read of eleven thousand records would be one request to what it already totals. */
+  freshness: freshnessOf(["openbrewerydb-counts"]),
+  docsUrl: "https://www.openbrewerydb.org/documentation",
+  credentials: [],
+  handle: unreachable,
+  objectives: [
+    {
+      id: "oregon",
+      request: "How many breweries are listed in Oregon?",
+      answer: countOf("state:Oregon"),
+      tolerance: 0,
+      records: countOf("total"),
+      scripted: { path: "/v1/breweries", measure: { agg: "count", where: 'state == "Oregon"' } },
+    },
+    {
+      id: "brewpubs",
+      request: "How many brewpubs are listed?",
+      answer: countOf("type:brewpub"),
+      tolerance: 0,
+      records: countOf("total"),
+      scripted: { path: "/v1/breweries", measure: { agg: "count", where: 'brewery_type == "brewpub"' } },
+    },
+  ],
+};
+
+export const catfact: MockProvider = {
+  id: "catfact",
+  split: "real",
+  pattern: "Real API, documented by an OpenAPI document: breeds and facts in pages, Laravel style (current_page, next_page_url)",
+  hosts: ["catfact.ninja"],
+  live: true,
+  freshness: freshnessOf(["catfact-breeds", "catfact-facts"]),
+  docsUrl: "https://catfact.ninja/docs",
+  credentials: [],
+  handle: unreachable,
+  objectives: [
+    {
+      id: "us-breeds",
+      request: "How many cat breeds come from the United States?",
+      answer: breeds.filter((one) => one.country === "United States").length,
+      tolerance: 0,
+      records: breeds.length,
+      scripted: { path: "/breeds", measure: { agg: "count", where: 'country == "United States"' } },
+    },
+    {
+      id: "long-facts",
+      request: "How many cat facts are longer than 200 characters?",
+      answer: facts.filter((one) => Number(one.length) > 200).length,
+      tolerance: 0,
+      records: facts.length,
+      scripted: { path: "/facts", measure: { agg: "count", where: "length > 200" } },
     },
   ],
 };

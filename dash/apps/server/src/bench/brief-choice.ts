@@ -2,6 +2,8 @@ import { briefCandidates, describeEntities, inferShape, resolveCandidate, writeB
 import {
   compileBrief,
   entityById,
+  filterParamsOf,
+  readsRangeOf,
   getOp,
   observeEntity,
   rerootBrief,
@@ -11,6 +13,7 @@ import {
   type EntitySpec,
   type WidgetSpec,
 } from "@freebirdai/dash-spec";
+import { seenByRecordType, type SeenSet } from "../integrate/values.js";
 
 /**
  * Choosing what answers an objective, the way the product does — unscripted.
@@ -67,6 +70,10 @@ export const chooseByBrief = async (input: {
   readonly entry: CatalogEntry;
   readonly request: string;
   readonly llm: LlmAdapter;
+  /** Today, for the benchmark's own clock. */
+  readonly today?: string;
+  /** What the first check's reads showed the records hold, by endpoint — as the product keeps it per connection. */
+  readonly seen?: Readonly<Record<string, SeenSet>>;
 }): Promise<BriefChoice> => {
   const { connection, entry, llm } = input;
   const notes: string[] = [];
@@ -98,12 +105,27 @@ export const chooseByBrief = async (input: {
       modelCalls,
     };
   notes.push(`Record types described: ${entities.map((one) => one.name.many).join(", ")}.`);
+  /* Which fields each carries, so a brief naming one that is not there can be diagnosed from the record. */
+  for (const one of entities)
+    notes.push(`${one.name.many} (${one.id}): ${one.fields.map((field) => `${field.path}${field.label && field.label !== field.path ? ` "${field.label}"` : ""}`).join(", ").slice(0, 600)}`);
 
   /* 2. The request, as a brief over those record types. */
-  const candidates = briefCandidates([{ connection: connection.id, title: connection.title, entities }]);
-  const written = await writeBrief(counted, { intent: input.request, candidates });
+  const seen = seenByRecordType(connection, entities, input.seen ?? {});
+  for (const [recordType, one] of Object.entries(seen))
+    notes.push(
+      `Seen in ${one.everyRecord ? "every one" : "some"} of ${recordType}'s records: ${Object.entries(one.fields).map(([path, values]) => `${path} = ${values.join(" / ")}`).join("; ").slice(0, 600)}`,
+    );
+  const candidates = briefCandidates([{ connection: connection.id, title: connection.title, entities, seen }]);
+  const written = await writeBrief(counted, { intent: input.request, candidates, ...(input.today ? { today: input.today } : {}) });
   if (!written.brief)
-    return { stop: "choose", why: written.error ?? "No brief was written for the request.", notes, modelCalls };
+    return {
+      stop: "choose",
+      why: written.unmatched
+        ? `No record type here is what the request is about: ${written.unmatched}`
+        : (written.error ?? "No brief was written for the request."),
+      notes,
+      modelCalls,
+    };
   notes.push(`Brief: ${JSON.stringify(written.brief)}. The model said: ${written.reason}`);
 
   /* 3. Compiled, exactly as the brief route compiles it. */
@@ -119,6 +141,8 @@ export const chooseByBrief = async (input: {
     connection: connection.id,
     listPath: listPathOf(connection, resource.listOp),
     rowsPathOf: (op) => getOp(connection, op)?.rowsPath,
+    filterParamOf: filterParamsOf(connection),
+    readsRange: readsRangeOf(connection),
     id: "objective",
   });
   notes.push(...compiled.notes.map((one) => `Compiling the brief: ${one}`));
@@ -169,6 +193,8 @@ export const observeFirstRead = (input: {
     connection: input.connection.id,
     listPath: listPathOf(input.connection, resource.listOp),
     rowsPathOf: (op) => getOp(input.connection, op)?.rowsPath,
+    filterParamOf: filterParamsOf(input.connection),
+    readsRange: readsRangeOf(input.connection),
     id: "objective",
   });
   if (!compiled.widget) return null;

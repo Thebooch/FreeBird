@@ -80,7 +80,20 @@ export class LocalAesVault implements SecretVault {
 }
 
 /** Vault-file-backed key store: keyRef → encrypted secret. */
-export class KeyStore {
+/**
+ * Where credentials are kept, encrypted (plan, track G): the server depends on
+ * this, and a hosted build supplies one backed by its own key management
+ * service. `SecretVault` is the encryption beneath the local one.
+ */
+export interface SecretRepository {
+  has(keyRef: string): boolean;
+  set(keyRef: string, plaintext: string): void;
+  delete(keyRef: string): void;
+  get(keyRef: string): string | null;
+  refs(): string[];
+}
+
+export class KeyStore implements SecretRepository {
   private secrets: Record<string, string> = {};
 
   constructor(

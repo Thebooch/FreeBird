@@ -3,6 +3,7 @@ import { componentIdSchema, contractFor } from "./contracts.js";
 import { dashboardParamsSchema } from "./params.js";
 import { facetsSchema } from "./facet.js";
 import { widgetBriefSchema } from "./brief-schema.js";
+import { metricSchema } from "./metric.js";
 import { recordOverrideSchema } from "./entity.js";
 import { fieldNameSchema, highlightSchema, pipelineSchema } from "./pipeline.js";
 import { presentationSchema } from "./presentation.js";
@@ -47,6 +48,15 @@ export const widgetSourceSchema = z.object({
   /** Merged over the op's own query. Values may carry `{{…}}` params. */
   params: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
 });
+
+/**
+ * The most records a tile's per-record reads cover in all.
+ *
+ * A tile reads the first `fanOut.maxRows` itself so it can draw; where the host
+ * can read the rest in the background (Dash's server does), it reads up to
+ * this many, one request each, behind every board's own reads.
+ */
+export const FAN_OUT_WHOLE_MAX = 500;
 
 /**
  * One endpoint inside a multi-source widget.
@@ -185,6 +195,31 @@ export const widgetSchema = z
    * revoke every approval on every board.
    */
   brief: widgetBriefSchema.optional(),
+  /**
+   * The time this widget reads, where its request named one — "since 1 June",
+   * "in July" — in place of the board's window. Read within the board's thirty
+   * days, a total asked for since June counted a month of it and said nothing
+   * (checkpoint 3). ISO dates; `to` is exclusive, and absent means now.
+   *
+   * Optional with no default, for the reason `brief` is: a default would
+   * change every widget's digest.
+   */
+  timeWindow: z
+    .union([
+      z.object({ from: z.string().min(10).max(40), to: z.string().min(10).max(40).optional() }),
+      /* Every record, where the request named no time and the number counts (checkpoint 4). */
+      z.object({ all: z.literal(true) }),
+    ])
+    .optional(),
+  /**
+   * What this widget's number means: what is counted or added, over which
+   * records, narrowed how, dated by what, in which currency, and what was
+   * checked (`MetricDefinition`, plan track E). Compiled with the brief, and
+   * shown on the tile where the widget has no description of its own.
+   *
+   * Optional with no default, for the reason `brief` is.
+   */
+  metric: metricSchema.optional(),
   /**
    * This widget's own changes to the record page its rows open.
    *

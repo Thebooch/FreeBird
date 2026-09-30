@@ -16,6 +16,7 @@ import {
 } from "./primitives.js";
 import { resourceSchema } from "./resource.js";
 import { connectorSchema } from "./connector.js";
+import { evidenceLevelSchema } from "./evidence.js";
 
 /**
  * A dialect is "how this vendor does things", declared once per API.
@@ -201,6 +202,11 @@ export const catalogEntrySchema = z.object({
     .regex(/^[a-z0-9-]+$/, "catalog ids must be lowercase [a-z0-9-]"),
   title: z.string().min(1),
   /**
+   * What is at the address: an API read over HTTP, or an MCP server whose
+   * read-only tools are its endpoints. See `connectionSchema.kind`.
+   */
+  kind: z.enum(["rest", "mcp"]).default("rest"),
+  /**
    * Where requests go. A real address, always — for an API hosted per
    * account it is the template filled with its documented defaults, which
    * is a place to start and not an address anybody's account lives at. See
@@ -229,6 +235,16 @@ export const catalogEntrySchema = z.object({
    * names of the ones it asks the server to use.
    */
   connector: connectorSchema.optional(),
+  /** A client certificate the API asks for (mutual TLS). See `connectionSchema.clientCertificate`. */
+  clientCertificate: z
+    .object({
+      certRef: z.string().min(1),
+      keyRef: z.string().min(1),
+      caRef: z.string().min(1).optional(),
+      certLabel: z.string().max(80).optional(),
+      keyLabel: z.string().max(80).optional(),
+    })
+    .optional(),
   /** Suggested endpoints, so a new connection starts useful rather than empty. */
   ops: z
     .array(
@@ -245,8 +261,14 @@ export const catalogEntrySchema = z.object({
         totalPath: z.string().max(200).optional(),
         /** See `opDefSchema.servedBy`. */
         servedBy: z.literal("connector").optional(),
+        /** See `opDefSchema.stream`. */
+        stream: z
+          .object({ events: z.number().int().min(1).max(1000).default(100), seconds: z.number().int().min(1).max(30).default(5) })
+          .optional(),
         archetype: archetypeSchema.default("list"),
         rowsPath: z.string().optional(),
+        /** See `opDefSchema.timeFiltered`: false where the endpoint does not take the dialect's time range. */
+        timeFiltered: z.boolean().optional(),
         pagination: paginationSchema.optional(),
         /**
          * Entries written before the limit was shared allowed up to 100. They
@@ -446,7 +468,30 @@ export const catalogEntrySchema = z.object({
    */
   authRequired: z.boolean().default(false),
   /** How this entry came to exist — shown so a guess is never mistaken for fact. */
-  origin: z.enum(["repo", "openapi", "docs", "manual"]).default("manual"),
+  origin: z.enum(["repo", "openapi", "docs", "manual", "registry"]).default("manual"),
+  /**
+   * Counts what the entry says about the API: one more each time that changes.
+   * What a registry lists, so an entry already held is not fetched again, and
+   * what a check's evidence says it was gathered against.
+   */
+  version: z.number().int().min(1).optional(),
+  /** When a check last read this entry's endpoints from a real account and found them ready. */
+  verifiedAt: z.string().datetime().optional(),
+  /**
+   * What the last check established, endpoint by endpoint, as rungs of the
+   * evidence ladder. Shape only — no count and no value from the account it
+   * was run against — so it can be shared with the entry. It is whoever ran
+   * the check's word about the version named, not a claim about any other.
+   */
+  evidence: z
+    .object({
+      at: z.string().datetime(),
+      /** The entry's `version` the check ran against. */
+      version: z.number().int().min(1).optional(),
+      outcome: z.enum(["ready", "partial"]),
+      ops: z.record(z.string(), evidenceLevelSchema),
+    })
+    .optional(),
   /** Which importer wrote the address and auth. Absent means before `IMPORT_VERSION` existed. */
   importVersion: z.number().int().min(1).optional(),
   /** True once a real request against this dialect returned usable rows. */

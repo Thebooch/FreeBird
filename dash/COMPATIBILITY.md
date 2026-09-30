@@ -11,10 +11,10 @@ This is the boundary as the code stands, not a measured success rate. When an AP
 | | Status | What it means |
 |---|---|---|
 | REST APIs over HTTPS | Supported | Each connection reads from one address. |
-| GraphQL APIs | Partly | A GraphQL query can be read, and paged through its variables; one that could change anything is refused. Setting one up from the API's schema is not done yet. |
-| MCP servers | Not yet | The server does not connect to MCP servers yet. |
-| SOAP web services | Not yet | SOAP requests are XML sent with POST, and neither is read yet. |
-| Streams (server-sent events, WebSocket) | Not yet | Only requests that answer once can be read. |
+| GraphQL APIs | Partly | A GraphQL query can be read, and paged through its variables; one that could change anything is refused. Reads are set up from the API's schema: published by its documentation, or asked of the API itself. |
+| MCP servers | Partly | An MCP server reached over HTTP is a connection: the tools it marks read-only become endpoints, and so do tools named for reading where it says nothing either way. Any other tool is never called for a board. A server that signs clients in through OAuth's dynamic registration needs a token pasted for now; servers started as a local process are not reached. |
+| SOAP web services | Partly | A SOAP service is set up from its WSDL (1.1, document/literal): each operation named for reading becomes an endpoint that posts its envelope, and the answer is read as XML. A sign-in in the envelope, and RPC-style services, are for connector code. |
+| Streams (server-sent events, WebSocket) | Partly | A stream of server-sent events is read for a window — up to a hundred events or five seconds by default — and the tile says it shows only what arrived in it. WebSocket streams are not read. |
 | Binary protocols (gRPC, Protocol Buffers) | No | These need a purpose-built connector. |
 
 ## Requests
@@ -35,9 +35,9 @@ This is the boundary as the code stands, not a measured success rate. When an AP
 | | Status | What it means |
 |---|---|---|
 | JSON responses | Supported | Records are read from anywhere in the response. |
-| CSV and TSV responses | Partly | Read through connector code, which turns the file into records. An endpoint that answers with a spreadsheet file is not read without it. |
-| XML responses | Not yet | An endpoint answering in XML cannot be read yet. |
-| Newline-delimited JSON | Partly | Read through connector code, one record per line. An endpoint that answers this way is not read without it. |
+| CSV and TSV responses | Supported | An endpoint that answers with a table of rows is read as records: the first row names the columns. |
+| XML responses | Supported | An endpoint that answers in XML is read as records: elements and attributes become fields, repeated elements a list, and a SOAP envelope is opened. Requests that must themselves be XML (SOAP calls) are sent by connector code. |
+| Newline-delimited JSON | Supported | An endpoint that answers one record a line is read as records. |
 | Files and binary responses | No | Images, PDFs and other files are not read as data. |
 
 ## Signing in
@@ -52,11 +52,11 @@ This is the boundary as the code stands, not a measured success rate. When an AP
 | Several keys sent together | Supported | Up to four headers at once. |
 | OAuth 2.0 | Supported | Signing in with the provider, and renewing tokens before and after they run out, happens by itself. It needs an app registered with the provider, whose client ID and secret are pasted once. |
 | OAuth 2.0 without a flow Dash can run | Partly | When the documentation gives no sign-in address, or only the implicit or password flow, an access token can be pasted by hand, but the connection stops working when it expires. |
-| OpenID Connect | Not yet | Signing in through an identity provider is not supported yet. |
-| API keys in a cookie | Not yet | A key the API expects as a cookie cannot be sent yet. |
-| HTTP Digest | Not yet | Digest sign-in is not supported yet. |
-| Client certificates (mutual TLS) | Not yet | A certificate cannot be presented with requests yet. |
-| Signed requests (AWS Signature, HMAC) | Partly | Connector code signs each request: the server makes the signature with your key, and the code never sees the key. Each API's signing is written from its documentation and proven by a read. |
+| OpenID Connect | Partly | A specification that signs in with OpenID Connect has its provider's discovery document read, where it can be: somebody signs in once with the provider, or an app signs in as itself, and the token is kept and renewed. |
+| API keys in a cookie | Supported | An API key sent in a cookie, alone or beside keys in headers or the address, is sent where the API wants each. |
+| HTTP Digest | Supported | A username and password answered to the server's challenge, with MD5 or SHA-256; the password itself is never sent. |
+| Client certificates (mutual TLS) | Supported | The account's client certificate and key, pasted once, are presented to the API's own host and nowhere else, over https only, beside whatever key it also asks for. |
+| Signed requests (AWS Signature, HMAC) | Partly | Connector code signs each request: the server makes the signature with your key, and the code never sees the key. Each API's signing is written from its documentation and proven by a read. AWS Signature Version 4 needs no code: it is built in, signing each request with your secret access key for the region its address or documentation names. |
 | Signing in for a session token | Partly | Client credentials are supported directly. Any other login for a session token is done by connector code: the server sends the login and keeps the token, and the code never sees either. |
 
 ## Pages
@@ -67,6 +67,7 @@ This is the boundary as the code stands, not a measured success rate. When an AP
 | Offset pages | Supported | Reading stops at the first short page. |
 | Numbered pages | Supported | Reading stops at the first short page. |
 | Link-header pages | Supported | The next page's address is read from the response headers. |
+| Next-page addresses in the answer | Supported | The next page's address is read from each answer (`links.next`, `_links.next.href`, `@odata.nextLink`) and followed on the API's own address until an answer gives none. |
 | Page tokens sent in a request body | Supported | A page token or number can travel in a request body or in GraphQL variables. |
 | Pagination read from documentation | Supported | Confirmed by checking the connection: a rule is kept only when its second page returns new records. Until then one page is read, and the tile says so. |
 
@@ -75,19 +76,19 @@ This is the boundary as the code stands, not a measured success rate. When an AP
 | | Status | What it means |
 |---|---|---|
 | Pages per read | Partly | Up to 50 pages per read, 5 unless set. A read that stops early says so on the tile: what is shown excludes the rest. |
-| Records expanded per widget | Partly | A widget reading each record's related records reads at most 25 records' worth, and says so when there were more. |
+| Records expanded per widget | Partly | A widget reading each record's related records reads the first 25 at once and the rest in the background, up to 500, and says what it has not read yet. |
 
 ## Reading documentation
 
 | | Status | What it means |
 |---|---|---|
 | OpenAPI 3 and Swagger 2 specifications | Supported | Endpoints, their parameters, the fields they return and how to sign in are read from the specification. |
-| Specifications split across several files | Not yet | References to other files are not followed, so the parts described there are missing. |
+| Specifications split across several files | Partly | References to other files on the specification's own site are followed and put back together, up to 40 files. A reference to another organisation's site is not followed, and is named. |
 | Specifications embedded in a documentation page | Supported | Found in the page itself when no separate file is published. |
 | Documentation indexes (llms.txt) | Supported | Followed to the specifications they list; reading every page is offered separately. |
 | Documentation written as prose | Partly | An AI model reads the page and proposes a few endpoints without their parameters. Everything it proposes is marked as a guess until a request proves it. |
 | Documentation that only appears in a browser | Not yet | A page that is built by scripts shows nothing to read. |
-| GraphQL schemas | Not yet | Depends on GraphQL support. |
+| GraphQL schemas | Partly | A schema published as SDL, in the documentation or a file it links to, or asked of the API (introspection, a type at a time where queries are limited in depth), becomes one read per list: its records' fields selected, paged by cursor, page or offset as the schema says. A list that needs an input nobody supplies is left out and said. |
 | WSDL service descriptions | Not yet | Depends on SOAP support. |
 
 ## Networks
@@ -95,7 +96,7 @@ This is the boundary as the code stands, not a measured success rate. When an AP
 | | Status | What it means |
 |---|---|---|
 | APIs on the public internet | Supported | Every request is checked to go only to the connection's own address. |
-| APIs on a private or internal network | Not yet | Private and internal addresses are refused, whatever the documentation says. |
+| APIs on a private or internal network | Supported | Reached only when the server's operator allows the address (DASH_PRIVATE_EGRESS) and the connection says it is on a private network; the address checked is the one connected to. Cloud metadata addresses are never reached. A hosted build reaches a customer's network through an agent they run, as the server's transport. |
 
 ## Data
 

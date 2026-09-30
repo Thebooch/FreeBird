@@ -129,6 +129,28 @@ export const resourceSchema = z.object({
   detailOp: idSchema.optional(),
   /** The path parameter `detailOp` expects, e.g. `leaseId`. */
   detailParam: z.string().max(120).optional(),
+  /**
+   * An endpoint that says how many there are (`/breweries/meta`,
+   * `/orders/count`), where a read confirmed it: its number matched a
+   * complete read of the list, or the count the list itself stated. "How
+   * many" is then one request, however many records there are — a list read
+   * page by page stops at its ceiling (plan, track D).
+   *
+   * Never installed from a name alone: an endpoint called `count` that counts
+   * something else would be a wrong number that looks right.
+   */
+  count: z
+    .object({
+      op: idSchema,
+      /** Where the number is in its answer: `total`, `count.value`. */
+      field: z.string().min(1).max(120),
+      /**
+       * Filter parameters the count honours, each confirmed the same way: the
+       * count narrowed by it matched a complete read of the list narrowed by it.
+       */
+      filters: z.array(z.string().min(1).max(120)).max(20).default([]),
+    })
+    .optional(),
   relations: z.array(relationSchema).max(40).default([]),
   verified: z.boolean().default(false),
 });

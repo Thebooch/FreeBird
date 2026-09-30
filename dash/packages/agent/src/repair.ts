@@ -29,6 +29,15 @@ export const repairProposalSchema = z.object({
   headerName: z.string().optional().describe("A header the API requires on every request."),
   headerValue: z.string().optional().describe("Its value, exactly as the documentation gives it."),
   rowsPath: z.string().optional().describe('Where the records are in the response, e.g. "$.data" or "$.result.items".'),
+  inputs: z
+    .array(z.object({ name: z.string(), value: z.string() }))
+    .max(4)
+    .optional()
+    .describe(
+      "Values the endpoint requires that nothing supplies, written exactly as the documentation says to write them, " +
+        "chosen so the read returns EVERY record: a search that matches everything, the earliest start time, the widest " +
+        "range the documentation allows. Never an id of one record, a key, or a person's details.",
+    ),
   cannot: z
     .string()
     .optional()
@@ -49,11 +58,12 @@ const SYSTEM = `You fix how a dashboard product calls an API, the way a careful 
 You are shown the request as configured, what went wrong, what was already tried, and the API's documentation.
 
 Rules:
-- Propose ONE change: the address, how the key is sent, one required header, or where the records are in the response.
+- Propose ONE change: the address, how the key is sent, one required header, where the records are in the response, or values the endpoint requires that nothing supplies.
+- A value the endpoint requires — a search expression, a start time, a restriction the API insists on — is written as the documentation says to write it, and chosen so the read returns every record there is: a search that matches everything, the earliest time allowed, the widest bound the documentation permits.
 - Only use values the documentation states. Never invent a header value, a parameter name or an address.
 - An address must be https, and on the same organisation's domain as the documentation.
 - Never put a key or secret in any field; the product inserts the key itself.
-- If the documentation shows the API needs something none of these can express — signed requests, a sign-in or token exchange, a request body, an export to download, a non-JSON format — say so in "cannot" and propose nothing else.
+- If the documentation shows the API needs something none of these can express — signed requests, a sign-in or token exchange, a request body the endpoint does not send, an export to download, a non-JSON format — say so in "cannot" and propose nothing else.
 - If you cannot tell from the documentation, say so in "cannot" rather than guess.
 
 ${UNTRUSTED_METADATA}`;

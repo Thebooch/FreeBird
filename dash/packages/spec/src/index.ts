@@ -59,8 +59,11 @@ export {
   allowedHost,
   connectionSchema,
   effectiveAuth,
+  filterParamsOf,
+  readsRangeOf,
   getOp,
   connectionAuths,
+  connectionCredentials,
   connectionKeyRefs,
   connectionNeedsAddress,
   connectionNeedsAuthSetup,
@@ -250,6 +253,7 @@ export type { RolePaths, WriteMode, WriteRole } from "./write-roles.js";
 export { mapWriteFields, unmappedFields } from "./write-map.js";
 export {
   PERMISSIONS,
+  ROLE_PERMISSIONS,
   ROLES,
   inviteSchema,
   memberSchema,
@@ -378,6 +382,7 @@ export {
   withoutWidget,
   widgetSourceSchema,
   widgetStatesSchema,
+  FAN_OUT_WHOLE_MAX,
 } from "./dashboard.js";
 export type {
   DashboardSpec,
@@ -438,6 +443,8 @@ export {
   interpolateValue,
   parseTokens,
   quantiseEnd,
+  paramsForWidget,
+  rangeForWindow,
   opOfQueryKey,
   queryKey,
   queryKeyOpPrefix,
@@ -455,6 +462,7 @@ export type {
   ResolvedParams,
   ResolveRangeInput,
   TimeRange,
+  TimeWindow,
   TokenFilter,
 } from "./params.js";
 
@@ -570,9 +578,10 @@ export {
   evidenceLevelSchema,
   evidenceRank,
   evidenceSchema,
+  readCoverage,
   strongestEvidence,
 } from "./evidence.js";
-export type { Evidence, EvidenceLevel } from "./evidence.js";
+export type { Evidence, EvidenceLevel, ReadCoverage } from "./evidence.js";
 export {
   CONNECTOR_CONTRACT,
   CONNECTOR_HOOKS,
@@ -584,3 +593,5 @@ export {
 } from "./connector.js";
 export type { ConnectorAuthority, ConnectorDestination, ConnectorHook, ConnectorSpec } from "./connector.js";
 export { credentialNameSchema } from "./primitives.js";
+export { describeMetric, metricSchema, reconcileRuleSchema } from "./metric.js";
+export type { MetricDefinition, ReconcileRule } from "./metric.js";

@@ -28,8 +28,16 @@ import { SandboxError, type ConnectorSandbox, type SandboxSession } from "./sand
  *   out — and through the same authority as its own requests.
  *
  * Each read is one run: a fresh sandbox, the code loaded after its pin is
- * checked, and everything it asks for decided by `host.ts`.
+ * checked, and everything it asks for decided by `host.ts`. A read too long
+ * for one run's allowance says where it got to (`resume`) and is carried on
+ * in another run — a fresh sandbox and a fresh allowance each time, a bounded
+ * number of times — so the allowance bounds a run without cutting a read short.
  */
+
+/** How many runs one read may take. Each has the authority's own allowance of requests and time. */
+export const MAX_READ_RUNS = 10;
+/** How much a run may hand to the next: a place to carry on from, not data. */
+const MAX_RESUME_CHARS = 8_000;
 
 export interface ConnectorServices {
   readonly sandbox: ConnectorSandbox;
@@ -158,32 +166,57 @@ export class ConnectorAdapter implements SourceAdapter {
         return await new RestAdapter(signing).fetch(connection, op, overrides, ctx);
       }
 
-      const answer = (await session.call("read", { ctx: runCtx })) as {
-        rows?: unknown;
-        total?: unknown;
-        complete?: unknown;
-        pages?: unknown;
-      } | null;
-      if (!answer || !Array.isArray(answer.rows))
-        throw new SandboxError("run", "the connector's read did not answer with records");
-      const rows = answer.rows.filter((row): row is Record<string, unknown> => row !== null && typeof row === "object" && !Array.isArray(row));
+      type ReadAnswer = { rows?: unknown; total?: unknown; complete?: unknown; pages?: unknown; resume?: unknown } | null;
+      const rows: Record<string, unknown>[] = [];
       const warnings: string[] = [];
-      if (rows.length !== answer.rows.length)
-        warnings.push(`${answer.rows.length - rows.length} value(s) the connector returned were not records and were left out.`);
-      const total =
-        typeof answer.total === "number" && Number.isInteger(answer.total) && answer.total >= 0 ? answer.total : undefined;
-      const stopped = answer.complete === false;
+      let dropped = 0;
+      let total: number | undefined;
+      let stopped = false;
+      let pages = 0;
+      let lastStatus = 200;
+      let resumeFrom: string | undefined;
+      for (let run = 1; ; run++) {
+        const answer = (await session.call("read", {
+          ctx: resumeFrom === undefined ? runCtx : { ...runCtx, resume: JSON.parse(resumeFrom) as unknown },
+        })) as ReadAnswer;
+        if (!answer || !Array.isArray(answer.rows))
+          throw new SandboxError("run", "the connector's read did not answer with records");
+        for (const row of answer.rows) {
+          if (row !== null && typeof row === "object" && !Array.isArray(row)) rows.push(row as Record<string, unknown>);
+          else dropped++;
+        }
+        if (typeof answer.total === "number" && Number.isInteger(answer.total) && answer.total >= 0) total = answer.total;
+        const sent = host.trace.filter((one) => one.status !== null);
+        pages += typeof answer.pages === "number" ? answer.pages : Math.max(1, sent.length);
+        lastStatus = sent.at(-1)?.status ?? lastStatus;
+        if (answer.complete === false) stopped = true;
+        /* Where it got to, for another run to carry on from: a fresh sandbox, a fresh allowance. */
+        const next = answer.resume === undefined || answer.resume === null ? undefined : JSON.stringify(answer.resume);
+        if (next === undefined || stopped) break;
+        if (run >= MAX_READ_RUNS || next.length > MAX_RESUME_CHARS || next === resumeFrom) {
+          /* More to read than a read is given, or code that is not moving on: said, not looped. */
+          stopped = true;
+          break;
+        }
+        resumeFrom = next;
+        await session.close();
+        session = null;
+        const again = await this.open(connection, connector, op, ctx);
+        host = again.host;
+        session = again.session;
+        if (session.hooks.includes("authenticate")) await session.call("authenticate", { ctx: runCtx });
+      }
+      if (dropped > 0) warnings.push(`${dropped} value(s) the connector returned were not records and were left out.`);
       if (stopped) warnings.push(INCOMPLETE.connectorStopped);
       else if (total !== undefined && rows.length < total) warnings.push(INCOMPLETE.reportedMore(total));
-      const last = host.trace.filter((one) => one.status !== null).at(-1);
       return {
         body: rows,
         meta: {
           url: `${connection.baseUrl ?? ""}${op.path}`,
-          status: last?.status ?? 200,
+          status: lastStatus,
           fetchedAt: ctx.now,
           durationMs: Date.now() - started,
-          pages: typeof answer.pages === "number" ? answer.pages : Math.max(1, host.trace.filter((one) => one.status !== null).length),
+          pages,
           truncated: stopped || (total !== undefined && rows.length < total),
           warnings,
           ...(total !== undefined ? { reportedTotal: total } : {}),

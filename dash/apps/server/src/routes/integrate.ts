@@ -44,6 +44,11 @@ export interface IntegrateRouteDeps {
   readonly fetchDocument: (url: string) => Promise<{ status: number; text: string; url: string }>;
   readonly llm: () => LlmAdapter | null;
   readonly evidence: EvidenceStore;
+  /**
+   * Told what a check that read something established, so the API's catalog
+   * entry can say when it was last checked and how far each endpoint got.
+   */
+  readonly recordCheck?: (connection: ConnectionSpec, report: Pick<IntegrationReport, "outcome" | "evidence">) => void;
   /** The per-connection gate and cooldown; a check started by itself waits behind boards. */
   readonly around: (connection: string, background: boolean) => <T>(run: () => Promise<T>) => Promise<T>;
   /** Told of every read the check sends: the journal keeps the ones that might not be reads. */
@@ -56,6 +61,8 @@ export interface IntegrateRouteDeps {
    * somebody's requests by existing. The real entry point turns it on.
    */
   readonly auto: boolean;
+  /** The endpoints boards read on a connection, checked before any other. */
+  readonly usedOps?: (connection: string) => readonly string[];
   readonly log?: (message: string) => void;
   readonly now?: () => number;
   /** Running connector code. Absent: the check repairs in the connection's own vocabulary only. */
@@ -67,11 +74,21 @@ export interface IntegrateRouteDeps {
    * the documentation declared none for, and the record types that can then
    * be described. Absent in tests that do not keep a catalog.
    */
-  readonly recordObserved?: (connection: ConnectionSpec, observed: IntegrationReport["observed"]) => void;
+  readonly recordObserved?: (
+    connection: ConnectionSpec,
+    observed: IntegrationReport["observed"],
+    added?: IntegrationReport["added"],
+  ) => void;
+  /** Waiting out a short rate limit during a check. Absent, a rate limit stops it. */
+  readonly sleep?: (ms: number) => Promise<void>;
+  /** Keep what the records held, per connection: this account's, so never with the catalog. */
+  readonly recordValues?: (connection: ConnectionSpec, values: IntegrationReport["values"]) => Promise<void>;
 }
 
 /** How many endpoints a check settles, and what it may spend doing it. */
 const MAX_TARGETS = 8;
+/** Collections a check reads one first page of, for their fields. */
+const MAX_SAMPLES = 40;
 const REQUESTS = 60;
 const TRAVERSE_UP_TO = 20;
 
@@ -80,7 +97,32 @@ const TRAVERSE_UP_TO = 20;
  * chose to validate with, then each record type's list — those a board can
  * read with no input, since a check has none to give.
  */
-export const integrationTargets = (connection: ConnectionSpec, options: { canWriteCode?: boolean } = {}): string[] => {
+/**
+ * The other collections worth one first page each: those the check does not
+ * settle and whose documentation declared no fields, so a read is the only
+ * account of their records there will be.
+ */
+export const samplingTargets = (
+  connection: ConnectionSpec,
+  entry: CatalogEntry | undefined,
+  settled: readonly string[],
+): string[] =>
+  connection.resources
+    .map((resource) => resource.listOp)
+    .filter((opId): opId is string => {
+      if (!opId || settled.includes(opId)) return false;
+      const op = getOp(connection, opId);
+      if (!op || pathParamNames(op.path).length > 0 || missingInputs(op, {}).length > 0 || op.servedBy === "connector") return false;
+      const declared = entry?.ops.find((one) => one.id === opId);
+      return !declared?.fields || declared.fields.length === 0;
+    })
+    .filter((opId, index, all) => all.indexOf(opId) === index)
+    .slice(0, MAX_SAMPLES);
+
+export const integrationTargets = (
+  connection: ConnectionSpec,
+  options: { canWriteCode?: boolean; used?: readonly string[] } = {},
+): string[] => {
   const readable = (opId: string | undefined): opId is string => {
     const op = opId ? getOp(connection, opId) : undefined;
     /* A connector reads its endpoint its own way: the path's ids are its requests' business. */
@@ -88,7 +130,12 @@ export const integrationTargets = (connection: ConnectionSpec, options: { canWri
       !!op && (op.servedBy === "connector" || pathParamNames(op.path).length === 0) && missingInputs(op, {}).length === 0
     );
   };
-  const ordered = [connection.validateOpId, ...connection.resources.map((resource) => resource.listOp)];
+  /* What boards read comes first: a widget over an endpoint no check reached reads one unconfirmed page. */
+  const ordered = [
+    connection.validateOpId,
+    ...(options.used ?? []),
+    ...connection.resources.map((resource) => resource.listOp),
+  ];
   const targets = [...new Set(ordered.filter(readable))].slice(0, MAX_TARGETS);
   /*
    * Nothing is readable as the documentation describes it and the sign-in is
@@ -103,7 +150,12 @@ export const integrationTargets = (connection: ConnectionSpec, options: { canWri
      * a check to start on, so nothing was read, nothing could be described,
      * and no request could reach it (measurement 1).
      */
-    const fallback = [connection.validateOpId, ...connection.resources.map((resource) => resource.listOp)].find(
+    /*
+     * Collections before the endpoint discovery validates with: the point is
+     * to read records. Started on "check an export" instead, connector code
+     * read the export's status, not the transactions it holds (measurement 1).
+     */
+    const fallback = [...connection.resources.map((resource) => resource.listOp), connection.validateOpId].find(
       (opId): opId is string => !!opId && !!getOp(connection, opId),
     );
     if (fallback) return [fallback];
@@ -131,24 +183,44 @@ export interface IntegrationRunner {
    * address is known and every key it asks for is in the vault.
    */
   whenReady(connection: ConnectionSpec): void;
+  /** Check a connection by itself when boards read endpoints of it no check has settled. */
+  whenUsed(connection: ConnectionSpec, ops: readonly string[]): void;
   running(id: string): boolean;
 }
 
 export const createIntegrationRunner = (deps: IntegrateRouteDeps): IntegrationRunner => {
   const inFlight = new Map<string, Promise<IntegrationRun>>();
+  /* The endpoints a check has settled on each connection since the server started. */
+  const settled = new Map<string, Set<string>>();
+  const covered = (connection: string): Set<string> => {
+    const known = settled.get(connection) ?? new Set<string>();
+    settled.set(connection, known);
+    return known;
+  };
 
   const check = async (id: string, background: boolean): Promise<IntegrationRun> => {
     const connection = deps.getConnection(id);
     if (!connection) return { error: "no such connection", status: 404 };
-    const targets = integrationTargets(connection, { canWriteCode: !!deps.connectors });
-    if (targets.length === 0)
+    const targets = integrationTargets(connection, {
+      canWriteCode: !!deps.connectors,
+      ...(deps.usedOps ? { used: deps.usedOps(connection.id) } : {}),
+    });
+    /* An MCP server's endpoints are its tools, which the check itself asks for. */
+    if (targets.length === 0 && connection.kind !== "mcp")
       return { error: "This connection has no endpoint a check can read without an input.", status: 409 };
     const entry = (connection.catalog ? deps.catalogEntry(connection.catalog) : undefined) ?? undefined;
     const now = deps.now ?? Date.now;
+    for (const opId of targets) covered(connection.id).add(opId);
 
     const report = await integrate(
       connection,
-      { targets, entry, requests: REQUESTS, traverseUpTo: TRAVERSE_UP_TO },
+      {
+        targets,
+        entry,
+        requests: REQUESTS,
+        traverseUpTo: TRAVERSE_UP_TO,
+        sample: samplingTargets(connection, entry, targets),
+      },
       {
         http: deps.http,
         resolveSecret: deps.resolveSecret,
@@ -158,6 +230,7 @@ export const createIntegrationRunner = (deps: IntegrateRouteDeps): IntegrationRu
         around: deps.around(connection.id, background),
         ...(deps.onRead ? { onRead: deps.onRead } : {}),
         ...(deps.refresh ? { refresh: deps.refresh } : {}),
+        ...(deps.sleep ? { sleep: deps.sleep } : {}),
         ...(deps.connectors ? { connectors: deps.connectors } : {}),
         ...(deps.connectorLlm ? { connectorLlm: deps.connectorLlm() } : {}),
       },
@@ -211,11 +284,24 @@ export const createIntegrationRunner = (deps: IntegrateRouteDeps): IntegrationRu
     deps.log?.(
       `checked ${connection.id}: ${report.outcome}, ${report.changes.length} change(s), ${report.requests} request(s)`,
     );
+    try {
+      if (report.outcome !== "blocked") deps.recordCheck?.(report.connection, report);
+    } catch (error) {
+      deps.log?.(`what ${connection.id}'s check established could not be kept on its catalog entry: ${error instanceof Error ? error.message : String(error)}`);
+    }
     /* Kept, never allowed to cost the check: a read that showed fields is worth describing. */
     try {
-      if (Object.keys(report.observed).length > 0) deps.recordObserved?.(report.connection, report.observed);
+      if (Object.keys(report.observed).length > 0 || report.added)
+        deps.recordObserved?.(report.connection, report.observed, report.added);
     } catch (error) {
       deps.log?.(`what ${connection.id}'s check read could not be kept: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (Object.keys(report.values).length > 0) {
+      await deps
+        .recordValues?.(report.connection, report.values)
+        .catch((error: unknown) =>
+          deps.log?.(`the values ${connection.id}'s records held could not be kept: ${error instanceof Error ? error.message : String(error)}`),
+        );
     }
     return {
       outcome: report.outcome,
@@ -245,13 +331,26 @@ export const createIntegrationRunner = (deps: IntegrateRouteDeps): IntegrationRu
     if (!deps.auto || inFlight.has(connection.id)) return;
     if (connectionNeedsAddress(connection)) return;
     if (!connectionKeyRefs(connection).every((ref) => deps.hasSecret(ref))) return;
-    if (integrationTargets(connection, { canWriteCode: !!deps.connectors }).length === 0) return;
+    if (connection.kind !== "mcp" && integrationTargets(connection, { canWriteCode: !!deps.connectors }).length === 0) return;
     void run(connection.id, { background: true }).then((result) => {
       if ("error" in result && result.status !== 409) deps.log?.(`checking ${connection.id} failed: ${result.error}`);
     });
   };
 
-  return { run, whenReady, running: (id) => inFlight.has(id) };
+  /*
+   * A board began reading an endpoint no check has settled: check again, by
+   * itself, so its paging is confirmed and its filters found. Once per
+   * endpoint per run of the server, so saving a board is never a loop of checks.
+   */
+  const whenUsed: IntegrationRunner["whenUsed"] = (connection, ops) => {
+    const fresh = ops.filter((opId) => {
+      const op = getOp(connection, opId);
+      return !!op && !op.paginationChecked && !covered(connection.id).has(opId);
+    });
+    if (fresh.length > 0) whenReady(connection);
+  };
+
+  return { run, whenReady, whenUsed, running: (id) => inFlight.has(id) };
 };
 
 export const integrateRoutes =

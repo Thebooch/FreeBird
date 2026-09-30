@@ -1,5 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
-import type { HttpFetch } from "@freebirdai/dash-adapters";
+import { parseXml, type HttpFetch } from "@freebirdai/dash-adapters";
 import type { ConnectionSpec, ConnectorDestination, ConnectorSpec, OpSpec } from "@freebirdai/dash-spec";
 
 /**
@@ -346,6 +346,7 @@ export const createConnectorHost = (deps: ConnectorHostDeps): ConnectorHost => {
             ...(body !== undefined ? { body } : {}),
             purpose: "read",
             ...(deps.signal ? { signal: deps.signal } : {}),
+            ...(deps.connection.privateNetwork ? { privateNetwork: true } : {}),
           },
           destination.host,
         );
@@ -437,6 +438,16 @@ export const createConnectorHost = (deps: ConnectorHostDeps): ConnectorHost => {
         const handle = `derived_${derived.size + 1}`;
         derived.set(handle, { key, root });
         return handle;
+      }
+
+      case "xml.parse": {
+        /* Text the code already holds, read here so XML is never picked apart with regular expressions. */
+        if (typeof args !== "string") throw new ConnectorRefusal("XML.parse takes text");
+        try {
+          return parseXml(args);
+        } catch (error) {
+          throw new ConnectorRefusal(error instanceof Error ? error.message : String(error));
+        }
       }
 
       case "crypto.hash": {

@@ -1,8 +1,8 @@
 # Onboarding benchmark: protocol
 
-This protocol measures how well Dash turns documentation, credentials and a plain-language goal into a working dashboard. It is written down before any integration agent is run against the benchmark. A change to it is a deliberate, dated entry at the bottom, never a quiet edit.
+This protocol measures how well Dash turns documentation, credentials and a plain-language goal into a working dashboard. It was written down before any integration agent was run against the benchmark. A change to it is a deliberate, dated entry at the bottom, never a quiet edit.
 
-The code lives in `apps/server/src/bench/`. Results go in `bench/results/`.
+The code lives in `apps/server/src/bench/`. Each run writes its report to `bench/results/`, which is not committed. `RESULTS.md` keeps the latest figures.
 
 ## What a scenario is
 
@@ -25,18 +25,31 @@ The population is a *provisional best guess*, revisited at each checkpoint:
 
 Each provider records why it is in the corpus (its `pattern`), so the population changes on purpose rather than by drift.
 
-The corpus has three sources:
+The corpus has these sources:
 
 - **Mock providers** (`apps/server/src/bench/providers/`). Each one is a small in-process API with documentation, seeded data and answer keys, and each exercises one hard pattern. They run offline, deterministically and for free, so they are what CI runs.
+- **Real public APIs** (the `real` split, `providers/real.ts`). Public APIs that need no key: DummyJSON, JSONPlaceholder, Rick and Morty, PokéAPI, Open Brewery DB and Cat Facts. They are reached over the network through the server's SSRF guard, and only on their own hosts.
+  - Answer keys come from a snapshot of the full data taken by `real/snapshot.mts`, with at most two documented requests each (the first may say how many there are). They were fixed before any integrator ran against them.
+  - Each key is checked against the live API before scoring. A changed API is reported as a stale key (`stopped:stale-key`), never scored.
+  - By hand only, never in CI.
 - **Recorded public APIs**. Real providers, recorded once through the record/replay transport. Recordings are sanitized: credentials are removed, and values are kept only for benchmark corpora.
-- **Live runs**. By hand only, like the `eval:*` scripts. **Never Rentvine.** Buildium only with the owner's go-ahead, and read-only.
+- **Live runs against an account**. By hand only, like the `eval:*` scripts: read-only, and only on an account whose owner has agreed to it.
 
 ## Splits
 
 - **Dev set.** Used freely while building. Prompts and repair strategies may be tuned against it.
-- **Held-out set.** Run only at the end of plan steps 2–4 and at the checkpoints. Its results are recorded, never tuned against. A held-out failure is not debugged by changing a prompt until the checkpoint has been written up. After that, the scenario moves to the dev set and a replacement is written first.
+- **Held-out set.** Run only at checkpoints. Its results are recorded, never tuned against.
 
 Answer keys for both splits are fixed before the integrator they measure is run.
+
+How the held-out set stays held out:
+
+- **Who writes it.** Held-out providers are written by a separate author who does not read the integration loop, the importers or any result (`HELDOUT-AUTHORING.md`). They are wired in without being read. Each answer key is proven by a hand-written reference connection before any integrator runs against it.
+- **What is read.** Only a held-out run's outcome lines. Searches of the source leave the held-out files out.
+- **When a provider leaves.** A held-out failure that is studied moves the provider to the dev set. Studying it means reading its log, or building a fix from its outcome line. A replacement is written first, before that fix lands.
+  - Moved so far, each after its failure was studied: vaultbank, harborline, chargebolt, shopwell and cashloom.
+- **Generic work.** Work written for the kind of gap an outcome line names doesn't move the provider, provided it doesn't read the provider and is proven on a dev provider made for it. But the provider's later results then measure that work and are no longer clean held-out measurements. A report says so.
+- **Connector code.** The held-out split has no scripted connector code. A scripted run stops where a model would have to write some. Connector authoring on the held-out split is measured with `--live`.
 
 ## Scores
 
@@ -51,9 +64,38 @@ Each dimension is scored separately and never merged into one number that could 
 | Metric | `correct` / `wrong` / `n/a` | The widget's number against the answer key, within tolerance. |
 | Cost | requests, model calls, wall time | Requests to the provider; model calls by the integrator. |
 
-**Task success** requires all of: setup `done`, zero technical interventions, retrieval `ok`, completeness `complete` and metric `correct`.
+**Task success** requires all of these:
+- setup `done`;
+- zero technical interventions;
+- retrieval `ok`;
+- completeness `complete`;
+- metric `correct`.
+
+Completeness, where the widget reads fewer records than the collection by design:
+
+- **A read narrowed by the API's own filter.** A widget can narrow through a filter the check confirmed (`source.params`). Such a read holds fewer records than the collection. It is complete when nothing cut it short and any count the API gave matches.
+  - The answer key still decides whether it read the right records.
+  - The scoring read sends the widget's `source.params`, as a board does.
+- **The API's own count.** A widget can read an endpoint the check confirmed counts a record type (`ResourceSpec.count`). It is complete when that one answer was not cut short. Its one row is a number, not records, so "read / held" cannot measure it.
+
+**Wrong, and said why.** Each result keeps anything the tile said beyond missing records (`said`), such as:
+- a narrowing it could not apply;
+- parts that do not add up;
+- that it counts only the board's time range.
+
+The summary counts "wrong, and said why" apart from "wrong, silently". Correctness is unchanged: the answer key still decides.
 
 **Known-provider reuse** (a second connection to a provider already verified in the catalog) is reported in its own table and never mixed into the unseen-provider numbers. Otherwise a strong catalog could hide weak discovery.
+
+## The bench's person
+
+An integrator may ask the person what this protocol allows. The bench answers as a person would:
+
+- **Credentials** are pasted by the provider's own label for each value (`credentialLabels`: what the settings page calls it) where both sides have one. Otherwise they are pasted in the order asked.
+  - What is asked for is compared with what the provider issues, against the connection as it ends up, not as it was first imported.
+  - When connector code declares its own sign-in, the person is asked for those values then.
+- **An account address** is needed where an API lives at an address of each account's own. It is answered from the provider's `accountAddress`, or else its reference connection's address, and counted as an `account` intervention. That one value is all of the reference that ever reaches an integrator.
+- **Signing in with a provider** counts as consent. The person presses Allow on the consent page, submitting its form as a browser would. They never type a password into a login form.
 
 ## Targets
 
@@ -65,37 +107,36 @@ There is **no pass/fail threshold yet**. High coverage (90% and above) is the *d
 
 ## Integrators
 
-The benchmark measures an **integrator**: whatever turns the three inputs into a connection and a widget. Two exist or are planned:
+The benchmark measures an **integrator**: whatever turns the three inputs into a connection and a widget.
 
-- **`baseline`**: today's pipeline with no repair. Discovery, then a connection from the catalog entry, then credentials in the order asked. In CI its choice of endpoint and measure comes from the scenario's `scripted` field. Those runs test the harness's mechanics and the non-judgment half of the pipeline, **not** anybody's judgment, and are never reported as success rates.
-- **`agent`** (plan step 2, `apps/server/src/integrate/`): the baseline's first steps, then the discover → propose → execute → inspect → repair → verify loop over the objective's endpoint. It is measured on the same scenarios with the same scorer. Its endpoint choice is still scripted in these runs; choosing unscripted goes through the brief path, in live runs. Since plan step 4, when no repair can express what an API needs, the loop writes connector code (the `connector` model task) and proves it in the sandbox. In a scripted run that code is the provider's scripted answer, so it measures the mechanics. Only a `--live` run measures a model writing it.
+- **`baseline`**: today's pipeline with no repair. Discovery, then a connection from the catalog entry, then credentials in the order asked.
+  - In CI its choice of endpoint and measure comes from the scenario's `scripted` field.
+  - Those runs test the harness's mechanics and the non-judgment half of the pipeline, **not** anybody's judgment. They are never reported as success rates.
+- **`agent`** (`apps/server/src/integrate/`): the baseline's first steps, then the discover → propose → execute → inspect → repair → verify loop over the objective's endpoint. It is measured on the same scenarios with the same scorer.
+  - When no repair can express what an API needs, the loop writes connector code (the `connector` model task) and proves it in the sandbox.
+  - In a scripted run, that code is the provider's scripted answer, so the run measures only the mechanics. Only a `--live` run measures a model writing it.
+
+**Unscripted** (`--unscripted`): the integrator gets the request alone and goes the product's own way:
+1. It runs the first check over the connection's own targets, which the product runs by itself once a key is saved.
+2. It describes record types from what those reads showed, and the values they held.
+3. It writes a brief, and compiles the widget.
+4. It runs the integration loop, and observes the first read.
+
+Unscripted runs are scored against the same answer keys. They are live only, since a scripted model would be the answer itself.
 
 ## Running it
 
 ```bash
-pnpm bench                       # dev split, the agent, scripted choices
-pnpm bench --integrator baseline # today's pipeline with no repair, for comparison
-pnpm bench --split heldout --checkpoint "<name>"   # held-out: only at a checkpoint
+pnpm bench                                     # dev split, the agent, scripted choices
+pnpm bench --integrator baseline               # today's pipeline with no repair, for comparison
+pnpm bench --unscripted --live                 # the request alone, every model call live
+pnpm bench --split real --unscripted --live    # public APIs, over the network
+pnpm bench --only <id>,<id>                    # some scenarios only
+pnpm bench --split heldout --checkpoint "<name>" --unscripted --live   # held-out: only at a checkpoint
 ```
+
+A report is never overwritten. A second run on the same day gets `-2`, and a `--only`, `--live` or `--unscripted` run says so in its name.
 
 ## Changes to this protocol
 
-- 2026-09-26: written before any integration agent exists.
-- 2026-09-28: `searchy` (a POST search paged in its body), `oauthco` (OAuth sign-in, tokens good for three requests, rotating refresh tokens) and `filterly` (a required deepObject filter with a documented default) added to the dev set. OAuth scenarios sign in through a scripted person, counted as consent.
-- 2026-09-28: `quotient` (OAuth client credentials with expiring tokens, a POST search) and `ledgerline` (OAuth sign-in with PKCE and rotating refresh tokens, a deepObject filter, a total in a header) added to the held-out set **before any of plan step 3 was built**. Their reference connections are written once step 3 can express them.
-- 2026-09-28: `billhub` and `keyring` added to the dev set (a wrong address in the spec, a misnamed sign-in header), before the agent was run against them. The `agent` integrator added. See `results/checkpoint-step-2.md`.
-- 2026-09-28: `sessionly` (a login for a session token that ends after a few requests, records one JSON object per line, pages by the last id) and `stampede` (a request id never sent before and the current time on every request) added to the dev set for plan step 4, before the agent was run against them. Their patterns are deliberately not vaultbank's. Their scripted `connector` answers test the mechanics only.
-- 2026-09-28: A scenario may carry the provider's own label for each credential (`credentialLabels`): what a person reads on their settings page to paste each value into the field asking for it. Values are pasted by label where both sides have one, otherwise in the order asked. Added to sessionly, stampede and — before its checkpoint run, changing neither its API nor its answer — vaultbank.
-- 2026-09-28: The agent integrator counts a mismatch between the values asked for and the values the provider issues against the connection as it ends up, not as first imported. When the loop writes connector code that declares its own sign-in, the person is asked for those values then, as the product asks once the check reports them, and the check runs again. The baseline is unchanged.
-- 2026-09-28: vaultbank's reference connection written by hand, to prove its answer key, once connector code could express it. It is never shown to an integrator. The held-out split has no scripted connector code, so a scripted run stops where a model would have to write one; connector authoring on the held-out split is measured with `--live`.
-- 2026-09-28: Results files are never overwritten (a second run gets `-2`), and a `--only` or `--live` run says so in its name. Before this rule, `2026-09-28-dev-agent` was written three times: at the end of plan step 2 (10 of 10), at the end of step 3 (13 of 13), and by a partial run during step 4, whose file was renamed `…-only-sessionly-stampede`. The first two runs' files are lost; their figures survive in `results/checkpoint-step-2.md` and `checkpoint-step-3.md`.
-- 2026-09-28: After the end-of-step-4 checkpoint was written up (`results/checkpoint-step-4.md`), **vaultbank moved to the dev set**, and **`harborline` was added to the held-out set as its replacement**, before any fix. Harborline's pattern is a token obtained with an HS256-signed JWT assertion, every record in pre-signed files on a separate host that refuses the API's token, and tab-separated. Its answer key was proven by a hand-written reference before any integrator ran against it. Writing that reference exposed a capability gap: the assertion must carry the key ID, and connector code never receives a pasted value. The reference hard-codes its own key ID, as a person configuring their own account could; an integrator cannot. The capability (pasted identifiers the code may read) is built after this entry, as step 3's were after quotient and ledgerline.
-- 2026-09-28: Fixed after the step 4 write-up, and before harborline or vaultbank ran again: a proposal's `cannot` is a refusal only when no code comes with it (a caveat beside code is kept as an assumption, and the code tried); connector credentials can be declared identifiers (`secret: false`) that the code may read, never one named like a secret; a failed scenario's result keeps the integrator's log. Harborline's reference now reads its key ID as an identifier instead of hard-coding it. Its answer key is unchanged and re-proven. Vaultbank, now a dev scenario, has scripted connector code for CI.
-- 2026-09-28: Checkpoint 1 written (`results/checkpoint-1.md`), with every model call live for the first time. Fixed after it, from dev-set failures (sessionly, stampede):
-  - connector code is kept only when its read did not stop short;
-  - a connector's own read may go to the platform's page ceiling;
-  - a login is not passed through `signRequest` unless the code asks;
-  - a result keeps the integrator's log wherever a model was used.
-- 2026-09-28: **The unscripted path** (`--unscripted`), measure first per checkpoint 1: the integrator gets the request alone and goes the product's own way (record types → brief → compiled widget → the integration loop → the first read observed). Scored against the same answer keys; live only, since a scripted model would be the answer itself. Results named `-unscripted`. See `results/unscripted-1.md`.
-- 2026-09-28: **A real split** (`--split real --live`): public APIs that need no key (DummyJSON products and carts, JSONPlaceholder to-dos), reached over the network through the server's SSRF guard and only their own hosts. Answer keys come from a snapshot of the full data taken by `real/snapshot.mts` with one documented request each, and are checked against the live API before scoring; a changed API is reported as a stale key (`stopped:stale-key`), never scored. By hand only, never in CI. See `results/measurement-1.md`.
-- 2026-09-28: The unscripted procedure runs the product's own first check before choosing — the integration check over the connection's own targets, which the product runs by itself once a key is saved — and describes record types from what those reads showed, as the product now does. See `results/measurement-1.md`.
+- 2026-09-30: This version. It gathers the rules added while the benchmark was built into the sections above. Every later change is a dated entry below.

@@ -103,6 +103,12 @@ export interface MockProvider {
     readonly connection: Readonly<Record<string, unknown>>;
     readonly secrets: Readonly<Record<string, string>>;
   };
+  /**
+   * The address of the person's own account, for an API where each account
+   * lives at its own address — what they would type when asked. Absent, the
+   * reference connection's address is theirs.
+   */
+  readonly accountAddress?: string;
 }
 
 /** What an integrator is allowed to see of a scenario. The answer is not in it. */
@@ -112,6 +118,8 @@ export interface ScenarioInput {
   readonly credentials: readonly string[];
   /** See `MockProvider.credentialLabels`. */
   readonly credentialLabels?: readonly string[];
+  /** What the person types when asked which address their account is at. See `MockProvider.accountAddress`. */
+  readonly accountAddress?: string;
   readonly objective: {
     readonly id: string;
     readonly request: string;
@@ -175,6 +183,12 @@ export interface ScenarioScore {
   readonly records: number;
   /** What the product said about not having everything. */
   readonly flagged: readonly string[];
+  /**
+   * What the tile said about its number beyond that: a narrowing it could not
+   * apply, parts that do not add up to a total. A wrong number that says why
+   * is not a silent one (PROTOCOL.md).
+   */
+  readonly said?: readonly string[];
   readonly error?: string;
   /** What the integrator said along the way: kept on a failure, and wherever a model was used. */
   readonly log?: readonly string[];

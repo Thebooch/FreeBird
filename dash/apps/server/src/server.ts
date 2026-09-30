@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AdapterRegistry,
   AdapterError,
+  McpAdapter,
   RestAdapter,
   isIncompleteNote,
   type HttpFetch,
@@ -26,6 +28,7 @@ import {
 } from "@freebirdai/dash-agent";
 import type {
   ConnectionSpec,
+  OpSpec,
   DashboardSpec,
   EntityLinkView,
   EntitySpec,
@@ -48,6 +51,9 @@ import {
   defaultGrainFor,
   findNarrowing,
   getOp,
+  filterParamsOf,
+  readsRangeOf,
+  widgetSources,
   isStale,
   opDefSchema,
   onboardingSchema,
@@ -59,6 +65,8 @@ import {
   resolveServerUrl,
   resourceSchema,
   statusTone,
+  evidenceRank,
+  type EvidenceLevel,
 } from "@freebirdai/dash-spec";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -85,7 +93,7 @@ import { planNarrowing } from "./concierge/drilldown.js";
 import { NarrowingStore } from "./narrowings.js";
 import { MemoryDraftStore, ScratchDraftStore, type DraftStore } from "./concierge/store.js";
 import { CatalogStore, connectionFromCatalog, refreshCatalogConnection } from "./catalog.js";
-import { discover, readIndex } from "./discovery/index.js";
+import { AUTO_INDEX_PAGES, discover, readIndex, type DocsRenderer } from "./discovery/index.js";
 import type { SearchProvider } from "./discovery/search.js";
 import {
   type ModelChoices,
@@ -116,6 +124,8 @@ import type { PartRegistry } from "@freebirdai/dash-parts";
 import { partsRoutes } from "./routes/parts.js";
 import { installIdentity } from "./identity/context.js";
 import { ownerPolicy, type Policy } from "./identity/policy.js";
+import { installRouteGuard } from "./identity/guard.js";
+import type { LeaseLock } from "./platform/lease.js";
 import { LOCAL_USER_ID, localOwner, type IdentityResolver } from "./identity/resolver.js";
 import { nullJournal, type WriteJournal } from "./writes/journal.js";
 import { JournalingAdapter, readEventFor } from "./writes/read-journal.js";
@@ -148,7 +158,7 @@ import {
   widgetBriefSchema,
 } from "@freebirdai/dash-spec";
 import { describeMissingRecords, mapRoutes, mergeDescribedEntities } from "./routes/map.js";
-import { withEntryResources, withObservedFields } from "./integrate/observed.js";
+import { withAddedReads, withEntryResources, withObservedFields } from "./integrate/observed.js";
 import { onboardingRoutes } from "./routes/onboarding.js";
 import { refreshOutdatedConnectDetails } from "./discovery/connect-details.js";
 import { allocateDashboardId } from "./onboarding/materialise.js";
@@ -163,6 +173,7 @@ import { QueryCache, clampMaxAge } from "./cache/queryCache.js";
 import { extractRows, parsePath } from "@freebirdai/dash-expr";
 import { catalogEntryToVerify, validationCandidates } from "./verified.js";
 import { buildQueryRequest, resolveRequestedRange } from "./query.js";
+import { EACH_KEEP_MS, EACH_MAX, EachReads, eachKey } from "./fanout/each.js";
 import { ANSWER_TOOL, answerFromData } from "./context/tool.js";
 import { bindingFor, bindingsFor } from "./tools/bindings.js";
 import { READ_TOOL, READ_TOOL_NAME, readRecords, readToolSchema } from "./tools/read.js";
@@ -192,13 +203,21 @@ import { LOOK_UP_WIDGET_TOOL, lookUpWidget, lookUpWidgetSchema } from "./chat/lo
 import type { CacheStore } from "./cache/store.js";
 import { coolingMessage, retryAfterSeconds, waitPhrase } from "./cache/cooldown.js";
 import { ConnectionGate, Priority } from "./cache/gate.js";
-import { SpecStore } from "./store.js";
+import { SpecStore, type SpecRepository } from "./store.js";
 import { GrantStore, approveWidget, dashboardApprovals, widgetGrantSubject } from "./grants.js";
-import { KeyStore } from "./vault.js";
+import { KeyStore, type SecretRepository } from "./vault.js";
 import { MemoryEvidenceStore, type EvidenceStore } from "./evidence/store.js";
 import { CredentialBroker, vaultApps, type OAuthAppRegistry } from "./auth/broker.js";
 import { MemoryCredentialMetaStore, type CredentialMetaStore } from "./auth/credential-meta.js";
-import { OAuthRetryAdapter } from "./auth/retry-adapter.js";
+import { MemorySeenValueStore, type SeenValueStore } from "./values/store.js";
+import { MemoryShapeStore, type ShapeStore } from "./drift/store.js";
+import { DriftWatch } from "./drift/watch.js";
+import { openMcpClient } from "./mcp/client.js";
+import { registryIndex } from "./registry/registry.js";
+import { MemorySnapshotStore, type SnapshotStore } from "./history/store.js";
+import { dayOf, numbersFrom } from "./history/record.js";
+import { seenByRecordType } from "./integrate/values.js";
+import { OAuthRetryAdapter, RateLimitWaitAdapter } from "./auth/retry-adapter.js";
 import { ConnectorAdapter } from "./connector/adapter.js";
 import type { ConnectorTokenStore } from "./connector/host.js";
 import { QuickJsSandbox, type ConnectorSandbox } from "./connector/sandbox.js";
@@ -207,8 +226,8 @@ import { oauthRoutes } from "./routes/oauth.js";
 import { createIntegrationRunner, integrateRoutes, type IntegrateRouteDeps } from "./routes/integrate.js";
 
 export interface BuildServerOptions {
-  readonly store: SpecStore;
-  readonly keys: KeyStore;
+  readonly store: SpecRepository;
+  readonly keys: SecretRepository;
   readonly catalog?: CatalogStore;
   /**
    * Which saved widgets a person has approved.
@@ -321,7 +340,46 @@ export interface BuildServerOptions {
   readonly connectorSandbox?: ConnectorSandbox;
   /** Where a connector's session tokens are kept. Absent means the vault, with expiry in `credentialMeta`. */
   readonly connectorTokens?: ConnectorTokenStore;
+  /**
+   * Where the values each connection's records were seen to hold are kept
+   * (`integrate/values.ts`) — this account's, never the catalog's. Absent
+   * means in this process only.
+   */
+  readonly seenValues?: SeenValueStore;
+  /**
+   * Draws documentation rendered in the browser so it can be read. Absent
+   * locally, where such a page is said to be unreadable; a hosted build
+   * supplies a rendering service that reaches public addresses only.
+   */
+  readonly renderDocs?: DocsRenderer;
+  /**
+   * Where number tiles' values are kept day by day (`history/`). Absent means
+   * in this process only; the real entry point keeps them in Dash's database.
+   */
+  readonly snapshots?: SnapshotStore;
+  /**
+   * The shape each endpoint was accepted in, and any change seen since
+   * (`drift/`). Memory unless supplied: tests and embedders get a store that
+   * lives in this process only; the real entry point keeps it in Dash's database.
+   */
+  readonly shapes?: ShapeStore;
+  /**
+   * Serve this instance's verified catalog entries as a registry another
+   * instance can pull from (`registry/`): `/api/registry/index.json` and one
+   * file per entry. Off unless asked for — what a hosted build turns on.
+   */
+  readonly serveRegistry?: boolean;
+  /**
+   * Which server's keeper refreshes a connection, when several share one
+   * database (`platform/lease.ts`). Absent, this server's keeper does all of it.
+   */
+  readonly leases?: LeaseLock;
+  /** How many days of that history are kept. Four hundred unless said. */
+  readonly historyDays?: number;
 }
+
+/** A year and a bit: last year's same month is still there to compare with. */
+const DEFAULT_HISTORY_DAYS = 400;
 
 /** Re-exported: the constant lives with the identity it belongs to. */
 export { LOCAL_USER_ID } from "./identity/resolver.js";
@@ -497,6 +555,8 @@ const rangeSchema = z.object({
   grain: z.enum(["1h", "1d", "1w", "1mo", "1y"]).optional(),
   start: z.number().optional(),
   end: z.number().optional(),
+  /** Every record, whatever its dates: the API is asked without date bounds. */
+  all: z.boolean().optional(),
 });
 
 const querySchema = z.object({
@@ -525,6 +585,20 @@ const querySchema = z.object({
    * that does not know about this keeps exactly the behaviour it had.
    */
   mode: z.enum(["view", "refresh"]).default("refresh"),
+});
+
+/** Every record's related records, past the ones a tile reads itself. See `EachReads`. */
+const eachSchema = z.object({
+  connection: z.string().min(1),
+  op: z.string().min(1),
+  /** What every read sends, whatever the record. */
+  params: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
+  /** The input each record's value goes into. */
+  input: z.string().min(1).max(120),
+  /** Each record's value, once each. */
+  values: z.array(z.union([z.string(), z.number(), z.boolean()])).min(1).max(EACH_MAX),
+  range: rangeSchema.default({ preset: "30d" }),
+  filters: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
 });
 
 /**
@@ -572,6 +646,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    */
   installIdentity(app, options.identity ?? localOwner());
   const policy = options.policy ?? ownerPolicy;
+  /* Every route that changes stored state asks the policy first (`identity/guard.ts`). */
+  installRouteGuard(app, policy);
   const journal = options.journal ?? nullJournal;
   /** Write endpoints discovery read, held until their entry is adopted. */
   const discovered = new Discovered();
@@ -616,9 +692,23 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * connector. Writes use `rest` directly, through the write service, which
    * journals them itself.
    */
-  const registry = new AdapterRegistry().register(
-    new JournalingAdapter(new OAuthRetryAdapter(reader, broker), journal, (message) => app.log.warn(message)),
+  /*
+   * An MCP server's read-only tools, called over the same guarded transport
+   * and with the same broker as any other read, and journalled: a tool call
+   * is a read on the server's word, not the protocol's. See `mcp/`.
+   */
+  const mcp = new McpAdapter((connection) =>
+    openMcpClient(connection, { http: options.http ?? nodeHttp, resolveSecret: (keyRef) => secretFor(keyRef) }),
   );
+  const registry = new AdapterRegistry()
+    .register(
+      new JournalingAdapter(
+        new OAuthRetryAdapter(new RateLimitWaitAdapter(reader), broker),
+        journal,
+        (message) => app.log.warn(message),
+      ),
+    )
+    .register(new JournalingAdapter(mcp, journal, (message) => app.log.warn(message)));
 
   /**
    * Everything a widget reads goes through here.
@@ -674,6 +764,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * than its own reconstruction of them — see `ViewedRequests`.
    */
   const viewed = new ViewedRequests();
+  /** Tiles' reads of every record's related records. See `EachReads`. */
+  const eachReads = new EachReads();
 
   /**
    * How often each endpoint is asked again, per connection.
@@ -809,6 +901,41 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   });
   /** What has been observed about reading each endpoint. See `BuildServerOptions.evidence`. */
   const evidence: EvidenceStore = options.evidence ?? new MemoryEvidenceStore();
+  /** What each connection's records were seen to hold. See `BuildServerOptions.seenValues`. */
+  const seenValueStore: SeenValueStore = options.seenValues ?? new MemorySeenValueStore();
+  /** Number tiles' values, day by day. See `BuildServerOptions.snapshots`. */
+  const snapshots: SnapshotStore = options.snapshots ?? new MemorySnapshotStore();
+  /*
+   * Each fresh answer, held against the shape its endpoint was accepted in.
+   * A change is said on the tiles that read it and the connection is checked
+   * again by itself; nothing is repaired into a saved widget. See `drift/`.
+   */
+  const drift = new DriftWatch({
+    shapes: options.shapes ?? new MemoryShapeStore(),
+    now: () => Date.now(),
+    dashboards: () => store.listDashboards(),
+    recheck: (connection) => integration.whenReady(connection),
+    log: (line) => app.log.info(line),
+  });
+  /** Kept out of the way of the read it describes: a shape that cannot be kept costs nothing shown. */
+  const watchShape = (connection: ConnectionSpec, op: OpSpec, body: unknown): void => {
+    void drift
+      .observe(connection, op, body)
+      .catch((error: unknown) => app.log.warn(`the shape of ${connection.id}/${op.id} could not be checked: ${String(error)}`));
+  };
+  const historyDays = options.historyDays ?? DEFAULT_HISTORY_DAYS;
+  /** A connection's seen values by record type, for the brief. Never a reason a brief is not written. */
+  const seenFor = async (
+    connection: ConnectionSpec,
+    entities: Parameters<typeof seenByRecordType>[1],
+  ): Promise<ReturnType<typeof seenByRecordType>> => {
+    try {
+      return seenByRecordType(connection, entities, await seenValueStore.get(connection.id));
+    } catch (error) {
+      app.log.warn(`the values ${connection.id}'s records hold could not be read: ${String(error)}`);
+      return {};
+    }
+  };
   /** A published document — an API's specification — for reading its write endpoints. */
   const readDocument: FetchDocument =
     options.fetchDocument ??
@@ -860,11 +987,47 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
      * values. The record types that can now be described are described next,
      * by themselves, like the check itself: nobody presses anything.
      */
-    recordObserved: (connection, observed) => {
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    usedOps: (connection) => [
+      ...new Set(
+        store
+          .listDashboards()
+          .flatMap((board) => board.widgets.flatMap((widget) => widgetSources(widget)))
+          .filter((source) => source.connection === connection && !source.fanOut)
+          .map((source) => source.op),
+      ),
+    ],
+    recordValues: async (connection, values) => {
+      for (const [op, seen] of Object.entries(values)) await seenValueStore.put(connection.id, op, seen);
+    },
+    /*
+     * What the check established, kept on the API's entry: when, against which
+     * version, and the rung each endpoint reached. Rungs only — a count is one
+     * account's, and an entry is every account's.
+     */
+    recordCheck: (connection, report) => {
+      const entries = options.catalog;
+      const entry = entries && connection.catalog ? entries.get(connection.catalog) : null;
+      if (!entries || !entry || report.evidence.length === 0) return;
+      const ops: Record<string, EvidenceLevel> = {};
+      for (const one of report.evidence) {
+        const held = ops[one.op];
+        if (!held || evidenceRank(one.level) > evidenceRank(held)) ops[one.op] = one.level;
+      }
+      const at = new Date().toISOString();
+      entries.put({
+        ...entry,
+        ...(report.outcome === "ready" ? { verifiedAt: at } : {}),
+        evidence: { at, ...(entry.version !== undefined ? { version: entry.version } : {}), outcome: report.outcome === "ready" ? "ready" : "partial", ops },
+      });
+    },
+    recordObserved: (connection, observed, added) => {
       const entries = options.catalog;
       const entry = connection.catalog ? entries?.get(connection.catalog) : undefined;
       if (!entries || !entry) return;
-      const next = withObservedFields(entry, observed);
+      /* Reads written from a GraphQL schema first, so their records are what is described. */
+      const read = withAddedReads(entry, added);
+      const next = withObservedFields(read ?? entry, observed) ?? read;
       if (!next) return;
       entries.put(next);
       /* A collection a read showed, carried by every connection made from this entry. */
@@ -1464,6 +1627,36 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * Not started in tests unless asked: a suite that builds a server should not
    * acquire a timer and a background appetite for somebody's API.
    */
+  /**
+   * Today's value of every number tile a refreshed read feeds, kept once a
+   * day, and anything past the retention let go. Never allowed to cost the
+   * refresh it follows.
+   */
+  const keepHistory = (target: { connection: string; op: string; key: string; resolved: ResolvedParams }, body: unknown) => {
+    const now = Date.now();
+    let numbers: ReturnType<typeof numbersFrom> = [];
+    try {
+      numbers = numbersFrom({
+        dashboards: store.listDashboards(),
+        connections: new Map(store.listConnections().map((one) => [one.id, one])),
+        read: target,
+        body,
+        now,
+      });
+    } catch (error) {
+      app.log.warn(`history could not be worked out for ${target.connection}: ${String(error)}`);
+      return;
+    }
+    if (numbers.length === 0) return;
+    const day = dayOf(now);
+    void (async () => {
+      for (const one of numbers) await snapshots.record(one.dashboard, one.widget, { day, value: one.value });
+      await snapshots.prune(dayOf(now - historyDays * 86_400_000));
+    })().catch((error: unknown) => app.log.warn(`history could not be kept: ${String(error)}`));
+  };
+
+  /* This server, among any others sharing the database. */
+  const keeperId = `${process.pid}-${randomUUID()}`;
   const keeper = new Keeper({
     targets: () => {
       const connections = store.listConnections();
@@ -1472,13 +1665,19 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         const links = linksFor(connection);
         if (links.length > 0) entityLinks[connection.id] = [...links];
       }
-      return warmTargets({
+      const targets = warmTargets({
         dashboards: store.listDashboards(),
         connections,
         entityLinks,
         viewed: viewed.recent(Date.now()),
         now: () => Date.now(),
       });
+      /* An endpoint a board reads that no check has settled is checked, by itself — paging, filters. */
+      for (const connection of connections) {
+        const ops = targets.filter((one) => one.connection === connection.id && one.because === "widget").map((one) => one.op);
+        if (ops.length > 0) integration.whenUsed(connection, [...new Set(ops)]);
+      }
+      return targets;
     },
     refresh: async (target) => {
       const spec = store.getConnection(target.connection);
@@ -1493,7 +1692,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
        * window and inputs were built by `buildQueryRequest`, or recorded from
        * `/api/query` itself, so the upstream call and the key both match.
        */
-      return queries.read({
+      const result = await queries.read({
         key: target.key,
         connection: target.connection,
         /* Somebody has to ask the API something, and this is the only thing
@@ -1510,12 +1709,20 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             ...(validators ? { validators } : {}),
           }),
       });
+      /* A fresh answer is today's value of each number tile it feeds; a stale one is not. */
+      if (result.outcome === "miss" || result.outcome === "hit") keepHistory(target, result.body);
+      /* A fresh answer is also what the endpoint looks like now. */
+      if (result.outcome === "miss") watchShape(spec, op, result.body);
+      return result;
     },
     lastReadAt: (connection) => seen.seenAt(connection),
     storedAt: (key) => queries.storedAt(key),
     coolingUntil: (connection) => queries.coolingUntil(connection),
     everyMsFor: (target) => everyMsForOp(target.connection, target.op, target.everyMs),
     now: () => Date.now(),
+    ...(options.leases
+      ? { lease: (connection: string) => options.leases!.acquire(`keeper:${connection}`, keeperId, 2 * 60_000) }
+      : {}),
   });
 
   /*
@@ -1525,6 +1732,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * connection's endpoints until the server restarted.
    */
   queries.onInvalidate((connection) => keeper.forget(connection));
+  queries.onInvalidate((connection) => eachReads.forget(connection));
 
   if (options.keeper === true) keeper.start();
   app.addHook("onClose", async () => keeper.stop());
@@ -1804,6 +2012,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         connection: connection.id,
         listPath: pathOf(connection, resource.listOp),
         rowsPathOf: rowsPathsOf(connection),
+        filterParamOf: filterParamsOf(connection),
+        readsRange: readsRangeOf(connection),
         related: relatedFor(connection, entities),
         id: widgetId(parsed.data.brief.title ?? entity.name.many, taken),
       });
@@ -2291,13 +2501,20 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
 
       const written = await writeBrief(llm, {
         intent: parsed.data.intent,
+        today: new Date().toISOString().slice(0, 10),
         // One source by construction: this route is addressed to one
         // connection, so there is nothing to choose between.
         candidates: briefCandidates([
-          { connection: connection.id, title: connection.title, entities },
+          { connection: connection.id, title: connection.title, entities, seen: await seenFor(connection, entities) },
         ]),
       });
       if (!written.brief) {
+        /* Nothing here is what was asked about: said, rather than the nearest records counted instead. */
+        if (written.unmatched) {
+          return reply.status(422).send({
+            error: `None of ${connection.title}'s record types is what that asks for. ${written.unmatched}`,
+          });
+        }
         return reply.status(502).send({ error: written.error ?? "no brief was written" });
       }
 
@@ -2327,6 +2544,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         connection: connection.id,
         listPath: pathOf(connection, resource.listOp),
         rowsPathOf: rowsPathsOf(connection),
+        filterParamOf: filterParamsOf(connection),
+        readsRange: readsRangeOf(connection),
         related: relatedFor(connection, entities),
         id: widgetId(written.brief.title ?? entity.name.many, taken),
       });
@@ -2354,6 +2573,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
               connection: connection.id,
               listPath: pathOf(connection, otherResource.listOp),
               rowsPathOf: rowsPathsOf(connection),
+              filterParamOf: filterParamsOf(connection),
+              readsRange: readsRangeOf(connection),
               related: relatedFor(connection, entities),
               id: widgetId(
                 otherEntity.name.many,
@@ -2402,6 +2623,10 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       });
       if (!parsed.success) {
         return reply.status(400).send({ error: "invalid connection", detail: parsed.error.issues });
+      }
+      /* A kind nothing on this server reads is refused when saved, not when a board first asks (plan, track G). */
+      if (!registry.adapterFor(parsed.data.kind)) {
+        return reply.status(400).send({ error: `Nothing on this server reads a "${parsed.data.kind}" connection.` });
       }
       store.putConnection(parsed.data);
       queries.invalidate(parsed.data.id);
@@ -2497,6 +2722,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         .object({
           values: z.record(z.string(), z.string().max(200)).optional(),
           baseUrl: z.string().max(500).optional(),
+          /* The API is on a private network this server's operator allows (`EgressPolicy`). */
+          privateNetwork: z.boolean().optional(),
         })
         .safeParse(request.body);
       if (!parsed.success || (!parsed.data.values && !parsed.data.baseUrl)) {
@@ -2550,11 +2777,13 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         server = { ...connection.server, values };
       }
 
-      const { server: _previous, addressPending: _pending, ...rest } = connection;
+      const { server: _previous, addressPending: _pending, privateNetwork: wasPrivate, ...rest } = connection;
+      const privateNetwork = parsed.data.privateNetwork ?? wasPrivate ?? false;
       const next = connectionSchema.parse({
         ...rest,
         baseUrl,
         ...(server ? { server } : {}),
+        ...(privateNetwork ? { privateNetwork: true } : {}),
         credentialsRevision:
           baseUrl === connection.baseUrl
             ? connection.credentialsRevision
@@ -2723,6 +2952,33 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   });
 
   // ── query ───────────────────────────────────────────────────────────────
+  /*
+   * The registry this instance serves, when it serves one: verified entries
+   * only, and never an entry's code — a puller would not run it anyway.
+   */
+  if (options.serveRegistry && options.catalog) {
+    const shared = options.catalog;
+    app.get("/api/registry/index.json", async () => registryIndex(shared.list()));
+    app.get<{ Params: { file: string } }>("/api/registry/:file", async (request, reply) => {
+      const id = request.params.file.replace(/\.json$/, "");
+      const entry = shared.get(id);
+      if (!entry || !entry.verified) return reply.status(404).send({ error: "no such entry" });
+      const { connector: _code, ...rest } = entry;
+      return rest;
+    });
+  }
+
+  /** What has changed on a connection's endpoints since they were checked, in words. */
+  app.get<{ Params: { id: string } }>("/api/connections/:id/drift", async (request, reply) => {
+    const connection = store.getConnection(request.params.id);
+    if (!connection) return reply.status(404).send({ error: "no such connection" });
+    try {
+      return { changes: await drift.open(connection) };
+    } catch (error) {
+      return reply.status(503).send({ error: `What has changed could not be read: ${error instanceof Error ? error.message : String(error)}` });
+    }
+  });
+
   app.post<{ Body: unknown }>("/api/query", async (request, reply) => {
     const parsed = querySchema.safeParse(request.body);
     if (!parsed.success) {
@@ -2783,10 +3039,14 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           }),
       });
 
+      if (outcome.outcome === "miss") watchShape(spec, resolvedOp, outcome.body);
+      /* A change open on this endpoint is said on every tile that reads it, however old the copy. */
+      const changed = await drift.noteFor(spec, op).catch(() => null);
       return {
         body: outcome.body,
         meta: {
           ...outcome.meta,
+          ...(changed ? { warnings: [...outcome.meta.warnings, changed] } : {}),
           receipt: previews.record(key, spec, op, resolved, overrides),
           cache: outcome.outcome,
           ageMs: Number.isFinite(outcome.ageMs) ? outcome.ageMs : 0,
@@ -2850,6 +3110,76 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       }
       throw error;
     }
+  });
+
+  /*
+   * The rest of a tile's per-record reads, read here in the background.
+   *
+   * A tile reads the first twenty-five records' related records itself and
+   * says the rest are missing; this reads every one it names, behind every
+   * board's own reads, and answers "reading" until it has them all. Each read
+   * is the request the tile would have sent — the same spelling, so one
+   * already held is not asked again — and one not held is read without being
+   * stored, so two hundred of them cannot push a board's reads out of the
+   * cache. See `EachReads`.
+   */
+  app.post<{ Body: unknown }>("/api/query/each", async (request, reply) => {
+    const parsed = eachSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "invalid query", detail: parsed.error.issues });
+    }
+    const { connection, op, params, input, values, range, filters } = parsed.data;
+    seen.touch(connection, Date.now());
+    const spec = store.getConnection(connection);
+    if (!spec) return reply.status(404).send({ error: `no connection "${connection}"` });
+    const resolvedOp = getOp(spec, op);
+    if (!resolvedOp) return reply.status(404).send({ error: `no operation "${op}"` });
+    registry.addConnection(spec);
+    refreshQueryIdentity(spec);
+
+    const window = { range: resolveRequestedRange(range, Date.now()), filters };
+    const reads = values.map((value) =>
+      buildQueryRequest({
+        connection,
+        op: resolvedOp,
+        params: { ...params, [input]: value },
+        resolved: window,
+      }),
+    );
+    return eachReads.ask({
+      key: eachKey(connection, reads.map((read) => read.key)),
+      connection,
+      count: reads.length,
+      read: async (index) => {
+        const { key, overrides, resolved } = reads[index]!;
+        const fetcher = () =>
+          registry.fetch(connection, op, overrides, {
+            params: resolved,
+            now: Date.now(),
+            resolveSecret: secretFor,
+          });
+        /* Already held — the tile's own first twenty-five, say: served as held. */
+        const answer =
+          queries.storedAt(key) !== null
+            ? await queries.read({
+                key,
+                connection,
+                mode: "view",
+                maxAgeMs: EACH_KEEP_MS,
+                fetcher,
+                priority: Priority.Background,
+              })
+            : await upstream(connection, fetcher, Priority.Background);
+        const said = answer.meta.warnings.filter(isIncompleteNote);
+        return {
+          body: answer.body,
+          notes:
+            answer.meta.truncated && said.length === 0
+              ? ["Not every page was read, so what is shown may exclude additional records."]
+              : said,
+        };
+      },
+    });
   });
 
   // ── endpoints on an existing connection ─────────────────────────────────
@@ -2948,6 +3278,13 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     // Never left to reject unhandled: a damaged database must not take the process down.
     evidence.forget(request.params.id).catch((error: unknown) =>
       app.log.warn(`evidence for ${request.params.id} could not be removed: ${String(error)}`),
+    );
+    // What its records held is that account's, and goes with it.
+    seenValueStore.forget(request.params.id).catch((error: unknown) =>
+      app.log.warn(`the values ${request.params.id}'s records held could not be removed: ${String(error)}`),
+    );
+    drift.forget(request.params.id).catch((error: unknown) =>
+      app.log.warn(`the shapes ${request.params.id}'s endpoints were accepted in could not be removed: ${String(error)}`),
     );
     // The report describes an API this instance can no longer reach, and
     // leaving it behind would let a same-named connection inherit a stale one.
@@ -3660,6 +3997,10 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       catalog: options.catalog,
       llm: resolveLlm("discover"),
       search: resolveSearch(),
+      /* A small section is read by itself when nothing else answered; a large one is still offered. */
+      readIndexUpTo: AUTO_INDEX_PAGES,
+      ...(options.renderDocs ? { renderDocs: options.renderDocs } : {}),
+      http: options.http ?? nodeHttp,
     });
 
     if (result.entry) discovered.hold(result.entry);
@@ -3862,6 +4203,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           connection: found.connection.id,
           listPath: pathOf(found.connection, resource.listOp),
           rowsPathOf: rowsPathsOf(found.connection),
+          filterParamOf: filterParamsOf(found.connection),
+          readsRange: readsRangeOf(found.connection),
           related: relatedFor(found.connection, found.entities ?? []),
           id: widget.id,
         });
@@ -3992,6 +4335,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         connection: found.connection.id,
         listPath: pathOf(found.connection, resource.listOp),
           rowsPathOf: rowsPathsOf(found.connection),
+          filterParamOf: filterParamsOf(found.connection),
+          readsRange: readsRangeOf(found.connection),
         related: relatedFor(found.connection, found.entities ?? []),
         /*
          * The widget's own id, which `recompileWidget` also enforces. A fresh
@@ -4129,8 +4474,29 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     // A board id can be reused; leaving its grants behind would silently
     // pre-approve whatever gets created under the same name next.
     options.grants?.revokeDashboard(request.params.id);
+    // Its numbers' history, likewise: a new board under the old id starts its own.
+    snapshots.forget(request.params.id).catch((error: unknown) =>
+      app.log.warn(`history for ${request.params.id} could not be removed: ${String(error)}`),
+    );
     return { ok: true };
   });
+
+  /**
+   * What a number tile was, day by day, since its history started — kept by
+   * the keeper while the board is looked after (`history/`). Free: nothing
+   * is asked of the API.
+   */
+  app.get<{ Params: { id: string; widgetId: string } }>(
+    "/api/dashboards/:id/widgets/:widgetId/history",
+    async (request, reply) => {
+      const board = store.getDashboard(request.params.id);
+      if (!board?.widgets.some((widget) => widget.id === request.params.widgetId)) {
+        return reply.status(404).send({ error: "no such widget" });
+      }
+      const points = await snapshots.list(request.params.id, request.params.widgetId);
+      return { points, ...(points[0] ? { since: points[0].day } : {}) };
+    },
+  );
 
   /* ── writes ─────────────────────────────────────────────────────────── */
 
@@ -5039,18 +5405,22 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
                      * brief could only ever see one roster, so two made it
                      * useless rather than merely harder.
                      */
-                    const described = store.listConnections().flatMap((entry) => {
-                      const records = entry.catalog
-                        ? (options.catalog?.get(entry.catalog)?.entities ?? [])
-                        : [];
-                      return records.length > 0
-                        ? [{ connection: entry.id, title: entry.title, entities: records, entry }]
-                        : [];
-                    });
+                    const described = (
+                      await Promise.all(
+                        store.listConnections().map(async (entry) => {
+                          const records = entry.catalog
+                            ? (options.catalog?.get(entry.catalog)?.entities ?? [])
+                            : [];
+                          return records.length > 0
+                            ? [{ connection: entry.id, title: entry.title, entities: records, entry, seen: await seenFor(entry, records) }]
+                            : [];
+                        }),
+                      )
+                    ).flat();
 
                     if (described.length > 0) {
                       const candidates = briefCandidates(described);
-                      const written = await writeBrief(model, { intent, candidates });
+                      const written = await writeBrief(model, { intent, candidates, today: new Date().toISOString().slice(0, 10) });
                       const picked = written.brief
                         ? resolveCandidate(candidates, written.brief.entity)
                         : null;
@@ -5219,9 +5589,11 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
                         patch: {},
                         reason: "",
                         notes: [
-                          written.error
-                            ? `I could not work out which records this is about: ${written.error}`
-                            : "I could not work out which kind of record this is about.",
+                          written.unmatched
+                            ? `None of the records I can read is what that asks for. ${written.unmatched}`
+                            : written.error
+                              ? `I could not work out which records this is about: ${written.error}`
+                              : "I could not work out which kind of record this is about.",
                         ],
                         ambiguities: [],
                       };

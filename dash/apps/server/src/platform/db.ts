@@ -56,6 +56,62 @@ CREATE TABLE IF NOT EXISTS dash_credential_meta (
   meta       JSONB NOT NULL,
   PRIMARY KEY (workspace, key_ref)
 );
+
+CREATE TABLE IF NOT EXISTS dash_snapshots (
+  workspace  TEXT NOT NULL,
+  dashboard  TEXT NOT NULL,
+  widget     TEXT NOT NULL,
+  day        TEXT NOT NULL,
+  value      DOUBLE PRECISION NOT NULL,
+  at         TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (workspace, dashboard, widget, day)
+);
+
+CREATE TABLE IF NOT EXISTS dash_seen_values (
+  workspace  TEXT NOT NULL,
+  connection TEXT NOT NULL,
+  op         TEXT NOT NULL,
+  at         TIMESTAMPTZ NOT NULL,
+  seen       JSONB NOT NULL,
+  PRIMARY KEY (workspace, connection, op)
+);
+
+CREATE TABLE IF NOT EXISTS dash_workspaces (
+  id     TEXT PRIMARY KEY,
+  record JSONB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS dash_members (
+  workspace TEXT NOT NULL,
+  user_id   TEXT NOT NULL,
+  record    JSONB NOT NULL,
+  PRIMARY KEY (workspace, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS dash_invites (
+  id         TEXT PRIMARY KEY,
+  workspace  TEXT NOT NULL,
+  token_hash TEXT NOT NULL,
+  record     JSONB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS dash_leases (
+  workspace TEXT NOT NULL,
+  key       TEXT NOT NULL,
+  holder    TEXT NOT NULL,
+  until     TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (workspace, key)
+);
+
+CREATE TABLE IF NOT EXISTS dash_shapes (
+  workspace  TEXT NOT NULL,
+  connection TEXT NOT NULL,
+  op         TEXT NOT NULL,
+  accepted   JSONB NOT NULL,
+  drift      JSONB,
+  since      TIMESTAMPTZ,
+  PRIMARY KEY (workspace, connection, op)
+);
 `;
 
 export interface DashDb {

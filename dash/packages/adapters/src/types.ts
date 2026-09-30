@@ -104,6 +104,14 @@ export interface FetchContext {
    * already read.
    */
   readonly renew?: () => Promise<boolean>;
+  /**
+   * Waiting, for a short rate limit part-way through: a page refused with
+   * "try again in 10s" is waited for and read again, so a read of forty pages
+   * behind a limit of thirty is not refused at page thirty-one every time
+   * (checkpoint 2). Only for reads safe to send twice; absent, a rate limit
+   * ends the read, as it always did.
+   */
+  readonly sleep?: (ms: number) => Promise<void>;
 }
 
 export interface SourceAdapter {

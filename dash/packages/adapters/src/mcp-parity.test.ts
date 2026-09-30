@@ -156,7 +156,7 @@ describe("MCP pagination", () => {
 
     const result = await adapter.fetch(spec, op(spec), {}, { params, now: 0 });
     expect(calls).toHaveLength(1);
-    expect(result.meta.warnings.join(" ")).toContain("link headers");
+    expect(result.meta.warnings.join(" ")).toContain("the next page's address");
   });
 
   it("shares its page decision with REST", () => {

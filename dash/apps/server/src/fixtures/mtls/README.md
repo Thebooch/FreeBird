@@ -1,0 +1,1 @@
+Throwaway certificates for `safe-fetch.test.ts` only: a test CA (its key deleted after signing), a server certificate for `localhost` and a client certificate `dash-client`. They protect nothing and are trusted by nothing outside that test.

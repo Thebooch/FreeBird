@@ -1,4 +1,5 @@
-import type { Permission, Principal, Scope } from "@freebirdai/dash-spec";
+import { ROLE_PERMISSIONS, type Permission, type Principal, type Scope } from "@freebirdai/dash-spec";
+import type { MembershipStore } from "./membership.js";
 
 /**
  * Whether one principal may do one thing, somewhere.
@@ -24,6 +25,28 @@ const ALLOWED: PolicyDecision = Object.freeze({ ok: true as const });
  * ever produces. A managed build replaces this with one that reads each
  * member's role and grants — see `@freebirdai/dash-spec`'s `access.ts`.
  */
+/**
+ * Each member's role, and the grants they were given on top of it (plan,
+ * track G): what a hosted build's workspaces use. A grant scoped to one
+ * connection, or one record type on it, allows only there; an unscoped one
+ * everywhere. Somebody who is no longer a member may do nothing.
+ */
+export const rolePolicy = (memberships: MembershipStore): Policy => ({
+  can: async (principal, permission, scope = {}) => {
+    if (principal.kind === "local-owner") return ALLOWED;
+    const member = await memberships.member(principal.workspaceId, principal.userId);
+    if (!member) return { ok: false, reason: "You are no longer a member of this workspace." };
+    if (ROLE_PERMISSIONS[member.role].includes(permission)) return ALLOWED;
+    const granted = member.grants.some(
+      (grant) =>
+        grant.permission === permission &&
+        (grant.scope.connection === undefined || grant.scope.connection === scope.connection) &&
+        (grant.scope.entity === undefined || grant.scope.entity === scope.entity),
+    );
+    return granted ? ALLOWED : { ok: false, reason: `Your role here (${member.role}) does not allow this.` };
+  },
+});
+
 export const ownerPolicy: Policy = {
   can: (principal) =>
     principal.role === "owner"

@@ -256,6 +256,12 @@ const templatedServer = (
   }
 };
 
+/** Whether a document names no server at all, so it is served from where the document is. */
+const servedFromDocument = (doc: Json): boolean =>
+  specVersionOf(doc) === 2
+    ? str(doc.host) === undefined
+    : !Array.isArray(doc.servers) || doc.servers.length === 0;
+
 export const addressFrom = (doc: Json, specUrl: string): ApiAddress | undefined => {
   if (specVersionOf(doc) === 2) {
     const host = str(doc.host);
@@ -265,8 +271,30 @@ export const addressFrom = (doc: Json, specUrl: string): ApiAddress | undefined 
     if (host && !host.includes("{")) {
       return { baseUrl: `${scheme}://${host}${basePath}`.replace(/\/+$/, "") };
     }
+    /* No host at all means the host serving the document, by Swagger 2's own rule — not a guess. */
+    if (host === undefined) {
+      try {
+        const served = new URL(specUrl);
+        return { baseUrl: `${served.protocol}//${served.host}${basePath}`.replace(/\/+$/, "") };
+      } catch {
+        /* fall through to the guess */
+      }
+    }
   } else {
     const servers = Array.isArray(doc.servers) ? doc.servers.filter(isObject) : [];
+    /*
+     * No servers at all means one at "/", relative to the document, by
+     * OpenAPI 3's own rule — not a guess. Asked for an address anyway, a
+     * public API whose document leaves them out could never be read without
+     * a person typing what the specification had already said (checkpoint 2).
+     */
+    if (!Array.isArray(doc.servers) || doc.servers.length === 0) {
+      try {
+        return { baseUrl: new URL(specUrl).origin };
+      } catch {
+        return undefined;
+      }
+    }
     /* A fixed address wins: nothing to ask. */
     for (const server of servers) {
       const url = str(server.url);
@@ -476,6 +504,15 @@ const issuedByLogin = (doc: Json, scheme: Json): boolean => {
   return false;
 };
 
+/**
+ * AWS Signature Version 4, as API Gateway's exports mark it: an `apiKey`
+ * scheme named `Authorization` carrying `x-amazon-apigateway-authtype`.
+ * Signed by the built-in signer (plan, track B), never pasted as a header.
+ */
+const awsSigned = (scheme: Json): boolean =>
+  /^aws_?sigv4$/i.test(str(scheme["x-amazon-apigateway-authtype"]) ?? "") ||
+  (str(scheme.type)?.toLowerCase() === "http" && /^aws4-hmac-sha256$/i.test(str(scheme.scheme) ?? ""));
+
 /** The capability a scheme needs that no supported auth type covers, if any. */
 const schemeGap = (scheme: Json, doc: Json): CapabilityId | null => {
   const type = str(scheme.type)?.toLowerCase();
@@ -484,9 +521,7 @@ const schemeGap = (scheme: Json, doc: Json): CapabilityId | null => {
     return "auth.token-exchange";
   if (type === "oauth2") return oauthFlowOf(scheme, "probe") ? null : "auth.oauth2-token";
   if (type === "openidconnect") return "auth.oidc";
-  if (type === "mutualtls") return "auth.mtls";
-  if (type === "apikey" && str(scheme.in)?.toLowerCase() === "cookie") return "auth.cookie";
-  if (type === "http" && httpScheme === "digest") return "auth.digest";
+  if (awsSigned(scheme)) return null;
   if (type === "http" && httpScheme && httpScheme !== "bearer" && httpScheme !== "basic")
     return "auth.signing";
   return null;
@@ -656,6 +691,7 @@ const responseGap = (doc: Json, operation: Json): CapabilityId | null => {
   const lines = (type: string) => /nd-?json|jsonl|json-seq/.test(type);
   if (lowered.some((type) => /json/.test(type) && !lines(type)) || lowered.includes("*/*")) return null;
   if (lowered.some(lines)) return "response.ndjson";
+  if (lowered.includes("text/event-stream")) return "transport.stream";
   if (lowered.some((type) => /csv|tab-separated|tsv/.test(type))) return "response.csv";
   if (lowered.some((type) => /xml/.test(type))) return "response.xml";
   if (lowered.every((type) => type.startsWith("text/plain"))) return null;
@@ -769,16 +805,35 @@ const authFrom = (doc: Json, keyRef: string): DialectAuth => {
   // Preserve every required header instead of choosing one and losing the rest.
   for (const requirement of requirements) {
     if (!isObject(requirement) || Object.keys(requirement).length < 2) continue;
-    const parts: Array<{ header: string; keyRef: string; template?: string }> = [];
+    /* A signature and a key in a header beside it: API Gateway's metered APIs ask for both. */
+    const required = Object.keys(requirement).map((schemeName) => deref(doc, schemes[schemeName]));
+    const beside = required.filter((scheme) => !(isObject(scheme) && awsSigned(scheme)));
+    if (required.length === 2 && beside.length === 1) {
+      const key = beside[0];
+      if (isObject(key) && str(key.type)?.toLowerCase() === "apikey" && str(key.in)?.toLowerCase() === "header" && str(key.name))
+        return {
+          type: "sigv4",
+          accessKeyRef: `${keyRef}-access`,
+          keyRef,
+          apiKey: { header: str(key.name)!, keyRef: `${keyRef}-api` },
+        };
+    }
+    const parts: Array<{ header: string; keyRef: string; template?: string; in?: "query" | "cookie" }> = [];
     for (const [index, schemeName] of Object.keys(requirement).entries()) {
       const scheme = deref(doc, schemes[schemeName]);
-      if (!isObject(scheme)) break;
+      if (!isObject(scheme) || awsSigned(scheme)) break;
+      const where = str(scheme.in)?.toLowerCase();
       if (
         str(scheme.type)?.toLowerCase() === "apikey" &&
-        str(scheme.in)?.toLowerCase() === "header" &&
+        (where === "header" || where === "query" || where === "cookie") &&
         str(scheme.name)
       ) {
-        parts.push({ header: str(scheme.name)!, keyRef: `${keyRef}-${index + 1}` });
+        /* Wherever each key goes: a header, the query string, a cookie (plan, track B). */
+        parts.push({
+          header: str(scheme.name)!,
+          keyRef: `${keyRef}-${index + 1}`,
+          ...(where === "header" ? {} : { in: where }),
+        });
       } else if (str(scheme.type) === "http" && str(scheme.scheme) === "bearer") {
         parts.push({
           header: "Authorization",
@@ -824,6 +879,18 @@ const authFrom = (doc: Json, keyRef: string): DialectAuth => {
           auth: { type: "basic", usernameRef: `${keyRef}-user`, keyRef },
         });
       }
+      /* HTTP Digest: the same two values, answered to the server's challenge (plan, track B). */
+      if (httpScheme === "digest") {
+        candidates.push({
+          rank: 3 - preferred,
+          auth: { type: "basic", digest: true, usernameRef: `${keyRef}-user`, keyRef },
+        });
+      }
+    }
+    /* Signed for AWS: two values the person holds, and a signature made here. The address names the region. */
+    if (awsSigned(scheme)) {
+      candidates.push({ rank: 1 - preferred, auth: { type: "sigv4", accessKeyRef: `${keyRef}-access`, keyRef } });
+      continue;
     }
     // Swagger 2.0 spells apiKey the same way, so this covers both versions.
     if (type === "apikey" && name) {
@@ -832,6 +899,10 @@ const authFrom = (doc: Json, keyRef: string): DialectAuth => {
       }
       if (inWhere === "query") {
         candidates.push({ rank: 2 - preferred, auth: { type: "query", param: name, keyRef } });
+      }
+      /* A key sent in a cookie: one part of the several-keys sign-in, sent there. */
+      if (inWhere === "cookie") {
+        candidates.push({ rank: 2 - preferred, auth: { type: "headers", parts: [{ header: name, keyRef, in: "cookie" }] } });
       }
     }
     if (type === "oauth2") {
@@ -874,6 +945,9 @@ const successSchema = (doc: Json, operation: Json): Json | undefined => {
   }
   return undefined;
 };
+
+/** A key that names a wrapper around an answer's content, not a field of a record. */
+export const ENVELOPE_KEY = /^(_embedded|data|result|results|response|payload|body|content|d)$/i;
 
 /**
  * Where the rows live, read from the declared response schema.
@@ -921,6 +995,25 @@ const shapeOf = (
     const preferred = ["data", "items", "results", "records", "rows", "hits"];
     const match = arrayProps.find(([name]) => preferred.includes(name));
     if (match) return { archetype: "list", rowsPath: `$.${match[0]}` };
+  }
+  /*
+   * An envelope inside an envelope: HAL's `_embedded.vehicles`, OData's
+   * `d.results`, a `data.items`. Only under a key that names a wrapper, and
+   * only where it holds exactly one list — a record's own nested object with
+   * a list in it is still a record. Read as one record, 214 vehicles were
+   * eight: one per page (2026-09-30).
+   */
+  if (arrayProps.length === 0) {
+    for (const [name, value] of Object.entries(properties)) {
+      const container = deref(doc, value);
+      if (!ENVELOPE_KEY.test(name) || !isObject(container) || !isObject(container.properties)) continue;
+      const inner = Object.entries(container.properties).filter(([, entry]) => {
+        const resolved = deref(doc, entry);
+        return isObject(resolved) && str(resolved.type) === "array";
+      });
+      if (inner.length === 1 && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && /^[A-Za-z_][A-Za-z0-9_]*$/.test(inner[0]![0]))
+        return { archetype: "list", rowsPath: `$.${name}.${inner[0]![0]}` };
+    }
   }
   return { archetype: "summary" };
 };
@@ -1100,14 +1193,37 @@ const LIMIT_PARAMS = [
   "max_results",
 ];
 
+/*
+ * Parameters that window records by when they happened. Not `since` or
+ * `updated_after`: on most APIs those select records *changed* since a time,
+ * and a total read through one counts only what was edited lately — a
+ * catalogue of 194 products read as 33 (measurement 1). Those suit keeping a
+ * copy up to date, and are said so rather than installed; see
+ * `CHANGED_SINCE`.
+ */
 const DATE_PARAMS: ReadonlyArray<{ names: string[]; format: "unix" | "iso" | "date" }> = [
   { names: ["created[gte]", "created_at[gte]", "since_ts", "start_time"], format: "unix" },
   {
-    names: ["since", "start_date", "from", "created_after", "updated_after", "start"],
+    names: ["start_date", "from", "created_after", "start"],
     format: "iso",
   },
   { names: ["date_from", "start_day"], format: "date" },
 ];
+
+/** What closes the range each of those opens, where an API declares it. */
+const RANGE_END: Readonly<Record<string, readonly string[]>> = {
+  "created[gte]": ["created[lt]", "created[lte]"],
+  "created_at[gte]": ["created_at[lt]", "created_at[lte]"],
+  since_ts: ["until_ts"],
+  start_time: ["end_time"],
+  start_date: ["end_date"],
+  from: ["to"],
+  created_after: ["created_before"],
+  start: ["end"],
+};
+
+/** A parameter that selects records changed since a time, not records that happened in one. */
+export const CHANGED_SINCE = /^(since|updated|modified|changed)$|(updated|modified|changed|edited)[_-]?(after|since|from|gte|\[gte\])|(updated|modified|changed)_?at\[?gte|^last_?(modified|updated|changed)/i;
 
 const pick = (names: readonly string[], candidates: readonly string[]): string | undefined =>
   candidates.find((candidate) => names.some((name) => name.toLowerCase() === candidate));
@@ -1160,10 +1276,22 @@ const dialectFromParams = (
     const match = pick(lower, group.names);
     if (match) {
       const original = names.find((name) => name.toLowerCase() === match)!;
-      timeFilter = { param: original, format: group.format };
+      /*
+       * The other end of the range, where the API declares one beside it. Only
+       * for a moment in time: "now" is the same end whether the API includes
+       * it or not, while a date that excludes its last day would drop today.
+       */
+      const other = group.format === "date" ? undefined : RANGE_END[match]?.find((name) => lower.includes(name));
+      const endParam = other ? names.find((name) => name.toLowerCase() === other) : undefined;
+      timeFilter = { param: original, ...(endParam ? { endParam } : {}), format: group.format };
       break;
     }
   }
+  const changedSince = names.find((name) => CHANGED_SINCE.test(name));
+  if (!timeFilter && changedSince)
+    warnings.push(
+      `"${changedSince}" selects records changed since a time, so it is not used as a board's time window: a total read through it would count only what was edited lately.`,
+    );
 
   return { pagination, ...(timeFilter ? { timeFilter } : {}), warnings };
 };
@@ -1243,6 +1371,10 @@ export const parseOpenApi = (
     warnings.push(
       "The specification does not say where the API lives, so its address is a guess. It is asked for before connecting.",
     );
+  } else if (servedFromDocument(doc)) {
+    warnings.push(
+      `The specification names no server, so requests go to the host that serves it (${baseUrl}), as the specification's own rules say.`,
+    );
   }
   const keyRef = `${id}-key`;
   /*
@@ -1253,6 +1385,22 @@ export const parseOpenApi = (
   const labelled = (value: DialectAuth): DialectAuth =>
     value.type === "basic" ? { ...value, ...basicLabelsFrom(keyHelp) } : value;
   const auth = labelled(authFrom(doc, keyRef));
+  /*
+   * A client certificate (mutual TLS), where a requirement the API states
+   * asks for one — alone, or beside a key (plan, track B).
+   */
+  const mutualTls = (() => {
+    const schemes = schemesOf(doc);
+    const named = Object.entries(schemes)
+      .filter(([, raw]) => {
+        const scheme = deref(doc, raw);
+        return isObject(scheme) && str(scheme.type)?.toLowerCase() === "mutualtls";
+      })
+      .map(([name]) => name);
+    if (named.length === 0) return false;
+    const requirements = Array.isArray(doc.security) ? doc.security.filter(isObject) : [];
+    return requirements.length === 0 || requirements.some((entry) => named.some((name) => name in entry));
+  })();
   // A spec that declares no scheme has not told us the API is public — most
   // business APIs omit the block and still require credentials. Record that a
   // key is needed without inventing where it goes.
@@ -1348,7 +1496,10 @@ export const parseOpenApi = (
     if (postRead) postReads.add(rawPath);
 
     const format = responseGap(doc, operation);
-    if (format) unreadable.set(format, (unreadable.get(format) ?? 0) + 1);
+    /* A table of rows, a record a line and XML are read as they are; only a file of bytes is not. */
+    if (format === "response.binary") unreadable.set(format, (unreadable.get(format) ?? 0) + 1);
+    /* A stream of events is read for a window, each event a record. */
+    const streams = format === "transport.stream";
 
     const params = [
       ...operationParams(doc, operation, pathItem, signInHeaders),
@@ -1440,9 +1591,17 @@ export const parseOpenApi = (
        * says (usually just "string"). Read as one summary, it was never a
        * resource, so its records could never be asked for (measurement 1).
        */
-      ...(format === "response.ndjson" || format === "response.csv"
+      ...(streams ? { stream: { events: 100, seconds: 5 } } : {}),
+      ...(format === "response.ndjson" || format === "response.csv" || streams
         ? { archetype: "list" as const, rowsPath: "$" }
-        : { archetype: shape.archetype, ...(shape.rowsPath ? { rowsPath: shape.rowsPath } : {}) }),
+        : format === "response.xml" && !single
+          ? /*
+             * XML names no list in a way a schema here is read for: a
+             * collection's address is a collection, and where its records are
+             * is found by reading it (`rowsStrategy`).
+             */
+            { archetype: "list" as const }
+          : { archetype: shape.archetype, ...(shape.rowsPath ? { rowsPath: shape.rowsPath } : {}) }),
       ...(totalPath ? { totalPath } : {}),
       // Strip the seeding-only field; the rest is the declared contract.
       params: params.map(({ value: _seed, ...param }) => param),
@@ -1494,6 +1653,22 @@ export const parseOpenApi = (
 
   const inferred = dialectFromParams(collectedParams);
   warnings.push(...inferred.warnings);
+  /*
+   * The time range is sent only where the endpoint takes it. One parameter
+   * found anywhere in the specification was sent to every list, and an
+   * endpoint that never declared it was asked for a window it cannot give.
+   * Both ends only where every endpoint that takes the start takes the end.
+   */
+  const timeFilter = (() => {
+    const found = inferred.timeFilter;
+    if (!found) return undefined;
+    const takes = (op: (typeof ops)[number], name: string) => op.params.some((param) => param.in === "query" && param.name === name);
+    for (const [index, op] of ops.entries())
+      if (!takes(op, found.param)) ops[index] = { ...op, timeFiltered: false };
+    const everywhere = found.endParam !== undefined && ops.every((op) => !takes(op, found.param) || takes(op, found.endParam!));
+    const { endParam, ...start } = found;
+    return everywhere && endParam ? found : start;
+  })();
   if (inferred.pagination.kind !== "none")
     warnings.push(
       "Pagination is an unconfirmed suggestion. Only one response will be read until an endpoint's pagination contract is configured.",
@@ -1506,10 +1681,11 @@ export const parseOpenApi = (
     ...(address.server ? { server: address.server } : {}),
     ...(address.guessed ? { baseUrlGuessed: true } : {}),
     ...(keyHelp ? { keyHelp } : {}),
+    ...(mutualTls ? { clientCertificate: { certRef: `${keyRef}-cert`, keyRef: `${keyRef}-cert-key` } } : {}),
     dialect: {
       auth,
       pagination: { kind: "none" },
-      ...(inferred.timeFilter ? { timeFilter: inferred.timeFilter } : {}),
+      ...(timeFilter ? { timeFilter } : {}),
     },
     ops,
     writes: writes.ops,
