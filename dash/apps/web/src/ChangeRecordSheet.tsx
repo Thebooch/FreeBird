@@ -182,7 +182,6 @@ export const ChangeRecordSheet = ({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [request]);
 
   const confirm = async (current: WriteReviewView, from: WriteFormView | undefined): Promise<void> => {
