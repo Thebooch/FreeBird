@@ -134,3 +134,30 @@ export const parseDraft = (value: unknown): ConciergeDraft | null => {
   const parsed = conciergeDraftSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
 };
+
+/**
+ * A store that keeps a setup pointed at the widgets it already placed.
+ *
+ * Every change to a draft — a revise, an answer, an arrangement, the other
+ * reading — is a fresh object, and several of them rebuild the draft from
+ * nothing. Carrying `placed` through each of those by hand is a rule every
+ * future change would have to remember, so it is kept here instead: a write
+ * for the same setup that does not say where it is placed inherits where the
+ * last one was. Its fingerprint then no longer matches, which is what tells
+ * the card the board needs the new version.
+ *
+ * A write that sets `placed` itself (the commit) is taken as it is, and a
+ * new setup has a new id and inherits nothing.
+ */
+export const keepPlacement = (inner: DraftStore): DraftStore => ({
+  get: (scope) => inner.get(scope),
+  clear: (scope) => inner.clear(scope),
+  put: async (scope, draft) => {
+    if (draft.placed) return inner.put(scope, draft);
+    const existing = await inner.get(scope);
+    return inner.put(
+      scope,
+      existing?.placed && existing.id === draft.id ? { ...draft, placed: existing.placed } : draft,
+    );
+  },
+});

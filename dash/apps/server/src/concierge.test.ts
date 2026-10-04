@@ -1,6 +1,6 @@
 import { fingerprintOps } from "@freebirdai/dash-spec";
 import type { ConciergeDraft } from "@freebirdai/dash-agent";
-import { applyStep, newDraft } from "@freebirdai/dash-agent";
+import { applyStep, isPlacedCurrent, newDraft, placeDraft } from "@freebirdai/dash-agent";
 import {
   capabilityReportSchema,
   connectionSchema,
@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import { conciergeActions, lookUpEndpoint, type ConciergeOps } from "./chat/concierge-actions.js";
 import { buildChatRegistry } from "./chat/registry.js";
 import { buildConciergeContext } from "./concierge/context.js";
-import { MemoryDraftStore, parseDraft } from "./concierge/store.js";
+import { MemoryDraftStore, keepPlacement, parseDraft } from "./concierge/store.js";
 import { toJsonSchema } from "./llm.js";
 
 /**
@@ -320,7 +320,10 @@ describe("the setup actions", () => {
 
     expect(board().widgets).toHaveLength(1);
     expect(board().widgets[0]?.title).toBe("Amount by status");
-    expect(await ops.getDraft()).toBeNull();
+    // Kept, pointed at the widget it wrote, so a follow-up changes that tile.
+    const kept = await ops.getDraft();
+    expect(kept?.placed?.widgetIds).toEqual([board().widgets[0]!.id]);
+    expect(kept && isPlacedCurrent(kept)).toBe(true);
   });
 
   it("offers a control for every decision, including the ones it did not ask about", async () => {
@@ -446,6 +449,21 @@ describe("where a half-finished setup lives", () => {
     await store.clear("a");
     expect(await store.get("a")).toBeNull();
     expect((await store.get("b"))?.id).toBe("d2");
+  });
+
+  it("keeps a placed setup pointed at its widgets through every change", async () => {
+    const store = keepPlacement(new MemoryDraftStore());
+    await store.put("a", placeDraft(draft("d1"), ["w1"]));
+    expect(isPlacedCurrent((await store.get("a"))!)).toBe(true);
+    // A change that knows nothing about placement, as a rebuilt draft does.
+    await store.put("a", { ...draft("d1"), title: "Renamed" });
+    const changed = (await store.get("a"))!;
+    expect(changed.placed?.widgetIds).toEqual(["w1"]);
+    // Still pointed at the tile, but the board no longer shows what it says.
+    expect(isPlacedCurrent(changed)).toBe(false);
+    // A different setup inherits nothing.
+    await store.put("a", draft("d2"));
+    expect((await store.get("a"))?.placed).toBeUndefined();
   });
 
   it("refuses a stored blob that is not a draft, rather than half-trusting it", () => {

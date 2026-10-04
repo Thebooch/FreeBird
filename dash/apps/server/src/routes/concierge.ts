@@ -12,13 +12,14 @@ import {
   feasibleArrangements,
   newDraft,
   nextStepAcross,
+  placeDraft,
   readinessAcross,
   revise,
   skipStepAcross,
   takeReading,
 } from "@freebirdai/dash-agent";
 import type { DashboardSpec } from "@freebirdai/dash-spec";
-import { commitSetup } from "../concierge/commit.js";
+import { placeSetup, withoutPlaced } from "../concierge/commit.js";
 import { settleDetail } from "../concierge/detail.js";
 import type { DetailPlanRequest, DetailSetup } from "../concierge/detail.js";
 import { parseWidget } from "@freebirdai/dash-spec";
@@ -437,7 +438,7 @@ export const conciergeRoutes =
         const built = buildAll(named, context, {
           taken: new Set(board.widgets.map((widget) => widget.id)),
         });
-        const commit = commitSetup({ board, built });
+        const commit = placeSetup({ board, built, placed: draft.placed });
         const previewFailure = deps.previews?.failure(built.widgets);
         if (previewFailure) return reply.status(409).send({ error: previewFailure });
         if (!commit.ok || !commit.next) {
@@ -445,11 +446,28 @@ export const conciergeRoutes =
         }
 
         deps.putDashboard(commit.next);
-        await deps.drafts(request).clear(id);
+        /*
+         * An assisted setup stays, pointed at what it wrote, so the next thing
+         * somebody says about the widget changes it on the board. The wizard
+         * has nobody to say anything next, so it is spent as it always was.
+         */
+        if (draft.mode === "assisted") {
+          await deps.drafts(request).put(
+            id,
+            placeDraft(
+              named,
+              commit.widgets.map((widget) => widget.id),
+              commit.groupId,
+            ),
+          );
+        } else {
+          await deps.drafts(request).clear(id);
+        }
 
         const first = commit.widgets[0]!;
         return {
           added: true,
+          replaced: commit.replaced,
           // The primary, kept under its old name so nothing reading one
           // widget's id has to learn to count.
           widgetId: first.id,
@@ -465,5 +483,23 @@ export const conciergeRoutes =
     app.delete<{ Params: Params }>("/api/concierge/:dashboardId", async (request) => {
       await deps.drafts(request).clear(request.params.dashboardId);
       return { cleared: true };
+    });
+
+    /*
+     * Take back what the setup put on the board.
+     *
+     * The other half of adding without asking first: a widget that lands by
+     * itself has to leave just as easily, from the same card, without the
+     * person having to find its tile and its menu.
+     */
+    app.post<{ Params: Params }>("/api/concierge/:dashboardId/undo", async (request, reply) => {
+      const id = request.params.dashboardId;
+      const draft = await deps.drafts(request).get(id);
+      if (!draft?.placed)
+        return reply.status(409).send({ error: "nothing from this setup is on the board" });
+      const board = deps.getDashboard(id);
+      if (board) deps.putDashboard(withoutPlaced(board, draft.placed));
+      await deps.drafts(request).clear(id);
+      return { removed: draft.placed.widgetIds };
     });
   };

@@ -1,7 +1,7 @@
 import type { BuildAllResult } from "@freebirdai/dash-agent";
 import { type DashboardSpec, dashboardSchema, widgetSchema } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
-import { commitSetup } from "./commit.js";
+import { commitSetup, placeSetup, withoutPlaced } from "./commit.js";
 
 /**
  * Writing a finished setup onto a board.
@@ -126,5 +126,68 @@ describe("commitSetup", () => {
       // assertion — but say so, because that is the guarantee callers rely on.
       expect(framed().next).toBeDefined();
     });
+  });
+});
+
+describe("placeSetup", () => {
+  const placedBoard = () =>
+    board({
+      widgets: [widget("old", "Old"), widget("other", "Other")],
+      layout: { cells: [{ widgetId: "old", x: 4, y: 2, w: 6, h: 4 }] },
+    });
+
+  it("is a plain write when nothing has been placed yet", () => {
+    const result = placeSetup({ board: board(), built: built() });
+    expect(result.ok).toBe(true);
+    expect(result.replaced).toBe(false);
+    expect(result.next?.widgets).toHaveLength(2);
+  });
+
+  it("rewrites the placed widget where it stands, keeping its id and its cell", () => {
+    const result = placeSetup({
+      board: placedBoard(),
+      built: built({ widgets: [widget("fresh-id", "Renamed")] }),
+      placed: { widgetIds: ["old"] },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.replaced).toBe(true);
+    expect(result.next?.widgets.map((entry) => [entry.id, entry.title])).toEqual([
+      ["old", "Renamed"],
+      ["other", "Other"],
+    ]);
+    expect(result.next?.layout.cells).toEqual([
+      expect.objectContaining({ widgetId: "old", x: 4, y: 2, w: 6, h: 4 }),
+    ]);
+  });
+
+  it("swaps the tiles when the setup changed shape", () => {
+    const result = placeSetup({
+      board: placedBoard(),
+      built: built(),
+      placed: { widgetIds: ["old"] },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.replaced).toBe(true);
+    expect(result.next?.widgets.map((entry) => entry.id)).toEqual([
+      "other",
+      "properties",
+      "listings",
+    ]);
+  });
+
+  it("adds afresh when the placed widget was removed from the board", () => {
+    const result = placeSetup({
+      board: board({ widgets: [widget("other", "Other")] }),
+      built: built({ widgets: [widget("fresh-id", "Back again")] }),
+      placed: { widgetIds: ["old"] },
+    });
+    expect(result.replaced).toBe(false);
+    expect(result.next?.widgets.map((entry) => entry.id)).toEqual(["other", "fresh-id"]);
+  });
+
+  it("takes placed widgets back off the board", () => {
+    expect(withoutPlaced(placedBoard(), { widgetIds: ["old"] }).widgets.map((w) => w.id)).toEqual([
+      "other",
+    ]);
   });
 });

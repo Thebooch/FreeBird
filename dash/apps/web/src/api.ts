@@ -434,6 +434,13 @@ export interface ConciergeActive {
    * somebody is asked a question or simply carried on.
    */
   startedAt: string | null;
+  /**
+   * What this setup already put on the board, or null until it lands.
+   *
+   * `current` is false while a change the board does not show yet is waiting
+   * for its preview to check out; the card then writes it over the same tiles.
+   */
+  placed: { widgetIds: string[]; current: boolean } | null;
   ready: boolean;
   missing: ConciergeMissing[];
   /** The next question, or null when there is nothing left to ask. */
@@ -843,6 +850,8 @@ export const api = {
     title?: string,
   ): Promise<{
     added: boolean;
+    /** True when it rewrote the widgets this setup had already placed. */
+    replaced?: boolean;
     widgetId: string;
     title: string;
     warnings: string[];
@@ -851,6 +860,10 @@ export const api = {
 
   cancelSetup: (dashboardId: string): Promise<{ cleared: boolean }> =>
     request(`/api/concierge/${encodeURIComponent(dashboardId)}`, { method: "DELETE" }),
+
+  /** Take what the setup placed back off the board, and end the setup. */
+  undoSetup: (dashboardId: string): Promise<{ removed: string[] }> =>
+    request(`/api/concierge/${encodeURIComponent(dashboardId)}/undo`, json({})),
 
   models: (): Promise<ModelsResult> => request("/api/models"),
 

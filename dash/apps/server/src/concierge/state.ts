@@ -4,6 +4,7 @@ import {
   buildAll,
   nextStepAcross,
   feasibleArrangements,
+  isPlacedCurrent,
   readinessAcross,
   remainingStepsAcross,
 } from "@freebirdai/dash-agent";
@@ -70,10 +71,12 @@ const nextAction = (
   missing: ReturnType<typeof readinessAcross>["missing"],
 ): string => {
   if (ready) {
-    return (
-      "This is configured and build-valid. Its data preview still needs checking before confirmation. Say briefly what you " +
-      "made, in one sentence. Do not call confirm_setup until they say they want it."
-    );
+    return draft.placed
+      ? "This change goes onto the widget already on the board by itself, once its preview " +
+          "checks out. Say in one sentence what changed. Do not call confirm_setup."
+      : "This is configured and build-valid. It goes onto the board by itself as soon as its " +
+          "preview checks out — nothing for the user to pick or confirm, and do not call " +
+          "confirm_setup. Say in a sentence or two what you built.";
   }
 
   const piece = missing[0];
@@ -152,6 +155,14 @@ export const conciergeState = (input: StateInput) => {
      * and only the other is worth interrupting somebody to ask about.
      */
     startedAt: draft.startedAt ?? null,
+    /**
+     * What this setup already put on the board, and whether the board still
+     * holds what it describes. Null until it lands; once it has, the card
+     * carries each later change onto those same tiles.
+     */
+    placed: draft.placed
+      ? { widgetIds: [...draft.placed.widgetIds], current: isPlacedCurrent(draft) }
+      : null,
     /** True once nothing is left that blocks a widget. */
     configured: state.ready,
     buildValid: widget !== null && built?.errors.length === 0,
@@ -163,7 +174,7 @@ export const conciergeState = (input: StateInput) => {
     nextAction: built?.errors.length
       ? `The widget could not be built: ${built.errors.join("; ")}. Correct the draft before confirming.`
       : state.ready && ["checked", "empty", "partial"].includes(previewStatus)
-        ? `The preview is ${previewStatus}. Describe any empty or partial result, and confirm only when the user asks to add it.`
+        ? `The preview is ${previewStatus}. Describe any empty or partial result. It is placed on the board without a confirm step.`
         : nextAction(draft, context, state.ready, state.missing),
     /** The next question. Null in assisted mode once nothing blocks a widget. */
     step: step ? renderStep(step) : null,

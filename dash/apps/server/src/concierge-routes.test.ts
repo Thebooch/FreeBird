@@ -522,6 +522,76 @@ describe("guided setup with no model at all", () => {
     expect(store.getDashboard("ops")?.widgets).toHaveLength(1);
   });
 
+  it("keeps an assisted widget in reach after it lands, and changes it in place", async () => {
+    const app = makeApp();
+    await app.inject({
+      method: "POST",
+      url: "/api/concierge/ops/start",
+      payload: { intent: "my items and what they cost", mode: "assisted" },
+    });
+    await app.inject({
+      method: "POST",
+      url: "/api/concierge/ops/revise",
+      payload: {
+        endpoint: "items",
+        component: "bar",
+        roles: { category: ["State"], value: ["Total"] },
+        title: "Cost by state",
+      },
+    });
+    await checkPreview(app);
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/concierge/ops/confirm",
+      payload: {},
+    });
+    expect(first.statusCode).toBe(200);
+    const widgetId = (first.json() as { widgetId: string }).widgetId;
+
+    // Still there, pointing at what it wrote, so "make it a table" has a subject.
+    type Placed = State & { placed?: { widgetIds: string[]; current: boolean } | null };
+    const landed = (
+      await app.inject({ method: "GET", url: "/api/concierge/ops" })
+    ).json() as Placed;
+    expect(landed.placed).toEqual({ widgetIds: [widgetId], current: true });
+
+    const changed = (
+      await app.inject({
+        method: "POST",
+        url: "/api/concierge/ops/revise",
+        payload: { title: "Spend by state" },
+      })
+    ).json() as Placed;
+    // The board does not show this yet, which is what the card waits on.
+    expect(changed.placed?.current).toBe(false);
+
+    await checkPreview(app);
+    const second = await app.inject({
+      method: "POST",
+      url: "/api/concierge/ops/confirm",
+      payload: {},
+    });
+    expect(second.statusCode).toBe(200);
+    expect((second.json() as { replaced: boolean }).replaced).toBe(true);
+
+    // The same tile, renamed, rather than a second widget beside the first.
+    const widgets = store.getDashboard("ops")?.widgets ?? [];
+    expect(widgets.map((widget) => widget.id)).toEqual([widgetId]);
+    expect(widgets[0]?.title).toBe("Spend by state");
+
+    // And it can be taken back from the same card.
+    const undone = await app.inject({
+      method: "POST",
+      url: "/api/concierge/ops/undo",
+      payload: {},
+    });
+    expect(undone.statusCode).toBe(200);
+    expect(store.getDashboard("ops")?.widgets).toEqual([]);
+    expect((await app.inject({ method: "GET", url: "/api/concierge/ops" })).json()).toEqual({
+      active: false,
+    });
+  });
+
   it("hands back a field nobody offered rather than absorbing it", async () => {
     const app = makeApp();
     await app.inject({

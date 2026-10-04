@@ -368,6 +368,26 @@ export const conciergeDraftSchema = z.object({
    */
   startedAt: z.string().optional(),
   /**
+   * The widgets this setup already put on the board, when it has.
+   *
+   * Asking for a widget used to end in a picker and an Add button, and adding
+   * it destroyed the draft — so "make it a bar chart" a moment later had
+   * nothing to change. Now an assisted setup lands on the board by itself the
+   * moment its preview checks out, and the draft stays, pointing at what it
+   * wrote, so every follow-up rewrites those same tiles in place.
+   *
+   * `fingerprint` is the draft as it was when it was written to the board, so
+   * whether the board still shows what the draft describes is a comparison
+   * (`isPlacedCurrent`) rather than a flag every change would have to clear.
+   */
+  placed: z
+    .object({
+      widgetIds: z.array(z.string().min(1)).min(1),
+      groupId: z.string().min(1).optional(),
+      fingerprint: z.string(),
+    })
+    .optional(),
+  /**
    * The model that proposed this setup, if one did.
    *
    * Carried so the finished widget can record who designed it — the actions
@@ -622,6 +642,40 @@ export const withPart = (
 };
 
 /** Append an empty part, so a patch has somewhere to land. */
+/** Stable JSON: object keys sorted, so equal drafts always print the same. */
+const stable = (value: unknown): string =>
+  JSON.stringify(value, (_key, entry: unknown) =>
+    entry && typeof entry === "object" && !Array.isArray(entry)
+      ? Object.fromEntries(
+          Object.entries(entry as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)),
+        )
+      : entry,
+  );
+
+/** What a draft describes, ignoring where it was placed. */
+export const draftFingerprint = (draft: ConciergeDraft): string => {
+  const { placed: _placed, ...rest } = draft;
+  return stable(rest);
+};
+
+/** Mark a draft as written to the board, as these widgets. */
+export const placeDraft = (
+  draft: ConciergeDraft,
+  widgetIds: readonly string[],
+  groupId?: string,
+): ConciergeDraft => ({
+  ...draft,
+  placed: {
+    widgetIds: [...widgetIds],
+    ...(groupId ? { groupId } : {}),
+    fingerprint: draftFingerprint(draft),
+  },
+});
+
+/** Whether the board still shows what a placed draft describes. */
+export const isPlacedCurrent = (draft: ConciergeDraft): boolean =>
+  draft.placed !== undefined && draft.placed.fingerprint === draftFingerprint(draft);
+
 export const addPart = (draft: ConciergeDraft): ConciergeDraft => ({
   ...draft,
   parts: [...partsOf(draft), draftPartSchema.parse({})],
