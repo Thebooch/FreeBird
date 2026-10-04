@@ -1,4 +1,4 @@
-import { DEPENDENT_MAX, DependentAdapter, INCOMPLETE, RestAdapter } from "@freebirdai/dash-adapters";
+import { DEPENDENT_MAX, DependentAdapter, INCOMPLETE, RestAdapter, isIncompleteNote } from "@freebirdai/dash-adapters";
 import { connectionSchema, getOp, resolveRange } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import { ledgerly } from "../bench/providers/ledgerly.js";
@@ -74,16 +74,17 @@ describe("a GraphQL list that needs an argument another list supplies", () => {
     resources: [{ id: "record", title: "Records", listOp: "graphql" }],
   });
 
-  it("keeps the list, settles the argument from the organisations list, and reads its projects", async () => {
+  it("keeps the list, supplies the argument from the organisations list, and reads its projects", async () => {
     const transport = benchTransport([orgchart]);
     const deps = { http: transport.http, resolveSecret: async () => null, fetchDocument: transport.fetchDocument, now: () => NOW };
     const report = await integrate(connection, { targets: ["graphql"] }, deps);
     expect(report.connection.ops.map((op) => op.id)).toEqual(["organizations", "projects"]);
     const projectsOp = getOp(report.connection, "projects")!;
+    /* One organisation on a list whose end nothing confirmed: read for each, not settled on it. */
     expect(projectsOp.params.find((one) => one.name === "organizationId")).toMatchObject({
-      default: "org_7",
-      valueFrom: { op: "organizations", field: "id", each: false },
+      valueFrom: { op: "organizations", field: "id", each: true },
     });
+    expect(projectsOp.params.find((one) => one.name === "organizationId")?.default).toBeUndefined();
     expect(report.ops.find((one) => one.op === "projects")?.outcome).toBe("ready");
     const read = await tryRead(report.connection, "projects", { ...deps, budget: budgetOf(10) });
     expect(read.rows).toHaveLength(12);
@@ -127,6 +128,28 @@ describe("a question about every record another list holds", () => {
     expect(result.meta.warnings).toContain(INCOMPLETE.dependentCap(DEPENDENT_MAX, DEPENDENT_MAX + 10, "Accounts"));
   });
 
+  it("keeps every part it read when the API will not answer for one record, and says which were left out", async () => {
+    const gone = new Set(["a2"]);
+    const refusing = async (url: string) => {
+      const owner = /^\/accounts\/([^/]+)\/payments$/.exec(new URL(url).pathname)?.[1];
+      if (owner && gone.has(owner))
+        return { status: 404, text: JSON.stringify({ error: "account archived" }), url, header: (name: string) => (name === "content-type" ? "application/json" : null) };
+      if (!owner) return { status: 200, text: JSON.stringify({ data: accounts.slice(0, 3) }), url, header: (name: string) => (name === "content-type" ? "application/json" : null) };
+      return http(url);
+    };
+    const ctx = { params: { range: resolveRange({ preset: "30d", now: NOW }), filters: {} }, now: NOW };
+    const result = await new DependentAdapter(new RestAdapter(refusing)).fetch(connection, getOp(connection, "payments")!, {}, ctx);
+    const rows = (result.body as { data: Array<{ account: string }> }).data;
+    expect(rows.map((row) => row.account)).toEqual(["a1", "a3"]);
+    expect(result.meta).toMatchObject({ truncated: true, completion: { state: "partial", reason: "each-failed" } });
+    expect(result.meta.warnings).toContain(INCOMPLETE.dependentFailed(1, 3, "Accounts"));
+    expect(isIncompleteNote(INCOMPLETE.dependentFailed(1, 3, "Accounts"))).toBe(true);
+
+    /* Every part refused: the read fails, as it did, rather than claiming an empty account. */
+    for (const one of ["a1", "a3"]) gone.add(one);
+    await expect(new DependentAdapter(new RestAdapter(refusing)).fetch(connection, getOp(connection, "payments")!, {}, ctx)).rejects.toThrow();
+  });
+
   it("finds the list an input is named for, and the record a request names", () => {
     const bare = connectionSchema.parse({
       ...connection,
@@ -136,6 +159,74 @@ describe("a question about every record another list holds", () => {
     expect(inputSources(bare, "payments")).toEqual([{ param: "account_id", op: "accounts", field: "id" }]);
     expect(namedInRequest(accounts, "How much did Account 7 pay?")).toMatchObject({ id: "a7" });
     expect(namedInRequest(accounts, "How much was paid in total?")).toBeNull();
+  });
+});
+
+/* Regression (audit, 2026-10-04): one record on a list's first page was taken for the whole account. */
+describe("a list that pages one record at a time", () => {
+  const orgs = ["org_1", "org_2", "org_3"];
+  const pager: MockProvider = {
+    ...ledgerly,
+    id: "pager",
+    hosts: ["api.pager.bench.test"],
+    handle: (request) => {
+      const { pathname, searchParams } = request.url;
+      if (pathname === "/orgs") {
+        const at = Math.max(0, orgs.indexOf(searchParams.get("after") ?? "") + 1);
+        const page = orgs.slice(at, at + 1);
+        return json({ data: page.map((id) => ({ id })), next: at + 1 < orgs.length ? page[0] : null });
+      }
+      const owner = /^\/orgs\/([^/]+)\/projects$/.exec(pathname)?.[1];
+      if (owner) return json({ data: [{ id: `${owner}-p1` }, { id: `${owner}-p2` }] });
+      return json({ error: "not found" }, 404);
+    },
+  };
+  const connectionWith = (orgsOp: Record<string, unknown>) =>
+    connectionSchema.parse({
+      id: "pager",
+      title: "Pager",
+      kind: "rest",
+      baseUrl: "https://api.pager.bench.test",
+      ops: [
+        { id: "orgs", title: "List organisations", path: "/orgs", rowsPath: "$.data", ...orgsOp },
+        {
+          id: "projects",
+          title: "List projects",
+          path: "/orgs/{{param.org_id}}/projects",
+          rowsPath: "$.data",
+          params: [{ name: "org_id", in: "path", required: true }],
+        },
+      ],
+      resources: [
+        { id: "org", title: "Organisations", listOp: "orgs" },
+        { id: "project", title: "Projects", listOp: "projects" },
+      ],
+    });
+  const deps = () => {
+    const transport = benchTransport([pager]);
+    return { http: transport.http, resolveSecret: async () => null, fetchDocument: transport.fetchDocument, now: () => NOW };
+  };
+
+  it("reads projects for every organisation, not the first page's one", async () => {
+    const on = deps();
+    const connection = connectionWith({ pagination: { kind: "cursor", cursorPath: "$.next", param: "after", in: "query" } });
+    const report = await integrate(connection, { targets: ["projects"] }, on);
+    const param = getOp(report.connection, "projects")!.params.find((one) => one.name === "org_id");
+    expect(param).toMatchObject({ valueFrom: { op: "orgs", each: true } });
+    expect(param?.default).toBeUndefined();
+    const read = await tryRead(report.connection, "projects", { ...on, budget: budgetOf(20) });
+    expect(read.rows).toHaveLength(6);
+  });
+
+  it("settles on the one record where the list is known not to page", async () => {
+    const solo: MockProvider = { ...pager, handle: (request) => (request.url.pathname === "/orgs" ? json({ data: [{ id: "org_1" }] }) : pager.handle(request)) };
+    const transport = benchTransport([solo]);
+    const on = { http: transport.http, resolveSecret: async () => null, fetchDocument: transport.fetchDocument, now: () => NOW };
+    const report = await integrate(connectionWith({ paginationChecked: true }), { targets: ["projects"] }, on);
+    expect(getOp(report.connection, "projects")!.params.find((one) => one.name === "org_id")).toMatchObject({
+      default: "org_1",
+      valueFrom: { op: "orgs", each: false },
+    });
   });
 });
 

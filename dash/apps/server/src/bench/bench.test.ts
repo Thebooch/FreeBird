@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baselineIntegrator, referenceIntegrator } from "./integrator.js";
+import { baselineIntegrator, benchTooling, referenceIntegrator } from "./integrator.js";
 import { PROVIDERS } from "./providers/index.js";
 import { runSuite } from "./run.js";
 
@@ -45,7 +45,9 @@ describe("the benchmark's answer keys", () => {
 describe("a baseline run", () => {
   it("scores every dev scenario without leaving the benchmark's own hosts", async () => {
     const scores = await runSuite({ split: "dev", integrator: () => baselineIntegrator(), scripted: true });
-    const dev = PROVIDERS.filter((one) => one.split === "dev");
+    /* A provider whose documentation only a browser can draw is skipped, and said, where no browser is installed. */
+    const browser = benchTooling.status().state === "ready";
+    const dev = PROVIDERS.filter((one) => one.split === "dev" && (browser || one.needs !== "browser"));
     expect(scores).toHaveLength(dev.reduce((sum, one) => sum + one.objectives.length, 0));
     for (const score of scores) expect(score.integrator).toBe("baseline");
   });

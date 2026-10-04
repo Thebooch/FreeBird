@@ -1066,6 +1066,21 @@ export const integrate = async (
    * endpoint then read once for each. Nothing is set from a name alone: the
    * list must answer, and its records must hold the field.
    */
+  /*
+   * Whether a list read one page at a time holds no more than that page: the
+   * API's own count says so, or its paging is known — none, or read to its
+   * end under the paging it was confirmed to have.
+   */
+  const readWhole = async (listId: string, first: Attempt, records: number): Promise<boolean> => {
+    if (first.meta && countReconciled(first.meta, records)) return true;
+    const list = getOp(connection, listId);
+    if (!list?.paginationChecked) return false;
+    if (list.pagination.kind === "none") return true;
+    if (budget.remaining < 3) return false;
+    const whole = await tryRead(connection, listId, readDeps);
+    return whole.kind === "ok" && whole.meta?.completion?.state === "traversed" && !whole.meta.truncated && (whole.rows ?? []).length === records;
+  };
+
   const planInputs = async (opId: string): Promise<void> => {
     const op = getOp(connection, opId);
     const sources = op ? inputSources(connection, opId) : null;
@@ -1089,13 +1104,25 @@ export const integrate = async (
       const resource = connection.resources.find((one) => one.listOp === source.op);
       const named = namedInRequest(rows, options.objective, resource?.labelField);
       const values = [...new Set(rows.map((row) => readField(row, field)).filter((value) => typeof value === "string" || typeof value === "number"))];
-      const one = values.length === 1 ? values[0] : named ? readField(named, field) : undefined;
+      /*
+       * One record on the first page is not one record: an organisations list
+       * that pages one at a time made "every project" the first
+       * organisation's. Settled on it only where the list was read to its
+       * end; otherwise read for each, which is the same answer when there is
+       * only one.
+       */
+      const only = values.length === 1 && (await readWhole(source.op, list, rows.length));
+      const one = only ? values[0] : named ? readField(named, field) : undefined;
       if (one !== undefined && (typeof one === "string" || typeof one === "number")) {
         inputsFrom[source.param] = { valueFrom: { op: source.op, field, each: false }, default: one };
-        said.push(`${source.param} ${String(one)}, ${values.length === 1 ? `the one ${title} lists` : "the one the request names"}`);
+        said.push(`${source.param} ${String(one)}, ${only ? `the one ${title} lists` : "the one the request names"}`);
       } else {
         inputsFrom[source.param] = { valueFrom: { op: source.op, field, each: true } };
-        said.push(`${source.param} from each of the ${values.length} records ${title} lists`);
+        said.push(
+          values.length === 1
+            ? `${source.param} from each record ${title} lists (one so far, and the list may not have been read to its end)`
+            : `${source.param} from each of the ${values.length} records ${title} lists`,
+        );
       }
     }
     const patch: ConnectionPatch = { ops: { [opId]: { inputsFrom } } };

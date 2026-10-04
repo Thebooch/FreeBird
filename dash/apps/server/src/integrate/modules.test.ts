@@ -171,4 +171,15 @@ async function read(ctx) {
     expect(refused.connection).toBeNull();
     expect(refused.log.join("\n")).toMatch(/POST \/v1\/admin\/purge\) is not a path the documentation names/);
   });
+
+  it("never tries code that may POST without declaring the requests it sends", async () => {
+    const { connection, opOf, author } = await setUp();
+    const undeclared = { ...invoicesProposal, requests: [] };
+    const { result } = author(connection, opOf("/invoices"), [undeclared, undeclared, undeclared]);
+    const refused = await result;
+    expect(refused.connection).toBeNull();
+    /* Refused before it ran: no attempt, so no request left. */
+    expect(refused.attempt).toBeNull();
+    expect(refused.log.join("\n")).toMatch(/not tried: it may send POST and declares none of its requests/);
+  });
 });

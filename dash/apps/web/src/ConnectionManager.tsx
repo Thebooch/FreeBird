@@ -443,7 +443,6 @@ export const ConnectionManager = ({
       live = false;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [discovery, following]);
 
   const installRenderer = (): Promise<void> =>

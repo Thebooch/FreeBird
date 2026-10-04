@@ -45,6 +45,10 @@ const withValue = (
     ? { overrides, ctx: { ...ctx, params: { ...ctx.params, filters: { ...ctx.params.filters, [param.name]: value } } } }
     : { overrides: { ...overrides, [param.name]: value }, ctx };
 
+/** A failure about the one record a part was read for, not about the read: the API answered, and refused that record. */
+const onePartOnly = (error: unknown): boolean =>
+  error instanceof AdapterError && [400, 403, 404, 410, 422].includes(error.upstreamStatus ?? 0);
+
 export class DependentAdapter implements SourceAdapter {
   readonly kind: SourceAdapter["kind"];
   readonly transport: SourceAdapter["transport"];
@@ -103,30 +107,47 @@ export class DependentAdapter implements SourceAdapter {
       });
     }
 
-    /* The whole account: once for each record the source holds, put together. */
+    /*
+     * The whole account: once for each record the source holds, put together.
+     * One record the API will not answer for — an archived organisation's
+     * 404, a project this key may not see — leaves that record's part out
+     * and says so, rather than every other part with it. A failure that is
+     * the whole read's (a key refused, a rate limit, a budget spent) still
+     * ends it, as does every part failing.
+     */
     const asked = values.slice(0, DEPENDENT_MAX);
     const parts: FetchResult[] = [];
+    const readUnder: Value[] = [];
+    const failed: unknown[] = [];
     for (const value of asked) {
       const placed = withValue(param, value, overrides, fresh);
-      parts.push(await this.read(connection, op, placed.overrides, placed.ctx, depth));
+      try {
+        parts.push(await this.read(connection, op, placed.overrides, placed.ctx, depth));
+        readUnder.push(value);
+      } catch (error) {
+        if (!onePartOnly(error)) throw error;
+        failed.push(error);
+      }
     }
+    if (parts.length === 0 && failed.length > 0) throw failed[0];
     const rows: unknown[] = [];
     parts.forEach((part, index) => {
       for (const row of rowsAt(part.body, op.rowsPath) ?? [])
         rows.push(
           row !== null && typeof row === "object" && !Array.isArray(row) && !(param.name in row)
-            ? { ...(row as Record<string, unknown>), [param.name]: asked[index] }
+            ? { ...(row as Record<string, unknown>), [param.name]: readUnder[index] }
             : row,
         );
     });
     const left = values.length - asked.length;
-    const short = left > 0 || read.meta.truncated || parts.some((part) => part.meta.truncated);
+    const short = left > 0 || failed.length > 0 || read.meta.truncated || parts.some((part) => part.meta.truncated);
     const unsure = read.meta.completion?.state === "unknown" || parts.some((part) => part.meta.completion?.state === "unknown");
     const warnings = [
       ...new Set([
         ...read.meta.warnings,
         ...parts.flatMap((part) => part.meta.warnings),
         ...(left > 0 ? [INCOMPLETE.dependentCap(asked.length, values.length, source.title)] : []),
+        ...(failed.length > 0 ? [INCOMPLETE.dependentFailed(failed.length, asked.length, source.title)] : []),
       ]),
     ];
     const meta: FetchMeta = {
@@ -140,7 +161,7 @@ export class DependentAdapter implements SourceAdapter {
       truncated: short,
       warnings,
       completion: short
-        ? { state: "partial", reason: "each-capped" }
+        ? { state: "partial", reason: failed.length > 0 && left === 0 ? "each-failed" : "each-capped" }
         : unsure
           ? { state: "unknown", reason: "each-unsure" }
           : { state: "traversed", reason: "each-read" },

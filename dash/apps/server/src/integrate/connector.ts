@@ -457,7 +457,11 @@ export const authorConnector = async (input: AuthoringInput): Promise<Authored> 
      * every endpoint it reads has read), or code that listed none, whose
      * requests are learned from what it sent and checked like declared ones.
      */
-    const legacy = (existing !== undefined && existing.authority.templates === undefined) || (declared.length === 0 && !existing);
+    /* A whole rewrite of pre-template code that declares its requests takes templates from then on, every endpoint it reads proven below. */
+    const legacy =
+      part === "endpoint"
+        ? beside!.authority.templates === undefined
+        : declared.length === 0 && (existing === undefined || existing.authority.templates === undefined);
     const proposed: ConnectorAuthority = {
       destinations,
       exchanges: (proposal.exchanges ?? []).map((one) => ({ name: one.name, fields: one.fields ?? [] })),
@@ -506,6 +510,22 @@ export const authorConnector = async (input: AuthoringInput): Promise<Authored> 
             summary: proposal.summary.slice(0, 600),
             author,
           };
+    /*
+     * Without templates the limit is a host and a method, and what was sent
+     * is checked only after it was: a POST to an endpoint the catalog never
+     * listed as a write would leave before anything could refuse it, and its
+     * body — a GraphQL mutation, say — is checked against nothing. Such code
+     * is tried with GET alone; code that POSTs declares each request first.
+     */
+    if (!connector.authority.templates && connector.authority.destinations.some((one) => one.methods.includes("POST"))) {
+      const why =
+        part === "endpoint"
+          ? "it may send POST, and the shared code it is written beside declares none of its requests; POST is allowed only to requests declared in \"requests\", so rewrite the whole connector and list every request it sends"
+          : "it may send POST and declares none of its requests; POST is allowed only to requests declared in \"requests\", so list every request the code sends";
+      log.push(`Connector code was not tried: ${why}.`);
+      previous = { code: proposal.code, failure: `It was not run: ${why}.`, requests: [], log: [] };
+      continue;
+    }
     const opChange = serves
       ? {
           [input.opId]: {

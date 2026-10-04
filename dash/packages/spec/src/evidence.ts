@@ -131,6 +131,8 @@ export type CompletionReason =
   | "each-read"
   /* partial */
   | "each-capped"
+  /** A read made once per record of another endpoint, some of whose parts the API would not answer. */
+  | "each-failed"
   | "page-cap"
   | "later-page-refused"
   | "repeated-page"
