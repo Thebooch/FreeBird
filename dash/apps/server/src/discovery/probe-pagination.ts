@@ -47,6 +47,8 @@ export interface ProbeResult {
   readonly tried: readonly string[];
   /** A value the first request sends so every page is larger: `limit=100` where the next address said 20. */
   readonly query?: Readonly<Record<string, string>>;
+  /** Every record, where it read to the end: what the values a request can name are read from. */
+  readonly records?: readonly unknown[];
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -143,8 +145,8 @@ const NEXT_KEY = /^(next|next_?page_?url|next_?url|next_?page|next_?link)$/i;
  * The rules an answer's own "next" address implies: `?page=2` is paging by
  * page, and an offset equal to the records read is paging by offset. Laravel's
  * `next_page_url`, Django's `next`, `info.next` — the address the API itself
- * hands back, where nothing declared the parameter it uses (checkpoint 2: 10
- * of 332 facts, with `next_page_url` right there in the answer).
+ * hands back, where nothing declared the parameter it uses (10 of 332 facts
+ * were once read, with `next_page_url` right there in the answer).
  */
 const fromNextAddress = (body: unknown, rowsRead: number): PaginationSpec[] => {
   const addresses: string[] = [];
@@ -191,6 +193,13 @@ const looksLikeAddress = (value: unknown): value is string =>
 
 /** A path step as the path grammar wants it: a plain key, or a quoted one. */
 const step = (key: string): string => (/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) ? `.${key}` : `[${JSON.stringify(key)}]`);
+
+/** The last key of a path `step` wrote: `nextPageToken` of `$.meta.nextPageToken`. */
+const lastStep = (path: string): string => {
+  const quoted = /\[("(?:[^"\\]|\\.)*")\]$/.exec(path);
+  if (quoted) return JSON.parse(quoted[1]!) as string;
+  return /\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(path)?.[1] ?? path;
+};
 
 /**
  * Where an answer hands back the next page's address, outside its records:
@@ -258,6 +267,17 @@ const candidates = (
     for (const path of cursors)
       rules.push({ kind: "cursor", param: cursorParam.name, cursorPath: path, ...where(cursorParam) });
   /*
+   * The answer hands back a value under the very name a declared parameter
+   * takes — `nextPageToken` out, `nextPageToken` in: that is the cursor,
+   * whatever it is called. Fifty of 264 issues were read and nothing tried
+   * the token the answer gave (seen with the trackwell mock API).
+   */
+  for (const path of cursors) {
+    const same = paramNamed(op, [lastStep(path)]);
+    if (same && same.name !== cursorParam?.name)
+      rules.push({ kind: "cursor", param: same.name, cursorPath: path, ...where(same) });
+  }
+  /*
    * A cursor parameter and no cursor in the answer: the cursor is the last
    * record's own id (`starting_after`, `after`), as the path grammar's
    * `[last]` exists for.
@@ -272,7 +292,7 @@ const candidates = (
       /*
        * With the page size the endpoint declares, first: 332 records are 4
        * pages of 100 rather than 34 of 10, and an API that limits how fast it
-       * is asked refuses fewer of them (checkpoint 2).
+       * is asked refuses fewer of them.
        */
       if (rule.kind === "page" && !rule.limitParam && declaredLimit?.in === "query")
         rules.push({ ...rule, limitParam: declaredLimit.name, pageSize: 100 });
@@ -477,8 +497,7 @@ export const probePagination = async (
     /*
      * A larger page held every record the API says it has: nothing is left
      * to page through, and the rule is what read them all. Sixty-eight
-     * berries at a hundred a page were reported as unreadable past twenty
-     * (checkpoint 2).
+     * berries at a hundred a page were reported as unreadable past twenty.
      */
     if (!advanced && total !== undefined && firstCount === total && firstCount > firstRows.length) {
       return {
@@ -541,6 +560,7 @@ export const probePagination = async (
             : `Read to the last page: ${read} records over ${pages} page(s).`,
           tried,
           ...(widened ? { query: { [widened.name]: String(widened.size) } } : {}),
+          records: whole.rows ?? [],
         };
       }
     }
@@ -550,7 +570,7 @@ export const probePagination = async (
      * not, up to the ceiling — a number needs every record, and boards read
      * in the background, paced by the connection's gate. Left at the default
      * of five, 826 records were read 100 at a time, and 3,929 brewpubs 500 at
-     * a time; the tile said so (checkpoint 2).
+     * a time; the tile said so.
      */
     const enough = needed !== undefined && needed <= MAX_PAGES ? Math.min(MAX_PAGES, needed + 2) : MAX_PAGES;
     return {

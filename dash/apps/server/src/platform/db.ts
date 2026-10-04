@@ -112,6 +112,31 @@ CREATE TABLE IF NOT EXISTS dash_shapes (
   since      TIMESTAMPTZ,
   PRIMARY KEY (workspace, connection, op)
 );
+
+CREATE TABLE IF NOT EXISTS dash_jobs (
+  workspace  TEXT NOT NULL,
+  id         TEXT NOT NULL,
+  kind       TEXT NOT NULL,
+  connection TEXT NOT NULL,
+  op         TEXT,
+  state      TEXT NOT NULL,
+  priority   INTEGER NOT NULL,
+  not_before TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ NOT NULL,
+  record     JSONB NOT NULL,
+  PRIMARY KEY (workspace, id)
+);
+
+CREATE INDEX IF NOT EXISTS dash_jobs_connection_idx
+  ON dash_jobs (workspace, connection);
+
+CREATE TABLE IF NOT EXISTS dash_job_rows (
+  workspace TEXT NOT NULL,
+  job       TEXT NOT NULL,
+  seq       INTEGER NOT NULL,
+  rows      TEXT NOT NULL,
+  PRIMARY KEY (workspace, job, seq)
+);
 `;
 
 export interface DashDb {

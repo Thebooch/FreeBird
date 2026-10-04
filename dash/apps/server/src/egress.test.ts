@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { allowlistEgress, assertReachable, configureEgress, guardedFetch, publicOnlyEgress } from "./safe-fetch.js";
 
 /*
- * Plan, track F: an API on a private network, reached only where the server's
+ * An API on a private network, reached only where the server's
  * operator allows its address and the connection says it is on one.
  */
 

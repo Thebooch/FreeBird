@@ -273,7 +273,7 @@ describe("declared values", () => {
   });
 });
 
-/* Checkpoint 4: "more than $250" compared 250 cents, on a field the documentation said is in cents. */
+/* Regression: "more than $250" compared 250 cents, on a field the documentation said is in cents. */
 describe("a number the documentation says is in the smallest currency unit", () => {
   const rows = {
     type: "array",

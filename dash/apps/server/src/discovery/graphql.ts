@@ -1,7 +1,7 @@
 import type { CatalogEntry, ResourceSpec } from "@freebirdai/dash-spec";
 
 /**
- * A GraphQL API, set up from its schema (plan, track A).
+ * A GraphQL API, set up from its schema.
  *
  * A GraphQL API has one address, and every read is a query sent to it. What
  * the documentation calls its endpoints are the fields of its query type, and
@@ -619,6 +619,8 @@ export const graphqlReads = (schema: GqlSchema, input: { readonly path: string }
   const resources: ResourceSpec[] = [];
   const skipped: string[] = [];
   const taken = new Set<string>();
+  /* The kinds of record a resource was named for already. */
+  const typed = new Set<string>();
   for (const field of query?.fields ?? []) {
     if (field.deprecated || field.name.startsWith("__")) continue;
     const returns = unwrapNonNull(field.type);
@@ -628,9 +630,16 @@ export const graphqlReads = (schema: GqlSchema, input: { readonly path: string }
     const plainList = returns.kind === "list" && !isLeaf(schema, named) ? named : null;
     const records = connection?.records ?? wrapper?.records ?? plainList;
     if (!records) continue;
+    /*
+     * Arguments it insists on: kept as the read's inputs, not a reason to leave
+     * it out. An organisation's projects need its id, and the check finds where
+     * that comes from — the organisations list. Only an
+     * argument of a plain kind: an input object nobody can fill in.
+     */
     const needs = field.args.filter((arg) => required(arg) && !PAGING_ARGS.has(arg.name));
-    if (needs.length > 0) {
-      skipped.push(`${field.name} needs ${needs.map((arg) => arg.name).join(", ")}, which nothing here supplies`);
+    const unfillable = needs.filter((arg) => !isLeaf(schema, namedOf(arg.type)));
+    if (unfillable.length > 0) {
+      skipped.push(`${field.name} needs ${unfillable.map((arg) => arg.name).join(", ")}, which takes more than a value`);
       continue;
     }
     const budget = { leaves: 0, objects: 0 };
@@ -646,6 +655,18 @@ export const graphqlReads = (schema: GqlSchema, input: { readonly path: string }
     const pageSize = Math.max(10, Math.min(PAGE_SIZE, Math.floor(COST_BUDGET / (1 + budget.objects + (connection?.via === "edges" ? 1 : 0)))));
     const variables: string[] = [];
     const passed: string[] = [];
+    /* Each insisted-on argument: a variable the body fills from the read's input of the same name. */
+    const inputs = needs.map((arg) => {
+      variables.push(`$${arg.name}: ${argType(arg.name)}`);
+      passed.push(`${arg.name}: $${arg.name}`);
+      const kind = namedOf(arg.type);
+      return {
+        name: arg.name,
+        in: "body" as const,
+        type: kind === "Int" || kind === "Float" ? ("number" as const) : kind === "Boolean" ? ("boolean" as const) : ("string" as const),
+        required: true,
+      };
+    });
     let pagination: CatalogOp["pagination"] | undefined;
     const base = `$.data.${field.name}`;
     let rowsPath: string;
@@ -713,16 +734,24 @@ export const graphqlReads = (schema: GqlSchema, input: { readonly path: string }
       title: field.description?.split("\n")[0]?.slice(0, 120) || words(field.name),
       method: "POST",
       path: input.path,
-      body: { type: "graphql", query: document, variables: {}, operationName: operation },
+      body: {
+        type: "graphql",
+        query: document,
+        variables: Object.fromEntries(inputs.map((one) => [one.name, `{{param.${one.name}}}`])),
+        operationName: operation,
+      },
       readSafety: { basis: "graphql-query", note: `The ${field.name} query, generated from the schema.` },
       archetype: "list",
       rowsPath,
       ...(pagination ? { pagination } : {}),
       ...(totalPath ? { totalPath } : {}),
-      params: [],
+      params: inputs,
       query: {},
       fields: selection.fields,
     });
+    /* One record type per kind of record: a search over the orders is another way to read orders, not a type of its own. */
+    if (typed.has(records)) continue;
+    typed.add(records);
     let resource = singular(field.name).replace(/[^a-z0-9-]/g, "-") || "record";
     for (let suffix = 2; resources.some((one) => one.id === resource); suffix++) resource = `${singular(field.name)}-${suffix}`;
     resources.push({ id: resource, title: words(field.name), listOp: id, relations: [], verified: false });

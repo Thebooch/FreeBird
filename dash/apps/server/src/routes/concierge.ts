@@ -22,7 +22,7 @@ import { commitSetup } from "../concierge/commit.js";
 import { settleDetail } from "../concierge/detail.js";
 import type { DetailPlanRequest, DetailSetup } from "../concierge/detail.js";
 import { parseWidget } from "@freebirdai/dash-spec";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { conciergeState } from "../concierge/state.js";
 import type { DraftStore } from "../concierge/store.js";
@@ -84,7 +84,8 @@ const arrangementSchema = z.object({
 
 export interface ConciergeRouteDeps {
   readonly previews?: SetupPreviews;
-  readonly drafts: DraftStore;
+  /** Each person's own half-finished setup: drafts are kept per person, never shared. */
+  readonly drafts: (request: FastifyRequest) => DraftStore;
   /** Rebuilt per request from what is on disk, so a new read is visible at once. */
   readonly context: () => ConciergeContext;
   readonly getDashboard: (id: string) => DashboardSpec | null;
@@ -168,7 +169,7 @@ export const conciergeRoutes =
         if (!parsed.success || !deps.previews)
           return reply.status(400).send({ error: "Invalid preview check." });
         const candidate = parseWidget(parsed.data.widget);
-        const draft = await deps.drafts.get(request.params.dashboardId);
+        const draft = await deps.drafts(request).get(request.params.dashboardId);
         const board = deps.getDashboard(request.params.dashboardId);
         if (!candidate.ok || !candidate.value || !draft || !board)
           return reply.status(409).send({ error: "The setup has changed. Reload its preview." });
@@ -183,7 +184,7 @@ export const conciergeRoutes =
     );
 
     app.get<{ Params: Params }>("/api/concierge/:dashboardId", async (request) =>
-      stateOf(await deps.drafts.get(request.params.dashboardId), deps, request.params.dashboardId),
+      stateOf(await deps.drafts(request).get(request.params.dashboardId), deps, request.params.dashboardId),
     );
 
     app.post<{ Params: Params; Body: unknown }>(
@@ -198,7 +199,7 @@ export const conciergeRoutes =
           parsed.data.intent,
           parsed.data.mode,
         );
-        await deps.drafts.put(id, draft);
+        await deps.drafts(request).put(id, draft);
         return stateOf(draft, deps, id);
       },
     );
@@ -210,7 +211,7 @@ export const conciergeRoutes =
         if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
 
         const id = request.params.dashboardId;
-        const draft = await deps.drafts.get(id);
+        const draft = await deps.drafts(request).get(id);
         if (!draft) return reply.status(409).send({ error: "no setup is in progress" });
 
         /*
@@ -270,7 +271,7 @@ export const conciergeRoutes =
              */
             skipStepAcross(draft, parsed.data.stepId)
           : applyStepAcross(draft, parsed.data.stepId, parsed.data.values, deps.context());
-        await deps.drafts.put(id, next);
+        await deps.drafts(request).put(id, next);
         return stateOf(next, deps, id);
       },
     );
@@ -298,7 +299,7 @@ export const conciergeRoutes =
         if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
 
         const id = request.params.dashboardId;
-        const draft = await deps.drafts.get(id);
+        const draft = await deps.drafts(request).get(id);
         if (!draft) return reply.status(409).send({ error: "no setup is in progress" });
 
         const context = deps.context();
@@ -320,7 +321,7 @@ export const conciergeRoutes =
           : { ...applyArrangement(draft, parsed.data.arrangement, context), notes: [] as string[] };
         if (outcome.error) return reply.status(400).send({ error: outcome.error });
 
-        await deps.drafts.put(id, outcome.draft);
+        await deps.drafts(request).put(id, outcome.draft);
         return { ...stateOf(outcome.draft, deps, id), notes: outcome.notes };
       },
     );
@@ -341,7 +342,7 @@ export const conciergeRoutes =
       "/api/concierge/:dashboardId/reading",
       async (request, reply) => {
         const id = request.params.dashboardId;
-        const draft = await deps.drafts.get(id);
+        const draft = await deps.drafts(request).get(id);
         if (!draft) return reply.status(409).send({ error: "no setup is in progress" });
 
         const offered = draft.alternative;
@@ -362,7 +363,7 @@ export const conciergeRoutes =
         if (compiled.error) return reply.status(400).send({ error: compiled.error });
 
         const result = takeReading(draft, { label: offered.label, patch: compiled.patch }, deps.context());
-        await deps.drafts.put(id, result.draft);
+        await deps.drafts(request).put(id, result.draft);
         return { ...stateOf(result.draft, deps, id), rejected: result.rejected };
       },
     );
@@ -374,11 +375,11 @@ export const conciergeRoutes =
         if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
 
         const id = request.params.dashboardId;
-        const draft = await deps.drafts.get(id);
+        const draft = await deps.drafts(request).get(id);
         if (!draft) return reply.status(409).send({ error: "no setup is in progress" });
 
         const result = revise(draft, parsed.data, deps.context());
-        await deps.drafts.put(id, result.draft);
+        await deps.drafts(request).put(id, result.draft);
         return { ...stateOf(result.draft, deps, id), rejected: result.rejected };
       },
     );
@@ -390,7 +391,7 @@ export const conciergeRoutes =
         if (!parsed.success) return reply.status(400).send({ error: parsed.error.message });
 
         const id = request.params.dashboardId;
-        const draft = await deps.drafts.get(id);
+        const draft = await deps.drafts(request).get(id);
         if (!draft) return reply.status(409).send({ error: "no setup is in progress" });
 
         const board = deps.getDashboard(id);
@@ -444,7 +445,7 @@ export const conciergeRoutes =
         }
 
         deps.putDashboard(commit.next);
-        await deps.drafts.clear(id);
+        await deps.drafts(request).clear(id);
 
         const first = commit.widgets[0]!;
         return {
@@ -462,7 +463,7 @@ export const conciergeRoutes =
     );
 
     app.delete<{ Params: Params }>("/api/concierge/:dashboardId", async (request) => {
-      await deps.drafts.clear(request.params.dashboardId);
+      await deps.drafts(request).clear(request.params.dashboardId);
       return { cleared: true };
     });
   };

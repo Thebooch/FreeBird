@@ -26,7 +26,7 @@ import { newQuickJSWASMModuleFromVariant, newVariant } from "quickjs-emscripten-
 import base from "@jitl/quickjs-wasmfile-release-sync";
 
 const PAGE = 65_536;
-const { wasmModule, code, prelude, limits, now, seed } = workerData;
+const { wasmModule, code, module: endpointCode, prelude, limits, now, seed } = workerData;
 
 let hostNow = now;
 let cpuSpent = 0;
@@ -187,6 +187,16 @@ parentPort.on("message", async (message) => {
 try {
   evaluate(prelude, "prelude.js");
   evaluate(code, "connector.js");
+  /*
+   * One endpoint's own module, in a function scope: it sees the shared code's
+   * functions, its own names never clash with them, and its read, parse and
+   * paginate become the run's.
+   */
+  if (typeof endpointCode === "string")
+    evaluate(
+      `(function () {\n${endpointCode}\n;if (typeof read === "function") globalThis.read = read;\nif (typeof parse === "function") globalThis.parse = parse;\nif (typeof paginate === "function") globalThis.paginate = paginate;\n})();`,
+      "endpoint.js",
+    );
   evaluate(
     `globalThis.__hooks = {
       authenticate: typeof authenticate === "function" ? authenticate : undefined,

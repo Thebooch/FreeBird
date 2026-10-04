@@ -3,15 +3,31 @@ import {
   AdapterError,
   INCOMPLETE,
   RestAdapter,
-  renderBody,
+  resolveReadRequest,
+  type Continuation,
   type FetchContext,
   type FetchResult,
   type HttpFetch,
   type HttpResponse,
+  type ResolvedReadRequest,
   type SourceAdapter,
 } from "@freebirdai/dash-adapters";
-import { MAX_PAGES, interpolate, interpolatePath, type ConnectionSpec, type ConnectorSpec, type OpSpec } from "@freebirdai/dash-spec";
-import { ConnectorRefusal, createConnectorHost, type ConnectorHost, type ConnectorRequestEvent, type ConnectorTokenStore } from "./host.js";
+import {
+  MAX_PAGES,
+  connectorServes,
+  type ConnectionSpec,
+  type ConnectorSpec,
+  type OpSpec,
+  type ReadCompletion,
+} from "@freebirdai/dash-spec";
+import {
+  ConnectorRefusal,
+  createConnectorHost,
+  type ConnectorHost,
+  type ConnectorRequestEvent,
+  type ConnectorTokenStore,
+  type KnownWrite,
+} from "./host.js";
 import { SandboxError, type ConnectorSandbox, type SandboxSession } from "./sandbox.js";
 
 /**
@@ -51,6 +67,8 @@ export interface ConnectorServices {
   readonly onRequest?: (connection: ConnectionSpec, op: OpSpec, event: ConnectorRequestEvent) => void;
   /** Told of each line a run logs. */
   readonly onLog?: (connection: ConnectionSpec, line: string) => void;
+  /** The catalog's endpoints that change this connection's account: refused to its code, whatever its authority says. */
+  readonly writes?: (connection: ConnectionSpec) => readonly KnownWrite[];
 }
 
 /** `sha256:<hex>` of the code: what a connector is pinned by. */
@@ -59,8 +77,18 @@ export const connectorHash = (code: string): string =>
 
 const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-/** What a run's hooks are told about the endpoint they are for. */
-export const runContext = (connection: ConnectionSpec, connector: ConnectorSpec, op: OpSpec | undefined, fetch?: FetchContext) => {
+/**
+ * What a run's hooks are told about the endpoint they are for. `inputs` is
+ * every value the read is given — each parameter's default, the board's
+ * filters, the widget's own values — resolved as REST resolves them.
+ */
+export const runContext = (
+  connection: ConnectionSpec,
+  connector: ConnectorSpec,
+  op: OpSpec | undefined,
+  fetch?: FetchContext,
+  resolved?: ResolvedReadRequest,
+) => {
   const range = fetch?.params.range;
   return {
     op: op
@@ -76,32 +104,29 @@ export const runContext = (connection: ConnectionSpec, connector: ConnectorSpec,
       : null,
     baseUrl: connection.baseUrl ?? "",
     apiHosts: connector.authority.destinations.filter((one) => one.role === "api").map((one) => one.host),
-    inputs: fetch?.params.filters ?? {},
+    inputs: resolved?.inputs ?? fetch?.params.filters ?? {},
     range: range ? { start: new Date(range.start).toISOString(), end: new Date(range.end).toISOString() } : null,
     /* A connector's own read goes as far as it must; only a declared endpoint's paging has a smaller default. */
     maxPages: op?.servedBy === "connector" ? MAX_PAGES : (op?.maxPages ?? 5),
   };
 };
 
-/** The endpoint's own first request, for a served endpoint with no `read` of its own. */
-const declaredRequest = (connection: ConnectionSpec, op: OpSpec, ctx: FetchContext) => {
-  const base = (connection.baseUrl ?? "").replace(/\/+$/, "");
-  const path = interpolatePath(op.path, ctx.params);
-  const query = new URLSearchParams();
-  for (const [name, value] of Object.entries(op.query)) {
-    const filled = interpolate(String(value), ctx.params);
-    if (filled !== "") query.set(name, filled);
-  }
+/**
+ * The endpoint's own first request, as REST would send it but for the
+ * credential: what a served endpoint's code is handed as `ctx.request`, and
+ * what one with no `read` of its own sends. Inputs nobody supplied are the
+ * code's to fill (an id it reads first, say), so they are listed, not refused.
+ */
+const declaredRequest = (resolved: ResolvedReadRequest) => {
   const headers: Record<string, string> = {};
-  for (const [name, value] of Object.entries(op.headers)) headers[name.toLowerCase()] = interpolate(value, ctx.params);
-  const body = op.method === "POST" && op.body ? renderBody(op.body, ctx.params, {}) : undefined;
-  if (body) headers["content-type"] = body.contentType;
-  const text = query.toString();
+  for (const [name, value] of Object.entries(resolved.headers)) headers[name.toLowerCase()] = value;
+  if (resolved.body) headers["content-type"] = resolved.body.contentType;
   return {
-    method: op.method,
-    url: `${base}${path.startsWith("/") ? path : `/${path}`}${text ? `?${text}` : ""}`,
+    method: resolved.method,
+    url: resolved.url,
     headers,
-    ...(body ? { body: body.text } : {}),
+    ...(resolved.body ? { body: resolved.body.text } : {}),
+    ...(resolved.unresolved.length > 0 ? { missing: [...resolved.unresolved] } : {}),
   };
 };
 
@@ -141,12 +166,13 @@ export class ConnectorAdapter implements SourceAdapter {
   ): Promise<FetchResult> {
     const connector = connection.connector;
     if (!connector) return this.rest.fetch(connection, op, overrides, ctx);
-    if (connectorHash(connector.code) !== connector.hash)
+    const module = connector.operations[op.id];
+    if (connectorHash(connector.code) !== connector.hash || (module && connectorHash(module.code) !== module.hash))
       throw new AdapterError(`connector code for ${connection.id} does not match its pin`, {
         status: 500,
         userMessage: `${connection.title}'s connector has changed since it was checked, so it was not run.`,
       });
-    const served = connector.serves.includes(op.id);
+    const served = connectorServes(connector, op.id);
     const signs = connector.hooks.includes("signRequest") || connector.hooks.includes("authenticate");
     if (!served && !signs) return this.rest.fetch(connection, op, overrides, ctx);
 
@@ -157,7 +183,12 @@ export class ConnectorAdapter implements SourceAdapter {
       const opened = await this.open(connection, connector, op, ctx);
       host = opened.host;
       session = opened.session;
-      const runCtx = { ...runContext(connection, connector, op, ctx), ...(served ? { request: declaredRequest(connection, op, ctx) } : {}) };
+      /* The same inputs REST would send — the widget's own values among them — whichever way this endpoint is read. */
+      const resolved = resolveReadRequest(connection, op, overrides, ctx.params);
+      const runCtx = {
+        ...runContext(connection, connector, op, ctx, resolved),
+        ...(served ? { request: declaredRequest(resolved) } : {}),
+      };
       if (session.hooks.includes("authenticate")) await session.call("authenticate", { ctx: runCtx });
 
       if (!served) {
@@ -166,15 +197,34 @@ export class ConnectorAdapter implements SourceAdapter {
         return await new RestAdapter(signing).fetch(connection, op, overrides, ctx);
       }
 
-      type ReadAnswer = { rows?: unknown; total?: unknown; complete?: unknown; pages?: unknown; resume?: unknown } | null;
+      type ReadAnswer = {
+        rows?: unknown;
+        total?: unknown;
+        done?: unknown;
+        complete?: unknown;
+        pages?: unknown;
+        resume?: unknown;
+      } | null;
       const rows: Record<string, unknown>[] = [];
       const warnings: string[] = [];
       let dropped = 0;
       let total: number | undefined;
       let stopped = false;
+      /* What the code said of its own end — "all", "partial" — on the run that ended the read. Unsaid is not "all". */
+      let said: "all" | "partial" | undefined;
+      /* Pages of records, by the code's own count; every request it sent, sign-ins and exports included, apart. */
       let pages = 0;
+      let requests = 0;
       let lastStatus = 200;
-      let resumeFrom: string | undefined;
+      /* Carried on from where an earlier read's runs ran out: that read's, and nobody else's. */
+      const from = ctx.continueFrom;
+      if (from && (from.kind !== "connector" || (from.scope !== undefined && from.scope !== resolved.scope)))
+        throw new AdapterError(`a continuation for another read was handed to ${connection.id}/${op.id}`, {
+          status: 409,
+          userMessage: `"${op.title}" changed since its read stopped, so it is read again from the start.`,
+        });
+      let resumeFrom: string | undefined = from?.resume !== undefined ? JSON.stringify(from.resume) : undefined;
+      let continuation: Continuation | undefined;
       for (let run = 1; ; run++) {
         const answer = (await session.call("read", {
           ctx: resumeFrom === undefined ? runCtx : { ...runCtx, resume: JSON.parse(resumeFrom) as unknown },
@@ -187,15 +237,36 @@ export class ConnectorAdapter implements SourceAdapter {
         }
         if (typeof answer.total === "number" && Number.isInteger(answer.total) && answer.total >= 0) total = answer.total;
         const sent = host.trace.filter((one) => one.status !== null);
-        pages += typeof answer.pages === "number" ? answer.pages : Math.max(1, sent.length);
+        requests += sent.length;
+        /* A sign-in or an export being prepared is a request, not a page: a run's records count as one page unless the code says. */
+        pages += typeof answer.pages === "number" && Number.isInteger(answer.pages) && answer.pages >= 0 ? answer.pages : 1;
         lastStatus = sent.at(-1)?.status ?? lastStatus;
-        if (answer.complete === false) stopped = true;
+        said =
+          answer.done === "all" || answer.done === "partial"
+            ? answer.done
+            : answer.complete === true
+              ? "all"
+              : answer.complete === false
+                ? "partial"
+                : undefined;
+        if (said === "partial") stopped = true;
         /* Where it got to, for another run to carry on from: a fresh sandbox, a fresh allowance. */
         const next = answer.resume === undefined || answer.resume === null ? undefined : JSON.stringify(answer.resume);
         if (next === undefined || stopped) break;
         if (run >= MAX_READ_RUNS || next.length > MAX_RESUME_CHARS || next === resumeFrom) {
           /* More to read than a read is given, or code that is not moving on: said, not looped. */
           stopped = true;
+          said = undefined;
+          /* Still moving on, only out of runs: where it got to, so the read can be carried on later. */
+          if (run >= MAX_READ_RUNS && next.length <= MAX_RESUME_CHARS && next !== resumeFrom)
+            continuation = {
+              kind: "connector",
+              scope: resolved.scope,
+              resume: JSON.parse(next) as unknown,
+              pageIndex: (from?.pageIndex ?? 0) + pages,
+              collected: (from?.collected ?? 0) + rows.length,
+              ...(total !== undefined ? { reportedTotal: total } : {}),
+            };
           break;
         }
         resumeFrom = next;
@@ -207,8 +278,23 @@ export class ConnectorAdapter implements SourceAdapter {
         if (session.hooks.includes("authenticate")) await session.call("authenticate", { ctx: runCtx });
       }
       if (dropped > 0) warnings.push(`${dropped} value(s) the connector returned were not records and were left out.`);
+      const short = total !== undefined && rows.length < total;
       if (stopped) warnings.push(INCOMPLETE.connectorStopped);
-      else if (total !== undefined && rows.length < total) warnings.push(INCOMPLETE.reportedMore(total));
+      else if (total !== undefined && short) warnings.push(INCOMPLETE.reportedMore(total));
+      /*
+       * Complete only on the code's own word. Code that returns records and
+       * says nothing about whether they were all of them has not read to the
+       * end as far as anyone can tell, so nothing claims it did — on the tile,
+       * in the evidence, or in a count.
+       */
+      const completion: ReadCompletion = stopped
+        ? { state: "partial", reason: said === "partial" ? "connector-partial" : "run-limit" }
+        : short
+          ? { state: "partial", reason: "reported-more" }
+          : said === "all"
+            ? { state: "traversed", reason: "connector-all" }
+            : { state: "unknown", reason: "connector-silent" };
+      if (completion.state === "unknown") warnings.push(INCOMPLETE.unknownEnd);
       return {
         body: rows,
         meta: {
@@ -217,9 +303,14 @@ export class ConnectorAdapter implements SourceAdapter {
           fetchedAt: ctx.now,
           durationMs: Date.now() - started,
           pages,
-          truncated: stopped || (total !== undefined && rows.length < total),
+          requests,
+          truncated: stopped || short,
           warnings,
-          ...(total !== undefined ? { reportedTotal: total } : {}),
+          completion,
+          scope: resolved.scope,
+          /* The code's own count speaks for this read only where the code also says it read to the end. */
+          ...(total !== undefined ? { reportedTotal: total, ...(said === "all" ? { totalScope: resolved.scope } : {}) } : {}),
+          ...(continuation && completion.reason === "run-limit" ? { continuation } : {}),
         },
       };
     } catch (error) {
@@ -248,9 +339,13 @@ export class ConnectorAdapter implements SourceAdapter {
       sleep: this.services.sleep ?? realSleep,
       signal: ctx.signal,
       onRequest: op && this.services.onRequest ? (event) => this.services.onRequest!(connection, op, event) : undefined,
+      writes: this.services.writes?.(connection),
     });
+    /* The shared sign-in, then this endpoint's own reading code where it has a module: never another endpoint's. */
+    const module = op ? connector.operations[op.id] : undefined;
     const session = await this.services.sandbox.open({
       code: connector.code,
+      ...(module ? { module: module.code } : {}),
       host: {
         call: (name, args) => host.call(name, args),
         now: () => host.now(),
@@ -277,12 +372,8 @@ export class ConnectorAdapter implements SourceAdapter {
           ...(init.body !== undefined ? { body: init.body } : {}),
         },
       });
-      const answer = (await host.call("http.request", signed)) as {
-        status: number;
-        headers: Record<string, string>;
-        text: string;
-        url: string;
-      };
+      /* Signed by the code, sent where it was going: the connection's own endpoint, never somewhere the code chose. */
+      const answer = await host.endpointRequest(signed, { method: init.method ?? "GET", url });
       const response: HttpResponse = {
         status: answer.status,
         text: answer.text,

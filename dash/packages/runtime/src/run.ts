@@ -159,6 +159,9 @@ const aggregate = (
   }
 };
 
+/** A narrowing by a named value — `status == "open"`, `type in ["Bug"]` — rather than a comparison of dates or numbers. */
+const NAMED_VALUE = /(==|!=)\s*"|\bin\s*\[\s*"/;
+
 /** Aggregations that mean "none of them" rather than "unknown" in an empty bucket. */
 const ZERO_FILLED = new Set<Aggregation>(["count", "countDistinct", "sum"]);
 
@@ -362,7 +365,19 @@ export const runPipeline = (
 
       case "filter": {
         const ast = resolveAst(compiled.where, ctx.params);
+        const before = rows.length;
         rows = rows.filter((row) => evalPredicate(ast, row, { now: ctx.now }));
+        /*
+         * Records went in, narrowed by a named value, and none came out: said,
+         * so a count of none is never taken for a count of something. "Platform"
+         * on a project's key matched no issue, and 0 was shown as the answer
+         * (seen with the trackwell mock API). An empty date window is
+         * ordinary and says nothing.
+         */
+        if (before > 0 && rows.length === 0 && NAMED_VALUE.test(compiled.where.source)) {
+          const said = `None of the ${before} records read match ${compiled.where.source}.`;
+          if (!warnings.includes(said)) warnings.push(said);
+        }
         note = compiled.where.source;
         break;
       }

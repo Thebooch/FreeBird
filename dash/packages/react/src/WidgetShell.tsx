@@ -328,7 +328,7 @@ export const WidgetShell = ({
     ) : widget.metric ? (
       /*
        * What the number means, where nobody wrote a description: what it
-       * counts or adds, over which records, narrowed how (plan, track E). A
+       * counts or adds, over which records, narrowed how. A
        * reader checks a number against this before acting on it.
        */
       <p className="dash-widget__subtitle dash-widget__meaning">{widget.metric.says}</p>
@@ -337,7 +337,7 @@ export const WidgetShell = ({
       <>
         {data.stale && data.state === "ok" && (
           <Badge tone="stale" title="Older than this widget's freshness window">
-            stale · {formatValue(data.lastFetchedAt, { semantic: "relative_time" }, { now })}
+            stale · {formatValue(data.lastFetchedAt, { semantic: "relative_time" }, { now: Math.max(now, data.lastFetchedAt) })}
           </Badge>
         )}
         {data.state === "ok" && data.binding && data.binding.warnings.length > 0 && (
@@ -442,7 +442,7 @@ export const WidgetShell = ({
             <span aria-hidden="true">⚠</span>
             <span>
               {data.fetchMeta.staleReason} Showing data from{" "}
-              {formatValue(data.lastFetchedAt, { semantic: "relative_time" }, { now })}.
+              {formatValue(data.lastFetchedAt, { semantic: "relative_time" }, { now: Math.max(now, data.lastFetchedAt) })}.
             </span>
           </p>
         )}
@@ -560,6 +560,11 @@ const WidgetFooter = ({
 }): JSX.Element => {
   const truncated = data.fetchMeta?.truncated === true || data.incomplete.length > 0;
   /*
+   * A read that cannot say where it ended is not known to be short either:
+   * "may be partial", where one that stopped early is "partial".
+   */
+  const unsure = data.fetchMeta?.truncated !== true && data.fetchMeta?.completion?.state === "unknown";
+  /*
    * How far the read got, in the ladder's own terms: every record the API
    * says it holds, every page, or one request. Said only of a read that was
    * not cut short — that one says what it left out, above.
@@ -573,7 +578,7 @@ const WidgetFooter = ({
         {truncated && (
           <span className="dash-widget__more" title={data.incomplete.join("\n") || "Not every record was read"}>
             {" "}
-            · partial
+            · {unsure ? "may be partial" : "partial"}
           </span>
         )}
         {timeWindow && (
@@ -622,7 +627,12 @@ const WidgetFooter = ({
         )}
       </span>
       <span className="dash-widget__updated">
-        {formatValue(data.lastFetchedAt, { semantic: "relative_time" }, { now })}
+        {/*
+         * `now` is the board's anchored instant, which moves only when somebody
+         * acts; an answer that arrived after it — a read finished in the
+         * background — is "now", never "in 4 seconds".
+         */}
+        {formatValue(data.lastFetchedAt, { semantic: "relative_time" }, { now: Math.max(now, data.lastFetchedAt) })}
       </span>
     </div>
   );

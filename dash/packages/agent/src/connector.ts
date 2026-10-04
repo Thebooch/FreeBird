@@ -80,6 +80,43 @@ export const connectorProposalSchema = z.object({
     .describe(
       "true when the code reads the endpoint itself (define read, or parse/paginate). false when it only signs or authenticates requests the endpoint already sends as documented.",
     ),
+  requests: z
+    .array(
+      z.object({
+        id: z.string().regex(/^[a-z][a-z0-9_-]{0,39}$/).describe("A short name for this request, e.g. list_invoices, login, start_export."),
+        purpose: z
+          .enum(["read", "search", "exchange", "export-create", "export-status", "download"])
+          .describe("read or search: reads records. exchange: a login for a token. export-create, export-status, download: an export's three steps."),
+        method: z.enum(["GET", "HEAD", "POST"]),
+        host: z.string().min(3).max(253),
+        path: z
+          .string()
+          .min(1)
+          .max(300)
+          .describe('The path as the documentation gives it, with {name} for each id in it, e.g. "/v1/exports/{id}". A GET may end in /** to cover everything below; a POST names its one path.'),
+        credentials: z.array(nameSchema).max(8).describe("The credentials and tokens this request carries, by name."),
+        bodyType: z
+          .enum(["json", "form", "xml", "graphql", "text"])
+          .optional()
+          .describe("For a POST: what its body is — a JSON object, form fields, an XML document, a GraphQL query, or plain text."),
+        bodyKeys: z
+          .array(z.string().min(1).max(80))
+          .max(40)
+          .optional()
+          .describe("For a POST with a JSON or form body: the top-level fields it sends. Not for XML, GraphQL or text."),
+      }),
+    )
+    .max(20)
+    .optional()
+    .describe(
+      "Every request the code sends, as the documentation names it. Each is allowed alone: a request the list does not name is refused before it is sent. Never an endpoint that creates, changes or deletes a record.",
+    ),
+  part: z
+    .enum(["endpoint", "whole"])
+    .optional()
+    .describe(
+      'Only when you are shown THE SHARED CODE: "endpoint" when you wrote only this endpoint\'s reading code (read, or parse/paginate) and the shared code stays as it is; "whole" when the sign-in itself had to change and you rewrote all of it.',
+    ),
   code: z.string().min(1).max(64_000).describe("The connector: plain JavaScript defining the hooks it needs."),
   assumptions: z
     .string()
@@ -119,6 +156,8 @@ Rules:
 - Where the documentation leaves a detail unsaid, make the most reasonable choice, write the code, and name the choice in "assumptions".
 - Only if the documentation does not say enough to write working code at all, say so in "cannot" rather than guess.
 - A value the person pastes that the code must see — a key ID or account number inside something it signs — is declared with secret: false and read with credentials.identifier. A secret, password or token never is.
+- List every request the code sends in "requests", with the path as the documentation gives it. A request not in the list is refused before it leaves, and so is any endpoint that creates, changes or deletes something.
+- When you are shown THE SHARED CODE, another endpoint of this API is already read through it. Write only this endpoint's reading code (read, or parse and paginate) and set part: "endpoint". Its functions run beside the shared code, which you may call but must not redefine (no authenticate, no signRequest). Only if the sign-in itself must change, rewrite the whole and set part: "whole": every endpoint the shared code reads must still read exactly as before.
 
 ${UNTRUSTED_METADATA}`;
 
@@ -135,6 +174,19 @@ export interface ConnectorInput {
   readonly contract: string;
   /** Credentials already asked for, by name and label, when a connector exists. */
   readonly credentials?: readonly { readonly name: string; readonly label: string }[] | undefined;
+  /**
+   * The connector's shared code, when it already reads other endpoints:
+   * shown so this endpoint's code can be written beside it, never over it.
+   */
+  readonly shared?:
+    | {
+        readonly code: string;
+        /** The endpoints it reads already, by title. */
+        readonly reads: readonly string[];
+        /** The requests already declared, one per line: "id: METHOD host/path (purpose)". */
+        readonly requests: readonly string[];
+      }
+    | undefined;
   /** The last attempt, when revising one: its code, what happened, and what it sent. */
   readonly previous?:
     | {
@@ -163,6 +215,14 @@ export const buildConnectorPrompt = (input: ConnectorInput): string =>
           "",
           "CREDENTIALS ALREADY ASKED FOR (keep these names and this order unless the documentation says otherwise):",
           ...input.credentials.map((one) => `- ${one.name}: ${one.label}`),
+        ]
+      : []),
+    ...(input.shared
+      ? [
+          "",
+          `THE SHARED CODE (it already reads: ${input.shared.reads.join(", ") || "nothing yet, it signs requests"}). Write only this endpoint's code beside it, part: "endpoint":`,
+          input.shared.code.slice(0, 12_000),
+          ...(input.shared.requests.length > 0 ? ["", "REQUESTS ALREADY DECLARED (list again only the new ones):", ...input.shared.requests] : []),
         ]
       : []),
     ...(input.previous
@@ -215,6 +275,13 @@ export const proposeConnector = async (
       if (!HOOKS.test(args.code))
         return "the code defines none of the hooks (authenticate, signRequest, read, paginate, parse).";
       if (/\b(import|require)\s*\(|^\s*import\s/m.test(args.code)) return "the code cannot import anything.";
+      for (const request of args.requests ?? []) {
+        if (request.method !== "GET" && request.path.includes("*")) return `${request.id}: only a GET may cover more than one path.`;
+        if (!args.destinations.some((one) => one.host.toLowerCase() === request.host.toLowerCase()) && !input.shared)
+          return `${request.id} is sent to ${request.host}, which is not among the destinations.`;
+      }
+      if (args.part === "endpoint" && /\bfunction\s+(authenticate|signRequest)\b/.test(args.code))
+        return 'an endpoint\'s own code defines no authenticate or signRequest: those stay in the shared code (or set part: "whole").';
       return null;
     },
   });

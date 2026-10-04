@@ -223,7 +223,7 @@ describe("POST /api/connections/:id/brief", () => {
     await app.close();
   });
 
-  /* Checkpoint 2: with no such record type, the nearest one was counted and looked like an answer. */
+  /* Regression: with no such record type, the nearest one was counted and looked like an answer. */
   it("says so when no record type is what was asked about, and builds nothing", async () => {
     connect();
     const result = await ask(

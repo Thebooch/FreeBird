@@ -1,4 +1,4 @@
-import { AdapterError, RestAdapter, type FetchMeta, type HttpFetch, type SourceAdapter } from "@freebirdai/dash-adapters";
+import { AdapterError, DependentAdapter, RestAdapter, type FetchMeta, type HttpFetch, type SourceAdapter } from "@freebirdai/dash-adapters";
 import { extractRows, parsePath } from "@freebirdai/dash-expr";
 import { getOp, pagingParamNames, resolveRange, type ConnectionSpec, type OpSpec } from "@freebirdai/dash-spec";
 import { ENVELOPE_KEY } from "../discovery/openapi.js";
@@ -88,7 +88,7 @@ export interface ReadDeps {
   /**
    * Waiting, for a short rate limit: an API that says "try again in 10s" is
    * waited for and the page read again by the reader (`FetchContext.sleep`),
-   * rather than the check stopping there (checkpoint 2, Rick and Morty).
+   * rather than the check stopping there (seen with Rick and Morty's API).
    * Absent, a rate limit ends the read.
    */
   readonly sleep?: (ms: number) => Promise<void>;
@@ -217,7 +217,11 @@ export const tryRead = async (
   connection: ConnectionSpec,
   opId: string,
   deps: ReadDeps,
-  change: { readonly op?: Partial<OpSpec> } = {},
+  change: {
+    readonly op?: Partial<OpSpec>;
+    /** Values sent as a widget sends its own: where the endpoint takes each, and in connector code's `ctx.inputs`. */
+    readonly overrides?: Readonly<Record<string, string | number | boolean>>;
+  } = {},
 ): Promise<Attempt> => {
   const base = getOp(connection, opId);
   if (!base) return { kind: "failed", status: 0, message: `no endpoint "${opId}"` };
@@ -245,9 +249,10 @@ export const tryRead = async (
   try {
     const refresh = deps.refresh;
     const counting = counted(deps.http, deps.budget);
-    const adapter = deps.adapter ? deps.adapter(counting) : new RestAdapter(counting);
+    /* An input another endpoint's records supply is read as a board will read it (`ParamDef.valueFrom`). */
+    const adapter = new DependentAdapter(deps.adapter ? deps.adapter(counting) : new RestAdapter(counting));
     const send = () =>
-      adapter.fetch(connection, op, {}, {
+      adapter.fetch(connection, op, change.overrides ?? {}, {
         params: { range: resolveRange({ preset: "30d", now }), filters: {} },
         now,
         resolveSecret: deps.resolveSecret,

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { discover } from "./index.js";
 
 /*
- * OpenID Connect, read as the OAuth sign-in it is (plan, track B): the
+ * OpenID Connect, read as the OAuth sign-in it is: the
  * specification names a discovery document, and the document says where a
  * person signs in and where the code is exchanged.
  */

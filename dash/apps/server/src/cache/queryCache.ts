@@ -184,6 +184,16 @@ export class QueryCache {
     };
   }
 
+  /**
+   * An answer read elsewhere, held under a tile's key: a read carried on in
+   * the background, once it reaches its end (`jobs/long-reads.ts`). Held in
+   * memory like any other answer — never on disk.
+   */
+  put(key: string, result: FetchResult): void {
+    const { continuation: _continuation, ...meta } = result.meta;
+    this.store.set({ key, body: result.body, meta, storedAt: this.now(), bytes: estimateBytes(result.body) });
+  }
+
   /** When the copy under this key was stored, or null when there is none. */
   storedAt(key: string): number | null {
     return this.store.get(key)?.storedAt ?? null;

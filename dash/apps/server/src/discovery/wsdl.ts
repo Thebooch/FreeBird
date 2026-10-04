@@ -2,7 +2,7 @@ import { parseXml } from "@freebirdai/dash-adapters";
 import { catalogEntrySchema, type CatalogEntry, type ParamDef } from "@freebirdai/dash-spec";
 
 /**
- * A SOAP web service, from its WSDL (plan, track A).
+ * A SOAP web service, from its WSDL.
  *
  * WSDL 1.1, document/literal — what almost every SOAP service in use today
  * describes itself as. Each operation that reads becomes an endpoint: a POST

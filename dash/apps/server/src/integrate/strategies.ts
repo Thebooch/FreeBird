@@ -115,6 +115,13 @@ export const addressStrategy: RepairStrategy = {
     try {
       const parsed = new URL(current);
       const trimmed = parsed.pathname.replace(/\/+$/, "");
+      /*
+       * The address already holds the start of the endpoint's own path —
+       * `…/rest/api/3` and `/rest/api/3/search/jql` — so every request sends it
+       * twice. Tried first, before any guess (seen with the trackwell mock
+       * API).
+       */
+      if (trimmed !== "" && op.path.startsWith(`${trimmed}/`)) add(parsed.origin, `the address repeats the start of ${op.path}`);
       for (const prefix of PREFIXES) {
         if (!trimmed.endsWith(prefix)) add(`${parsed.origin}${trimmed}${prefix}`, `APIs often live under ${prefix}`);
       }
@@ -312,10 +319,83 @@ export const rowsStrategy: RepairStrategy = {
   },
 };
 
+/* ── The request: a method, a body type ───────────────────────────────── */
+
+/** The specification's operations on one path, found by the path's shape. */
+const specOperations = (spec: Record<string, unknown> | null, opPath: string): Record<string, unknown> | null => {
+  const paths = spec && isRecord(spec.paths) ? spec.paths : null;
+  if (!paths) return null;
+  const shape = (path: string) => path.replace(/\{\{\s*param\.[^}]*\}\}|\{[^/{}]+\}/g, "{}").replace(/\/+$/, "");
+  const wanted = shape(opPath);
+  for (const [path, operations] of Object.entries(paths)) if (shape(path) === wanted && isRecord(operations)) return operations;
+  return null;
+};
+
+/** An operation the specification describes as a read: a search, a list, a query, a report. Never a create. */
+const READS = /\b(search|list|query|find|lookup|filter|report|export)\b/i;
+
+/**
+ * Refused with 405 on a GET, where the specification reads the same path with
+ * a POST it describes as a search or a list: that POST, with the body its
+ * example gives (or none). A POST the specification describes as anything
+ * else could create something, and is never tried.
+ */
+export const methodStrategy: RepairStrategy = {
+  id: "method",
+  handles: ["notFound"],
+  async propose({ op, attempt, docs }) {
+    if (attempt.status !== 405 || op.method !== "GET") return [];
+    const post = specOperations(await docs.spec(), op.path)?.post;
+    if (!isRecord(post)) return [];
+    const words = [post.operationId, post.summary, post.description].filter((one) => typeof one === "string").join(" ");
+    if (!READS.test(words) && !READS.test(op.path)) return [];
+    const content = isRecord(post.requestBody) && isRecord(post.requestBody.content) ? post.requestBody.content : {};
+    const json = isRecord(content["application/json"]) ? content["application/json"] : null;
+    const example = json && "example" in json ? json.example : undefined;
+    return [
+      {
+        patch: {
+          ops: {
+            [op.id]: {
+              method: "POST",
+              ...(example !== undefined || json ? { body: { type: "json" as const, template: example ?? {} } } : {}),
+              readSafety: { basis: "spec-declared", note: `The specification reads ${op.path} with POST: ${words.slice(0, 120)}` },
+            },
+          },
+        },
+        because: `the API refused GET (405), and its specification reads ${op.path} with POST as a ${READS.exec(words)?.[0]?.toLowerCase() ?? "read"}`,
+      },
+    ];
+  },
+};
+
+/**
+ * Refused with 415: the body is sent the way the specification says it is
+ * taken — form fields for a JSON object, or the other way round.
+ */
+export const bodyTypeStrategy: RepairStrategy = {
+  id: "body-type",
+  handles: ["failed", "badRequest"],
+  async propose({ op, attempt, docs }) {
+    if (attempt.status !== 415 || op.method !== "POST" || !op.body) return [];
+    const post = specOperations(await docs.spec(), op.path)?.post;
+    const content = isRecord(post) && isRecord(post.requestBody) && isRecord(post.requestBody.content) ? Object.keys(post.requestBody.content) : [];
+    if (op.body.type === "json" && content.includes("application/x-www-form-urlencoded") && isRecord(op.body.template)) {
+      const template = Object.fromEntries(Object.entries(op.body.template).map(([key, value]) => [key, typeof value === "string" ? value : JSON.stringify(value)]));
+      return [{ patch: { ops: { [op.id]: { body: { type: "form" as const, template } } } }, because: "the API refused JSON (415), and its specification takes form fields" }];
+    }
+    if (op.body.type === "form" && content.some((one) => /json/i.test(one)))
+      return [{ patch: { ops: { [op.id]: { body: { type: "json" as const, template: op.body.template } } } }, because: "the API refused form fields (415), and its specification takes JSON" }];
+    return [];
+  },
+};
+
 export const DEFAULT_STRATEGIES: readonly RepairStrategy[] = [
   addressStrategy,
   authStrategy,
   awsScopeStrategy,
   headerStrategy,
   rowsStrategy,
+  methodStrategy,
+  bodyTypeStrategy,
 ];

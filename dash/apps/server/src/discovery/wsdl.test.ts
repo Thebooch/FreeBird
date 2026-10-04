@@ -5,7 +5,7 @@ import { connectionFromCatalog } from "../catalog.js";
 import { discover } from "./index.js";
 import { looksLikeWsdl, parseWsdl, readsByName } from "./wsdl.js";
 
-/* Plan, track A: a SOAP service, set up from its WSDL and read without code. */
+/* A SOAP service, set up from its WSDL and read without code. */
 
 const URL_ = "https://soap.orders.test/OrderService.asmx?wsdl";
 const NS = "http://orders.test/api";

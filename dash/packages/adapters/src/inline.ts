@@ -93,6 +93,8 @@ export class InlineAdapter implements SourceAdapter {
         pages: 1,
         truncated: false,
         warnings: [],
+        /* Data held in the board itself: there is nothing past it. */
+        completion: { state: "traversed", reason: "single-response" },
       },
     };
   }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readWindow } from "./safe-fetch.js";
 
-/* Plan, track A: a stream that never ends, read for a window and closed. */
+/* A stream that never ends, read for a window and closed. */
 
 const endless = (events: string[], every: number) => {
   let cancelled = false;

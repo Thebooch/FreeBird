@@ -2,7 +2,7 @@ import { sql } from "kysely";
 import type { DashDb } from "./db.js";
 
 /**
- * Who may do a piece of background work right now (plan, track G).
+ * Who may do a piece of background work right now.
  *
  * One server has one keeper, and nothing to decide. Several servers sharing
  * one database — a hosted fleet — would each refresh every connection, and

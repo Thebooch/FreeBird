@@ -38,7 +38,7 @@ export interface SeenSet {
    * Fields whose values were all different — titles, names, descriptions —
    * named only, never their values. Nothing narrows by one of them: asked for
    * smartphones, a count narrowed a product's title to "smartphones" and
-   * found none (checkpoint 2).
+   * found none.
    */
   readonly unique?: readonly string[];
 }

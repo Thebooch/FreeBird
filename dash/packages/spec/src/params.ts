@@ -53,7 +53,7 @@ export interface TimeRange {
   /**
    * Every record, whatever its dates: `{{range.start}}` and `{{range.end}}`
    * resolve to nothing, so an endpoint that filters by date is asked without
-   * bounds. A number whose request named no time reads this (checkpoint 4).
+   * bounds. A number whose request named no time reads this.
    */
   readonly all?: true;
 }

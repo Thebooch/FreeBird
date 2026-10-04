@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AdapterError } from "../types.js";
 import { formatOf, parseBody, parseDelimited, parseNdjson, parseXml, XmlError } from "./index.js";
 
-/* Plan, track A: answers that are not JSON, read into the same plain values. */
+/* Answers that are not JSON, read into the same plain values. */
 
 describe("XML", () => {
   it("reads elements as records, repeats as lists, and plain numbers as numbers", () => {

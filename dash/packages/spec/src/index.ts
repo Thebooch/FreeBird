@@ -54,6 +54,7 @@ export type {
 export {
   authSchema,
   missingInputs,
+  boardInputs,
   pathParamNames,
   requiredInputs,
   allowedHost,
@@ -575,23 +576,46 @@ export type {
 export {
   EVIDENCE_LEVELS,
   EVIDENCE_WORDS,
+  countReconciled,
   evidenceLevelSchema,
   evidenceRank,
   evidenceSchema,
   readCoverage,
   strongestEvidence,
 } from "./evidence.js";
-export type { Evidence, EvidenceLevel, ReadCoverage } from "./evidence.js";
+export type {
+  CompletionReason,
+  CompletionState,
+  Evidence,
+  EvidenceLevel,
+  ReadCompletion,
+  ReadCoverage,
+  ReadExtent,
+} from "./evidence.js";
 export {
   CONNECTOR_CONTRACT,
   CONNECTOR_HOOKS,
   CONNECTOR_METHODS,
+  CONNECTOR_PURPOSES,
+  OPERATION_HOOKS,
   connectorAuthoritySchema,
   connectorDestinationSchema,
   connectorExchangeSchema,
+  connectorOperationSchema,
+  connectorRequestSchema,
   connectorSchema,
+  connectorServes,
+  requestMatches,
 } from "./connector.js";
-export type { ConnectorAuthority, ConnectorDestination, ConnectorHook, ConnectorSpec } from "./connector.js";
+export type {
+  ConnectorAuthority,
+  ConnectorDestination,
+  ConnectorHook,
+  ConnectorOperation,
+  ConnectorPurpose,
+  ConnectorRequest,
+  ConnectorSpec,
+} from "./connector.js";
 export { credentialNameSchema } from "./primitives.js";
 export { describeMetric, metricSchema, reconcileRuleSchema } from "./metric.js";
 export type { MetricDefinition, ReconcileRule } from "./metric.js";

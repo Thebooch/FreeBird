@@ -1,5 +1,5 @@
 import { INCOMPLETE } from "./incomplete.js";
-import type { ConnectionSpec, OpSpec } from "@freebirdai/dash-spec";
+import type { CompletionReason, ConnectionSpec, OpSpec } from "@freebirdai/dash-spec";
 import { interpolate } from "@freebirdai/dash-spec";
 import { firstPageParams, mergePages, nextPageParams, rowsAt } from "./paginate.js";
 import { AdapterError, type FetchContext, type FetchResult, type SourceAdapter } from "./types.js";
@@ -205,11 +205,14 @@ export class McpAdapter implements SourceAdapter {
     let truncated = false;
     let more = true;
     const seen = new Set<string>();
+    /* Where the read ended, for `completion`: the last page's own word, or what stopped it. */
+    let ended: CompletionReason = "single-response";
 
     while (more && pageIndex < op.maxPages) {
       const request = JSON.stringify(args);
       if (seen.has(request)) {
         truncated = true;
+        ended = "repeated-page";
         warnings.push(INCOMPLETE.repeatedArgs);
         break;
       }
@@ -227,13 +230,14 @@ export class McpAdapter implements SourceAdapter {
       pageIndex++;
       if (op.pagination.kind !== "none" && rowsAt(pages[pages.length - 1], op.rowsPath) === null) {
         truncated = true;
+        ended = "rows-missing";
         warnings.push(INCOMPLETE.rowsMissing);
         break;
       }
 
       const next =
         op.pagination.kind === "link-header" || op.pagination.kind === "next-url"
-          ? ({ kind: "none" } as const)
+          ? ({ kind: "none", why: "no-next" } as const)
           : nextPageParams({
               pagination: op.pagination,
               body: pages[pages.length - 1],
@@ -247,17 +251,24 @@ export class McpAdapter implements SourceAdapter {
           // Say so loudly, exactly as REST does: a silently truncated result
           // is a chart that is quietly incomplete.
           truncated = true;
+          ended = "page-cap";
           warnings.push(INCOMPLETE.pageCap(op.maxPages, "tool"));
         }
       } else {
         more = false;
+        ended = next.kind === "none" ? next.why : "no-next";
       }
     }
 
     const beforeMerge = warnings.length;
     const body = pages.length === 1 ? pages[0] : mergePages(pages, op.rowsPath, warnings);
     // A merge that fell back to the first page left the rest out.
-    if (warnings.length > beforeMerge) truncated = true;
+    if (warnings.length > beforeMerge) {
+      truncated = true;
+      ended = "unmerged";
+    }
+    /* Paging a tool cannot follow: only the first page was read, and nothing says that was all. */
+    const unfollowable = op.pagination.kind === "link-header" || op.pagination.kind === "next-url";
 
     return {
       body,
@@ -269,6 +280,11 @@ export class McpAdapter implements SourceAdapter {
         pages: pageIndex,
         truncated,
         warnings,
+        completion: truncated
+          ? { state: "partial", reason: ended }
+          : unfollowable
+            ? { state: "unknown", reason: "unconfirmed-paging" }
+            : { state: "traversed", reason: ended },
       },
     };
   }

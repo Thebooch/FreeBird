@@ -3,8 +3,7 @@ import type { DashDb } from "../platform/db.js";
 import type { AcceptedShape, Drift } from "./detect.js";
 
 /**
- * The shape each endpoint was accepted in, and any change seen since (plan,
- * track H).
+ * The shape each endpoint was accepted in, and any change seen since.
  *
  * Names and kinds only, per connection and endpoint: what a later answer is
  * held against. A plug-in point: memory in tests, Dash's database in the

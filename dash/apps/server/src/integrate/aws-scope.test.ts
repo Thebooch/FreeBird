@@ -4,7 +4,7 @@ import type { DocsKnowledge } from "./docs.js";
 import type { Attempt } from "./read.js";
 import { awsScopeStrategy } from "./strategies.js";
 
-/* Plan, track B: a signature scoped to the wrong region or service, set right from what was said. */
+/* A signature scoped to the wrong region or service, set right from what was said. */
 
 const connection = connectionSchema.parse({
   id: "orders",

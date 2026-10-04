@@ -1,6 +1,15 @@
 import { createHash, createHmac } from "node:crypto";
 import { parseXml, type HttpFetch } from "@freebirdai/dash-adapters";
-import type { ConnectionSpec, ConnectorDestination, ConnectorSpec, OpSpec } from "@freebirdai/dash-spec";
+import {
+  graphqlReadsOnly,
+  requestMatches,
+  type ConnectionSpec,
+  type ConnectorDestination,
+  type ConnectorPurpose,
+  type ConnectorRequest,
+  type ConnectorSpec,
+  type OpSpec,
+} from "@freebirdai/dash-spec";
 
 /**
  * Everything a connector's code can do outside the sandbox, decided here.
@@ -57,9 +66,45 @@ export interface ConnectorRequestEvent {
   /** The path only: a query string can carry a credential. */
   readonly path: string;
   readonly status: number | null;
-  readonly purpose: "read" | "exchange" | "download";
+  /** What it was for: the template it matched, or for a connector without templates, how it was sent. */
+  readonly purpose: ConnectorPurpose;
   readonly refused?: string;
 }
+
+/**
+ * An endpoint that changes the account, as the catalog knows it: never sent by
+ * connector code, whatever its authority says. `path` is relative to the
+ * connection's address, with `{{param.x}}` for its ids.
+ */
+export interface KnownWrite {
+  readonly method: string;
+  readonly path: string;
+}
+
+/**
+ * A sign-in, by its path: `/login`, `/oauth/token`, `/sessions`. A
+ * specification lists one as a POST like any other, and the catalog imports
+ * it with the endpoints that change things; signing in through
+ * `auth.exchange` — whose answer must hold a token — is not a change to the
+ * account, so it is not refused as one. Any other request to it still is.
+ */
+export const isSignInPath = (path: string): boolean =>
+  /(^|\/)(login|log-in|logon|signin|sign-in|sign_in|token|tokens|oauth2?|session|sessions|auth|authenticate|authorize)(\/|$)/i.test(path);
+
+/**
+ * What a POST the catalog lists among its writes is really for, where its
+ * path says it serves a read: signing in, searching, or preparing an export.
+ * A specification lists each as a POST like a change, and the catalog
+ * imports it with the changes. Null for anything else — a change.
+ */
+export const readSideOf = (path: string): "exchange" | "search" | "export-create" | null =>
+  isSignInPath(path)
+    ? "exchange"
+    : /(^|\/)(search|searches|query|queries|find|lookup|filter)(\/|$)/i.test(path)
+      ? "search"
+      : /(^|\/)(exports?|reports?|downloads?|extracts?|bulk|jobs?)(\/|$)/i.test(path)
+        ? "export-create"
+        : null;
 
 /** Refused by the authority. The code sees the message; nothing was sent. */
 export class ConnectorRefusal extends Error {
@@ -81,10 +126,24 @@ export interface ConnectorHostDeps {
   readonly sleep: (ms: number) => Promise<void>;
   readonly signal?: AbortSignal | undefined;
   readonly onRequest?: ((event: ConnectorRequestEvent) => void) | undefined;
+  /** The catalog's endpoints that change things: refused to connector code on any grant, templates or none. */
+  readonly writes?: readonly KnownWrite[] | undefined;
 }
 
 export interface ConnectorHost {
   call(name: string, args: unknown): Promise<unknown>;
+  /**
+   * A declared endpoint's own request, as the code's `signRequest` returned
+   * it: sent only to the address and with the method it was going to, so the
+   * code may sign a request but never redirect one. Not reachable from the
+   * sandbox — the server calls it for the connection's own reads.
+   */
+  endpointRequest(signed: unknown, original: { readonly method: string; readonly url: string }): Promise<{
+    status: number;
+    headers: Record<string, string>;
+    text: string;
+    url: string;
+  }>;
   now(): number;
   log(line: string): void;
   readonly trace: readonly ConnectorRequestEvent[];
@@ -216,11 +275,110 @@ export const createConnectorHost = (deps: ConnectorHostDeps): ConnectorHost => {
     return destination;
   };
 
+  /** A host and the credentials a request to it may carry: its destination's, narrowed by the request's template. */
+  type Bound = Pick<ConnectorDestination, "host" | "credentials">;
+
+  /**
+   * The request's template, where the connector declares templates: same
+   * method, host and path, sent for the purpose the template names, by an
+   * endpoint it allows. Null where none matches; undefined where the
+   * connector predates templates and its hosts and methods are its limit.
+   */
+  const templates = authority.templates;
+  const templateFor = (
+    method: string,
+    url: URL,
+    purpose: "api" | "exchange" | "endpoint",
+    download: boolean,
+  ): ConnectorRequest | null | undefined => {
+    /* A declared endpoint's own request, signed by the code: the connection's declaration is its template. */
+    if (!templates || purpose === "endpoint") return undefined;
+    return (
+      templates.find(
+        (one) =>
+          requestMatches(one, method, url.hostname, url.pathname) &&
+          (purpose === "exchange" ? one.purpose === "exchange" : one.purpose !== "exchange") &&
+          (download ? one.purpose === "download" : one.purpose !== "download") &&
+          (!one.ops || !deps.op || one.ops.includes(deps.op.id)),
+      ) ?? null
+    );
+  };
+
+  /*
+   * The catalog's endpoints that change the account, as full paths on the
+   * connection's own host: refused to code on any grant. A template the model
+   * wrote, or a connector from before templates, cannot reach one.
+   */
+  const writeTemplates = (() => {
+    let base: URL | null = null;
+    try {
+      base = connection.baseUrl ? new URL(connection.baseUrl) : null;
+    } catch {
+      base = null;
+    }
+    if (!base) return [];
+    const prefix = base.pathname.replace(/\/+$/, "");
+    return (deps.writes ?? []).map((write) => ({
+      method: write.method.toUpperCase(),
+      host: base!.hostname.toLowerCase(),
+      path: `${prefix}${write.path.startsWith("/") ? "" : "/"}${write.path}`
+        .replace(/\{\{\s*param\.([A-Za-z0-9_]+)[^}]*\}\}/g, "{$1}")
+        .replace(/\/+$/, ""),
+    }));
+  })();
+  /*
+   * A request to one of the catalog's writes is refused, unless the write is a
+   * read's own step and is sent as one: a sign-in through `auth.exchange`, a
+   * search or an export started through a request — and, where the request
+   * has a template, one declared for exactly that.
+   */
+  const isWrite = (
+    method: string,
+    url: URL,
+    purpose: "api" | "exchange" | "endpoint",
+    template: ConnectorRequest | null | undefined,
+  ): boolean =>
+    writeTemplates.some((one) => {
+      if (!requestMatches(one, method, url.hostname, url.pathname)) return false;
+      const side = readSideOf(one.path);
+      if (side === null) return true;
+      if ((side === "exchange") !== (purpose === "exchange")) return true;
+      return template ? template.purpose !== side : false;
+    });
+
+  /** What a POST's body is allowed to say, against its template. A reason when it is not. */
+  const bodyProblem = (body: string | undefined, template: ConnectorRequest): string | null => {
+    if (body === undefined || !template.body) return null;
+    const { type, keys } = template.body;
+    if (type === "graphql" || /^\s*\{\s*"query"\s*:/.test(body)) {
+      let query: unknown;
+      try {
+        query = (JSON.parse(body) as { query?: unknown }).query;
+      } catch {
+        return type === "graphql" ? "a GraphQL request is JSON with a query" : null;
+      }
+      if (typeof query === "string" && /^\s*(query|mutation|subscription|\{)/.test(query) && !graphqlReadsOnly(query))
+        return "a GraphQL document that can change something is never sent";
+    }
+    if (!keys) return null;
+    let sent: string[] = [];
+    if (type === "json") {
+      try {
+        const parsed = JSON.parse(body) as unknown;
+        sent = isRecord(parsed) ? Object.keys(parsed) : [];
+      } catch {
+        return "its body is not the JSON its template says";
+      }
+    } else if (type === "form") sent = [...new URLSearchParams(body).keys()];
+    const extra = sent.filter((key) => !keys.includes(key));
+    return extra.length > 0 ? `its body carries ${extra.slice(0, 5).join(", ")}, which ${template.id} does not allow` : null;
+  };
+
   /**
    * Whether anything this request carries belongs to a credential the address
    * is not bound to: a signature made with it, or the value itself.
    */
-  const assertNoLeak = (request: string, destination: ConnectorDestination) => {
+  const assertNoLeak = (request: string, destination: Bound) => {
     for (const signature of signatures) {
       if (!destination.credentials.includes(signature.root) && request.includes(signature.value))
         throw new ConnectorRefusal(
@@ -236,7 +394,7 @@ export const createConnectorHost = (deps: ConnectorHostDeps): ConnectorHost => {
   /** Put each named credential in, where the address is bound to it. */
   const fill = async (
     input: string,
-    destination: ConnectorDestination,
+    destination: Bound,
     encode: (value: string) => string,
   ): Promise<string> => {
     const names = [...input.matchAll(SLOT)].map((match) => match[1]!);
@@ -287,7 +445,7 @@ export const createConnectorHost = (deps: ConnectorHostDeps): ConnectorHost => {
   /** Check, fill and send one request. Refusals throw before anything leaves. */
   const send = async (
     request: Outgoing,
-    purpose: ConnectorRequestEvent["purpose"] | "api",
+    purpose: "api" | "exchange" | "endpoint",
   ): Promise<{ status: number; headers: Record<string, string>; text: string; url: string; destination: ConnectorDestination }> => {
     await prime();
     let url: URL;
@@ -304,32 +462,50 @@ export const createConnectorHost = (deps: ConnectorHostDeps): ConnectorHost => {
       note({ method: request.method, host: url.hostname, path: url.pathname, status: null, purpose: "read", refused: why });
       throw error;
     }
-    const kind: ConnectorRequestEvent["purpose"] =
-      purpose === "exchange" ? "exchange" : destination.role === "download" ? "download" : "read";
+    const template = templateFor(request.method, url, purpose, destination.role === "download");
+    const kind: ConnectorPurpose =
+      template?.purpose ?? (purpose === "exchange" ? "exchange" : destination.role === "download" ? "download" : "read");
     const refuse = (why: string): never => {
       note({ method: request.method, host: url.hostname, path: url.pathname, status: null, purpose: kind, refused: why });
       throw new ConnectorRefusal(why);
     };
     if (!destination.methods.includes(request.method as "GET"))
       refuse(`${request.method} is not allowed to ${destination.host}`);
+    /*
+     * Each request against the templates the connector declared: the method,
+     * the host, the path, what it is for. Permission to POST a search is not
+     * permission to POST anything else on the same host.
+     */
+    if (template === null)
+      refuse(`${request.method} ${url.pathname.slice(0, 200)} is not a request this connector declared${purpose === "exchange" ? " for signing in" : ""}`);
+    if (isWrite(request.method, url, purpose, template))
+      refuse(`${request.method} ${url.pathname.slice(0, 200)} changes things in the account; a connector only reads, and changes go through a person's review`);
     if (destination.role === "download" && !handedOut.has(url.href))
       refuse(`${url.href.slice(0, 200)} is a download address the API did not give`);
     if (sent >= authority.requests) refuse(`this run has sent all ${authority.requests} requests it may`);
+    if (template) {
+      const problem = bodyProblem(request.body, template);
+      if (problem) refuse(problem);
+    }
+    /* The credentials this request may carry: its destination's, and of those only the ones its template names. */
+    const bound: Bound = template
+      ? { host: destination.host, credentials: destination.credentials.filter((name) => template.credentials.includes(name)) }
+      : destination;
     try {
-      assertNoLeak(`${request.url}\n${JSON.stringify(request.headers)}\n${request.body ?? ""}`, destination);
+      assertNoLeak(`${request.url}\n${JSON.stringify(request.headers)}\n${request.body ?? ""}`, bound);
     } catch (error) {
       refuse(error instanceof Error ? error.message : String(error));
     }
 
-    const finalUrl = await fill(request.url, destination, encodeURIComponent).catch((error: Error) => refuse(error.message));
+    const finalUrl = await fill(request.url, bound, encodeURIComponent).catch((error: Error) => refuse(error.message));
     const headers: Record<string, string> = {};
     for (const [name, value] of Object.entries(request.headers))
-      headers[name] = await fill(value, destination, (one) => one).catch((error: Error) => refuse(error.message));
+      headers[name] = await fill(value, bound, (one) => one).catch((error: Error) => refuse(error.message));
     const json = (headers["content-type"] ?? "").includes("json");
     const body =
       request.body === undefined
         ? undefined
-        : await fill(request.body, destination, (one) => (json ? JSON.stringify(one).slice(1, -1) : one)).catch(
+        : await fill(request.body, bound, (one) => (json ? JSON.stringify(one).slice(1, -1) : one)).catch(
             (error: Error) => refuse(error.message),
           );
 
@@ -539,8 +715,26 @@ export const createConnectorHost = (deps: ConnectorHostDeps): ConnectorHost => {
     }
   };
 
+  const endpointRequest: ConnectorHost["endpointRequest"] = async (signed, original) => {
+    const request = readRequest(signed);
+    const was = new URL(original.url);
+    let now: URL;
+    try {
+      now = new URL(request.url);
+    } catch {
+      throw new ConnectorRefusal("signRequest returned something that is not an address");
+    }
+    if (request.method !== original.method.toUpperCase() || now.origin !== was.origin || now.pathname !== was.pathname)
+      throw new ConnectorRefusal(
+        `signRequest may sign a request, not send it elsewhere: ${original.method} ${was.pathname} came back as ${request.method} ${now.pathname}`,
+      );
+    const answer = await send(request, "endpoint");
+    return { status: answer.status, headers: answer.headers, text: redact(answer.text), url: answer.url };
+  };
+
   return {
     call,
+    endpointRequest,
     now: deps.now,
     log(line) {
       if (logs.length < 200) logs.push(redact(line));

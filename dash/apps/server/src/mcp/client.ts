@@ -2,7 +2,7 @@ import { prepareAuth, type HttpFetch, type McpClient, type McpToolInfo, type Mcp
 import { allowedHost, type ConnectionSpec } from "@freebirdai/dash-spec";
 
 /**
- * An MCP server, reached over streamable HTTP (plan, track A).
+ * An MCP server, reached over streamable HTTP.
  *
  * Only what reading needs: `initialize`, `tools/list`, `tools/call`. Written
  * over the server's own transport rather than an SDK's, so a connection to an

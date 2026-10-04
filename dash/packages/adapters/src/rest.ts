@@ -9,23 +9,15 @@ import {
   truthy,
   withRows,
 } from "./paginate.js";
-import type { AuthSpec, ConnectionSpec, OpSpec, PaginationSpec } from "@freebirdai/dash-spec";
-import {
-  allowedHost,
-  authKeyRefs,
-  connectionNeedsAddress,
-  hasTokens,
-  interpolate,
-  interpolatePath,
-  missingInputs,
-  pathParamNames,
-} from "@freebirdai/dash-spec";
+import type { AuthSpec, CompletionReason, ConnectionSpec, OpSpec, PaginationSpec } from "@freebirdai/dash-spec";
+import { allowedHost, authKeyRefs, connectionNeedsAddress, pathParamNames } from "@freebirdai/dash-spec";
 import { INCOMPLETE, isIncompleteNote as isIncomplete } from "./incomplete.js";
 import { formatOf, parseBody } from "./parse/index.js";
-import { locateInputs, renderBody, setQueryValue } from "./request.js";
+import { renderBody, resolveReadRequest } from "./request.js";
 import {
   AdapterError,
   parseRetryAfter,
+  type Continuation,
   type FetchContext,
   type FetchResult,
   type SourceAdapter,
@@ -329,6 +321,32 @@ const totalBeside = (body: unknown): number | undefined => {
   return found;
 };
 
+/** A next page an answer names beside its records: a token, a cursor or an address. */
+const NEXT_KEY = /^(@odata\.)?next(_?page)?(_?(token|cursor|url|link|href|key|marker))?$|^(next_?)?(page_?token|continuation(_?token)?)$|^next_?link$/i;
+const LAST_KEY = /^(is_?)?last(_?page)?$/i;
+const MORE_KEY = /^(has_?more|more|more_?results|has_?next(_?page)?|truncated)$/i;
+
+/**
+ * Whether an answer says, beside its records, that it holds more than this
+ * page: a last-page flag that is false, a "more" flag that is true, or a next
+ * token, cursor or address that is set. Never a claim that it holds no more.
+ */
+const saysMore = (body: unknown): boolean => {
+  let more = false;
+  const walk = (node: unknown, depth: number): void => {
+    if (more || depth > 2 || !node || typeof node !== "object" || Array.isArray(node)) return;
+    for (const [key, value] of Object.entries(node)) {
+      if (LAST_KEY.test(key) && value === false) more = true;
+      else if (MORE_KEY.test(key) && value === true) more = true;
+      else if (NEXT_KEY.test(key) && typeof value === "string" && value.trim() !== "") more = true;
+      if (more) return;
+    }
+    for (const value of Object.values(node)) walk(value, depth + 1);
+  };
+  walk(body, 0);
+  return more;
+};
+
 const statedTotal = (op: OpSpec, body: unknown, response: HttpResponse): number | undefined => {
   const raw = op.totalPath ? readPath(body, op.totalPath) : response.header("x-total-count");
   const total = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
@@ -444,6 +462,7 @@ export class RestAdapter implements SourceAdapter {
     const total = whole.meta.reportedTotal ?? totalBeside(whole.body);
     const reach = rowsAt(whole.body, op.rowsPath)?.length ?? 0;
     if (
+      ctx.continueFrom !== undefined ||
       !whole.meta.truncated ||
       !whole.meta.warnings.includes(INCOMPLETE.laterPageRefused) ||
       !readsBothEnds(op) ||
@@ -470,6 +489,11 @@ export class RestAdapter implements SourceAdapter {
         truncated: short || others.some((warning) => isIncomplete(warning)),
         warnings: short ? [...others, INCOMPLETE.reportedMore(total)] : others,
         reportedTotal: total,
+        /* The windows' counts add up to the whole range's, and each was read to its end. */
+        completion: short || others.some((warning) => isIncomplete(warning))
+          ? { state: "partial", reason: "reported-more" }
+          : { state: "traversed", reason: "windows-covered" },
+        ...(whole.meta.scope ? { totalScope: whole.meta.scope } : {}),
       },
     };
   }
@@ -557,92 +581,15 @@ export class RestAdapter implements SourceAdapter {
       warnings.push(INCOMPLETE.unconfirmed);
     const host = allowedHost(connection);
 
-    const headers: Record<string, string> = {};
-    for (const [name, value] of Object.entries(op.headers)) {
-      headers[name] = interpolate(value, ctx.params);
-    }
-
     let prepared = await prepareAuth(connection, auth, ctx.resolveSecret);
     const clientCertificate = await clientCertificateOf(connection, ctx.resolveSecret);
     const redactQueryParam = prepared.redact;
 
-    /*
-     * Each supplied value goes where the endpoint declares it: the query
-     * string, a header, a cookie, or the body. Paging parameters go wherever
-     * the paging rule says — the query string, or into the body.
-     */
-    const pagingInBody = "in" in op.pagination && op.pagination.in === "body";
-    const located = locateInputs(op, overrides);
-    const byName = new Map(op.params.map((param) => [param.name, param]));
-    const query = new URLSearchParams(pagingInBody ? {} : firstPageParams(op.pagination));
-    for (const [name, value] of Object.entries(op.query)) {
-      const resolved = interpolate(String(value), ctx.params);
-      /*
-       * A value built from a token that resolves to nothing is left out, as a
-       * body's is: a read over every record asks without date bounds, rather
-       * than with `created[gte]=`, which an API refuses (checkpoint 4).
-       */
-      if (resolved === "" && hasTokens(String(value))) continue;
-      setQueryValue(query, name, resolved, byName.get(name));
-    }
-    for (const [name, value] of Object.entries(located.query)) {
-      const resolved = typeof value === "string" ? interpolate(value, ctx.params) : String(value);
-      // An empty override means "no filter", not "filter by empty string".
-      if (resolved === "") query.delete(name);
-      else setQueryValue(query, name, resolved, byName.get(name));
-    }
-    for (const [name, value] of Object.entries(located.header)) {
-      const resolved = interpolate(value, ctx.params);
-      if (resolved !== "") headers[name] = resolved;
-    }
-    const cookies = Object.entries(located.cookie)
-      .map(([name, value]) => [name, interpolate(value, ctx.params)] as const)
-      .filter(([, value]) => value !== "")
-      .map(([name, value]) => `${name}=${encodeURIComponent(value)}`);
-    /* A key in a cookie is kept beside an endpoint's own cookies, not replaced by them. */
-    if (cookies.length > 0) headers.cookie = [headers.cookie, ...cookies].filter(Boolean).join("; ");
-
-    if (!pagingInBody)
-      for (const [name, value] of Object.entries(firstPageParams(op.pagination))) {
-        if (query.get(name) !== value)
-          throw new AdapterError(
-            `Pagination input ${name} conflicts with this endpoint's pagination settings. Update the endpoint settings before loading it.`,
-            { status: 400 },
-          );
-      }
-
+    /* Every input in place, as connector code is handed it too (`resolveReadRequest`). */
+    const request = resolveReadRequest(connection, op, overrides, ctx.params, { credentialQuery: prepared.query });
+    const { headers, query, pagingInBody, bodyParams, unresolved } = request;
     addAuthHeaders(headers, prepared.headers);
     for (const [name, value] of prepared.query) query.set(name, value);
-
-    /* The body's tokens read the supplied values, with body parameters' defaults beside them. */
-    const bodyParams = { ...ctx.params, filters: { ...ctx.params.filters, ...located.body } };
-
-    /*
-     * What this endpoint needs before it can be called, asked of the spec
-     * rather than re-derived here. `missingInputs` checks the declared
-     * parameters *and* the path template — see its comment for why the path
-     * case is the dangerous one.
-     */
-    const supplied = {
-      ...Object.fromEntries(query),
-      ...located.header,
-      ...located.cookie,
-      ...located.body,
-      ...ctx.params.filters,
-    };
-    // Query values are validated where they are sent; path values come only
-    // from path inputs, so a query parameter cannot satisfy a missing path id.
-    for (const param of op.params) {
-      if (param.in === "query") supplied[param.name] = query.get(param.name) ?? "";
-    }
-    const unresolved = missingInputs(op, supplied);
-    for (const name of pathParamNames(op.path)) {
-      if (
-        (ctx.params.filters[name] === undefined || ctx.params.filters[name] === "") &&
-        !unresolved.includes(name)
-      )
-        unresolved.push(name);
-    }
 
     if (unresolved.length > 0) {
       throw new AdapterError(`unresolved path parameters: ${unresolved.join(", ")}`, {
@@ -655,41 +602,56 @@ export class RestAdapter implements SourceAdapter {
       });
     }
 
-    const path = interpolatePath(op.path, ctx.params);
-    const base = connection.baseUrl.replace(/\/+$/, "");
-    const first = `${base}${path.startsWith("/") ? path : `/${path}`}`;
+    const first = request.address;
+
+    /* Carried on from where an earlier read stopped: that read's, and nobody else's. */
+    const from = ctx.continueFrom;
+    if (from && (from.kind !== "rest" || (from.scope !== undefined && from.scope !== request.scope)))
+      throw new AdapterError(`a continuation for another read was handed to ${connection.id}/${op.id}`, {
+        status: 409,
+        userMessage: `"${op.title}" changed since its read stopped, so it is read again from the start.`,
+      });
 
     const pages: unknown[] = [];
     const seen = new Set<string>();
     /* The next request: its address, and the paging values its body carries. */
-    let next: { url: string; paging: Record<string, string> } | null = {
-      url: withQuery(first, query),
-      paging: pagingInBody ? firstPageParams(op.pagination) : {},
-    };
-    let pageIndex = 0;
+    let next: { url: string; paging: Record<string, string> } | null = from?.url
+      ? { url: nextAddress(from.url, from.url, prepared.query) ?? withQuery(first, query), paging: { ...from.paging } }
+      : {
+          url: withQuery(first, query),
+          paging: pagingInBody ? firstPageParams(op.pagination) : {},
+        };
+    /* Pages counted from the read's start, so paging by page number goes on where it stopped; the ceiling is this read's own. */
+    const startIndex = from?.pageIndex ?? 0;
+    let pageIndex = startIndex;
     let truncated = false;
+    /* Where the read ended, for `completion`: the last page's own word, or what stopped it. */
+    let ended: CompletionReason = "single-response";
+    let continuation: Continuation | undefined;
     let lastUrl = next.url;
     let lastStatus = 0;
     let etag: string | null = null;
     let lastModified: string | null = null;
-    let reportedTotal: number | undefined;
-    let firstPageRows: number | undefined;
-    let collected = 0;
+    let reportedTotal: number | undefined = from?.reportedTotal;
+    let firstPageRows: number | undefined = from?.firstPageRows;
+    let collected = from?.collected ?? 0;
     let renewals = 0;
     let waits = 0;
     /* HTTP Digest: the challenge answered, and how many requests its nonce has signed. */
     let digestState: { challenge: DigestChallenge; count: number } | null = null;
     let digestAnswers = 0;
-    const reads = op.method === "POST" && op.body !== undefined;
+    /* A read sent with POST is sent with POST, body or none: it was once sent as a GET when it had no body. */
+    const reads = request.method === "POST";
     /* Sent twice only where the protocol says a read is a read: a GET, or a GraphQL query. */
     const repeatable = !reads || op.readSafety?.basis === "graphql-query";
 
-    while (next && pageIndex < op.maxPages) {
-      const sent = reads ? renderBody(op.body!, bodyParams, next.paging) : undefined;
+    while (next && pageIndex - startIndex < op.maxPages) {
+      const sent = reads && op.body ? renderBody(op.body, bodyParams, next.paging) : undefined;
       /* A page is the same page when its address and its body are the same. */
       const identity = `${next.url}\n${sent?.text ?? ""}`;
       if (seen.has(identity)) {
         truncated = true;
+        ended = "repeated-page";
         warnings.push(INCOMPLETE.repeatedPage);
         break;
       }
@@ -717,7 +679,7 @@ export class RestAdapter implements SourceAdapter {
           challenge: digestState.challenge,
           username: prepared.digest.username,
           password: prepared.digest.password,
-          method: sent ? "POST" : "GET",
+          method: request.method,
           uri: pathAndQuery(next.url),
           count: ++digestState.count,
         });
@@ -728,12 +690,12 @@ export class RestAdapter implements SourceAdapter {
         next.url,
         {
           headers: await signedForAws(prepared.sigv4, {
-            method: sent ? "POST" : "GET",
+            method: request.method,
             url: next.url,
             headers: { ...headers, ...conditional, ...(sent ? { "content-type": sent.contentType } : {}) },
             body: sent?.text,
           }),
-          ...(sent ? { method: "POST", body: sent.text, purpose: "read" as const } : {}),
+          ...(reads ? { method: "POST", purpose: "read" as const, ...(sent ? { body: sent.text } : {}) } : {}),
           ...(ctx.signal ? { signal: ctx.signal } : {}),
           ...(clientCertificate ? { clientCertificate } : {}),
           ...(op.stream ? { stream: op.stream } : {}),
@@ -812,6 +774,7 @@ export class RestAdapter implements SourceAdapter {
         (reportedTotal === undefined || collected >= reportedTotal)
       ) {
         next = null;
+        ended = "past-last-page";
         break;
       }
 
@@ -824,6 +787,7 @@ export class RestAdapter implements SourceAdapter {
        */
       if (pageIndex > 0 && [400, 409, 416, 422].includes(response.status)) {
         truncated = true;
+        ended = "later-page-refused";
         warnings.push(INCOMPLETE.laterPageRefused);
         next = null;
         break;
@@ -846,6 +810,7 @@ export class RestAdapter implements SourceAdapter {
       pageIndex++;
       if (op.pagination.kind !== "none" && rowsAt(body, op.rowsPath) === null) {
         truncated = true;
+        ended = "rows-missing";
         warnings.push(INCOMPLETE.rowsMissing);
         break;
       }
@@ -855,6 +820,7 @@ export class RestAdapter implements SourceAdapter {
       /* A window of a stream is the answer, and says it is a window. */
       if (op.stream && formatOf(response.header("content-type")) === "sse") {
         truncated = true;
+        ended = "stream-window";
         warnings.push(INCOMPLETE.streamWindow(op.stream.events, op.stream.seconds));
         next = null;
         break;
@@ -869,11 +835,14 @@ export class RestAdapter implements SourceAdapter {
         collected,
         reportedTotal,
       });
-      if (decided.kind === "none") next = null;
-      else if (decided.kind === "link-header" || decided.kind === "url") {
+      if (decided.kind === "none") {
+        next = null;
+        ended = decided.why;
+      } else if (decided.kind === "link-header" || decided.kind === "url") {
         const given: string | null = decided.kind === "url" ? decided.url : nextFromLinkHeader(response.header("link"));
         const url: string | null = given ? nextAddress(given, next.url, prepared.query) : null;
         next = url ? { url, paging: next.paging } : null;
+        if (!next) ended = "no-next";
       } else if (pagingInBody) next = { url: next.url, paging: { ...next.paging, ...decided.params } };
       else {
         const params = new URLSearchParams(query);
@@ -881,32 +850,71 @@ export class RestAdapter implements SourceAdapter {
         next = { url: withQuery(first, params), paging: next.paging };
       }
 
-      if (next && pageIndex >= op.maxPages) {
+      if (next && pageIndex - startIndex >= op.maxPages) {
         // Say so loudly: a silently truncated result is a chart that is
         // quietly incomplete, which is worse than an error.
         truncated = true;
+        ended = "page-cap";
         warnings.push(INCOMPLETE.pageCap(op.maxPages));
+        /* And where it stopped, so it can be carried on: the next request, with no key in it. */
+        continuation = {
+          kind: "rest",
+          scope: request.scope,
+          url: withoutCredentials(next.url, prepared.query),
+          paging: next.paging,
+          pageIndex,
+          collected,
+          ...(firstPageRows !== undefined ? { firstPageRows } : {}),
+          ...(reportedTotal !== undefined ? { reportedTotal } : {}),
+        };
       }
     }
 
     const beforeMerge = warnings.length;
     const merged = pages.length === 1 ? pages[0] : mergePages(pages, op.rowsPath, warnings);
     // A merge that fell back to the first page left the rest out.
-    if (warnings.length > beforeMerge) truncated = true;
+    if (warnings.length > beforeMerge) {
+      truncated = true;
+      ended = "unmerged";
+    }
 
     /*
      * A total the answer states beside its records, where nothing declared
      * one: used only to say a read fell short, never to claim it complete.
      * Ten of 332 facts were read and shown as the whole, with nothing on the
-     * tile (checkpoint 2).
+     * tile.
      */
     if (!truncated && reportedTotal === undefined && pages.length > 0 && op.rowsPath && op.rowsPath !== "$") {
       const hinted = totalBeside(pages[0]);
       if (hinted !== undefined && hinted > collected) {
         truncated = true;
+        ended = "reported-more";
         warnings.push(INCOMPLETE.reportedMore(hinted));
       }
     }
+    /*
+     * An answer that says, beside its records, that there is more — `isLast:
+     * false`, `hasMore: true`, a next token — read with no rule for reading
+     * the rest: what was read is not all of it, and says so. Fifty of 264
+     * issues were read this way and shown as the whole, with nothing on the
+     * tile (seen with the trackwell mock API).
+     */
+    if (
+      !truncated &&
+      op.pagination.kind === "none" &&
+      pages.length === 1 &&
+      /* A list beside which the answer says something; never a single record's own fields. */
+      op.rowsPath !== undefined &&
+      op.rowsPath !== "$" &&
+      Array.isArray(rowsAt(pages[0], op.rowsPath)) &&
+      saysMore(pages[0])
+    ) {
+      truncated = true;
+      ended = "said-more";
+      warnings.push(INCOMPLETE.saidMore);
+    }
+    /* Paging nobody confirmed: the first page may be all of it, or may not. Said, never claimed. */
+    const unconfirmed = warnings.includes(INCOMPLETE.unconfirmed);
 
     /*
      * Offered back only for a single-page result. Quoting a page-one validator
@@ -929,10 +937,18 @@ export class RestAdapter implements SourceAdapter {
         status: lastStatus,
         fetchedAt: started,
         durationMs: Date.now() - started,
-        pages: pageIndex,
+        pages: pageIndex - startIndex,
         truncated,
         warnings,
-        ...(reportedTotal !== undefined ? { reportedTotal } : {}),
+        completion: truncated
+          ? { state: "partial", reason: ended }
+          : unconfirmed
+            ? { state: "unknown", reason: "unconfirmed-paging" }
+            : { state: "traversed", reason: ended },
+        scope: request.scope,
+        /* Stated on this read's own first page: about exactly what it asked for. */
+        ...(reportedTotal !== undefined ? { reportedTotal, totalScope: request.scope } : {}),
+        ...(continuation && ended === "page-cap" ? { continuation } : {}),
       },
     };
   }
@@ -1122,6 +1138,18 @@ const withQuery = (url: string, query: URLSearchParams): string => {
   const text = query.toString();
   if (text === "") return url;
   return `${url}${url.includes("?") ? "&" : "?"}${text}`;
+};
+
+/** An address with every key the query carries taken out, for keeping: `nextAddress` puts them back. */
+const withoutCredentials = (url: string, authQuery: ReadonlyArray<readonly [string, string]>): string => {
+  if (authQuery.length === 0) return url;
+  try {
+    const parsed = new URL(url);
+    for (const [name] of authQuery) parsed.searchParams.delete(name);
+    return parsed.toString();
+  } catch {
+    return url;
+  }
 };
 
 const redact = (url: string, param: string | null): string => {

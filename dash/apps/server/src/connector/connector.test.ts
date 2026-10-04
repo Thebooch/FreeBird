@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { AdapterError, type HttpFetch, type HttpResponse } from "@freebirdai/dash-adapters";
+import { AdapterError, INCOMPLETE, RestAdapter, type Continuation, type HttpFetch, type HttpResponse } from "@freebirdai/dash-adapters";
 import { connectionSchema, getOp, resolveRange, type ConnectionSpec } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import { ConnectorAdapter, connectorHash } from "./adapter.js";
@@ -90,7 +90,17 @@ const connectionWith = (code: string, authority: Record<string, unknown> = {}, e
 
 const sandbox = new QuickJsSandbox({ memoryBytes: 32 * 1024 * 1024, cpuMs: 1_500, stackBytes: 256 * 1024, wallMs: 20_000 });
 
-const read = async (connection: ConnectionSpec, http: HttpFetch, opId = "records", tokens = new MemoryConnectorTokens()) => {
+const read = async (
+  connection: ConnectionSpec,
+  http: HttpFetch,
+  opId = "records",
+  tokens = new MemoryConnectorTokens(),
+  asked: {
+    readonly overrides?: Record<string, string | number | boolean>;
+    readonly filters?: Record<string, string>;
+    readonly continueFrom?: Continuation;
+  } = {},
+) => {
   const logs: string[] = [];
   let clock = NOW;
   const adapter = new ConnectorAdapter(http, {
@@ -103,8 +113,13 @@ const read = async (connection: ConnectionSpec, http: HttpFetch, opId = "records
     onLog: (_connection, line) => logs.push(line),
   });
   const op = getOp(connection, opId)!;
-  const params = { range: resolveRange({ preset: "30d", now: NOW }), filters: {} };
-  const result = await adapter.fetch(connection, op, {}, { params, now: NOW, resolveSecret: async (keyRef) => secrets[keyRef] ?? null });
+  const params = { range: resolveRange({ preset: "30d", now: NOW }), filters: asked.filters ?? {} };
+  const result = await adapter.fetch(connection, op, asked.overrides ?? {}, {
+    params,
+    now: NOW,
+    resolveSecret: async (keyRef) => secrets[keyRef] ?? null,
+    ...(asked.continueFrom ? { continueFrom: asked.continueFrom } : {}),
+  });
   return { result, logs };
 };
 
@@ -195,7 +210,7 @@ describe("connector: reading", () => {
   });
 
   it("parses CSV the way a spreadsheet would", async () => {
-    const csv = '﻿id,amount,note,when\r\n1,12.50,"a, ""quoted"" b",2026-07-01\r\n2,0.75,,007\r\n\r\n';
+    const csv = 'id,amount,note,when\r\n1,12.50,"a, ""quoted"" b",2026-07-01\r\n2,0.75,,007\r\n\r\n';
     const { http } = transport(() => ({ status: 200, body: csv, headers: { "content-type": "text/csv" } }));
     const code = `async function read() { return (await http.request({ url: "/export" })).body }`;
     const { result } = await read(connectionWith(code), http);
@@ -205,7 +220,7 @@ describe("connector: reading", () => {
     ]);
   });
 
-  /* Plan, track A: XML, read by the server rather than picked apart by the code. */
+  /* XML, read by the server rather than picked apart by the code. */
   it("reads XML by its content type, and on request", async () => {
     const xml = `<?xml version="1.0"?><batch id="7"><tx><id>1</id><amount>12.50</amount></tx><tx><id>2</id><amount>3</amount></tx></batch>`;
     const { http } = transport(() => ({ status: 200, body: xml, headers: { "content-type": "text/xml" } }));
@@ -233,14 +248,14 @@ describe("connector: reading", () => {
       let page = ctx.resume ? ctx.resume.page : 1;
       for (let sent = 0; sent < 18; sent++, page++) {
         const answer = await http.request({ url: "/items", query: { page } });
-        if (answer.body.items.length === 0) return { rows };
+        if (answer.body.items.length === 0) return { rows, done: "all" };
         rows.push(...answer.body.items);
       }
       return { rows, resume: { page } };
     }`;
     const { result } = await read(connectionWith(code), http);
     expect((result.body as { id: number }[]).map((one) => one.id)).toEqual(Array.from({ length: 45 }, (_, index) => index + 1));
-    expect(result.meta).toMatchObject({ truncated: false, warnings: [] });
+    expect(result.meta).toMatchObject({ truncated: false, warnings: [], completion: { state: "traversed", reason: "connector-all" } });
     expect(sent).toHaveLength(46);
   });
 
@@ -254,6 +269,27 @@ describe("connector: reading", () => {
     const second = await read(connectionWith(endless), http);
     expect(second.result.body).toHaveLength(10);
     expect(second.result.meta.warnings.join(" ")).toMatch(/connector stopped before the end/);
+  });
+
+  /* Out of runs, still moving on — where it got to, for a read in the background to carry on from. */
+  it("says where a read out of runs got to, and carries it on from there, for that read only", async () => {
+    const { http } = transport(() => ({ status: 200, body: [] }));
+    const endless = `async function read(ctx) { const n = (ctx.resume || 0) + 1; return n > 25 ? { rows: [], done: "all" } : { rows: [{ n }], resume: n }; }`;
+    const connection = connectionWith(endless);
+    const first = await read(connection, http);
+    expect(first.result.meta).toMatchObject({
+      completion: { state: "partial", reason: "run-limit" },
+      continuation: { kind: "connector", resume: 10, pageIndex: 10, collected: 10 },
+    });
+    const second = await read(connection, http, "records", undefined, { continueFrom: first.result.meta.continuation! });
+    expect((second.result.body as { n: number }[]).map((one) => one.n)).toEqual(Array.from({ length: 10 }, (_, index) => index + 11));
+    const third = await read(connection, http, "records", undefined, { continueFrom: second.result.meta.continuation! });
+    expect((third.result.body as { n: number }[]).map((one) => one.n)).toEqual([21, 22, 23, 24, 25]);
+    expect(third.result.meta).toMatchObject({ completion: { state: "traversed", reason: "connector-all" } });
+    expect(third.result.meta.continuation).toBeUndefined();
+    /* Another read's place is not this one's. */
+    const error = await refusal(read(connection, http, "records", undefined, { continueFrom: { ...first.result.meta.continuation!, scope: "elsewhere" } }));
+    expect(error.status).toBe(409);
   });
 
   it("says so when the code stopped short", async () => {
@@ -387,7 +423,7 @@ describe("connector: containment", () => {
     expect(sent.filter((one) => one.url.endsWith("/things"))).toHaveLength(2);
   });
 
-  /* Checkpoint 1: a signRequest that adds the session asked for one on the login that creates it. */
+  /* Regression: a signRequest that adds the session asked for one on the login that creates it. */
   it("does not pass a login through signRequest unless asked", async () => {
     const { http } = transport((request) =>
       request.url.endsWith("/login")
@@ -463,5 +499,202 @@ describe("connector: containment", () => {
     const [row] = result.body as Array<{ escaped: string; keys: string }>;
     expect(row!.escaped).toBe("undefinedundefinedundefined");
     expect(row!.keys).not.toMatch(/process|require|fetch|Buffer/);
+  });
+});
+
+describe("connector: the same request REST sends", () => {
+  /* One endpoint, three kinds of input: a path id from the board, a widget's own value, a header with a documented default. */
+  const orders = {
+    id: "orders",
+    title: "Orders",
+    path: "/accounts/{{param.account}}/orders",
+    query: { limit: 50 },
+    params: [
+      { name: "account", in: "path", required: true },
+      { name: "status", in: "query" },
+      { name: "x-api-version", in: "header", default: "2" },
+    ],
+  };
+  const asked = { overrides: { status: "open" }, filters: { account: "42" } };
+  const answer = () => ({ status: 200, body: { orders: [{ id: 1, status: "open" }] } });
+  /* The orders endpoint, read by this code. */
+  const servedOrders = (code: string, hooks: Array<"read" | "parse"> = ["read"]): ConnectionSpec => {
+    const connection = connectionWith(code, {}, { ops: [{ ...orders, servedBy: "connector" }] });
+    return { ...connection, connector: { ...connection.connector!, hooks, serves: ["orders"] } };
+  };
+
+  it("sends a widget's own values from connector code, as REST does", async () => {
+    const viaRest = transport(answer);
+    const rest = connectionSchema.parse({
+      id: "r",
+      title: "Test API",
+      kind: "rest",
+      baseUrl: `https://${API}/v1`,
+      auth: { type: "none" },
+      ops: [{ ...orders, rowsPath: "$.orders" }],
+    });
+    await new RestAdapter(viaRest.http).fetch(rest, getOp(rest, "orders")!, asked.overrides, {
+      params: { range: resolveRange({ preset: "30d", now: NOW }), filters: asked.filters },
+      now: NOW,
+    });
+
+    /* No read() of its own: the endpoint's request, as resolved, and parse() over the answer. */
+    const code = `async function parse(response) { return { rows: JSON.parse(response.text).orders }; }`;
+    const viaCode = transport(answer);
+    const { result } = await read(servedOrders(code, ["parse"]), viaCode.http, "orders", new MemoryConnectorTokens(), asked);
+
+    const lower = (headers: Readonly<Record<string, string>>) =>
+      Object.fromEntries(Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]));
+    const [fromRest] = viaRest.sent;
+    const [fromCode] = viaCode.sent;
+    expect(fromRest!.url).toBe(`https://${API}/v1/accounts/42/orders?limit=50&status=open`);
+    expect(fromCode!.url).toBe(fromRest!.url);
+    expect(fromCode!.method).toBe(fromRest!.method);
+    expect(lower(fromCode!.headers)["x-api-version"]).toBe("2");
+    expect(lower(fromCode!.headers)["x-api-version"]).toBe(lower(fromRest!.headers)["x-api-version"]);
+    expect(result.body).toEqual([{ id: 1, status: "open" }]);
+  });
+
+  it("gives a connector's read() every input it was asked with", async () => {
+    const { http } = transport(() => ({ status: 200, body: [] }));
+    const code = `async function read(ctx) { return [{ inputs: ctx.inputs, url: ctx.request.url }]; }`;
+    const { result } = await read(servedOrders(code), http, "orders", new MemoryConnectorTokens(), asked);
+    const [row] = result.body as Array<{ inputs: Record<string, unknown>; url: string }>;
+    expect(row!.inputs).toEqual({ "x-api-version": "2", account: "42", status: "open" });
+    expect(row!.url).toContain("status=open");
+  });
+
+  it("lists what nobody supplied, for the code to find, rather than refusing", async () => {
+    const { http } = transport(() => ({ status: 200, body: [] }));
+    const code = `async function read(ctx) { return [{ missing: ctx.request.missing }]; }`;
+    const { result } = await read(servedOrders(code), http, "orders");
+    expect(result.body).toEqual([{ missing: ["account"] }]);
+  });
+});
+
+/* Complete only on the code's own word, and a sign-in is not a page. */
+describe("connector: how a read ended", () => {
+  const api = () =>
+    transport((request) =>
+      request.url.endsWith("/v1/login")
+        ? { status: 200, body: { token: "tok_abcdef123", expires_in: 600 } }
+        : { status: 200, body: { items: [{ id: Number(new URL(request.url).searchParams.get("page") ?? 1) }] } },
+    );
+  const code = (ending: string) => `async function authenticate() {
+      await auth.exchange({ name: "session", request: { method: "POST", url: "/login", body: { password: "{{secret:password}}" } }, token: "$.token" });
+    }
+    async function read() {
+      const rows = [];
+      for (let page = 1; page <= 3; page++) {
+        const answer = await http.request({ url: "/items", query: { page }, headers: { authorization: "Bearer {{secret:session}}" } });
+        rows.push(...answer.body.items);
+      }
+      return ${ending};
+    }`;
+  const withLogin = (source: string) => {
+    const connection = connectionWith(source);
+    return { ...connection, connector: { ...connection.connector!, hooks: ["authenticate" as const, "read" as const] } };
+  };
+
+  it("counts pages of records, not the sign-in, and says it read to the end only when the code does", async () => {
+    const { http, sent } = api();
+    const { result } = await read(withLogin(code(`{ rows, done: "all", pages: 3 }`)), http);
+    expect(sent).toHaveLength(4);
+    expect(result.meta).toMatchObject({ pages: 3, requests: 4, truncated: false, completion: { state: "traversed", reason: "connector-all" } });
+  });
+
+  it("claims nothing for code that returns records without saying they were all of them", async () => {
+    const { http } = api();
+    const { result } = await read(withLogin(code("{ rows }")), http);
+    expect(result.body).toHaveLength(3);
+    expect(result.meta.completion).toEqual({ state: "unknown", reason: "connector-silent" });
+    expect(result.meta.truncated).toBe(false);
+    expect(result.meta.warnings).toContain(INCOMPLETE.unknownEnd);
+    /* One run of records, however many requests it took: never the four requests counted as pages. */
+    expect(result.meta.pages).toBe(1);
+  });
+
+  it("says a read the code stopped is partial", async () => {
+    const { http } = api();
+    const { result } = await read(withLogin(code(`{ rows, done: "partial", reason: "the export was still running" }`)), http);
+    expect(result.meta).toMatchObject({ truncated: true, completion: { state: "partial", reason: "connector-partial" } });
+  });
+
+  it("trusts the code's own total only alongside its word that it read to the end", async () => {
+    const { http } = api();
+    const silent = await read(withLogin(code("{ rows, total: 3 }")), http);
+    expect(silent.result.meta.reportedTotal).toBe(3);
+    expect(silent.result.meta.totalScope).toBeUndefined();
+    const said = await read(withLogin(code(`{ rows, total: 3, done: "all" }`)), http);
+    expect(said.result.meta.totalScope).toBe(said.result.meta.scope);
+  });
+});
+
+/*
+ * Every request against the templates the connector
+ * declared, before anything leaves. These show each refusal working on the
+ * attempt it exists for; they do not prove there is no other way around it.
+ */
+describe("connector: request templates", () => {
+  const templates = [
+    { id: "search", purpose: "search", method: "POST", host: API, path: "/v1/search", credentials: ["secret"], body: { type: "json", keys: ["query", "page"] } },
+    { id: "items", purpose: "read", method: "GET", host: API, path: "/v1/items/{id}", credentials: [] },
+    { id: "graph", purpose: "search", method: "POST", host: API, path: "/v1/graphql", credentials: [], body: { type: "graphql" } },
+  ];
+  const strict = (code: string) => connectionWith(code, { templates });
+
+  it("sends what a template allows, and refuses before sending a POST anywhere else on the same host", async () => {
+    const { http, sent } = transport(() => ({ status: 200, body: { items: [{ id: 1 }] } }));
+    const allowed = await read(strict(`async function read() { return { rows: (await http.request({ method: "POST", url: "/search", headers: { authorization: "{{secret:secret}}" }, body: { query: "open" } })).body.items, done: "all" }; }`), http);
+    expect(allowed.result.body).toEqual([{ id: 1 }]);
+    const before = sent.length;
+    const error = await refusal(read(strict(`async function read() { await http.request({ method: "POST", url: "/records/7/archive", body: {} }); return []; }`), http));
+    expect(error.userMessage).toMatch(/POST \/v1\/records\/7\/archive is not a request this connector declared/);
+    expect(sent.length).toBe(before);
+  });
+
+  it("puts a credential only into a request whose template names it", async () => {
+    const { http, sent } = transport(() => ({ status: 200, body: {} }));
+    /* The host may receive the secret, but this request's template does not carry it. */
+    const error = await refusal(read(strict(`async function read() { await http.request({ url: "/items/3", headers: { authorization: "{{secret:secret}}" } }); return []; }`), http));
+    expect(error.userMessage).toMatch(/"secret" may not be sent/);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("refuses a body field the template does not list, and a GraphQL document that could change something", async () => {
+    const { http, sent } = transport(() => ({ status: 200, body: {} }));
+    const extra = await refusal(read(strict(`async function read() { await http.request({ method: "POST", url: "/search", headers: { authorization: "{{secret:secret}}" }, body: { query: "x", delete: true } }); return []; }`), http));
+    expect(extra.userMessage).toMatch(/carries delete, which search does not allow/);
+    const mutation = await refusal(read(strict(`async function read() { await http.request({ method: "POST", url: "/graphql", body: { query: "mutation { deleteAll }" } }); return []; }`), http));
+    expect(mutation.userMessage).toMatch(/GraphQL document that can change something/);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("refuses an endpoint the catalog knows changes the account, even to a connector from before templates", async () => {
+    const { http, sent } = transport(() => ({ status: 200, body: {} }));
+    const logs: string[] = [];
+    const adapter = new ConnectorAdapter(http, {
+      sandbox,
+      tokens: new MemoryConnectorTokens(),
+      now: () => NOW,
+      onLog: (_c, line) => logs.push(line),
+      writes: () => [{ method: "POST", path: "/records/{{param.id}}/archive" }],
+    });
+    const connection = connectionWith(`async function read() { await http.request({ method: "POST", url: "/records/7/archive", body: {} }); return []; }`);
+    const error = await refusal(
+      adapter.fetch(connection, getOp(connection, "records")!, {}, { params: { range: resolveRange({ preset: "30d", now: NOW }), filters: {} }, now: NOW, resolveSecret: async (keyRef) => secrets[keyRef] ?? null }),
+    );
+    expect(error.userMessage).toMatch(/changes things in the account/);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("lets code sign a declared endpoint's request, but never send it elsewhere", async () => {
+    const { http, sent } = transport(() => ({ status: 200, body: [{ id: 1 }] }));
+    const redirect = `async function signRequest(request) { request.url = "https://${API}/v1/admin/export"; return request; }`;
+    const connection = connectionWith(redirect, { templates });
+    const signing = { ...connection, connector: { ...connection.connector!, hooks: ["signRequest" as const], serves: [] } };
+    const error = await refusal(read(signing, http, "listed"));
+    expect(error.userMessage).toMatch(/may sign a request, not send it elsewhere/);
+    expect(sent).toHaveLength(0);
   });
 });

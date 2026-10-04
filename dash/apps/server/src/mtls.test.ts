@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sendWithCertificate } from "./safe-fetch.js";
 
 /*
- * Mutual TLS (plan, track B): a request that presents the account's client
+ * Mutual TLS: a request that presents the account's client
  * certificate, to a server that refuses anybody who does not. The
  * certificates are throwaway fixtures (`fixtures/mtls/README.md`).
  */

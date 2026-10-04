@@ -3,6 +3,7 @@ import { proposeRepair, type LlmAdapter } from "@freebirdai/dash-agent";
 import {
   authCredentials,
   connectionNeedsAddress,
+  countReconciled,
   evidenceSchema,
   fingerprintConnection,
   getOp,
@@ -16,6 +17,7 @@ import {
   type ConnectionSpec,
   type Evidence,
   type EvidenceLevel,
+  type OpSpec,
   type PaginationSpec,
   type ResourceSpec,
 } from "@freebirdai/dash-spec";
@@ -28,13 +30,17 @@ import {
 } from "../discovery/graphql.js";
 import { signInGapNotes } from "../discovery/openapi.js";
 import { cursorPaths, nextAddressPaths, probePagination, reportedTotal, saysMore } from "../discovery/probe-pagination.js";
-import { authorConnector, connectorReader, stoppedShort, type ConnectorKit } from "./connector.js";
+import { authorConnector, connectorReader, stoppedShort, type ConnectorKit, type SeenRequests } from "./connector.js";
+import { describeTemplate, templatesFromTrace } from "./templates.js";
+import { requestChange } from "./request-change.js";
+import { inputSources, namedInRequest, valueField } from "./inputs.js";
 import { countCandidates, countIn } from "./count.js";
 import { docsKnowledge } from "./docs.js";
 import { observedShape, type ObservedShape } from "./observed.js";
 import { seenValues, uniqueFields, type SeenSet } from "./values.js";
 import { applyPatch, describePatch, sameSite, type ConnectionPatch } from "./patch.js";
 import { BudgetSpent, budgetOf, rowsOf, tryRead, type Attempt, type DiagnosisKind, type ReadDeps } from "./read.js";
+import { fieldSelector, holdsOnlyIds } from "./selected-fields.js";
 import { McpError, openMcpClient } from "../mcp/client.js";
 import { toolOps } from "../mcp/discover.js";
 import { DEFAULT_STRATEGIES, type RepairStrategy } from "./strategies.js";
@@ -108,10 +114,16 @@ export interface IntegrateOptions {
    * for the fields their documentation never declared, with a budget of
    * their own (`sampleRequests`). The check settles a handful of endpoints;
    * an API documented in prose may have fifty collections, and one never
-   * read is one no request can ever reach (checkpoint 2).
+   * read is one no request can ever reach.
    */
   readonly sample?: readonly string[] | undefined;
   readonly sampleRequests?: number | undefined;
+  /**
+   * What the board was asked, in the person's words, where there is one: an
+   * input a list supplies is settled to the record it names ("the Marketing
+   * workspace"), and otherwise read for every record.
+   */
+  readonly objective?: string | undefined;
 }
 
 export interface OpOutcome {
@@ -157,7 +169,7 @@ export interface IntegrationReport {
   /**
    * Reads written from a GraphQL schema the API answered with, and the
    * endpoint each set replaced: for the catalog entry, where record types are
-   * described from its reads (plan, track A).
+   * described from its reads.
    */
   readonly added?: {
     readonly ops: readonly CatalogEntry["ops"][number][];
@@ -168,6 +180,8 @@ export interface IntegrationReport {
 
 /** Filter parameters tried per endpoint: each is one request. */
 const MAX_FILTER_TRIES = 6;
+/** Endpoints a check may write connector code for. Each is written once, beside the others. */
+const MAX_AUTHORED = 3;
 
 /** Fields a filter by never narrows to a kind of record: identities and names. */
 const FILTER_NEVER = /(^|[._])(id|ids|uuid|guid|name|title|description|email|phone|url|slug|sku)$|Ids?$/i;
@@ -379,6 +393,11 @@ export const integrate = async (
 ): Promise<IntegrationReport> => {
   let connection = initial;
   const budget = budgetOf(options.requests ?? 60);
+  /* The catalog's endpoints that change the account: never sent by connector code, and never a template. */
+  const writes = (options.entry?.writes ?? []).map((write) => ({ method: write.method, path: write.path }));
+  const kit = deps.connectors ? { ...deps.connectors, writes: () => writes } : undefined;
+  /* What connector code sent during this check, by endpoint: what an older connector's templates are learned from. */
+  const sent: SeenRequests = { requests: [], log: [], events: [] };
   const readDeps: ReadDeps = {
     http: deps.http,
     resolveSecret: deps.resolveSecret,
@@ -386,8 +405,8 @@ export const integrate = async (
     budget,
     ...(initial.kind === "mcp"
       ? { adapter: mcpReader(deps.resolveSecret) }
-      : deps.connectors
-        ? { adapter: connectorReader(deps.connectors) }
+      : kit
+        ? { adapter: connectorReader(kit, sent) }
         : {}),
     ...(deps.around ? { around: deps.around } : {}),
     ...(deps.onRead ? { onRead: deps.onRead } : {}),
@@ -440,34 +459,42 @@ export const integrate = async (
   /*
    * Connector code, when nothing in the connection's own vocabulary can work:
    * written from the documentation, proven by a read, kept only when that read
-   * returns records. Once per check — it has its own attempts inside.
+   * returns records. Once per endpoint, for a few endpoints a check — each has
+   * its own attempts inside. A second endpoint's code is written beside the
+   * first's, never over it.
    */
-  let authoring = 0;
+  const authored = new Set<string>();
+  /* The connector model said the documentation does not say enough: asking again for another endpoint would hear the same. */
+  let codeCannot = false;
   const escalate = async (opId: string, attempt: Attempt, reason?: string): Promise<Attempt | null> => {
     const writer = deps.connectorLlm ?? deps.llm;
-    if (!deps.connectors || !writer || authoring > 0) return null;
-    authoring++;
+    if (!kit || !writer || codeCannot || authored.has(opId) || authored.size >= MAX_AUTHORED) return null;
+    authored.add(opId);
     const gaps = attempt.kind === "noSignIn" ? signInGapNotes(await docs.spec()).join(" ") : "";
     const problem = [reason, gaps, attempt.message].filter((one): one is string => !!one).join(" ");
-    const authored = await authorConnector({
+    const result = await authorConnector({
       connection,
       opId,
       problem,
       docs,
       docsUrl,
       llm: writer,
-      kit: deps.connectors,
+      kit,
       read: readDeps,
       attempts: options.connectorAttempts ?? 3,
       now: deps.now,
+      writes,
     });
-    modelCalls += authored.modelCalls;
-    log.push(...authored.log);
-    if (authored.cannot) cannot = authored.cannot;
-    if (!authored.connection || !authored.patch) return null;
-    tried.add(fingerprintConnection(authored.connection));
-    keep(authored.connection, authored.because ?? "connector code", authored.patch);
-    return authored.attempt;
+    modelCalls += result.modelCalls;
+    log.push(...result.log);
+    if (result.cannot) {
+      cannot = result.cannot;
+      codeCannot = true;
+    }
+    if (!result.connection || !result.patch) return null;
+    tried.add(fingerprintConnection(result.connection));
+    keep(result.connection, result.because ?? "connector code", result.patch);
+    return result.attempt;
   };
 
   /** Read one endpoint and repair until it reads, or nothing more helps. */
@@ -525,7 +552,7 @@ export const integrate = async (
        * A sign-in nobody declared: the specification named none, so the API
        * may simply answer. Tried once without a key, and kept only if records
        * come back — a refusal means a key is needed after all. A public API
-       * had connector code written for it, for want of trying (checkpoint 2).
+       * had connector code written for it, for want of trying.
        */
       if (
         attempt.kind === "noSignIn" &&
@@ -583,12 +610,15 @@ export const integrate = async (
       /* Nothing built-in helped: one change from a model, with the same rule. */
       if (!deps.llm || modelCalls >= maxModelCalls || !repairConnection) break;
       modelCalls++;
+      /* The endpoints in words first — a method or a path is wrong only against them — then the prose. */
+      const outline = await docs.outline();
+      const prose = await docs.text();
       const answer = await proposeRepair(deps.llm, {
         apiTitle: connection.title,
         request: describeRequest(connection, opId),
         failure: attempt.message,
         tried: log.filter((line) => line.startsWith("Tried ")).slice(-8),
-        docs: await docs.text(),
+        docs: [outline ? `THE SPECIFICATION, ENDPOINT BY ENDPOINT:\n${outline}` : "", prose].filter((one) => one !== "").join("\n\n"),
       });
       if ("error" in answer) {
         log.push(`Asked a model for a repair; ${answer.error}`);
@@ -602,7 +632,20 @@ export const integrate = async (
         attempt = written;
         continue;
       }
-      const patch = patchFromProposal(answer.proposal, connection, opId, docsUrl);
+      /* The request itself, held to the documentation and the account's writes. */
+      const asked = requestChange(answer.proposal, connection, opId, { ground: `${outline}\n${prose}`, writes });
+      if (asked && "refused" in asked) {
+        log.push(`A model proposed a change to the request the documentation does not support (${asked.refused}); it was not tried.`);
+        break;
+      }
+      const vocabulary = patchFromProposal(answer.proposal, connection, opId, docsUrl);
+      const patch: ConnectionPatch | null =
+        asked && "change" in asked
+          ? {
+              ...(vocabulary ?? {}),
+              ops: { ...(vocabulary?.ops ?? {}), [opId]: { ...(vocabulary?.ops?.[opId] ?? {}), ...asked.change } },
+            }
+          : vocabulary;
       if (!patch) {
         log.push("A model proposed a change that is not allowed here; it was not tried.");
         break;
@@ -621,6 +664,8 @@ export const integrate = async (
     readonly pages: number;
     readonly reportedTotal?: number;
     readonly pagination?: PaginationSpec;
+    /** The read's scope (`resolveReadRequest`): what any count here is evidence about. */
+    readonly digest?: string;
     readonly note: string;
     readonly by: Evidence["by"];
     readonly maxPages: number;
@@ -680,6 +725,19 @@ export const integrate = async (
       };
       const next = applyPatch(connection, patch);
       if (next) keep(next, probe.note, patch);
+      /*
+       * Read to the end: the values a request can name are read from every
+       * record, not the first page's. Fifty issues, newest first, were all
+       * one project's, so no project could be named (seen with the
+       * trackwell mock API).
+       */
+      const shape = shapes[opId];
+      if (shape && probe.records && probe.records.length > (first.rows?.length ?? 0)) {
+        const fields = seenValues(probe.records, shape.fields);
+        const unique = uniqueFields(probe.records, shape.fields);
+        if (Object.keys(fields).length > 0 || unique.length > 0)
+          values[opId] = { fields, everyRecord: probe.level === "count-reconciled", unique };
+      }
       return;
     }
     /*
@@ -715,8 +773,33 @@ export const integrate = async (
    * only if every record comes back holding it — while the unnarrowed page
    * held others. Its name only chooses what to try. Once confirmed, a number
    * narrowed to one value asks the API for those records alone, where it read
-   * five pages of 11,848 to count 295 before (checkpoint 2).
+   * five pages of 11,848 to count 295 before.
    */
+  /*
+   * Records that hold nothing but what identifies them — an id, a link —
+   * where the documentation names a parameter that asks for their fields and
+   * the value that asks for every one: asked, and kept only when the records
+   * come back with them. Issues came back as ids, so no count could tell a
+   * bug from a task (seen with the trackwell mock API).
+   */
+  const askForFields = async (opId: string, first: Attempt): Promise<Attempt> => {
+    const op = getOp(connection, opId);
+    const rows = first.rows ?? [];
+    if (!op || rows.length === 0 || !rows.every(holdsOnlyIds)) return first;
+    const selector = fieldSelector(op);
+    if (!selector || op.query[selector.name] !== undefined) return first;
+    const patch: ConnectionPatch = { ops: { [opId]: { inputs: { [selector.name]: selector.all } } } };
+    const next = applyPatch(connection, patch);
+    if (!next) return first;
+    const answer = await tryRead(next, opId, readDeps, plain);
+    if (!answer.rows || answer.rows.length === 0 || answer.rows.every(holdsOnlyIds)) {
+      log.push(`${op.title} answered with ids only, and asking for ${selector.name}=${selector.all} did not change that.`);
+      return first;
+    }
+    keep(next, `${op.title} answered with ids only; its documentation asks for every field with ${selector.name}=${selector.all}`, patch);
+    return answer;
+  };
+
   const confirmFilters = async (opId: string, first: Attempt, shape: ObservedShape): Promise<void> => {
     const op = getOp(connection, opId);
     if (!op) return;
@@ -729,7 +812,7 @@ export const integrate = async (
      * never an id or a name — a filter by one of those finds one record, not
      * a kind of record — and fields whose values repeat most first. Tried in
      * the order documented, four ids and names used the tries before the type
-     * of brewery was reached (checkpoint 2).
+     * of brewery was reached.
      */
     const heldBy = (path: string) =>
       rows
@@ -767,8 +850,10 @@ export const integrate = async (
       /* A value the unnarrowed page held beside others: a filter that did nothing would be caught. */
       if (!value || held.every((one) => sameWord(one, value))) continue;
       tries++;
+      /* Sent as a widget would send it, so connector code is asked the same way a board will ask it. */
       const narrowed = await tryRead(connection, opId, readDeps, {
-        op: { query: { ...op.query, [param.name]: value }, pagination: { kind: "none" }, maxPages: 1 },
+        op: { pagination: { kind: "none" }, maxPages: 1 },
+        overrides: { [param.name]: value },
       });
       const got = narrowed.kind === "ok" ? (narrowed.rows ?? []).map((row) => readField(row, field.name)) : [];
       if (got.length > 0 && got.every((one) => typeof one === "string" && sameWord(one, value))) {
@@ -790,7 +875,7 @@ export const integrate = async (
    * under that filter holds — Oregon's 295 of 11,848 breweries. Either shows
    * what the endpoint counts, and each filter that agreed is one it honours.
    * "How many" is then one request, where a list read page by page stops at
-   * its ceiling (plan, track D).
+   * its ceiling.
    */
   const confirmCount = async (opId: string, first: Attempt): Promise<void> => {
     const op = getOp(connection, opId);
@@ -870,7 +955,7 @@ export const integrate = async (
   /*
    * A GraphQL endpoint read as if it were REST: asked for its schema, and read
    * through what the schema declares — one query per list, generated rather
-   * than written per API (plan, track A). Where it will not say, the check
+   * than written per API. Where it will not say, the check
    * goes on as before, and code may read it.
    */
   const added = { ops: [] as CatalogEntry["ops"][number][], resources: [] as ResourceSpec[], replaced: [] as string[] };
@@ -971,9 +1056,64 @@ export const integrate = async (
   /*
    * The endpoint the check starts from. A key recognised and refused one
    * endpoint (403) may read every other, so the next becomes the start rather
-   * than the check ending there (checkpoint 2); only when every endpoint
+   * than the check ending there; only when every endpoint
    * refuses is the connection blocked.
    */
+  /*
+   * An input no board gives, that another list's records supply: that list
+   * is read first, and the input settled from what it
+   * holds — its one record, the one the request names, or every one, the
+   * endpoint then read once for each. Nothing is set from a name alone: the
+   * list must answer, and its records must hold the field.
+   */
+  const planInputs = async (opId: string): Promise<void> => {
+    const op = getOp(connection, opId);
+    const sources = op ? inputSources(connection, opId) : null;
+    if (!op || !sources || sources.length === 0) return;
+    const inputsFrom: Record<string, { valueFrom: { op: string; field: string; each: boolean }; default?: string | number }> = {};
+    const said: string[] = [];
+    for (const source of sources) {
+      if (budget.remaining < 3) return;
+      const list = await tryRead(connection, source.op, readDeps, plain);
+      const title = getOp(connection, source.op)?.title ?? source.op;
+      if (list.kind !== "ok" || (list.rows ?? []).length === 0) {
+        log.push(`${op.title} needs ${source.param}, and ${title} did not list any: ${list.message}`);
+        return;
+      }
+      const rows = list.rows ?? [];
+      const field = valueField(rows, source.field, source.param);
+      if (!field) {
+        log.push(`${op.title} needs ${source.param}, and ${title}'s records hold no id for it.`);
+        return;
+      }
+      const resource = connection.resources.find((one) => one.listOp === source.op);
+      const named = namedInRequest(rows, options.objective, resource?.labelField);
+      const values = [...new Set(rows.map((row) => readField(row, field)).filter((value) => typeof value === "string" || typeof value === "number"))];
+      const one = values.length === 1 ? values[0] : named ? readField(named, field) : undefined;
+      if (one !== undefined && (typeof one === "string" || typeof one === "number")) {
+        inputsFrom[source.param] = { valueFrom: { op: source.op, field, each: false }, default: one };
+        said.push(`${source.param} ${String(one)}, ${values.length === 1 ? `the one ${title} lists` : "the one the request names"}`);
+      } else {
+        inputsFrom[source.param] = { valueFrom: { op: source.op, field, each: true } };
+        said.push(`${source.param} from each of the ${values.length} records ${title} lists`);
+      }
+    }
+    const patch: ConnectionPatch = { ops: { [opId]: { inputsFrom } } };
+    const next = applyPatch(connection, patch);
+    if (next) keep(next, `${op.title} reads ${said.join("; ")}`, patch);
+  };
+
+  /** The input an answer says is missing: one the endpoint declares, or one named plainly as required. */
+  const requiredNamed = (said: string, op: OpSpec | undefined): string | null => {
+    const named =
+      /\b([A-Za-z_][\w.-]{1,60})\b[`'"]?\s+(?:is|are)\s+(?:a\s+)?required/i.exec(said)?.[1] ??
+      /\b(?:missing|requires?)\s+(?:the\s+)?(?:required\s+)?(?:param(?:eter)?|field|input|argument|query parameter)?\s*[`'"]?([A-Za-z_][\w.-]{1,60})/i.exec(said)?.[1];
+    if (!named || !op) return null;
+    const declared = op.params.find((param) => param.name.toLowerCase() === named.toLowerCase());
+    if (declared) return declared.required ? null : declared.name;
+    return /^[a-z][a-z0-9]*(_[a-z0-9]+)*(Id|_id|ID)?$/.test(named) && /id$/i.test(named) ? named : null;
+  };
+
   let first = 0;
   /* Endpoints read, in order, for paging and filters once every one has been. */
   const read: Array<{ opId: string; title: string; attempt: Attempt; shape: ObservedShape | null }> = [];
@@ -984,7 +1124,24 @@ export const integrate = async (
       outcomes.push({ op: opId, title: op.title, outcome: "skipped", note: "Not checked: the check's requests were used up." });
       continue;
     }
-    const attempt = await settle(opId, primary);
+    await planInputs(opId);
+    let attempt = await settle(opId, primary);
+    /*
+     * The API says an input is required that its documentation never marked
+     * so — "account_id is required: payments are listed one account at a
+     * time" — and another list supplies it: required from now on, planned like
+     * any other, and read again (seen with the twofold mock API).
+     */
+    if ((attempt.kind === "badRequest" || attempt.kind === "failed") && attempt.said) {
+      const name = requiredNamed(attempt.said, getOp(connection, opId));
+      const patch: ConnectionPatch | null = name ? { ops: { [opId]: { required: [name] } } } : null;
+      const next = patch ? applyPatch(connection, patch) : null;
+      if (patch && next && (inputSources(next, opId)?.length ?? 0) > 0) {
+        keep(next, `the API says ${name} is required`, patch);
+        await planInputs(opId);
+        attempt = await settle(opId, primary);
+      }
+    }
     if (attempt.kind !== "ok") {
       /* A sign-in the importer could not represent: say which, in the manifest's words. */
       const unsupported =
@@ -1016,9 +1173,8 @@ export const integrate = async (
       shapes[opId] = shape;
       const read = rowsOf(attempt.body, shape.rowsPath);
       const fields = seenValues(read, shape.fields);
-      /* Every record only where the API's own count, under the same scope, says so. */
-      const total = attempt.meta?.reportedTotal;
-      const everyRecord = total !== undefined && total === read.length && !attempt.meta?.truncated;
+      /* Every record only where the API's own count, under the same scope, says so — and the read says it reached its end. */
+      const everyRecord = attempt.meta !== undefined && countReconciled(attempt.meta, read.length);
       const unique = uniqueFields(read, shape.fields);
       if (Object.keys(fields).length > 0 || unique.length > 0) values[opId] = { fields, everyRecord, unique };
     }
@@ -1027,11 +1183,11 @@ export const integrate = async (
     const rows = attempt.rows?.length ?? 0;
     observed.push({
       op: opId,
-      level:
-        servedTotal !== undefined && servedTotal === rows && !attempt.meta?.truncated ? "count-reconciled" : "accepted",
+      level: servedTotal !== undefined && attempt.meta && countReconciled(attempt.meta, rows) ? "count-reconciled" : "accepted",
       rows,
       pages: attempt.meta?.pages ?? 1,
       ...(servedTotal !== undefined ? { reportedTotal: servedTotal } : {}),
+      ...(attempt.meta?.scope ? { digest: attempt.meta.scope } : {}),
       note: attempt.message,
       by: "integrate",
       maxPages: getOp(connection, opId)?.maxPages ?? 1,
@@ -1043,9 +1199,20 @@ export const integrate = async (
    * Then how each pages, and what it filters by, with what is left. Every
    * endpoint is read before any is read to its end: a count reconciled over
    * forty-two pages spent the budget the next collection needed, and it was
-   * never read at all (checkpoint 2).
+   * never read at all.
    */
-  for (const { opId, title, attempt, shape } of read) {
+  for (const { opId, title, attempt: answered, shape: answeredShape } of read) {
+    /* Records that came back as ids alone are asked for their fields first: paging and filters are confirmed on those. */
+    const attempt = await askForFields(opId, answered);
+    let shape = answeredShape;
+    if (attempt !== answered) {
+      shape = observedShape(attempt.body, getOp(connection, opId)?.rowsPath) ?? answeredShape;
+      if (shape) {
+        shapes[opId] = shape;
+        const rowsRead = rowsOf(attempt.body, shape.rowsPath);
+        values[opId] = { fields: seenValues(rowsRead, shape.fields), everyRecord: false, unique: uniqueFields(rowsRead, shape.fields) };
+      }
+    }
     await confirmPaging(opId, attempt);
     if (shape) await confirmFilters(opId, attempt, shape);
     await confirmCount(opId, attempt);
@@ -1080,6 +1247,25 @@ export const integrate = async (
     if (sampled > 0) log.push(`Read a first page of ${sampled} more collection(s), for the fields their documentation does not declare.`);
   }
 
+  /*
+   * A connector written before templates: once every endpoint it reads has
+   * read in this check, the requests its code really sent become its
+   * templates, and from then on nothing else leaves — by itself, with no
+   * model and nobody asked.
+   */
+  const older = connection.connector;
+  if (older && older.authority.templates === undefined && kit) {
+    const served = [...new Set([...older.serves, ...Object.keys(older.operations)])];
+    const allRead = served.length > 0 && served.every((id) => read.some((one) => one.opId === id && one.attempt.kind === "ok"));
+    const events = (sent.events ?? []).filter((one) => served.includes(one.op)).map((one) => one.event);
+    const learned = allRead ? templatesFromTrace(events, older.authority.destinations) : [];
+    if (learned.length > 0) {
+      const patch: ConnectionPatch = { connector: { ...older, authority: { ...older.authority, templates: learned } } };
+      const next = applyPatch(connection, patch);
+      if (next) keep(next, `the requests its code sends, declared: ${learned.map(describeTemplate).join("; ")}`, patch);
+    }
+  }
+
   /* Evidence is recorded against the configuration it ends up describing. */
   const configVersion = fingerprintConnection(connection);
   const at = new Date(deps.now()).toISOString();
@@ -1089,6 +1275,7 @@ export const integrate = async (
       connection: connection.id,
       op: one.op,
       level: one.level,
+      ...(one.digest ? { scope: { digest: one.digest } } : {}),
       configVersion,
       at,
       limits: { pages: one.pages, maxPages: one.maxPages, requests: budget.spent },

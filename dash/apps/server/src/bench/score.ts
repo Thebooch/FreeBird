@@ -1,9 +1,19 @@
-import { AdapterError, RestAdapter, isIncompleteNote, type FetchMeta, type SourceAdapter } from "@freebirdai/dash-adapters";
+import {
+  AdapterError,
+  DependentAdapter,
+  RestAdapter,
+  isIncompleteNote,
+  type FetchMeta,
+  type FetchResult,
+  type SourceAdapter,
+} from "@freebirdai/dash-adapters";
 import { OAuthRetryAdapter, RateLimitWaitAdapter } from "../auth/retry-adapter.js";
 import { ConnectorAdapter } from "../connector/adapter.js";
+import { LongReads } from "../jobs/long-reads.js";
+import { MemoryJobStore } from "../jobs/store.js";
 import { benchConnectors } from "./connectors.js";
 import { executeWidget } from "@freebirdai/dash-runtime";
-import { getOp, paramsForWidget, resolveRange } from "@freebirdai/dash-spec";
+import { getOp, paramsForWidget, resolveRange, type ConnectionSpec, type OpSpec, type ResolvedParams } from "@freebirdai/dash-spec";
 import type { BenchTransport } from "./transport.js";
 import type {
   Completeness,
@@ -21,6 +31,38 @@ import type {
  * integrator: one read through the real REST adapter, then the real runtime.
  * What the integrator claimed about its own result is not taken on trust.
  */
+/** A read carried on past its own limit, through `LongReads` itself, to its end. */
+const carriedOn = async (input: {
+  readonly connection: ConnectionSpec;
+  readonly op: OpSpec;
+  readonly overrides: Readonly<Record<string, string | number | boolean>>;
+  readonly params: ResolvedParams;
+  readonly first: FetchResult;
+  readonly now: number;
+  readonly adapter: SourceAdapter;
+  readonly resolveSecret: (keyRef: string) => Promise<string | null>;
+}): Promise<{ readonly result: FetchResult; readonly notes: readonly string[] }> => {
+  if (!input.first.meta.continuation) return { result: input.first, notes: [] };
+  let whole: FetchResult | null = null;
+  const notes: string[] = [];
+  const reads = new LongReads({
+    store: new MemoryJobStore(),
+    getConnection: () => input.connection,
+    read: (connection, op, overrides, ctx) => input.adapter.fetch(connection, op, overrides, { ...ctx, resolveSecret: input.resolveSecret }),
+    answer: async (_key, _connection, result) => {
+      whole = result;
+    },
+    now: () => input.now,
+    log: (line) => notes.push(line),
+  });
+  await reads.carryOn({ key: "bench", connection: input.connection, op: input.op, overrides: input.overrides, resolved: input.params, first: input.first });
+  await reads.idle();
+  /* Left waiting or blocked: what stopped it, for the report. */
+  for (const left of await reads.list()) notes.push(`carrying on stopped (${left.status.state}): ${left.status.error ?? "no reason given"}`);
+  reads.stop();
+  return { result: whole ?? input.first, notes };
+};
+
 export const scoreOutcome = async (input: {
   provider: MockProvider;
   objective: Objective;
@@ -100,6 +142,7 @@ export const scoreOutcome = async (input: {
   const params = paramsForWidget(outcome.widget, { range: resolveRange({ preset: "30d", now: input.now }), filters: {} }, input.now);
   let body: unknown;
   let meta: FetchMeta;
+  let ended: string | undefined;
   try {
     /*
      * Read the way a board does: through the connection's connector when it
@@ -110,17 +153,24 @@ export const scoreOutcome = async (input: {
     const rest = connection.connector
       ? new ConnectorAdapter(input.transport.http, kit)
       : new RateLimitWaitAdapter(new RestAdapter(input.transport.http));
-    const adapter: SourceAdapter = outcome.broker ? new OAuthRetryAdapter(rest, outcome.broker) : rest;
+    /* An input another endpoint's records supply is read as the server reads it, outermost. */
+    const adapter: SourceAdapter = new DependentAdapter(outcome.broker ? new OAuthRetryAdapter(rest, outcome.broker) : rest);
     /* With what the widget asks of the API, as a board sends it: a confirmed filter, say. */
-    const result = await adapter.fetch(connection, op, source?.params ?? {}, {
-      params,
-      now: input.now,
-      resolveSecret: outcome.broker
-        ? outcome.broker.resolve
-        : async (keyRef) => outcome.secrets[keyRef] ?? null,
-    });
-    body = result.body;
-    meta = result.meta;
+    const overrides = source?.params ?? {};
+    const resolveSecret = outcome.broker
+      ? outcome.broker.resolve
+      : async (keyRef: string) => outcome.secrets[keyRef] ?? null;
+    const result = await adapter.fetch(connection, op, overrides, { params, now: input.now, resolveSecret });
+    /*
+     * Stopped at its own limit with more to read: carried on as the server
+     * carries it on, from where it stopped, and the whole answer scored once
+     * it reaches its end.
+     */
+    const whole = await carriedOn({ connection, op, overrides, params, first: result, now: input.now, adapter, resolveSecret });
+    body = whole.result.body;
+    meta = whole.result.meta;
+    const how = (one: FetchMeta) => (one.completion ? `${one.completion.state}:${one.completion.reason}` : "unsaid");
+    ended = [how(result.meta), ...(whole.notes.length > 0 || whole.result !== result ? [`carried on → ${how(meta)}`, ...whole.notes] : [])].join("; ");
   } catch (error) {
     return finish({
       setup: "done",
@@ -145,9 +195,16 @@ export const scoreOutcome = async (input: {
    * A read the widget narrows through the API's own filter holds fewer records
    * than the collection by design. It is complete when nothing cut it short
    * and any count the API gave matches; whether it read the right records is
-   * the answer key's to say (checkpoint 2, PROTOCOL.md).
+   * the answer key's to say (PROTOCOL.md).
    */
-  const askedApi = Object.keys(source?.params ?? {}).length > 0;
+  /*
+   * Or narrowed to the one record the request names, through an input another
+   * list supplies — "the Marketing workspace" — settled by the check
+   * (`ParamDef.valueFrom`). As with an API filter, the
+   * read holds fewer records than the collection by design.
+   */
+  const settled = op.params.some((param) => param.valueFrom && !param.valueFrom.each && param.default !== undefined);
+  const askedApi = Object.keys(source?.params ?? {}).length > 0 || settled;
   const wholeScope =
     askedApi &&
     extracted !== null &&
@@ -162,8 +219,19 @@ export const scoreOutcome = async (input: {
     connection.resources.some((resource) => resource.count?.op === op.id) &&
     !meta.truncated &&
     flagged.length === 0;
+  /*
+   * A read that went to its end over more records than the objective counts —
+   * every issue, where the question is about one project's — holds every
+   * record asked about; the widget narrows to them (PROTOCOL.md, 2026-10-03).
+   */
+  const throughWider =
+    meta.completion?.state === "traversed" &&
+    !meta.truncated &&
+    flagged.length === 0 &&
+    extracted !== null &&
+    extracted >= objective.records;
   const completeness: Completeness =
-    extracted === objective.records || wholeScope || counted
+    extracted === objective.records || wholeScope || counted || throughWider
       ? "complete"
       : flagged.length > 0
         ? "incomplete-flagged"
@@ -186,5 +254,6 @@ export const scoreOutcome = async (input: {
     flagged,
     ...(caveats.length > 0 ? { said: caveats } : {}),
     ...(executed.ok ? {} : { error: executed.errors.join("; ") }),
+    ...(ended ? { ended } : {}),
   });
 };

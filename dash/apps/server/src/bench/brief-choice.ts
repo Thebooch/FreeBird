@@ -115,7 +115,7 @@ export const chooseByBrief = async (input: {
     notes.push(
       `Seen in ${one.everyRecord ? "every one" : "some"} of ${recordType}'s records: ${Object.entries(one.fields).map(([path, values]) => `${path} = ${values.join(" / ")}`).join("; ").slice(0, 600)}`,
     );
-  const candidates = briefCandidates([{ connection: connection.id, title: connection.title, entities, seen }]);
+  const candidates = briefCandidates([{ connection: connection.id, title: connection.title, entities, seen }], { request: input.request });
   const written = await writeBrief(counted, { intent: input.request, candidates, ...(input.today ? { today: input.today } : {}) });
   if (!written.brief)
     return {

@@ -23,6 +23,7 @@ import { paceGapMs } from "../capabilities.js";
 import { type SpecFragment, mergeSpecDocuments } from "./merge-specs.js";
 import { proposeDialect } from "./propose-dialect.js";
 import { type SearchProvider, buildSearchQueries, rankSearchResults } from "./search.js";
+import { RENDERER_DOWNLOAD_MB } from "./render/tooling.js";
 
 export type DiscoverySource = "catalog" | "openapi" | "wsdl" | "docs" | "mcp" | "none";
 
@@ -45,6 +46,12 @@ export interface DiscoveryResult {
    * reading the lot an offer we can price before spending anything.
    */
   readonly index?: DocsIndex;
+  /**
+   * The documentation is drawn by its own scripts, and the browser that reads
+   * it is not here yet: the person is asked once whether to fetch it, and
+   * discovery runs again once it is here.
+   */
+  readonly needsRenderer?: boolean;
 }
 
 export interface DocsIndex {
@@ -65,7 +72,7 @@ export interface DiscoveryDeps {
    * When nothing else answered, read a documentation section page by page by
    * itself, if it has no more pages than this. Absent, the read is offered
    * and a person decides. The product sets it: somebody who gives a docs link
-   * expects the API found, not a count of pages to approve (plan, track C).
+   * expects the API found, not a count of pages to approve.
    */
   readonly readIndexUpTo?: number | undefined;
   /**
@@ -84,8 +91,16 @@ export interface DiscoveryDeps {
 
 /** See `DiscoveryDeps.renderDocs`. */
 export interface DocsRenderer {
-  /** The page as a browser draws it, or null when it could not be drawn. */
-  render(url: string): Promise<{ readonly html: string; readonly url: string } | null>;
+  /**
+   * Whether a page can be drawn now: `needs-install` while the browser is not
+   * here yet and the person has not agreed to fetch it. Absent: always ready.
+   */
+  ready?(): Promise<"ready" | "needs-install" | "unavailable">;
+  /**
+   * The page as a browser draws it, or null when it could not be drawn — with
+   * any specification the page fetched to draw itself.
+   */
+  render(url: string): Promise<{ readonly html: string; readonly url: string; readonly specs?: readonly string[] } | null>;
 }
 
 /** A documentation section small enough to read by itself when nothing else answered. */
@@ -291,6 +306,8 @@ interface AttemptContext {
    * headline rather than being buried in a list.
    */
   blocked: string | null;
+  /** A page drawn by scripts waits on a browser the person has not agreed to fetch yet. */
+  needsRenderer?: boolean;
 }
 
 /**
@@ -299,6 +316,52 @@ interface AttemptContext {
  * Factored out so that search results re-enter exactly the same logic — a
  * spec found by searching is parsed just as exactly as one typed in.
  */
+/**
+ * A specification a drawn page holds or links to, imported exactly: what only
+ * the page as drawn shows. Null when it shows none that parses.
+ */
+const specificationIn = async (
+  html: string,
+  url: string,
+  deps: DiscoveryDeps,
+  ctx: AttemptContext,
+  fetched: readonly string[] = [],
+): Promise<DiscoveryResult | null> => {
+  const inline = extractInlineSpec(html, looksLikeOpenApi);
+  const held = inline ? parseOpenApi(inline.spec, url) : null;
+  if (held)
+    return {
+      source: "openapi",
+      entry: held.entry,
+      note: `Found a complete OpenAPI spec in the documentation as drawn at ${url} and imported ${held.entry.ops.length} endpoint(s).`,
+      warnings: [...ctx.warnings, ...held.warnings],
+      tried: ctx.tried,
+    };
+  /* What the page fetched to draw itself is its own description: tried before anything it merely links to. */
+  for (const candidate of [...new Set([...fetched, ...specLinksIn(html, url)])]) {
+    if (ctx.tried.includes(candidate)) continue;
+    ctx.tried.push(candidate);
+    try {
+      const response = await deps.fetchDocument(candidate);
+      if (response.status >= 400) continue;
+      const doc = parseSpecDocument(response.text);
+      if (!looksLikeOpenApi(doc)) continue;
+      const parsed = parseOpenApi(await wholeSpec(doc, response.url, deps, ctx.warnings), response.url);
+      if (!parsed) continue;
+      return {
+        source: "openapi",
+        entry: parsed.entry,
+        note: `Imported ${parsed.entry.ops.length} endpoint(s) from the OpenAPI spec at ${response.url}, ${fetched.includes(candidate) ? "which the documentation fetched to draw itself" : "linked from the documentation as drawn"}.`,
+        warnings: [...ctx.warnings, ...parsed.warnings],
+        tried: ctx.tried,
+      };
+    } catch {
+      /* A link that does not answer is one fewer candidate. */
+    }
+  }
+  return null;
+};
+
 const attemptUrl = async (
   url: string,
   deps: DiscoveryDeps,
@@ -490,17 +553,26 @@ const attemptUrl = async (
    * with nothing in it is never handed to a model to invent an API from.
    */
   if (analysis.isClientRendered && deps.renderDocs) {
-    const rendered = await deps.renderDocs.render(pageUrl).catch(() => null);
+    const readiness = deps.renderDocs.ready ? await deps.renderDocs.ready().catch(() => "unavailable" as const) : "ready";
+    if (readiness === "needs-install") ctx.needsRenderer = true;
+    const rendered = readiness === "ready" ? await deps.renderDocs.render(pageUrl).catch(() => null) : null;
     if (rendered) {
+      /* What only the drawn page shows: a specification it holds or links to, read exactly, before its prose. */
+      const specified = await specificationIn(rendered.html, rendered.url, deps, ctx, rendered.specs ?? []);
+      if (specified) return specified;
       const drawn = analysePage(rendered.html);
       if (!drawn.isClientRendered) {
         analysis = drawn;
+        pageHtml = rendered.html;
+        pageUrl = rendered.url;
         ctx.warnings.push(`The documentation is drawn in the browser, so it was read as drawn (${rendered.url}).`);
       }
     }
   }
   if (analysis.isClientRendered) {
-    ctx.blocked = `${analysis.reason} Try linking directly to an OpenAPI spec instead, or describe the API by hand.`;
+    ctx.blocked = ctx.needsRenderer
+      ? `This documentation is drawn in the browser. Reading it needs a one-time download of about ${RENDERER_DOWNLOAD_MB} MB.`
+      : `${analysis.reason} Try linking directly to an OpenAPI spec instead, or describe the API by hand.`;
     return null;
   }
   if (!deps.llm) {
@@ -523,7 +595,7 @@ const attemptUrl = async (
 
   /*
    * A GraphQL API whose documentation publishes its schema: the reads are
-   * written from the schema, not guessed from prose (plan, track A).
+   * written from the schema, not guessed from prose.
    */
   const graphql = await withGraphqlReads(proposed.entry, { html: pageHtml, url: pageUrl }, deps.fetchDocument);
 
@@ -564,7 +636,7 @@ export const discover = async (input: string, deps: DiscoveryDeps): Promise<Disc
   return (await asMcp(input, deps)) ?? found;
 };
 
-/** The address as an MCP server (plan, track A), or null when it does not answer as one. */
+/** The address as an MCP server, or null when it does not answer as one. */
 const asMcp = async (input: string, deps: DiscoveryDeps): Promise<DiscoveryResult | null> => {
   if (!deps.http) return null;
   const url = /^https?:\/\//i.test(input.trim()) ? input.trim() : `https://${input.trim()}`;
@@ -574,7 +646,7 @@ const asMcp = async (input: string, deps: DiscoveryDeps): Promise<DiscoveryResul
 
 /**
  * A specification that signs in with OpenID Connect names a discovery
- * document; read, it is the OAuth sign-in the broker runs (plan, track B).
+ * document; read, it is the OAuth sign-in the broker runs.
  * Only where the import said it could not sign in that way.
  */
 const withOidcSignIn = async (found: DiscoveryResult, deps: DiscoveryDeps): Promise<DiscoveryResult> => {
@@ -644,6 +716,16 @@ const discoverOnce = async (input: string, deps: DiscoveryDeps): Promise<Discove
   if (url) {
     const direct = await attemptUrl(url, deps, ctx, { allowDocs: true, primary: true });
     if (direct) return withIndex(direct);
+    /* The page itself could be read, once the person agrees to the browser: asked, before anything is searched. */
+    if (ctx.needsRenderer)
+      return withIndex({
+        source: "none",
+        entry: null,
+        note: ctx.blocked ?? "This documentation is drawn in the browser.",
+        warnings: ctx.warnings,
+        tried: ctx.tried,
+        needsRenderer: true,
+      });
   }
 
   // ── Rung 4: go looking ─────────────────────────────────────────────────

@@ -15,7 +15,7 @@ import { DbMembershipStore, MemoryMembershipStore } from "./members.js";
 import { oidcJwtResolver } from "./oidc.js";
 import { rolePolicy } from "./policy.js";
 
-/* Plan, track G: what a hosted build signs people in and decides with. */
+/* What a hosted build signs people in and decides with. */
 
 const ISSUER = "https://login.example.test";
 const AUDIENCE = "dash-app";

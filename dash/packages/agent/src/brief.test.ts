@@ -243,7 +243,7 @@ describe("writeBrief", () => {
     expect(String(described.calls[1]!.messages.at(-1)!.content)).toMatch(/"total cost" is not a field/);
   });
 
-  /* Checkpoint 3: "delivered kilograms" named the field `kilograms`, which no record has. */
+  /* Regression: "delivered kilograms" named the field `kilograms`, which no record has. */
   describe("a unit written where a field was meant", () => {
     const deliveries = briefCandidates([
       {
@@ -272,7 +272,7 @@ describe("writeBrief", () => {
 
     it("is the one field that carries it, with nothing sent back", async () => {
       const llm = fakeLlm([sum("kilograms")]);
-      const result = await writeBrief(llm, { intent: "delivered kilograms", candidates: deliveries });
+      const result = await writeBrief(llm, { intent: "kilograms carried", candidates: deliveries });
       expect(result.brief?.measure).toEqual({ agg: "sum", field: "weight_kg" });
       expect(llm.calls).toHaveLength(1);
       const miles = fakeLlm([sum("miles")]);
@@ -280,6 +280,14 @@ describe("writeBrief", () => {
         agg: "sum",
         field: "distanceMiles",
       });
+    });
+
+    /* Seen with the trackwell mock API. */
+    it("sends back, once, a word of the request that a field holds and nothing narrows by", async () => {
+      const llm = fakeLlm([sum("weight_kg"), { args: { ...sum("weight_kg").args, filters: [{ field: "status", values: ["delivered"] }] } }]);
+      const result = await writeBrief(llm, { intent: "delivered kilograms", candidates: deliveries });
+      expect(String(llm.calls[1]!.messages.at(-1)!.content)).toMatch(/the request says "delivered", which status holds as delivered/);
+      expect(result.brief?.filters).toEqual([{ field: "status", values: ["delivered"] }]);
     });
 
     it("sends back, once, a name no record has, even one word long", async () => {
@@ -330,7 +338,7 @@ describe("writeBrief", () => {
     });
   });
 
-  /* Plan, track E: "revenue" invoiced or collected is the same records added up differently. */
+  /* "revenue" invoiced or collected is the same records added up differently. */
   it("says which reading of a business word it built, and offers the other", async () => {
     const llm = fakeLlm([
       {
@@ -362,7 +370,7 @@ describe("writeBrief", () => {
     expect((await writeBrief(list, { intent: "my work", candidates })).brief?.reading).toBeUndefined();
   });
 
-  /* Checkpoint 4: "leave out cancelled orders" was dropped while the reason said it was done. */
+  /* Regression: "leave out cancelled orders" was dropped while the reason said it was done. */
   it("carries whether a field holds anything, and what it could not express", async () => {
     const llm = fakeLlm([
       {
@@ -382,7 +390,7 @@ describe("writeBrief", () => {
     expect(result.brief?.unmet).toEqual(["leave out archived tasks"]);
   });
 
-  /* Checkpoint 4: "more than $250" compared 250 cents. The roster now says which numbers are in cents. */
+  /* Regression: "more than $250" compared 250 cents. The roster now says which numbers are in cents. */
   it("says which numbers the documentation puts in the smallest currency unit", () => {
     const [candidate] = briefCandidates([
       {
@@ -423,7 +431,7 @@ describe("writeBrief", () => {
     expect(result.brief?.filters).toEqual([{ field: "Status", values: ["Open"] }]);
   });
 
-  /* Checkpoint 2: with no such record type, "how many Pokémon" counted evolution chains, and "episodes" counted characters. */
+  /* Regression: with no such record type, "how many Pokémon" counted evolution chains, and "episodes" counted characters. */
   it("says when no record type is what was asked about, and builds nothing", async () => {
     const llm = fakeLlm([{ args: { entity: "none", intent: "measure", reason: "There are no invoices here, only tasks." } }]);
     const result = await writeBrief(llm, { intent: "how many invoices", candidates });
@@ -516,7 +524,7 @@ describe("writeBrief", () => {
       expect(llm.calls).toHaveLength(1);
     });
 
-    /* Checkpoint 2: "breeds from the United States" narrowed `origin`, which never holds that, and counted 0. */
+    /* Regression: "breeds from the United States" narrowed `origin`, which never holds that, and counted 0. */
     it("says so when a value is still one no record holds, rather than counting nothing", async () => {
       const llm = fakeLlm([
         { args: { entity: "payment", intent: "measure", filters: [{ field: "currency", values: ["GBP"] }], reason: "Pounds." } },
@@ -971,5 +979,76 @@ describe("choosing across APIs", () => {
       candidates: briefCandidates([sources[0]!]),
     });
     expect(prompt).not.toContain("from Acme CRM:");
+  });
+});
+
+/* Regression (trackwell mock API): "Platform" written on a project's key, where only its name holds it. */
+describe("a value written on a field that does not hold it", () => {
+  const issues = briefCandidates([
+    {
+      connection: "api",
+      title: "The API",
+      entities: [
+        entity({
+          id: "issue",
+          resource: "issue",
+          name: { one: "Issue", many: "Issues" },
+          kind: "event",
+          fields: [
+            { path: "id", visibility: "hidden" },
+            { path: "fields.project.key", label: "Project key", visibility: "detail" },
+            { path: "fields.project.name", label: "Project name", visibility: "primary", values: ["Platform", "Storefront"] },
+            { path: "fields.issuetype.name", label: "Type name", visibility: "primary", values: ["Bug", "Task", "Story"] },
+          ],
+        }),
+      ],
+    },
+  ]);
+  const count = (filters: unknown[]) => ({ args: { entity: "issue", intent: "measure", measureAgg: "count", filters, reason: "Bugs." } });
+
+  it("is sent back once, naming the field that holds it", async () => {
+    const llm = fakeLlm([
+      count([{ field: "fields.project.key", values: ["Platform"] }, { field: "fields.issuetype.name", values: ["Bug"] }]),
+      count([{ field: "fields.project.name", values: ["Platform"] }, { field: "fields.issuetype.name", values: ["Bug"] }]),
+    ]);
+    const result = await writeBrief(llm, { intent: "How many bugs are in the Platform project?", candidates: issues });
+    expect(String(llm.calls[1]!.messages.at(-1)!.content)).toMatch(/"Platform" is not a value fields\.project\.key shows; fields\.project\.name holds it/);
+    expect(result.brief?.filters).toEqual([
+      { field: "fields.project.name", values: ["Platform"] },
+      { field: "fields.issuetype.name", values: ["Bug"] },
+    ]);
+  });
+});
+
+/* Cashloom, 2026-10-03: "refunded" is both a status and a flag; narrowed by the flag, it is not sent back over the status. */
+describe("a word the answer narrows by in a field's own name", () => {
+  const payments = briefCandidates([
+    {
+      connection: "api",
+      title: "The API",
+      entities: [
+        entity({
+          id: "payment",
+          resource: "payment",
+          name: { one: "Payment", many: "Payments" },
+          kind: "event",
+          fields: [
+            { path: "id", visibility: "hidden" },
+            { path: "amount", label: "Payment amount", semantic: "number", visibility: "primary" },
+            { path: "status", label: "Status", visibility: "primary", values: ["succeeded", "refunded", "failed"] },
+            { path: "refunded", label: "Refunded", visibility: "primary", kinds: ["boolean"] },
+          ],
+        }),
+      ],
+    },
+  ]);
+
+  it("is taken as said, whatever else holds it as a value", async () => {
+    const llm = fakeLlm([
+      { args: { entity: "payment", intent: "measure", measureAgg: "count", filters: [{ field: "refunded", values: ["true"] }], reason: "Refunded." } },
+    ]);
+    const result = await writeBrief(llm, { intent: "How many refunded payments were there?", candidates: payments });
+    expect(llm.calls).toHaveLength(1);
+    expect(result.brief?.filters).toEqual([{ field: "refunded", values: ["true"] }]);
   });
 });

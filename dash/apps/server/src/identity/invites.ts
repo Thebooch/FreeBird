@@ -3,7 +3,7 @@ import type { Invite, Member, Role } from "@freebirdai/dash-spec";
 import type { MembershipStore } from "./membership.js";
 
 /**
- * The lead user's invitations (plan, track G): a token handed to the person
+ * The lead user's invitations: a token handed to the person
  * invited once, and only its hash kept, so a leaked store cannot be used to
  * join. Accepting one is the hosted build's front door — after the identity
  * provider has said who the person is — through `acceptInvite`.

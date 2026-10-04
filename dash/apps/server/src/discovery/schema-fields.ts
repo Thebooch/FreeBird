@@ -80,8 +80,7 @@ const kindsAndFormat = (
    * ("12500 is $125.00"). The API's own claim, not a guess from integers, and
    * recorded as one: `minor_units` never rescales a value by itself
    * (`coercionForFormat`). It lets a request's "$250" be read as 25000 in that
-   * field, where a count compared 250 cents and counted the wrong payments
-   * (checkpoint 4).
+   * field, where a count compared 250 cents and counted the wrong payments.
    */
   const minor =
     list.some((entry) => entry === "integer" || entry === "number") &&

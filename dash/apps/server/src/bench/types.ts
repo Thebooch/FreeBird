@@ -87,6 +87,12 @@ export interface MockProvider {
   /** Reached over the network rather than in-process: a real API. */
   readonly live?: boolean;
   /**
+   * Its documentation is drawn by scripts, so reading it needs Playwright's
+   * Chromium: skipped, and said, where none is installed. The benchmark never
+   * downloads one.
+   */
+  readonly needs?: "browser";
+  /**
    * Whether the data behind the answer keys is still what the API holds: null
    * when it is, the reason when not. A stale key is reported, never scored.
    */
@@ -190,6 +196,8 @@ export interface ScenarioScore {
    */
   readonly said?: readonly string[];
   readonly error?: string;
+  /** How the scored read ended (`FetchMeta.completion`), and what carrying it on past its own limit met. */
+  readonly ended?: string;
   /** What the integrator said along the way: kept on a failure, and wherever a model was used. */
   readonly log?: readonly string[];
   readonly requests: number;

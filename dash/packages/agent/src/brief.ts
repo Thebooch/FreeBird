@@ -57,8 +57,8 @@ export interface BriefField {
   /**
    * The documentation says this number is in the smallest currency unit
    * (12500 is $125.00). An amount a request names is written in that unit:
-   * "more than $250" compared 250 cents, and counted the wrong payments
-   * (checkpoint 4). The values are never rescaled on this claim alone.
+   * "more than $250" compared 250 cents, and counted the wrong payments.
+   * The values are never rescaled on this claim alone.
    */
   readonly minor?: true;
   /**
@@ -171,7 +171,7 @@ export interface WriteBriefResult {
    * Set when no record type is what the request is about: the model's words
    * for which records are missing. Said, never built — asked how many Pokémon
    * there were, with no such record type, the nearest one was counted instead
-   * and looked like an answer (checkpoint 2).
+   * and looked like an answer.
    */
   readonly unmatched?: string;
 }
@@ -222,7 +222,12 @@ const TOTALLABLE = new Set(["currency", "number", "count", "duration", "bytes"])
  * could only ever see one of them made the assistant fall back to picking
  * endpoints by hand the moment somebody connected a second.
  */
-export const briefCandidates = (sources: readonly BriefSource[]): BriefCandidate[] => {
+export const briefCandidates = (
+  sources: readonly BriefSource[],
+  /** What was asked, where known: a field whose values it names is offered first. */
+  options: { readonly request?: string | undefined } = {},
+): BriefCandidate[] => {
+  const asked = requestWords(options.request ?? "");
   /*
    * Qualified only on collision. Two APIs that both call something a task
    * genuinely need telling apart; one that does not should not be made to read
@@ -297,7 +302,24 @@ export const briefCandidates = (sources: readonly BriefSource[]): BriefCandidate
             (seen[field.path]?.length ?? 0) > 0),
       )
       .map((field) => field.path);
-    const narrow: BriefField[] = [...narrowPaths, ...closed].slice(0, MAX_NARROW).map((path) => {
+    /*
+     * An object narrows by nothing a request can name; its fields with values
+     * do — `fields.status.name`, not `fields.status`. Three of five places went
+     * to objects, and an issue's type and project were never offered, so a
+     * count of bugs was a count of every issue (seen with the trackwell
+     * mock API).
+     */
+    const holdsValue = (path: string): boolean => {
+      const field = entity.fields.find((one) => one.path === path);
+      return !field || field.kinds.length === 0 || !field.kinds.every((kind) => kind === "object" || kind === "null");
+    };
+    /*
+     * A field holding a value the request names comes first — "bugs" is the
+     * type, "Platform" the project's name — however far down the record it is.
+     */
+    const namesAsked = (path: string): boolean => valuesOf(path).values.some((value) => asked.has(value.trim().toLowerCase()));
+    const ranked = [...closed.filter(namesAsked), ...narrowPaths, ...closed];
+    const narrow: BriefField[] = [...new Set(ranked)].filter(holdsValue).slice(0, MAX_NARROW).map((path) => {
       const held = valuesOf(path);
       return {
         path,
@@ -347,22 +369,23 @@ export const briefCandidates = (sources: readonly BriefSource[]): BriefCandidate
     /*
      * Every other plain field, by name only. "Breeds from the United States"
      * is a question about `country`, which holds too many values to list;
-     * offered nothing but `origin`, the model narrowed that, and counted 0
-     * (checkpoint 2).
+     * offered nothing but `origin`, the model narrowed that, and counted 0.
      */
     const listed = new Set([...narrow, ...total, ...when].map((field) => field.path));
     /*
      * Never what names or describes a record: narrowed to "smartphones", a
-     * product's title matched none (checkpoint 2). Known from the check's read
+     * product's title matched none. Known from the check's read
      * where there was one, and from the name where there was not.
      */
     const naming = new Set(seenSet?.unique ?? []);
+    /* Values that repeat are a kind, not a name: a type's or a project's name narrows like any set. */
+    const repeats = (path: string): boolean => (seen[path]?.length ?? 0) > 0;
     const other: BriefField[] = visible
       .filter(
         (field) =>
           !listed.has(field.path) &&
           !naming.has(field.path) &&
-          !NAMING_PATH.test(field.path) &&
+          (repeats(field.path) || !NAMING_PATH.test(field.path)) &&
           !IDENTIFIER_PATH.test(field.path) &&
           field.kinds.some((kind) => kind === "string" || kind === "number") &&
           !field.kinds.some((kind) => kind === "object" || kind === "array"),
@@ -409,6 +432,98 @@ const listedAs = (listed: readonly string[], value: string): string | undefined 
 /** A flag's values stand for true and false, and the compiler reads "yes" and "no" as those. */
 const isFlag = (values: readonly string[]): boolean =>
   values.length === 2 && values.includes("true") && values.includes("false");
+
+/** The parent of a field path: `fields.project` of `fields.project.key`. */
+const parentOf = (path: string): string => path.split(".").slice(0, -1).join(".");
+
+/**
+ * Filter values a field does not list, that another field lists word for
+ * word — a sibling of the same object first. Nothing is said where the value
+ * is listed nowhere, or listed by the field itself.
+ */
+const valuesOnAnotherField = (
+  fields: readonly BriefField[],
+  filters: readonly { readonly field: string; readonly values?: readonly string[] | undefined }[],
+): Array<{ readonly value: string; readonly field: string; readonly holder: string }> =>
+  filters.flatMap((one) => {
+    /* A field the list leaves out lists no values either: its path is still where it is. */
+    const field = fieldNamed(fields, one.field) ?? { path: one.field, values: undefined };
+    return (one.values ?? []).flatMap((value) => {
+      if (field.values && listedAs(field.values, value) !== undefined) return [];
+      const holders = fields.filter(
+        (other) => other.path !== field.path && other.values && !isFlag(other.values) && listedAs(other.values, value) !== undefined,
+      );
+      const holder = holders.find((other) => parentOf(other.path) === parentOf(field.path)) ?? (holders.length === 1 ? holders[0] : undefined);
+      return holder ? [{ value, field: field.path, holder: holder.path }] : [];
+    });
+  });
+
+/** The words of a request, each also as it might be listed singly, and its two-word phrases: what a value may be. */
+const requestWords = (intent: string): Set<string> => {
+  const words = intent.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
+  const found = new Set<string>();
+  words.forEach((word, index) => {
+    if (word.length >= 3) {
+      found.add(word);
+      found.add(singular(word));
+    }
+    const next = words[index + 1];
+    if (next) found.add(`${word} ${next}`);
+  });
+  return found;
+};
+
+/** A word as it might be listed: "bugs" for Bug, "categories" for Category. */
+const singular = (word: string): string =>
+  /ies$/.test(word) ? `${word.slice(0, -3)}y` : /(ss|us)$/.test(word) ? word : /s$/.test(word) ? word.slice(0, -1) : word;
+
+/**
+ * Words of the request that are values a field lists, on a field nothing in
+ * the answer narrows by, groups by or measures. One value of one field only:
+ * a word several fields hold is not taken as meaning any one of them.
+ */
+const requestValuesUnused = (
+  intent: string,
+  fields: readonly BriefField[],
+  answer: {
+    readonly filters?: readonly { readonly field: string }[] | undefined;
+    readonly groupBy?: string | undefined;
+    readonly measureField?: string | undefined;
+  },
+): Array<{ readonly word: string; readonly field: string; readonly value: string }> => {
+  const used = new Set(
+    [...(answer.filters ?? []).map((one) => one.field), answer.groupBy, answer.measureField]
+      .filter((name): name is string => !!name)
+      .map((name) => fieldNamed(fields, name)?.path ?? name),
+  );
+  const words = intent.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
+  /*
+   * A word the answer already narrows by in a field's own name — "refunded",
+   * narrowed by the `refunded` flag — is said, whatever else holds it as a
+   * value. Sent back over a status of "refunded", the flag gave way, and the
+   * partial refunds it counted were lost (cashloom, 2026-10-03).
+   */
+  const covered = new Set(
+    [...used].flatMap((path) => {
+      const label = fieldNamed(fields, path)?.label ?? "";
+      return `${path} ${label}`.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean).flatMap((part) => [part, singular(part)]);
+    }),
+  );
+  const found: Array<{ word: string; field: string; value: string }> = [];
+  for (const word of new Set(words)) {
+    if (word.length < 3 || covered.has(word) || covered.has(singular(word))) continue;
+    const holders = fields.flatMap((field) => {
+      if (!field.values || isFlag(field.values) || used.has(field.path)) return [];
+      const value = field.values.find((one) => {
+        const listed = one.trim().toLowerCase();
+        return /^[\p{L}\p{N}']+$/u.test(listed) && (listed === word || listed === singular(word));
+      });
+      return value ? [{ word, field: field.path, value }] : [];
+    });
+    if (holders.length === 1) found.push(holders[0]!);
+  }
+  return found;
+};
 
 /**
  * The fields of a brief as a model states them, flat.
@@ -970,7 +1085,7 @@ export const writeBrief = async (
      * "kilograms" for `weight_kg` — where no one field carries it (a unit one
      * field does carry is that field; see `pathOf`), and any other name the
      * record type does not have. Sent back once rather than compiled into
-     * nothing (checkpoint 3).
+     * nothing.
      */
     const roster = input.candidates.find((candidate) => candidate.entity === parsed.data.entity);
     const named = [
@@ -1024,6 +1139,24 @@ export const writeBrief = async (
       problem = `a value is not one the field lists: ${unlisted.join("; ")}. Write the listed value that means what the request said, or keep the word if none does.`;
       continue;
     }
+    /*
+     * Asked once, then taken as meant (seen with the trackwell mock API):
+     * - a value written on a field that does not list it, which another field
+     *   lists word for word — "Platform" on a project's key, where its name
+     *   holds Platform: narrowed by it, a count is 0 and looks right;
+     * - a word of the request that is a value some field lists, on a field
+     *   nothing narrows by — "bugs", where the type holds Bug: left out, every
+     *   kind of issue is counted.
+     */
+    const elsewhere = roster && attempt === 1 ? valuesOnAnotherField(roster.fields, parsed.data.filters ?? []) : [];
+    const unused = roster && attempt === 1 ? requestValuesUnused(input.intent, roster.fields, parsed.data) : [];
+    if (elsewhere.length > 0 || unused.length > 0) {
+      problem = [
+        ...elsewhere.map((one) => `"${one.value}" is not a value ${one.field} shows; ${one.holder} holds it`),
+        ...unused.map((one) => `the request says "${one.word}", which ${one.field} holds as ${one.value}, and nothing narrows by ${one.field}`),
+      ].join("; ").concat(". Narrow by the field that holds what the request says, or keep your answer if it already means that.");
+      continue;
+    }
     accepted = parsed.data;
   }
   if (!accepted) return none(problem ? `the model did not write a usable brief: ${problem}` : "the model did not write a brief");
@@ -1034,7 +1167,7 @@ export const writeBrief = async (
   /*
    * Still a value that every record was seen not to hold, after being shown
    * what they do hold: it can only match nothing, so it is said rather than
-   * counted as 0 (checkpoint 2). A declared set stays lenient — a
+   * counted as 0. A declared set stays lenient — a
    * specification's list can be out of date.
    */
   const chosen = input.candidates.find((candidate) => candidate.entity === accepted!.entity);
@@ -1147,11 +1280,11 @@ export const writeBrief = async (
           },
         }
       : {}),
-    /* Asked for and not expressible: said on the widget, never dropped (checkpoint 4). */
+    /* Asked for and not expressible: said on the widget, never dropped. */
     ...((args.unmet ?? []).some((one) => one.trim())
       ? { unmet: (args.unmet ?? []).map((one) => one.trim().slice(0, 160)).filter(Boolean).slice(0, 4) }
       : {}),
-    /* Which "revenue" this is, said on the widget (plan, track E). Only on a number or a chart. */
+    /* Which "revenue" this is, said on the widget. Only on a number or a chart. */
     ...(args.reading?.term.trim() && args.reading.as.trim() && args.intent !== "records"
       ? { reading: { term: args.reading.term.trim().slice(0, 60), as: args.reading.as.trim().slice(0, 160) } }
       : {}),

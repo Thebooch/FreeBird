@@ -5,6 +5,8 @@ import {
   type ConnectorSpec,
   type PaginationSpec,
   type CatalogEntry,
+  type ParamDef,
+  type ReadBody,
   type ReadSafety,
   type ResourceSpec,
 } from "@freebirdai/dash-spec";
@@ -48,6 +50,26 @@ export interface ConnectionPatch {
          * goes into the body it already sends.
          */
         readonly inputs?: Readonly<Record<string, string | number | boolean>>;
+        /**
+         * The request itself, where the documentation reads it differently:
+         * its method, its path, the body it sends,
+         * and how a list parameter is written. A POST read carries the
+         * `readSafety` saying why it is believed to read; a GET sends no body.
+         */
+        readonly method?: "GET" | "POST";
+        readonly path?: string;
+        readonly body?: ReadBody;
+        readonly lists?: Readonly<Record<string, { readonly style: "form" | "spaceDelimited" | "pipeDelimited"; readonly explode: boolean }>>;
+        /**
+         * Where an input's value comes from: another endpoint's records, read
+         * by the check. A path id the endpoint never declared as a
+         * parameter is declared with it.
+         */
+        /** Inputs the API's own answer says are required, though its documentation did not: declared so. */
+        readonly required?: readonly string[];
+        readonly inputsFrom?: Readonly<
+          Record<string, { readonly valueFrom: NonNullable<ParamDef["valueFrom"]>; readonly default?: string | number }>
+        >;
       }
     >
   >;
@@ -86,6 +108,23 @@ const withInputs = (op: OpDef, inputs: Readonly<Record<string, string | number |
 };
 
 export const applyPatch = (connection: ConnectionSpec, patch: ConnectionPatch): ConnectionSpec | null => {
+  const parsed = connectionSchema.safeParse(patched(connection, patch));
+  return parsed.success ? parsed.data : null;
+};
+
+/** Why a patch does not make a valid connection, in the schema's words — for the log, and for a model to fix. Null when it does. */
+export const patchProblem = (connection: ConnectionSpec, patch: ConnectionPatch): string | null => {
+  const parsed = connectionSchema.safeParse(patched(connection, patch));
+  return parsed.success
+    ? null
+    : parsed.error.issues
+        .slice(0, 4)
+        .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+        .join("; ");
+};
+
+/** The connection with the patch applied, as data for the schema to read. */
+const patched = (connection: ConnectionSpec, patch: ConnectionPatch): unknown => {
   const dialect = connection.dialect ?? { headers: {}, query: {} };
   const next = {
     ...connection,
@@ -102,15 +141,27 @@ export const applyPatch = (connection: ConnectionSpec, patch: ConnectionPatch): 
     ops: connection.ops.map((op) => {
       const change = patch.ops?.[op.id];
       if (!change) return op;
-      const { filterParams, inputs, ...rest } = change;
+      const { filterParams, inputs, lists, inputsFrom, required, ...rest } = change;
+      /* Back to a GET: nothing of a POST read's goes with it. */
+      const { body: _body, readSafety: _safety, ...asGet } = op;
+      const base = change.method === "GET" ? asGet : op;
+      /* A path id the endpoint never declared, given a source: declared with it. */
+      const undeclared = [...new Set([...Object.keys(inputsFrom ?? {}), ...(required ?? [])])]
+        .filter((name) => !(op.params ?? []).some((param) => param.name === name))
+        .map((name) => ({ name, in: op.path.includes(`param.${name}`) ? ("path" as const) : ("query" as const), type: "string" as const, required: true }));
       const withFilters = {
-        ...op,
+        ...base,
         ...rest,
-        ...(filterParams
+        ...(filterParams || lists || inputsFrom || required
           ? {
-              params: (op.params ?? []).map((param) =>
-                filterParams[param.name] ? { ...param, filters: filterParams[param.name] } : param,
-              ),
+              params: [...(op.params ?? []), ...undeclared].map((declared) => {
+                const param = required?.includes(declared.name) ? { ...declared, required: true } : declared;
+                const list = lists?.[param.name];
+                const from = inputsFrom?.[param.name];
+                const filtered = filterParams?.[param.name] ? { ...param, filters: filterParams[param.name] } : param;
+                const listed = list ? { ...filtered, type: "array" as const, style: list.style, explode: list.explode } : filtered;
+                return from ? { ...listed, valueFrom: from.valueFrom, ...(from.default !== undefined ? { default: from.default } : {}) } : listed;
+              }),
             }
           : {}),
       };
@@ -137,8 +188,7 @@ export const applyPatch = (connection: ConnectionSpec, patch: ConnectionPatch): 
       ...(next.validateOpId === replace && added[0] ? { validateOpId: added[0].id } : {}),
     };
   };
-  const parsed = connectionSchema.safeParse(withReads());
-  return parsed.success ? parsed.data : null;
+  return withReads();
 };
 
 /** What a patch does, in words for the log a person can read. */
@@ -171,6 +221,20 @@ export const describePatch = (patch: ConnectionPatch, titleOf: (op: string) => s
       `run connector code (${patch.connector.hash.slice(7, 19)}) that may reach ${patch.connector.authority.destinations.map((one) => one.host).join(", ")}${patch.connector.summary ? `: ${patch.connector.summary}` : ""}`,
     );
   for (const [op, change] of Object.entries(patch.ops ?? {})) {
+    if (change.method || change.path)
+      parts.push(`read ${titleOf(op)} with ${[change.method, change.path].filter(Boolean).join(" ")}`);
+    if (change.body)
+      parts.push(
+        `send ${titleOf(op)} ${change.body.type === "graphql" ? "a GraphQL query" : change.body.type === "xml" ? "an XML document" : `a ${change.body.type} body`}`,
+      );
+    for (const [name, from] of Object.entries(change.inputsFrom ?? {}))
+      parts.push(
+        from.valueFrom.each
+          ? `read ${titleOf(op)} once for each record ${titleOf(from.valueFrom.op)} lists, by its ${from.valueFrom.field}`
+          : `read ${titleOf(op)} with ${name} ${String(from.default ?? "")}, the one ${titleOf(from.valueFrom.op)} gives`,
+      );
+    for (const [name, list] of Object.entries(change.lists ?? {}))
+      parts.push(`write ${name} as ${list.style === "form" ? (list.explode ? "repeated values" : "comma-separated values") : list.style}`);
     if (change.servedBy) parts.push(`read ${titleOf(op)} with the connector`);
     else if (change.rowsPath) parts.push(`read ${titleOf(op)} from ${change.rowsPath} in each response`);
     if (change.pagination)

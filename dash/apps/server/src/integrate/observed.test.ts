@@ -45,7 +45,7 @@ describe("observed fields", () => {
     expect(withObservedFields(filled!, { things: shape })).toBeNull();
   });
 
-  /* Checkpoint 3: connector code read a manifest's files, and the manifest's own fields described the shipments in them. */
+  /* Regression: connector code read a manifest's files, and the manifest's own fields described the shipments in them. */
   it("replaces declared fields the records hold none of", () => {
     const manifest = entry([
       { name: "files", kinds: ["array"] },
@@ -101,5 +101,25 @@ describe("observed fields", () => {
       },
     );
     expect(report.observed[connection.ops[0]!.id]?.fields.length).toBeGreaterThan(0);
+  });
+});
+
+/* Regression (trackwell mock API): the issue's declared `fields` was an open object, and what it held was never described. */
+describe("fields inside a declared object the documentation leaves open", () => {
+  it("are what the records were read to hold there, beside the declaration", () => {
+    const declared = entry([
+      { name: "id", kinds: ["string"] },
+      { name: "fields", kinds: ["object"] },
+    ]);
+    const shape = observedShape(
+      { issues: [{ id: "1", fields: { status: { name: "Open" }, issuetype: { name: "Bug" } } }, { id: "2", fields: { status: { name: "Done" }, issuetype: { name: "Task" } } }] },
+      "$.issues",
+    )!;
+    const filled = withObservedFields(declared, { things: shape });
+    const names = filled?.ops[0]?.fields?.map((field) => field.name) ?? [];
+    expect(names).toEqual(expect.arrayContaining(["id", "fields", "fields.status.name", "fields.issuetype.name"]));
+    /* The declaration is kept as the declaration: not replaced by what was read. */
+    expect(filled?.ops[0]?.fieldsFrom).toBeUndefined();
+    expect(withObservedFields(filled!, { things: shape })).toBeNull();
   });
 });

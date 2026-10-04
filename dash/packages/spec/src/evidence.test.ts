@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readCoverage } from "./evidence.js";
+import { countReconciled, readCoverage } from "./evidence.js";
 
 /*
  * The ladder on the tile: how far a read got, in the words a person reads
@@ -27,5 +27,36 @@ describe("readCoverage", () => {
 
   it("says nothing of a read cut short, which says what it left out elsewhere", () => {
     expect(readCoverage({ pages: 5, truncated: true, reportedTotal: 11848 }, 500)).toBeNull();
+  });
+
+  /* Completion is observed, never assumed. */
+  it("claims nothing for a read that cannot say where it ended, however many pages it took", () => {
+    expect(readCoverage({ pages: 12, truncated: false, completion: { state: "unknown", reason: "connector-silent" } }, 300)).toBeNull();
+    expect(
+      readCoverage({ pages: 3, truncated: false, reportedTotal: 300, completion: { state: "unknown", reason: "connector-silent" } }, 300),
+    ).toBeNull();
+  });
+
+  it("says every page only where the read reached its end", () => {
+    expect(readCoverage({ pages: 3, truncated: false, completion: { state: "traversed", reason: "short-page" } }, 250)).toMatchObject({
+      level: "traversed",
+      said: "every page read",
+    });
+    expect(readCoverage({ pages: 2, truncated: false, completion: { state: "traversed", reason: "connector-all" } }, 250)).toMatchObject({
+      level: "traversed",
+      said: "read to the end",
+    });
+  });
+
+  it("reconciles a count only under the read's own scope", () => {
+    const traversed = { state: "traversed", reason: "short-page" } as const;
+    expect(readCoverage({ pages: 3, truncated: false, reportedTotal: 295, completion: traversed, scope: "a1", totalScope: "a1" }, 295)?.level).toBe(
+      "count-reconciled",
+    );
+    /* A total of every order is no evidence about a read narrowed to last month's. */
+    expect(readCoverage({ pages: 3, truncated: false, reportedTotal: 295, completion: traversed, scope: "a1", totalScope: "b2" }, 295)?.level).toBe(
+      "traversed",
+    );
+    expect(countReconciled({ pages: 3, truncated: false, reportedTotal: 295, completion: traversed, scope: "a1" }, 295)).toBe(false);
   });
 });

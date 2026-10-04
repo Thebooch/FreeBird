@@ -7,8 +7,7 @@ import { DbSnapshotStore, MemorySnapshotStore } from "./store.js";
 
 /*
  * What a number on a board was, day by day: kept while the board is looked
- * after, because most APIs cannot be asked what a count was last month
- * (plan, track D).
+ * after, because most APIs cannot be asked what a count was last month.
  */
 
 const NOW = Date.UTC(2026, 8, 29, 12);

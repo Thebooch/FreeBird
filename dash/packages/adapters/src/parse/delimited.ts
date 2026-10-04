@@ -1,5 +1,5 @@
 /**
- * CSV, TSV and newline-delimited JSON, read into records (plan, track A).
+ * CSV, TSV and newline-delimited JSON, read into records.
  *
  * The same rules connector code has had in its sandbox (`CSV.parse`,
  * `NDJSON.parse`), here for an endpoint that simply answers this way: no code

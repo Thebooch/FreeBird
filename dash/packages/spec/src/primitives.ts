@@ -64,7 +64,7 @@ export const authSchema = z.discriminatedUnion("type", [
     type: z.literal("basic"),
     /**
      * HTTP Digest rather than Basic: the password is never sent, only a
-     * response to the server's challenge (plan, track B). The same two values.
+     * response to the server's challenge. The same two values.
      */
     digest: z.literal(true).optional(),
     username: z.string().min(1).optional(),
@@ -101,8 +101,8 @@ export const authSchema = z.discriminatedUnion("type", [
           template: z.string().optional(),
           /**
            * Where it goes: a header (absent), the query string, or a cookie. Keys
-           * an API wants in a cookie, or in two places at once, are parts here
-           * (plan, track B).
+           * an API wants in a cookie, or in two places at once, are parts
+           * here.
            */
           in: z.enum(["header", "query", "cookie"]).optional(),
         }),
@@ -112,8 +112,8 @@ export const authSchema = z.discriminatedUnion("type", [
   }),
   /**
    * AWS Signature Version 4: every request signed with the account's secret
-   * access key, by a reviewed signer in this repository, never sent (plan,
-   * track B). APIs behind AWS API Gateway with IAM, and AWS's own services.
+   * access key, by a reviewed signer in this repository, never sent. APIs
+   * behind AWS API Gateway with IAM, and AWS's own services.
    */
   z.object({
     type: z.literal("sigv4"),
@@ -670,6 +670,21 @@ export const paramDefSchema = z.object({
    * looks complete doing it.
    */
   filters: z.string().min(1).max(200).optional(),
+  /**
+   * Where the value comes from when nobody gives it: a field of another
+   * endpoint's records — an organisation's id for its projects. `each`: the
+   * endpoint is read once for every one of those records
+   * and the answers put together, for a question about the whole account.
+   * Otherwise the one value the check settled is the parameter's `default`.
+   * Set by the check, from a read, never from a name alone.
+   */
+  valueFrom: z
+    .object({
+      op: idSchema,
+      field: z.string().min(1).max(200),
+      each: z.boolean().default(false),
+    })
+    .optional(),
 });
 
 export type ParamDef = z.infer<typeof paramDefSchema>;
@@ -696,7 +711,7 @@ export const readBodySchema = z.discriminatedUnion("type", [
   /**
    * An XML document — a SOAP envelope — with `{{param.x}}` inputs in it. An
    * element whose whole content is an input nobody gave is left out rather
-   * than sent empty; every value is escaped. Read from a WSDL (plan, track A).
+   * than sent empty; every value is escaped. Read from a WSDL.
    */
   z.object({
     type: z.literal("xml"),

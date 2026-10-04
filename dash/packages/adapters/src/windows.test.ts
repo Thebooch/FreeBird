@@ -7,7 +7,7 @@ import type { FetchContext } from "./types.js";
 
 /*
  * A list the API will not read past a point, read whole in narrower time
- * windows (plan, track D: "time narrowing"). The API here lists at most its
+ * windows ("time narrowing"). The API here lists at most its
  * first 300 results, newest first, a hundred to a page; a time range narrows
  * it, and every answer says how many records the range holds.
  */

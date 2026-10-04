@@ -575,7 +575,7 @@ describe("highlights", () => {
   });
 });
 
-/* Plan, track E: a total of dollars and euros is valid arithmetic and the wrong answer. */
+/* A total of dollars and euros is valid arithmetic and the wrong answer. */
 describe("a caveat the rows show", () => {
   const total = widget({
     component: "stat",
@@ -628,5 +628,21 @@ describe("a caveat the rows show", () => {
     ]);
     expect(result.meta.warnings).toEqual(["On 2 of the 4 invoices read, Subtotal + Tax is not Total."]);
     expect(result.rows[0]).toMatchObject({ value: 33.5 });
+  });
+});
+
+/* Regression (trackwell mock API): a narrowing no record matched counted 0, and the tile said nothing. */
+describe("a narrowing by a value no record holds", () => {
+  const issues = [{ project: "PLAT" }, { project: "SHOP" }, { project: "PLAT" }];
+
+  it("says so, rather than counting none as if none were the answer", () => {
+    const result = run(widget({ pipeline: [{ op: "filter", where: 'project == "Platform"' }] }), issues);
+    expect(result.rows).toEqual([]);
+    expect(result.meta.warnings).toEqual(['None of the 3 records read match project == "Platform".']);
+  });
+
+  it("says nothing when the narrowing matched, or when a comparison of dates or numbers simply left nothing", () => {
+    expect(run(widget({ pipeline: [{ op: "filter", where: 'project == "PLAT"' }] }), issues).meta.warnings).toEqual([]);
+    expect(run(widget({ pipeline: [{ op: "filter", where: "size > 5" }] }), [{ size: 1 }]).meta.warnings).toEqual([]);
   });
 });

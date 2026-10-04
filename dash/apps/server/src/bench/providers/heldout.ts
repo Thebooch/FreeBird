@@ -313,8 +313,8 @@ const vaultbankSpec = {
 const exportPolls = new Map<string, number>();
 
 /*
- * The reference connector, written by hand once connectors existed (plan step
- * 4) and only to prove this provider's answer key. Never shown to an
+ * The reference connector, written by hand once connectors existed, and only
+ * to prove this provider's answer key. Never shown to an
  * integrator, and never a scripted answer: a scripted run of the held-out
  * split has no connector code to give, so it stops where a model would have to
  * write one.
@@ -340,9 +340,8 @@ async function read(ctx) {
 }`;
 
 /*
- * Moved to the dev set at the end of plan step 4, once its failure there was
- * written up: from then on it is tuned
- * against, and `harborline` is the held-out replacement.
+ * Moved to the dev set once its held-out failure was written up: from then on
+ * it is tuned against, and `harborline` is the held-out replacement.
  */
 export const vaultbank: MockProvider = {
   id: "vaultbank",

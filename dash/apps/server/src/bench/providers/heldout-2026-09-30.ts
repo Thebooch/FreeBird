@@ -5,7 +5,7 @@ import type { BenchRequest, BenchResponse, MockProvider } from "../types.js";
 /**
  * Held-out providers written on 2026-09-29 to replace harborline, shopwell and
  * cashloom, which moved to the dev set after checkpoint 4. Written by the
- * session that wrote `heldout-2026-09-28.ts` and `heldout-2026-09-29.ts`, under
+ * author of `heldout-2026-09-28.ts` and `heldout-2026-09-29.ts`, under
  * the same rules (`dash/bench/HELDOUT-AUTHORING.md`): without reading the
  * integration loop, the importers, any result, or the dev set's providers.
  *

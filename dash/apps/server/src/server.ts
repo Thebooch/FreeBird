@@ -5,9 +5,12 @@ import { join } from "node:path";
 import {
   AdapterRegistry,
   AdapterError,
+  DependentAdapter,
+  INCOMPLETE,
   McpAdapter,
   RestAdapter,
   isIncompleteNote,
+  type FetchResult,
   type HttpFetch,
 } from "@freebirdai/dash-adapters";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
@@ -94,6 +97,7 @@ import { NarrowingStore } from "./narrowings.js";
 import { MemoryDraftStore, ScratchDraftStore, type DraftStore } from "./concierge/store.js";
 import { CatalogStore, connectionFromCatalog, refreshCatalogConnection } from "./catalog.js";
 import { AUTO_INDEX_PAGES, discover, readIndex, type DocsRenderer } from "./discovery/index.js";
+import { RENDERER_DOWNLOAD_MB, type RendererStatus } from "./discovery/render/tooling.js";
 import type { SearchProvider } from "./discovery/search.js";
 import {
   type ModelChoices,
@@ -126,7 +130,7 @@ import { installIdentity } from "./identity/context.js";
 import { ownerPolicy, type Policy } from "./identity/policy.js";
 import { installRouteGuard } from "./identity/guard.js";
 import type { LeaseLock } from "./platform/lease.js";
-import { LOCAL_USER_ID, localOwner, type IdentityResolver } from "./identity/resolver.js";
+import { LOCAL_USER_ID, LOCAL_WORKSPACE_ID, localOwner, type IdentityResolver } from "./identity/resolver.js";
 import { nullJournal, type WriteJournal } from "./writes/journal.js";
 import { JournalingAdapter, readEventFor } from "./writes/read-journal.js";
 import { Discovered, catalogForBrowser, preservedWrites } from "./writes/catalog-writes.js";
@@ -173,7 +177,10 @@ import { QueryCache, clampMaxAge } from "./cache/queryCache.js";
 import { extractRows, parsePath } from "@freebirdai/dash-expr";
 import { catalogEntryToVerify, validationCandidates } from "./verified.js";
 import { buildQueryRequest, resolveRequestedRange } from "./query.js";
-import { EACH_KEEP_MS, EACH_MAX, EachReads, eachKey } from "./fanout/each.js";
+import { EACH_KEEP_MS, EACH_MAX, EachReads, eachKey, type EachReader, type EachRequest } from "./fanout/each.js";
+import { LongReads, type LongReadStatus } from "./jobs/long-reads.js";
+import { CheckQueue } from "./jobs/check-queue.js";
+import { MemoryJobStore, type JobStore } from "./jobs/store.js";
 import { ANSWER_TOOL, answerFromData } from "./context/tool.js";
 import { bindingFor, bindingsFor } from "./tools/bindings.js";
 import { READ_TOOL, READ_TOOL_NAME, readRecords, readToolSchema } from "./tools/read.js";
@@ -224,6 +231,12 @@ import { QuickJsSandbox, type ConnectorSandbox } from "./connector/sandbox.js";
 import { VaultConnectorTokens } from "./connector/tokens.js";
 import { oauthRoutes } from "./routes/oauth.js";
 import { createIntegrationRunner, integrateRoutes, type IntegrateRouteDeps } from "./routes/integrate.js";
+
+/** Whether the browser for drawn documentation is here, and fetching it once agreed. See `RendererTooling`. */
+export interface RendererSetup {
+  status(): RendererStatus;
+  install(): RendererStatus;
+}
 
 export interface BuildServerOptions {
   readonly store: SpecRepository;
@@ -347,11 +360,24 @@ export interface BuildServerOptions {
    */
   readonly seenValues?: SeenValueStore;
   /**
-   * Draws documentation rendered in the browser so it can be read. Absent
-   * locally, where such a page is said to be unreadable; a hosted build
-   * supplies a rendering service that reaches public addresses only.
+   * Draws documentation rendered in the browser so it can be read: Playwright's
+   * own Chromium (`discovery/render/`). Absent, such a page is said to be
+   * unreadable. Whatever draws it must reach public addresses only.
    */
   readonly renderDocs?: DocsRenderer;
+  /**
+   * Whether that browser is here, and fetching it once the person agrees
+   * (`RendererTooling`): the open-source build asks before it downloads; a
+   * hosted build has it in its image and supplies none.
+   */
+  readonly rendererSetup?: RendererSetup;
+  /**
+   * The workspace this server answers for, when one host holds several
+   * (`platform/workspaces.ts`): `id` is the workspace members belong to, `key`
+   * is what its rows are kept under. A request from a member of another
+   * workspace is refused. Absent: the one `local` workspace, as before.
+   */
+  readonly workspace?: { readonly id: string; readonly key: string };
   /**
    * Where number tiles' values are kept day by day (`history/`). Absent means
    * in this process only; the real entry point keeps them in Dash's database.
@@ -363,6 +389,13 @@ export interface BuildServerOptions {
    * lives in this process only; the real entry point keeps it in Dash's database.
    */
   readonly shapes?: ShapeStore;
+  /**
+   * Work that outlives a request — a read carried on past a tile's own limits
+   * (`jobs/`), its records kept encrypted while it runs. Memory unless
+   * supplied; the real entry point keeps it in Dash's database, so a restart
+   * carries a read on rather than starting over.
+   */
+  readonly jobs?: JobStore;
   /**
    * Serve this instance's verified catalog entries as a registry another
    * instance can pull from (`registry/`): `/api/registry/index.json` and one
@@ -645,9 +678,46 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * than hunting for those places.
    */
   installIdentity(app, options.identity ?? localOwner());
+  /*
+   * The workspace this server answers for, and the key its rows are kept
+   * under. One host may hold several (`platform/workspaces.ts`): a member of
+   * another workspace is refused here, whatever sent them.
+   */
+  const workspaceKey = options.workspace?.key ?? LOCAL_WORKSPACE_ID;
+  if (options.workspace) {
+    const own = options.workspace.id;
+    app.addHook("preHandler", async (request, reply) => {
+      if (request.principal && request.principal.workspaceId !== own)
+        return reply.status(403).send({ error: "That belongs to another workspace." });
+      return undefined;
+    });
+  }
+  /** Who a conversation's request came from, as the chat hands it back. */
+  const principalOf = (auth: { readonly extra?: Readonly<Record<string, unknown>> | undefined }): Principal | null => {
+    const parsed = principalSchema.safeParse(auth.extra?.["principal"]);
+    return parsed.success ? parsed.data : null;
+  };
   const policy = options.policy ?? ownerPolicy;
   /* Every route that changes stored state asks the policy first (`identity/guard.ts`). */
   installRouteGuard(app, policy);
+  /*
+   * Reads are asked too: a member granted some
+   * connections sees and reads those, and nothing of the rest. Every role
+   * that reads at all reads everything, as before; a narrower grant narrows.
+   */
+  const mayRead = async (principal: Principal | null, connection: string): Promise<boolean> =>
+    principal !== null && (await policy.can(principal, "records.read", { connection })).ok;
+  app.addHook("preHandler", async (request, reply) => {
+    const path = request.url.split("?")[0] ?? "";
+    const queried = request.method === "POST" && /^\/api\/query(\/each)?$/.test(path);
+    if (request.method !== "GET" && !queried) return undefined;
+    const named = queried
+      ? (request.body as { connection?: unknown } | null)?.connection
+      : /^\/api\/connections\/([^/]+)/.exec(path)?.[1];
+    if (typeof named !== "string") return undefined;
+    if (await mayRead(request.principal, decodeURIComponent(named))) return undefined;
+    return reply.status(403).send({ error: "This connection has not been shared with you." });
+  });
   const journal = options.journal ?? nullJournal;
   /** Write endpoints discovery read, held until their entry is adopted. */
   const discovered = new Discovered();
@@ -684,6 +754,12 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   const reader = new ConnectorAdapter(options.http ?? nodeHttp, {
     ...connectors,
     onLog: (connection, line) => app.log.debug(`connector ${connection.id}: ${line}`),
+    /* The API's endpoints that change things, as its catalog entry knows them: never sent by connector code. */
+    writes: (connection) =>
+      (connection.catalog ? (options.catalog?.get(connection.catalog)?.writes ?? []) : []).map((write) => ({
+        method: write.method,
+        path: write.path,
+      })),
   });
   /*
    * Reads go through the journal first: a read sent with POST on the
@@ -702,10 +778,13 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   );
   const registry = new AdapterRegistry()
     .register(
-      new JournalingAdapter(
-        new OAuthRetryAdapter(new RateLimitWaitAdapter(reader), broker),
-        journal,
-        (message) => app.log.warn(message),
+      /* Outermost: an input another endpoint's records supply is read through the same chain as everything else. */
+      new DependentAdapter(
+        new JournalingAdapter(
+          new OAuthRetryAdapter(new RateLimitWaitAdapter(reader), broker),
+          journal,
+          (message) => app.log.warn(message),
+        ),
       ),
     )
     .register(new JournalingAdapter(mcp, journal, (message) => app.log.warn(message)));
@@ -764,8 +843,20 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * than its own reconstruction of them — see `ViewedRequests`.
    */
   const viewed = new ViewedRequests();
-  /** Tiles' reads of every record's related records. See `EachReads`. */
-  const eachReads = new EachReads();
+  /*
+   * Work that outlives a request — a read carried on, every record's related
+   * records — kept so a restart carries it on. See `jobs/`.
+   */
+  const jobs: JobStore = options.jobs ?? new MemoryJobStore();
+  /** Which endpoints are due a check, kept in the job store. See `CheckQueue`. */
+  const checkQueue = new CheckQueue({ store: jobs, now: () => Date.now() });
+  /** Tiles' reads of every record's related records, kept in the job store while they run. See `EachReads`. */
+  const eachReads = new EachReads({
+    store: jobs,
+    /* Defined below, with the reads it needs: only ever called after. */
+    reader: (request) => eachPlan(request)?.read ?? null,
+    log: (line) => app.log.info(line),
+  });
 
   /**
    * How often each endpoint is asked again, per connection.
@@ -881,6 +972,103 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       }
     });
   };
+
+  /*
+   * Reads too long for a tile's own limits, carried on in the background from
+   * where they stopped, behind every board's own reads, and handed to the
+   * cache whole when they reach their end. See `LongReads`.
+   */
+  const longReads = new LongReads({
+    store: jobs,
+    getConnection: (id) => store.getConnection(id),
+    read: (connection, op, overrides, ctx) => {
+      registry.addConnection(connection);
+      const adapter = registry.adapterFor(connection.kind);
+      if (!adapter) throw new AdapterError(`no adapter registered for kind "${connection.kind}"`, { status: 501 });
+      return upstream(connection.id, () => adapter.fetch(connection, op, overrides, { ...ctx, resolveSecret: secretFor }), Priority.Background);
+    },
+    answer: async (key, _connection, result) => queries.put(key, result),
+    now: () => Date.now(),
+    log: (line) => app.log.info(line),
+  });
+
+  /*
+   * A per-record read's requests, spelled exactly as the tile spells them —
+   * so one already held is not asked again — and how to read one of them.
+   * Null when the connection is gone or its configuration changed since.
+   */
+  const eachPlan = (request: EachRequest): { readonly keys: string[]; readonly read: EachReader } | null => {
+    const spec = store.getConnection(request.connection);
+    const resolvedOp = spec ? getOp(spec, request.op) : undefined;
+    if (!spec || !resolvedOp || fingerprintConnection(spec) !== request.configVersion) return null;
+    registry.addConnection(spec);
+    refreshQueryIdentity(spec);
+    const reads = request.values.map((value) =>
+      buildQueryRequest({
+        connection: request.connection,
+        op: resolvedOp,
+        params: { ...request.params, [request.input]: value },
+        resolved: request.window,
+      }),
+    );
+    return {
+      keys: reads.map((read) => read.key),
+      read: async (index, signal) => {
+        const { key, overrides, resolved } = reads[index]!;
+        const fetcher = () =>
+          registry.fetch(request.connection, request.op, overrides, {
+            params: resolved,
+            now: Date.now(),
+            resolveSecret: secretFor,
+            signal,
+          });
+        /* Already held — the tile's own first twenty-five, say: served as held. */
+        const answer =
+          queries.storedAt(key) !== null
+            ? await queries.read({
+                key,
+                connection: request.connection,
+                mode: "view",
+                maxAgeMs: EACH_KEEP_MS,
+                fetcher,
+                priority: Priority.Background,
+              })
+            : await upstream(request.connection, fetcher, Priority.Background);
+        const said = answer.meta.warnings.filter(isIncompleteNote);
+        return {
+          body: answer.body,
+          notes:
+            answer.meta.truncated && said.length === 0
+              ? ["Not every page was read, so what is shown may exclude additional records."]
+              : said,
+        };
+      },
+    };
+  };
+  /* Once the server is up: whatever was being read when it last stopped is carried on. */
+  app.addHook("onReady", async () => {
+    void longReads.resume().catch((error: unknown) => app.log.warn(`long reads could not resume: ${String(error)}`));
+    void eachReads.resume().catch((error: unknown) => app.log.warn(`per-record reads could not resume: ${String(error)}`));
+    void checkQueue.resume().catch((error: unknown) => app.log.warn(`checks waiting their turn could not resume: ${String(error)}`));
+  });
+  app.addHook("onClose", async () => longReads.stop());
+
+  /*
+   * What a tile is told of its read: a continuation is the server's own, never
+   * the browser's, and a read being carried on says how far it has got in
+   * place of the note that it stopped.
+   */
+  const withReadingOn = <M extends FetchResult["meta"]>(meta: M, reading: LongReadStatus | null): Omit<M, "continuation"> => {
+    const { continuation: _continuation, ...rest } = meta;
+    if (!reading) return rest;
+    const stopped = (warning: string) => /^Only the first \d+ page\(s\) were read/.test(warning) || warning === INCOMPLETE.connectorStopped;
+    return {
+      ...rest,
+      warnings: [...meta.warnings.filter((warning) => !stopped(warning)), INCOMPLETE.readingOn(reading.read, reading.of)],
+      readingOn: { read: reading.read, ...(reading.of !== undefined ? { of: reading.of } : {}) },
+    };
+  };
+
   /*
    * The only thing that changes a connected account. Built here, beside
    * `upstream`, because a change waits in the same gate as every read — just
@@ -914,7 +1102,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     shapes: options.shapes ?? new MemoryShapeStore(),
     now: () => Date.now(),
     dashboards: () => store.listDashboards(),
-    recheck: (connection) => integration.whenReady(connection),
+    recheck: (connection, ops) => integration.recheck(connection, ops),
     log: (line) => app.log.info(line),
   });
   /** Kept out of the way of the read it describes: a shape that cannot be kept costs nothing shown. */
@@ -952,6 +1140,46 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * and cooldown as every other reader of the connection; a check that
    * started by itself waits behind boards. See `routes/integrate.ts`.
    */
+  /**
+   * What a check's reads showed, onto the shared catalog entry: fields for
+   * endpoints the documentation declared none for — names and kinds, never
+   * values — and reads it added. The record types that can now be described
+   * are described next, by themselves; the promise settles once they are.
+   */
+  const keepObserved = async (
+    connection: ConnectionSpec,
+    observed: Parameters<NonNullable<IntegrateRouteDeps["recordObserved"]>>[1],
+    added: Parameters<NonNullable<IntegrateRouteDeps["recordObserved"]>>[2],
+  ): Promise<void> => {
+    const entries = options.catalog;
+    const entry = connection.catalog ? entries?.get(connection.catalog) : undefined;
+    if (!entries || !entry) return;
+    /* Reads written from a GraphQL schema first, so their records are what is described. */
+    const read = withAddedReads(entry, added);
+    const next = withObservedFields(read ?? entry, observed) ?? read;
+    if (!next) return;
+    entries.put(next);
+    /* A collection a read showed, carried by every connection made from this entry. */
+    for (const one of store.listConnections()) {
+      if (one.catalog !== entry.id) continue;
+      const grown = withEntryResources(one, next);
+      if (grown !== one) {
+        store.putConnection(grown);
+        registry.addConnection(grown);
+      }
+    }
+    await describeMissingRecords(
+      {
+        catalog: entries,
+        llm: (task) => resolveLlm(task),
+        describing,
+        onDescribed: (catalogId) => {
+          for (const one of store.listConnections()) if (one.catalog === catalogId) observeConnection(one.id);
+        },
+      },
+      entry.id,
+    );
+  };
   const integrationDeps: IntegrateRouteDeps = {
     getConnection: (id) => store.getConnection(id),
     saveConnection: (next, changed) => {
@@ -1022,39 +1250,14 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       });
     },
     recordObserved: (connection, observed, added) => {
-      const entries = options.catalog;
-      const entry = connection.catalog ? entries?.get(connection.catalog) : undefined;
-      if (!entries || !entry) return;
-      /* Reads written from a GraphQL schema first, so their records are what is described. */
-      const read = withAddedReads(entry, added);
-      const next = withObservedFields(read ?? entry, observed) ?? read;
-      if (!next) return;
-      entries.put(next);
-      /* A collection a read showed, carried by every connection made from this entry. */
-      for (const one of store.listConnections()) {
-        if (one.catalog !== entry.id) continue;
-        const grown = withEntryResources(one, next);
-        if (grown !== one) {
-          store.putConnection(grown);
-          registry.addConnection(grown);
-        }
-      }
-      void describeMissingRecords(
-        {
-          catalog: entries,
-          llm: (task) => resolveLlm(task),
-          describing,
-          onDescribed: (catalogId) => {
-            for (const one of store.listConnections()) if (one.catalog === catalogId) observeConnection(one.id);
-          },
-        },
-        entry.id,
-      ).catch((error: unknown) =>
-        app.log.warn(`describing ${entry.id} after its check failed: ${error instanceof Error ? error.message : String(error)}`),
+      void keepObserved(connection, observed, added).catch((error: unknown) =>
+        app.log.warn(`describing ${connection.catalog ?? connection.id} after its check failed: ${error instanceof Error ? error.message : String(error)}`),
       );
     },
+    /* What a search for a request's records found, described before the brief that asked is written again. */
+    recordFound: (connection, observed, added) => keepObserved(connection, observed, added),
   };
-  const integration = createIntegrationRunner(integrationDeps);
+  const integration = createIntegrationRunner({ ...integrationDeps, queue: checkQueue });
   /** Read a connection's write endpoints if its entry never has had them read. Set below, once the reader exists. */
   let readWritesFor: (connection: ConnectionSpec) => void = () => {};
   const previews = new SetupPreviews(queries.store, (id) => store.getConnection(id));
@@ -1422,9 +1625,19 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    */
   const narrowings = options.narrowings ?? new NarrowingStore(join(tmpdir(), "dash-narrowings"));
 
-  const drafts: DraftStore = options.chat
-    ? new ScratchDraftStore(options.chat.adapter, { userId: LOCAL_USER_ID })
-    : new MemoryDraftStore();
+  /*
+   * Each person's half-finished setup, in this workspace: two people on one
+   * board are setting up different things. Kept in the chat database's
+   * scratch table, whose key holds the workspace and the person.
+   */
+  const memoryDrafts = new Map<string, MemoryDraftStore>();
+  const draftsFor = (principal: Principal | null | undefined): DraftStore => {
+    const userId = principal?.userId || LOCAL_USER_ID;
+    if (options.chat) return new ScratchDraftStore(options.chat.adapter, { userId, orgId: workspaceKey });
+    const held = memoryDrafts.get(userId) ?? new MemoryDraftStore();
+    memoryDrafts.set(userId, held);
+    return held;
+  };
 
   /*
    * Every question the guided setup can ask, from disk alone.
@@ -1597,7 +1810,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   void app.register(
     conciergeRoutes({
       previews,
-      drafts,
+      drafts: (request) => draftsFor(request.principal),
       context: conciergeContext,
       planDetail: planDetailFor,
       rearrange: rearrangeFor,
@@ -1687,6 +1900,12 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       registry.addConnection(spec);
       refreshQueryIdentity(spec);
 
+      /* Read in the background to its end: refreshed the same way, so the whole answer stays until a new one replaces it. */
+      if (await longReads.owns(target.key)) {
+        await longReads.refresh({ key: target.key, connection: spec, op, overrides: { ...target.overrides }, resolved: target.resolved });
+        return { outcome: "miss" as const };
+      }
+
       /*
        * Exactly the request a board sends: the query string and the resolved
        * window and inputs were built by `buildQueryRequest`, or recorded from
@@ -1709,6 +1928,15 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             ...(validators ? { validators } : {}),
           }),
       });
+      if (result.outcome === "miss" && result.meta.continuation)
+        await longReads.carryOn({
+          key: target.key,
+          connection: spec,
+          op,
+          overrides: { ...target.overrides },
+          resolved: target.resolved,
+          first: result,
+        });
       /* A fresh answer is today's value of each number tile it feeds; a stale one is not. */
       if (result.outcome === "miss" || result.outcome === "hit") keepHistory(target, result.body);
       /* A fresh answer is also what the endpoint looks like now. */
@@ -1733,6 +1961,12 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    */
   queries.onInvalidate((connection) => keeper.forget(connection));
   queries.onInvalidate((connection) => eachReads.forget(connection));
+  queries.onInvalidate((connection) => {
+    void (async () => {
+      const ids = connection ? [connection] : [...new Set((await jobs.list()).map((job) => job.connection))];
+      for (const id of ids) await longReads.forget(id);
+    })().catch((error: unknown) => app.log.warn(`long reads could not be forgotten: ${String(error)}`));
+  });
 
   if (options.keeper === true) keeper.start();
   app.addHook("onClose", async () => keeper.stop());
@@ -1900,9 +2134,11 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     return { ...connection, hasKey, labels, entityLinks, rangeOps };
   };
 
-  app.get("/api/connections", async () =>
-    store.listConnections().map((connection) => publicConnection(connection)),
-  );
+  app.get("/api/connections", async (request) => {
+    const listed = store.listConnections();
+    const readable = await Promise.all(listed.map((connection) => mayRead(request.principal, connection.id)));
+    return listed.filter((_, index) => readable[index]).map((connection) => publicConnection(connection));
+  });
 
   app.get<{ Params: { id: string } }>("/api/connections/:id", async (request, reply) => {
     const connection = store.getConnection(request.params.id);
@@ -2478,10 +2714,11 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         return reply.status(400).send({ error: "a request in the user's own words is needed" });
       }
 
-      const connection = store.getConnection(request.params.id);
-      if (!connection) return reply.status(404).send({ error: "no such connection" });
-
-      const entities = connection.catalog
+      const found = store.getConnection(request.params.id);
+      if (!found) return reply.status(404).send({ error: "no such connection" });
+      /* Grown by a search for what the request is about, below, when nothing here was. */
+      let connection: ConnectionSpec = found;
+      let entities = connection.catalog
         ? (options.catalog?.get(connection.catalog)?.entities ?? [])
         : [];
       if (entities.length === 0) {
@@ -2499,15 +2736,34 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         });
       }
 
-      const written = await writeBrief(llm, {
-        intent: parsed.data.intent,
-        today: new Date().toISOString().slice(0, 10),
-        // One source by construction: this route is addressed to one
-        // connection, so there is nothing to choose between.
-        candidates: briefCandidates([
-          { connection: connection.id, title: connection.title, entities, seen: await seenFor(connection, entities) },
-        ]),
-      });
+      const briefOver = async (over: ConnectionSpec, described: typeof entities) =>
+        writeBrief(llm, {
+          intent: parsed.data.intent,
+          today: new Date().toISOString().slice(0, 10),
+          // One source by construction: this route is addressed to one
+          // connection, so there is nothing to choose between.
+          candidates: briefCandidates(
+            [{ connection: over.id, title: over.title, entities: described, seen: await seenFor(over, described) }],
+            { request: parsed.data.intent },
+          ),
+        });
+      let written = await briefOver(connection, entities);
+      /*
+       * Nothing here is what was asked about: the documentation is read again
+       * for the endpoints it names that the import missed, each checked, and
+       * what answers described — then the brief is written once more, before
+       * anybody is told there is nothing.
+       */
+      if (!written.brief && written.unmatched) {
+        const sought = await integration.seek(connection.id, parsed.data.intent);
+        const grown = store.getConnection(connection.id);
+        const described = grown?.catalog ? (options.catalog?.get(grown.catalog)?.entities ?? []) : [];
+        if (sought.added.length > 0 && grown && described.length > entities.length) {
+          connection = grown;
+          entities = described;
+          written = await briefOver(connection, entities);
+        }
+      }
       if (!written.brief) {
         /* Nothing here is what was asked about: said, rather than the nearest records counted instead. */
         if (written.unmatched) {
@@ -2624,7 +2880,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       if (!parsed.success) {
         return reply.status(400).send({ error: "invalid connection", detail: parsed.error.issues });
       }
-      /* A kind nothing on this server reads is refused when saved, not when a board first asks (plan, track G). */
+      /* A kind nothing on this server reads is refused when saved, not when a board first asks. */
       if (!registry.adapterFor(parsed.data.kind)) {
         return reply.status(400).send({ error: `Nothing on this server reads a "${parsed.data.kind}" connection.` });
       }
@@ -3014,10 +3270,25 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     );
 
     try {
+      /*
+       * A key whose whole answer was read in the background is refreshed the
+       * same way — its first stretch read, the rest carried on — never by a
+       * capped read that would put a partial answer back over the whole one.
+       */
+      const heldAt = queries.storedAt(key);
+      const owned =
+        mode !== "view" &&
+        heldAt !== null &&
+        Date.now() - heldAt > clampMaxAge(parsed.data.maxAgeMs) &&
+        (await longReads.owns(key).catch(() => false));
+      if (owned)
+        void longReads
+          .refresh({ key, connection: spec, op: resolvedOp, overrides, resolved })
+          .catch((error: unknown) => app.log.warn(`a long read could not be refreshed: ${String(error)}`));
       const outcome = await queries.read({
         key,
         connection,
-        mode,
+        mode: owned ? "view" : mode,
         maxAgeMs: clampMaxAge(parsed.data.maxAgeMs),
         /*
          * Old is measured against how often this endpoint is refreshed, not
@@ -3040,13 +3311,20 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       });
 
       if (outcome.outcome === "miss") watchShape(spec, resolvedOp, outcome.body);
+      /* Stopped at its own limit with more to read: the rest is read in the background, from there. */
+      if (outcome.outcome === "miss" && outcome.meta.continuation)
+        await longReads
+          .carryOn({ key, connection: spec, op: resolvedOp, overrides, resolved, first: outcome })
+          .catch((error: unknown) => app.log.warn(`a long read could not be carried on: ${String(error)}`));
+      const reading = await longReads.status(key).catch(() => null);
+      const told = withReadingOn(outcome.meta, reading);
       /* A change open on this endpoint is said on every tile that reads it, however old the copy. */
       const changed = await drift.noteFor(spec, op).catch(() => null);
       return {
         body: outcome.body,
         meta: {
-          ...outcome.meta,
-          ...(changed ? { warnings: [...outcome.meta.warnings, changed] } : {}),
+          ...told,
+          ...(changed ? { warnings: [...told.warnings, changed] } : {}),
           receipt: previews.record(key, spec, op, resolved, overrides),
           cache: outcome.outcome,
           ageMs: Number.isFinite(outcome.ageMs) ? outcome.ageMs : 0,
@@ -3137,48 +3415,23 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     registry.addConnection(spec);
     refreshQueryIdentity(spec);
 
-    const window = { range: resolveRequestedRange(range, Date.now()), filters };
-    const reads = values.map((value) =>
-      buildQueryRequest({
-        connection,
-        op: resolvedOp,
-        params: { ...params, [input]: value },
-        resolved: window,
-      }),
-    );
-    return eachReads.ask({
-      key: eachKey(connection, reads.map((read) => read.key)),
+    const asked: EachRequest = {
       connection,
-      count: reads.length,
-      read: async (index) => {
-        const { key, overrides, resolved } = reads[index]!;
-        const fetcher = () =>
-          registry.fetch(connection, op, overrides, {
-            params: resolved,
-            now: Date.now(),
-            resolveSecret: secretFor,
-          });
-        /* Already held — the tile's own first twenty-five, say: served as held. */
-        const answer =
-          queries.storedAt(key) !== null
-            ? await queries.read({
-                key,
-                connection,
-                mode: "view",
-                maxAgeMs: EACH_KEEP_MS,
-                fetcher,
-                priority: Priority.Background,
-              })
-            : await upstream(connection, fetcher, Priority.Background);
-        const said = answer.meta.warnings.filter(isIncompleteNote);
-        return {
-          body: answer.body,
-          notes:
-            answer.meta.truncated && said.length === 0
-              ? ["Not every page was read, so what is shown may exclude additional records."]
-              : said,
-        };
-      },
+      op,
+      params,
+      input,
+      values,
+      window: { range: resolveRequestedRange(range, Date.now()), filters },
+      configVersion: fingerprintConnection(spec),
+    };
+    const plan = eachPlan(asked);
+    if (!plan) return reply.status(404).send({ error: `no operation "${op}"` });
+    return eachReads.ask({
+      key: eachKey(connection, plan.keys),
+      connection,
+      count: plan.keys.length,
+      read: plan.read,
+      request: asked,
     });
   });
 
@@ -3285,6 +3538,10 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     );
     drift.forget(request.params.id).catch((error: unknown) =>
       app.log.warn(`the shapes ${request.params.id}'s endpoints were accepted in could not be removed: ${String(error)}`),
+    );
+    // Its reads under way, the records they held, and its checks waiting their turn.
+    jobs.forget(request.params.id).catch((error: unknown) =>
+      app.log.warn(`the work ${request.params.id} had under way could not be removed: ${String(error)}`),
     );
     // The report describes an API this instance can no longer reach, and
     // leaving it behind would let a same-named connection inherit a stale one.
@@ -4005,6 +4262,23 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
 
     if (result.entry) discovered.hold(result.entry);
     return result.entry ? { ...result, entry: catalogForBrowser(result.entry) } : result;
+  });
+
+  /*
+   * The browser that reads documentation drawn by scripts: whether it is
+   * here, and the one-time download, started only when the person agrees.
+   * Under `/api/discover`, so only somebody who may add connections starts it.
+   */
+  app.get("/api/discover/renderer", async (): Promise<RendererStatus> =>
+    options.rendererSetup?.status() ?? {
+      state: options.renderDocs ? "ready" : "off",
+      consented: true,
+      downloadMb: RENDERER_DOWNLOAD_MB,
+    },
+  );
+  app.post("/api/discover/renderer", async (_request, reply) => {
+    if (!options.rendererSetup) return reply.status(404).send({ error: "Nothing here downloads a browser." });
+    return options.rendererSetup.install();
   });
 
   /**
@@ -4849,9 +5123,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
      * because the table folds tenant and user into its primary key, and these
      * rows hold records read off somebody's API.
      */
-    const focusStore = new ScratchFocusStore(chatDb.adapter, {
-      userId: LOCAL_USER_ID,
-    });
+    const focusFor = (auth: { readonly userId?: string | undefined }): ScratchFocusStore =>
+      new ScratchFocusStore(chatDb.adapter, { userId: auth.userId || LOCAL_USER_ID, orgId: workspaceKey });
 
     /*
      * One search per question, however many times it is asked for.
@@ -5038,11 +5311,11 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
            * A query that found records is as strong a statement of subject as
            * a search, so a follow-up about one of them costs nothing.
            */
-          if (focusStore && found.records.length > 0) {
+          if (found.records.length > 0) {
             const identity = bindings.find(
               (entry) => entry.verb === "read" && entry.listOp === binding.op,
             );
-            await focusStore.put(ctx.sessionId, {
+            await focusFor(ctx.auth).put(ctx.sessionId, {
               question: parsed.data.text
                 ? `${binding.resource} matching "${parsed.data.text}"`
                 : `${binding.resource} records`,
@@ -5100,8 +5373,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
            * strong a statement of subject as finding one, so a follow-up about
            * another of its fields costs nothing.
            */
-          if (focusStore && opened.records.length > 0) {
-            await focusStore.put(ctx.sessionId, {
+          if (opened.records.length > 0) {
+            await focusFor(ctx.auth).put(ctx.sessionId, {
               question: `the ${binding.resource} ${parsed.data.id}`,
               source: binding.id,
               sourceTitle: binding.title,
@@ -5141,7 +5414,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
              * other's.
              */
             sessionId: ctx.sessionId,
-            ...(focusStore ? { focus: focusStore } : {}),
+            focus: focusFor(ctx.auth),
             /*
              * The record on screen outranks whatever the last question put in
              * hand: somebody looking at one record and asking "what is this?"
@@ -5253,7 +5526,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
              */
             changed: (_result, sessionId) => {
               answered.clear();
-              void focusStore.clear(sessionId).catch(() => undefined);
+              void focusFor(auth).clear(sessionId).catch(() => undefined);
             },
           },
           /*
@@ -5271,10 +5544,10 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
              * the model may answer several questions inside one turn and each
              * has to see the answer before it.
              */
-            draft: await drafts.get(dashboard.id),
-            getDraft: () => drafts.get(dashboard.id),
-            putDraft: (draft) => drafts.put(dashboard.id, draft),
-            clearDraft: () => drafts.clear(dashboard.id),
+            draft: await draftsFor(principalOf(auth)).get(dashboard.id),
+            getDraft: () => draftsFor(principalOf(auth)).get(dashboard.id),
+            putDraft: (draft) => draftsFor(principalOf(auth)).put(dashboard.id, draft),
+            clearDraft: () => draftsFor(principalOf(auth)).clear(dashboard.id),
             getDashboard: () => store.getDashboard(dashboard.id),
             putDashboard: (spec) => store.putDashboard(spec),
             onChanged: () => invalidateRegistry(dashboard.id),
@@ -5312,7 +5585,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
                   narrow: async ({ op, phrase }: { op: string; phrase: string }) => {
                     const context = contextForConnection(
                       conciergeContext(),
-                      (await drafts.get(dashboard.id))?.connection,
+                      (await draftsFor(principalOf(auth)).get(dashboard.id))?.connection,
                     );
                     const matches = context.ops.filter((entry) => entry.id === op);
                     const owner = matches.length === 1 ? matches[0]?.connection : undefined;
@@ -5419,7 +5692,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
                     ).flat();
 
                     if (described.length > 0) {
-                      const candidates = briefCandidates(described);
+                      const candidates = briefCandidates(described, { request: intent });
                       const written = await writeBrief(model, { intent, candidates, today: new Date().toISOString().slice(0, 10) });
                       const picked = written.brief
                         ? resolveCandidate(candidates, written.brief.entity)
@@ -5708,12 +5981,12 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         if (!principal) return null;
         return {
           /*
-           * Never `orgId`, and never `extra.tenantId`: the chat store scopes
-           * sessions by either one, and every session saved so far has none —
-           * setting it would hide them all. A managed build moves tenancy to
-           * the workspace deliberately, with a migration, not by accident here.
+           * The workspace, as the chat store's tenant: its sessions are this
+           * workspace's and no other's. Sessions saved before there was one
+           * were moved to `local` when the chat database opened (`chat/db.ts`).
            */
           userId: principal.userId,
+          orgId: workspaceKey,
           extra: {
             principal,
             workspaceId: principal.workspaceId,
@@ -5751,7 +6024,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
        */
       tenantKey: (auth) => {
         const id = auth.extra?.["dashboardId"];
-        return typeof id === "string" && id.length > 0 ? id : "__none__";
+        return `${workspaceKey}:${typeof id === "string" && id.length > 0 ? id : "__none__"}`;
       },
 
       // Dash owns its own grid. FreeBird's layout solver would fight

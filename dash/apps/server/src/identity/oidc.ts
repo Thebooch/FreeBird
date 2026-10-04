@@ -4,7 +4,7 @@ import type { MembershipStore } from "./membership.js";
 import type { IdentityResolver } from "./resolver.js";
 
 /**
- * Who a request is, from a token an identity provider signed (plan, track G).
+ * Who a request is, from a token an identity provider signed.
  *
  * The identity plug-in point a hosted build uses: a bearer JWT, verified
  * against the issuer's published keys (OpenID Connect discovery, then its

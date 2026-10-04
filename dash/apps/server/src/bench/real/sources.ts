@@ -2,8 +2,8 @@
  * The real, public APIs in the benchmark: where each one's full data is read
  * from, by reference code, to fix its answer keys.
  *
- * Only public APIs that need no account and no key (the owner's decision at
- * checkpoint 1). The reference read is deliberately simple — one documented
+ * Only public APIs that need no account and no key, so anyone can run
+ * them. The reference read is deliberately simple — one documented
  * request that returns everything, or two where the first says how many there
  * are — and shares nothing with Dash's pipeline, so an answer key never comes
  * from what is being measured.

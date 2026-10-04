@@ -7,7 +7,7 @@ import type { CredentialBroker } from "./broker.js";
  *
  * A read of forty-two pages behind a limit of about thirty requests was
  * refused at page thirty-one every time it was tried, and started again from
- * page one (checkpoint 2). The reader waits where the API says to — only for
+ * page one. The reader waits where the API says to — only for
  * reads safe to send twice, and only briefly (`RestAdapter`); this hands it
  * the clock to wait on.
  */

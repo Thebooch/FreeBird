@@ -1,5 +1,5 @@
 /**
- * HTTP Digest (RFC 7616): the answer to a server's challenge (plan, track B).
+ * HTTP Digest (RFC 7616): the answer to a server's challenge.
  *
  * The server refuses the first request with `WWW-Authenticate: Digest …`,
  * naming a realm and a nonce; the request is sent again with a response that

@@ -1,7 +1,7 @@
 /**
- * AWS Signature Version 4: a built-in, reviewed signer (plan, track B).
+ * AWS Signature Version 4: a built-in, reviewed signer.
  *
- * The plan's rule for signing: a scheme that needs raw secret material is a
+ * The rule for signing: a scheme that needs raw secret material is a
  * host-side signer in the repository, never connector code. SigV4 is the one
  * most business APIs behind AWS use — API Gateway with IAM authorisation, and
  * AWS's own services. Written on WebCrypto, since this package also runs in

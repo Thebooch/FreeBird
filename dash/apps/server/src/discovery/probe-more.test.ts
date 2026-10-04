@@ -8,7 +8,7 @@ import { budgetOf, tryRead } from "../integrate/read.js";
 import { nextAddressPaths, probePagination } from "./probe-pagination.js";
 
 /*
- * Ways of paging the check could not confirm (plan, tracks C and D): an
+ * Ways of paging the check could not confirm: an
  * address only the answer knows, pages numbered from 0, the last record's id
  * as the cursor, and parameters nothing declared. Every one is kept only when
  * its second page returns records the first did not have.
@@ -259,5 +259,28 @@ describe("a next address with a token and a size", () => {
     expect(result.pagination).toEqual({ kind: "next-url", path: "$.next" });
     expect(result.query).toEqual({ limit: "100" });
     expect(result).toMatchObject({ level: "count-reconciled", rows: 1351 });
+  });
+});
+
+/* Regression (trackwell mock API): the answer handed back `nextPageToken`, and nothing tried sending it. */
+describe("a token the answer hands back under a parameter's own name", () => {
+  const all = rows(130);
+  const tokenOf = (start: number) => Buffer.from(JSON.stringify({ o: start }), "utf8").toString("base64url");
+
+  it("is sent back as that parameter, to the end, and every record is handed over", async () => {
+    const { result } = await probe(
+      "api.tokened.test",
+      (request) => {
+        const token = request.url.searchParams.get("nextPageToken");
+        const start = token ? (JSON.parse(Buffer.from(token, "base64url").toString("utf8")) as { o: number }).o : 0;
+        const page = all.slice(start, start + 50);
+        const end = start + page.length;
+        return json({ issues: page, isLast: end >= all.length, ...(end < all.length ? { nextPageToken: tokenOf(end) } : {}) });
+      },
+      { rowsPath: "$.issues", params: [{ name: "nextPageToken", in: "query" }] },
+    );
+    expect(result.pagination).toMatchObject({ kind: "cursor", param: "nextPageToken", cursorPath: "$.nextPageToken" });
+    expect(result).toMatchObject({ level: "traversed", rows: 130 });
+    expect(result.records).toHaveLength(130);
   });
 });

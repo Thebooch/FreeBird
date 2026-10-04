@@ -5,7 +5,7 @@ import { writeJsonAtomic } from "../json-file.js";
 
 /**
  * Catalog entries somebody else already worked out, pulled from a read-only
- * registry (plan, track H).
+ * registry.
  *
  * Everything in a catalog entry is a fact about an API, not about an account,
  * which is what makes it shareable: one person sets an API up, and the next

@@ -198,8 +198,8 @@ export const widgetSchema = z
   /**
    * The time this widget reads, where its request named one — "since 1 June",
    * "in July" — in place of the board's window. Read within the board's thirty
-   * days, a total asked for since June counted a month of it and said nothing
-   * (checkpoint 3). ISO dates; `to` is exclusive, and absent means now.
+   * days, a total asked for since June counted a month of it and said
+   * nothing. ISO dates; `to` is exclusive, and absent means now.
    *
    * Optional with no default, for the reason `brief` is: a default would
    * change every widget's digest.
@@ -207,14 +207,14 @@ export const widgetSchema = z
   timeWindow: z
     .union([
       z.object({ from: z.string().min(10).max(40), to: z.string().min(10).max(40).optional() }),
-      /* Every record, where the request named no time and the number counts (checkpoint 4). */
+      /* Every record, where the request named no time and the number counts. */
       z.object({ all: z.literal(true) }),
     ])
     .optional(),
   /**
    * What this widget's number means: what is counted or added, over which
    * records, narrowed how, dated by what, in which currency, and what was
-   * checked (`MetricDefinition`, plan track E). Compiled with the brief, and
+   * checked (`MetricDefinition`). Compiled with the brief, and
    * shown on the tile where the widget has no description of its own.
    *
    * Optional with no default, for the reason `brief` is.

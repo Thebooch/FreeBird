@@ -2,7 +2,7 @@ import { z } from "zod";
 import { idSchema } from "./primitives.js";
 
 /**
- * What a number means, stated (plan, track E).
+ * What a number means, stated.
  *
  * A total is valid arithmetic over whatever rows arrive, and the same rows
  * can answer several questions: "revenue" issued, collected or net; a count
@@ -62,7 +62,7 @@ export const metricSchema = z.object({
    * Which time the records are read over. `own`: the request named one
    * (`dateBasis`). `board`: the endpoint reads the board's time range, and the
    * request named none, so the number is only what falls in the board's range
-   * — said, because "how many" reads as "ever" (checkpoint 4). Absent: every
+   * — said, because "how many" reads as "ever". Absent: every
    * record, whatever the board shows.
    */
   window: z.enum(["own", "board", "all"]).optional(),

@@ -157,6 +157,8 @@ export interface EachAnswer {
   readonly of: number;
   /** Records whose own read failed. */
   readonly failed: number;
+  /** Records the API would not let this key read, each on its own (403). */
+  readonly denied?: number;
   /** What the records' own reads said they left out, once each. */
   readonly notes: readonly string[];
   /** Why the rest were not read, when the API stopped the read. */

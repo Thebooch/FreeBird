@@ -140,3 +140,43 @@ A report is never overwritten. A second run on the same day gets `-2`, and a `--
 ## Changes to this protocol
 
 - 2026-09-30: This version. It gathers the rules added while the benchmark was built into the sections above. Every later change is a dated entry below.
+- 2026-09-30: **Scoring: a read must say it reached its end.** Every read now records how it ended (`completion`: traversed, partial or unknown, and why).
+  - A read that says nothing about its end is `unknown`, and its tile says it may not be every record. Connector code that returns records without saying it read them all is the usual case.
+  - A read narrowed by the API's own filter, or answered by the API's own count, is scored complete only when nothing says it may be short. An `unknown` read is therefore scored as flagged, not complete.
+  - A read compared with how many records the provider really holds (read / held) is scored exactly as before.
+  - Prompted by a review of how reads are executed, not by any held-out outcome.
+- 2026-09-30: **An exposure, recorded.**
+  - **What was seen.** A search of the source for the paging type `NextPage` did not leave the held-out files out. It printed lines of `heldout-2026-09-28.ts` that mention `hasNextPage`, the page flag of GraphQL's Relay connections. Most were shopwell's, a dev provider since checkpoint 4. Two (a schema field and a line of a handler) did not show which provider they belong to.
+  - **What was built from it:** nothing. Relay paging was already supported and already tried by the check.
+  - Searches of the source leave `heldout*` out again.
+- 2026-10-01: **Scoring: a read settled to the record the request names.** Some endpoints need an input another list supplies, such as a workspace's tasks. The check settles that input to the one record the request names ("the Marketing workspace"), or reads every record's. A read settled to one named record holds fewer records than the collection by design, like a read narrowed by the API's own filter. It is scored complete on the same terms: nothing cut it short, nothing says it may be short, and any count the API gave matches. The answer key still decides whether it read the right records. Prompted by work on inputs another list supplies, and by the dev provider `workroom`, written for it.
+- 2026-10-02: **Checkpoint 6 notes.**
+  - **Dev was fixed after its own run.** The dev split ran first (30 of 32). Four generic gaps it showed were then fixed:
+    - templates declared twice under one name;
+    - a path named inside a whole address in the documentation;
+    - an input the API's own answer says is required;
+    - a request body that is not JSON.
+    Twofold and chargebolt were re-run after the fixes, live. The real and held-out splits ran after the fixes.
+  - **Trackwell is still held out.** The maintainer chose to measure it first, not study it. Unscripted, it again read 50 of 264 and said nothing. Whether to study it is the maintainer's decision.
+- 2026-10-02: **Scoring: a read carried on past its own limit.** A tile reads at most a page ceiling's worth of pages, or a connector's runs' worth. Past that, the product now carries the read on in the background, from where it stopped, and the tile gets the whole answer when the read reaches its end.
+  - The scorer does the same. A read that stops at its own limit and says where it stopped is carried on through the product's own `LongReads`, and the whole answer is scored.
+  - A read that cannot be carried on is scored as before.
+  - Each report now records how the scored read ended (`ended`), and anything carrying it on met.
+  - Prompted by work on reads past a tile's limits, and by the dev provider `longhaul`, written for it. Payrail's checkpoint results stopped at the page ceiling. Its later results will partly measure this work.
+- 2026-10-03: **Checkpoint 7 notes.**
+  - Long reads, the check queue, the documentation renderer and several workspaces on one server were built between checkpoints 6 and 7. No held-out failure was studied.
+  - **The benchmark draws pages where Chromium is installed.** Discovery in the benchmark has the documentation renderer, as the product does. Playwright's Chromium was installed on the benchmark's machine for this checkpoint. The benchmark never downloads it: where it is not installed, a scenario that needs it (`needs: "browser"`) is skipped and said, and any other page drawn by scripts stops as before.
+  - Harborline (dev) missed once, unscripted, when its model-written connector code failed; run again, it was correct. Reported as the run's result, with the re-run noted.
+- 2026-10-03: **Trackwell studied, and moved to dev.** By the maintainer's decision after checkpoint 7 (it read 50 of 264 and said nothing, at checkpoints 5, 6 and 7), trackwell's files were read and it is now a dev provider. The held-out set is 11 until a separate author who never reads the integration code writes a replacement. The gaps it showed, each fixed generically:
+  - an answer that said there was more (`isLast: false`, a next token) was called complete; it is now partial, and said;
+  - a token handed back under a parameter's own name was never tried as the cursor;
+  - records that came back as ids alone were never asked for their fields, though the documentation said how;
+  - fields inside an object the specification leaves open were never described, and the values a request can name came from the first page only;
+  - the brief's roster gave its places to objects and dropped categories called "name". Fields whose values the request names now come first. The brief is sent back once where a value sits on another field, or a word of the request is a value nothing narrows by. A narrowing by a value no record matches now says so on the tile.
+- 2026-10-03: **Scoring: a read that went to its end over more records than the objective counts.** Trackwell's read takes every issue, and the question is about one project's. A read whose completion is `traversed`, cut short by nothing and flagged by nothing, holding at least as many records as the objective counts, holds every record asked about; it is scored complete. Whether the widget narrowed to the right ones is the answer key's to say, as before.
+- 2026-10-03: **After trackwell's study, measured.**
+  - Trackwell unscripted: correct in each of five live runs (26 of 26, every issue read).
+  - **The scripted path** now also matches an endpoint whose path ends with it, where only one does: a path written against an address that holds more of it (`/search/jql` under `…/rest/api/3`). Trackwell's scripted run then needs a model's judgment, a query restriction for its search, so it stops without scripted answers, as shopwell, chargebolt and cashloom do.
+  - **A regression, caught by the dev run and fixed.** The brief's new feedback sent cashloom's answer back because "refunded" is also a status value, though it already narrowed by a field named for it. A word the answer covers in a field's own name is now taken as said. Cashloom is correct again in two live runs.
+  - Dev unscripted after the fix: chargebolt's model-written connector stopped short once, flagged, which is the run-to-run variance recorded at checkpoint 6.
+- 2026-10-03: **Trackwell's replacement, written.** A separate author who never read the integration code wrote one held-out provider, `staffnest` (`providers/heldout-2026-10-03.ts`), and wired it in. Its reference connection proves both of its answer keys. The held-out set is 12 again.

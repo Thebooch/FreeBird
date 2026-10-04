@@ -3,8 +3,7 @@ import { inferShape } from "@freebirdai/dash-agent";
 import { rowsOf } from "../integrate/read.js";
 
 /**
- * Whether an endpoint still answers in the shape it was accepted in (plan,
- * track H).
+ * Whether an endpoint still answers in the shape it was accepted in.
  *
  * A hash of every field a read happened to hold changes whenever an optional
  * field is absent from a page, so it cries drift at ordinary data. What is

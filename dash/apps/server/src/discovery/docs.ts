@@ -124,7 +124,7 @@ const MAX_NAMED = 300;
  * Ranking keeps the passages that look most like an API, which is right for
  * learning how one signs in and pages, and wrong for learning what it holds:
  * on a 570 KB page the model saw 18 of 158 sections, and the collection the
- * request was about was never imported (checkpoint 2). A read the page names
+ * request was about was never imported. A read the page names
  * — `GET /v1/things`, or an address on the API's own host — is found here
  * whatever its rank. The caller keeps only those under the API's address.
  */
@@ -146,7 +146,7 @@ export const endpointsNamed = (analysis: PageAnalysis): string[] => {
    * — with no method and no address beside it. Marked, so only a path under
    * the API's own address is taken; the check reads each before it counts,
    * and a page that is not the API answers with no records. A to-do list was
-   * missed when the model left the table out (checkpoint 2).
+   * missed when the model left the table out.
    */
   /* Never the end of a markup tag — `</name>` in an XML sample is not a path. */
   for (const match of text.matchAll(/(?<![\w/.:<-])(\/[A-Za-z][A-Za-z0-9_-]{1,40}(?:\/[A-Za-z0-9_{}:.,-]+)*\/?)(?![\w/.>])/g)) {

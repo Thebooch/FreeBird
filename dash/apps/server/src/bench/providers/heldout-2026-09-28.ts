@@ -3,8 +3,8 @@ import { BENCH_NOW, cents, html, intParam, json, major, notFound, pick, random }
 import type { BenchRequest, BenchResponse, MockProvider } from "../types.js";
 
 /**
- * Held-out providers written on 2026-09-28, after checkpoint 1, by a session
- * that has not read the integration loop, its repairs, its prompts, the
+ * Held-out providers written on 2026-09-28, after checkpoint 1, by a separate
+ * author who has not read the integration loop, its repairs, its prompts, the
  * importers or any result — see `dash/bench/HELDOUT-AUTHORING.md`.
  *
  * Each is shaped after a kind of business API that exists, and is awkward in

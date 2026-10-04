@@ -81,7 +81,7 @@ export class LocalAesVault implements SecretVault {
 
 /** Vault-file-backed key store: keyRef → encrypted secret. */
 /**
- * Where credentials are kept, encrypted (plan, track G): the server depends on
+ * Where credentials are kept, encrypted: the server depends on
  * this, and a hosted build supplies one backed by its own key management
  * service. `SecretVault` is the encryption beneath the local one.
  */

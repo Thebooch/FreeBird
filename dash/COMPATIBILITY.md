@@ -75,8 +75,8 @@ This is the boundary as the code stands, not a measured success rate. When an AP
 
 | | Status | What it means |
 |---|---|---|
-| Pages per read | Partly | Up to 50 pages per read, 5 unless set. A read that stops early says so on the tile: what is shown excludes the rest. |
-| Records expanded per widget | Partly | A widget reading each record's related records reads the first 25 at once and the rest in the background, up to 500, and says what it has not read yet. |
+| Pages per read | Partly | A tile reads up to 50 pages at once, 5 unless set, and says what it left out. A read that stops at that limit is carried on in the background from where it stopped, up to 2,000 pages, through a restart, and the tile is answered whole when it reaches the end. |
+| Records expanded per widget | Partly | A widget reading each record's related records reads the first 25 at once and the rest in the background, up to 500, through a restart, and says what it has not read yet. One record the key may not read is counted and the rest are read. |
 
 ## Reading documentation
 
@@ -87,9 +87,9 @@ This is the boundary as the code stands, not a measured success rate. When an AP
 | Specifications embedded in a documentation page | Supported | Found in the page itself when no separate file is published. |
 | Documentation indexes (llms.txt) | Supported | Followed to the specifications they list; reading every page is offered separately. |
 | Documentation written as prose | Partly | An AI model reads the page and proposes a few endpoints without their parameters. Everything it proposes is marked as a guess until a request proves it. |
-| Documentation that only appears in a browser | Not yet | A page that is built by scripts shows nothing to read. |
-| GraphQL schemas | Partly | A schema published as SDL, in the documentation or a file it links to, or asked of the API (introspection, a type at a time where queries are limited in depth), becomes one read per list: its records' fields selected, paged by cursor, page or offset as the schema says. A list that needs an input nobody supplies is left out and said. |
-| WSDL service descriptions | Not yet | Depends on SOAP support. |
+| Documentation that only appears in a browser | Supported | Drawn by Playwright's own Chromium, headless, with every request the page makes answered through the server's guarded reader: public addresses only, reads only, no downloads, pop-ups or WebSockets, bounded in requests, bytes and seconds. A specification the page fetched to draw itself, or one it holds or links to, is imported exactly; otherwise its prose is read. A hosted build has Chromium in its image. The open-source build asks once before downloading it (about 150 MB) and remembers the answer; until then such a page is said to need it. |
+| GraphQL schemas | Partly | A schema published as SDL, in the documentation or a file it links to, or asked of the API (introspection, a type at a time where queries are limited in depth), becomes one read per list: its records' fields selected, paged by cursor, page or offset as the schema says. A list that needs an input is kept: the input is settled from another list's records, or read for each of them when the question is about all of them. |
+| WSDL service descriptions | Partly | A WSDL (1.1, document/literal) sets up one endpoint per operation named for reading. RPC-style services, and a sign-in in the envelope, are for connector code. |
 
 ## Networks
 
@@ -102,7 +102,7 @@ This is the boundary as the code stands, not a measured success rate. When an AP
 
 | | Status | What it means |
 |---|---|---|
-| History the API does not keep | Not yet | Only what the API returns now can be shown; past values of something the API overwrites are not kept. |
+| History the API does not keep | Partly | What each number tile showed is kept day by day, for 400 days, from the day the board was first looked after; its line says when its history starts. Nothing earlier is claimed, and nothing but number tiles is kept. |
 | Changing records | Supported | Every change is reviewed before it is sent, and sent once. |
 
 ## Running it
@@ -110,4 +110,4 @@ This is the boundary as the code stands, not a measured success rate. When an AP
 | | Status | What it means |
 |---|---|---|
 | One person on their own machine | Supported | The server listens only on this computer. |
-| Several people sharing one server | Not yet | Sign-in, members and permissions are not built yet. |
+| Several people sharing one server | Partly | Sign-in through an OpenID Connect provider; members with roles and grants scoped to a connection or a record type, asked on every change and every read. With DASH_WORKSPACES=many, one server holds several workspaces, each with its own connections, boards, keys, chats, jobs and evidence. Tested in process, not yet against a live identity provider. The open-source build has one owner and no sign-in, on this machine only. |

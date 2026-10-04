@@ -161,7 +161,7 @@ describe("RestAdapter", () => {
     );
   });
 
-  /* Checkpoint 4: a read over every record sent `created[gte]=`, which the API refused. */
+  /* Regression: a read over every record sent `created[gte]=`, which the API refused. */
   it("leaves out a date bound that resolves to nothing, over every record", async () => {
     const { http, calls } = stub([{ body: { data: [] } }]);
     const conn = connection({
@@ -215,7 +215,7 @@ describe("RestAdapter", () => {
       expect(call.headers.authorization).toBe("Bearer sk_test_secret");
     });
 
-    /* Plan, track B: HTTP Digest, answering the server's challenge instead of sending the password. */
+    /* HTTP Digest, answering the server's challenge instead of sending the password. */
     it("answers a Digest challenge, then reads on with the same one", async () => {
       const challenge = { "www-authenticate": 'Digest realm="api", qop="auth", nonce="n0nce", algorithm=MD5, opaque="op"' };
       const { http, calls } = stub([
@@ -261,7 +261,7 @@ describe("RestAdapter", () => {
       expect(calls).toHaveLength(3);
     });
 
-    /* Plan, track B: AWS Signature V4, signed here by the built-in signer — never by connector code. */
+    /* AWS Signature V4, signed here by the built-in signer — never by connector code. */
     it("signs each request for AWS: its address, its time, and nothing of the secret key", async () => {
       const { http, calls } = stub([{ body: { data: [{ id: 1 }] } }, { body: { data: [] } }]);
       const secrets: Record<string, string> = { "aws-access": "AKIDEXAMPLE", aws: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY" };
@@ -305,7 +305,7 @@ describe("RestAdapter", () => {
       expect(calls).toHaveLength(0);
     });
 
-    /* Plan, track B: keys an API wants in a cookie, or in several places at once. */
+    /* Keys an API wants in a cookie, or in several places at once. */
     it("sends each key where the API wants it: a header, the address, a cookie", async () => {
       const { call } = await run({
         type: "headers",
@@ -530,7 +530,7 @@ describe("RestAdapter", () => {
       expect(result.meta.pages).toBe(2);
     });
 
-    /* Checkpoint 2: Rick and Morty declares no page size and answers 404 past its last page. */
+    /* Regression: Rick and Morty declares no page size and answers 404 past its last page. */
     describe("page numbers with no declared page size", () => {
       const paged = (maxPages = 10) =>
         connection({
@@ -638,7 +638,7 @@ describe("RestAdapter", () => {
       });
     });
 
-    /* Checkpoint 2: ten of 332 facts were read and shown as the whole. */
+    /* Regression: ten of 332 facts were read and shown as the whole. */
     it("says a read fell short where the answer states more records than were read", async () => {
       const { http } = stub([page([1, 2, 3], { total: 332 })]);
       const conn = connection();

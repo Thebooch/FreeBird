@@ -1,7 +1,7 @@
 import type { AuthSpec, CatalogEntry } from "@freebirdai/dash-spec";
 
 /**
- * OpenID Connect, as the OAuth sign-in it is (plan, track B).
+ * OpenID Connect, as the OAuth sign-in it is.
  *
  * A specification that declares `openIdConnect` names a discovery document
  * rather than the addresses themselves: the provider's

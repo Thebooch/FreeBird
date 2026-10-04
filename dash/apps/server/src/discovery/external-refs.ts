@@ -8,7 +8,7 @@ import { parseSpecDocument } from "./openapi.js";
  * `$ref: "paths/invoices.yaml"` points into another file, and the importer
  * reads one document: a specification whose paths all live elsewhere imported
  * as nothing at all, and said only that external references were "not
- * supported yet" (plan, track C). Each file is fetched once, through the same
+ * supported yet". Each file is fetched once, through the same
  * public-document reader as the specification itself, and only from the
  * specification's own site — a reference is an address a document chose, and
  * it is followed no further than the document's own organisation.

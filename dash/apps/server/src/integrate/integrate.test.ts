@@ -14,12 +14,12 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import { json } from "../bench/seed.js";
 import { billhub } from "../bench/providers/billhub.js";
+import { casebook } from "../bench/providers/casebook.js";
 import { keyring } from "../bench/providers/keyring.js";
 import { ledgerly } from "../bench/providers/ledgerly.js";
 import { multicur } from "../bench/providers/multicur.js";
 import { rentroll } from "../bench/providers/rentroll.js";
 import { taskpad } from "../bench/providers/taskpad.js";
-import { casebook } from "../bench/providers/track-a-dev.js";
 import { benchTransport } from "../bench/transport.js";
 import type { BenchRequest, MockProvider } from "../bench/types.js";
 import { CatalogStore, connectionFromCatalog } from "../catalog.js";
@@ -204,7 +204,7 @@ describe("confirming how an endpoint pages", () => {
     expect(probe).toMatchObject({ level: "traversed", rows: 70 });
   });
 
-  /* Checkpoint 2: 10 of 332 facts were read, with `next_page_url` right there in the answer. */
+  /* Regression: 10 of 332 facts were read, with `next_page_url` right there in the answer. */
   it("pages the way the answer's own next address does, where nothing declared how", async () => {
     const rows = Array.from({ length: 35 }, (_, index) => ({ id: index + 1 }));
     const laravel: MockProvider = {
@@ -239,7 +239,7 @@ describe("confirming how an endpoint pages", () => {
     expect(probe).toMatchObject({ level: "count-reconciled", rows: 35 });
   });
 
-  /* Checkpoint 2: 68 records at a hundred a page came back whole, and were reported as unreadable past twenty. */
+  /* Regression: 68 records at a hundred a page came back whole, and were reported as unreadable past twenty. */
   it("accepts a larger page that holds every record the API says it has", async () => {
     const rows = Array.from({ length: 68 }, (_, index) => ({ id: index + 1 }));
     const whole: MockProvider = {
@@ -307,7 +307,7 @@ describe("confirming how an endpoint pages", () => {
   });
 });
 
-/* Checkpoint 2: the API could filter 11,848 breweries by state, and nothing asked it to. */
+/* Regression: the API could filter 11,848 breweries by state, and nothing asked it to. */
 describe("filters the API offers", () => {
   const states = ["Oregon", "Ohio", "Texas"];
   const types = ["micro", "brewpub"];
@@ -361,7 +361,7 @@ describe("filters the API offers", () => {
   });
 });
 
-/* Plan, track D: "how many" from the API's own count, kept only where a read agrees with it. */
+/* "how many" from the API's own count, kept only where a read agrees with it. */
 describe("an endpoint that says how many", () => {
   const states = ["Oregon", "Ohio", "Texas"];
   const rows = Array.from({ length: 45 }, (_, index) => ({ id: index + 1, state: states[index % 3]! }));
@@ -543,7 +543,7 @@ describe("values a read must send that nothing supplies", () => {
   });
 });
 
-/* Plan, track A: a GraphQL endpoint read as REST is asked for its schema, and read through what it declares. */
+/* A GraphQL endpoint read as REST is asked for its schema, and read through what it declares. */
 describe("a GraphQL endpoint that describes its schema", () => {
   const ref = (kind: string, name: string | null, ofType: unknown = null) => ({ kind, name, ofType });
   const schema = {
@@ -639,7 +639,7 @@ describe("a GraphQL endpoint that describes its schema", () => {
   });
 });
 
-/* Checkpoint 2: an API with fifty collections had eight read, and the one a request was about was never described. */
+/* Regression: an API with fifty collections had eight read, and the one a request was about was never described. */
 describe("collections the check does not settle", () => {
   const many: MockProvider = {
     ...ledgerly,
@@ -693,7 +693,7 @@ describe("collections the check does not settle", () => {
   });
 });
 
-/* Checkpoint 2: a public API whose specification declared no sign-in had connector code written for it. */
+/* Regression: a public API whose specification declared no sign-in had connector code written for it. */
 describe("a sign-in nobody declared", () => {
   const api = (open: boolean): MockProvider => ({
     ...ledgerly,
@@ -734,7 +734,7 @@ describe("a sign-in nobody declared", () => {
   });
 });
 
-/* Checkpoint 2: the key was refused the endpoint the check started on, and nothing else was tried. */
+/* Regression: the key was refused the endpoint the check started on, and nothing else was tried. */
 describe("an endpoint the key may not use", () => {
   const partly: MockProvider = {
     ...ledgerly,
@@ -770,7 +770,7 @@ describe("an endpoint the key may not use", () => {
   });
 });
 
-/* Checkpoint 2: Rick and Morty said "try again in 10s", and the check stopped there. */
+/* Regression: Rick and Morty said "try again in 10s", and the check stopped there. */
 describe("a short rate limit", () => {
   const limited = (refusals: number, retryAfter: string): { provider: MockProvider; asked: () => number } => {
     let asked = 0;

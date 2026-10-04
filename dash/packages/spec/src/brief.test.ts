@@ -182,7 +182,7 @@ describe("compileBrief", () => {
     expect(list.notes.join(" ")).toMatch(/are shown/);
   });
 
-  /* Plan, track E: a total of dollars and euros is valid arithmetic and the wrong answer. */
+  /* A total of dollars and euros is valid arithmetic and the wrong answer. */
   it("says when a total adds amounts in more than one currency together", () => {
     const withCurrency = {
       fields: [
@@ -206,7 +206,7 @@ describe("compileBrief", () => {
     expect(compile({ intent: "measure" }, withCurrency).widget?.pipeline.some((step) => step.op === "caveat")).toBe(false);
   });
 
-  /* Checkpoint 3: "since 1 June" was narrowed within the board's thirty days, and counted one month. */
+  /* Regression: "since 1 June" was narrowed within the board's thirty days, and counted one month. */
   it("reads the time the request named, not only the board's window", () => {
     const since = compile({ intent: "measure", filters: [{ field: "DueDate", from: "2026-06-01" }] });
     expect(since.widget?.timeWindow).toEqual({ from: "2026-06-01T00:00:00.000Z" });
@@ -786,7 +786,7 @@ describe("compileBrief keeps a way through to a related record", () => {
   });
 });
 
-/* Checkpoint 2: 11,848 breweries were read five pages deep to count Oregon's 295, with a filter the API had confirmed. */
+/* Regression: 11,848 breweries were read five pages deep to count Oregon's 295, with a filter the API had confirmed. */
 describe("compileBrief, asking the API to narrow", () => {
   const byStatus = (op: string, field: string) => (op === "tasks_list" && field === "Status" ? "by_status" : undefined);
   const narrowed = (intent: WidgetBrief["intent"], values: string[]) =>
@@ -823,7 +823,7 @@ describe("compileBrief, asking the API to narrow", () => {
   });
 });
 
-/* Plan, track D: "how many" answered by the API's own count, where a read confirmed it counts these records. */
+/* "how many" answered by the API's own count, where a read confirmed it counts these records. */
 describe("compileBrief, the API's own count", () => {
   const byStatus = (op: string, field: string) => (op === "tasks_list" && field === "Status" ? "by_status" : undefined);
   const counted = resource({ count: { op: "tasks_count", field: "meta.total", filters: ["by_status"] } });
@@ -871,7 +871,7 @@ describe("compileBrief, the API's own count", () => {
   });
 });
 
-/* Plan, track E: what a number means, stated on it. */
+/* What a number means, stated on it. */
 describe("compileBrief, the metric", () => {
   const invoice = entity({
     id: "invoice",
@@ -949,7 +949,7 @@ describe("compileBrief, the metric", () => {
     expect(sum({ measure: { agg: "sum", field: "tax" } }).widget?.metric?.checks).toEqual([]);
   });
 
-  /* Checkpoint 4: "leave out cancelled orders" had no way to be said, and the total kept them, silently. */
+  /* Regression: "leave out cancelled orders" had no way to be said, and the total kept them, silently. */
   it("narrows by whether a field holds anything, for every kind of widget, and says it", () => {
     const withCancelled = entity({
       fields: [
@@ -994,7 +994,7 @@ describe("compileBrief, the metric", () => {
     expect(built.widget?.metric?.says).toMatch(/It does not leave out: leave out test orders\.$/);
   });
 
-  /* Checkpoint 4: "how many" over an endpoint that reads the board's range counted 30 days of 1,840, and said nothing. */
+  /* Regression: "how many" over an endpoint that reads the board's range counted 30 days of 1,840, and said nothing. */
   it("counts every record where the request named no time, and says so; a chart over time keeps the board's", () => {
     const over = (readsRange: boolean, brief: Partial<WidgetBrief> = {}) =>
       compileBrief({

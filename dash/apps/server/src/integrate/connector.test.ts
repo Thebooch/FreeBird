@@ -2,7 +2,8 @@ import { fakeLlm } from "@freebirdai/dash-agent";
 import { authCredentials, getOp } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import { benchConnectors } from "../bench/connectors.js";
-import { sessionly, stampede } from "../bench/providers/step4-dev.js";
+import { sessionly } from "../bench/providers/sessionly.js";
+import { stampede } from "../bench/providers/stampede.js";
 import { benchTransport } from "../bench/transport.js";
 import type { MockProvider } from "../bench/types.js";
 import { connectionFromCatalog } from "../catalog.js";
@@ -136,7 +137,7 @@ async function read(ctx) {
     expect(revision).not.toContain(stampede.credentials[0]);
   });
 
-  /* Checkpoint 1: code that read 100 of 180 records and said so was kept, and the total was wrong. */
+  /* Regression: code that read 100 of 180 records and said so was kept, and the total was wrong. */
   it("revises code that stopped before the end of the records, rather than keeping it", async () => {
     const { transport, entry, connection } = await setUp(stampede);
     const opId = connection.ops[0]!.id;

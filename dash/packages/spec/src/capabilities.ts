@@ -333,14 +333,14 @@ export const CAPABILITIES = [
     area: "limits",
     name: "Pages per read",
     status: "partial",
-    note: "Up to 50 pages per read, 5 unless set. A read that stops early says so on the tile: what is shown excludes the rest.",
+    note: "A tile reads up to 50 pages at once, 5 unless set, and says what it left out. A read that stops at that limit is carried on in the background from where it stopped, up to 2,000 pages, through a restart, and the tile is answered whole when it reaches the end.",
   },
   {
     id: "limits.fan-out",
     area: "limits",
     name: "Records expanded per widget",
     status: "partial",
-    note: "A widget reading each record's related records reads the first 25 at once and the rest in the background, up to 500, and says what it has not read yet.",
+    note: "A widget reading each record's related records reads the first 25 at once and the rest in the background, up to 500, through a restart, and says what it has not read yet. One record the key may not read is counted and the rest are read.",
   },
 
   /* ── discovery ─────────────────────────────────────────────────────── */
@@ -383,22 +383,22 @@ export const CAPABILITIES = [
     id: "discovery.rendered",
     area: "discovery",
     name: "Documentation that only appears in a browser",
-    status: "planned",
-    note: "A page that is built by scripts shows nothing to read.",
+    status: "supported",
+    note: "Drawn by Playwright's own Chromium, headless, with every request the page makes answered through the server's guarded reader: public addresses only, reads only, no downloads, pop-ups or WebSockets, bounded in requests, bytes and seconds. A specification the page fetched to draw itself, or one it holds or links to, is imported exactly; otherwise its prose is read. A hosted build has Chromium in its image. The open-source build asks once before downloading it (about 150 MB) and remembers the answer; until then such a page is said to need it.",
   },
   {
     id: "discovery.graphql",
     area: "discovery",
     name: "GraphQL schemas",
     status: "partial",
-    note: "A schema published as SDL, in the documentation or a file it links to, or asked of the API (introspection, a type at a time where queries are limited in depth), becomes one read per list: its records' fields selected, paged by cursor, page or offset as the schema says. A list that needs an input nobody supplies is left out and said.",
+    note: "A schema published as SDL, in the documentation or a file it links to, or asked of the API (introspection, a type at a time where queries are limited in depth), becomes one read per list: its records' fields selected, paged by cursor, page or offset as the schema says. A list that needs an input is kept: the input is settled from another list's records, or read for each of them when the question is about all of them.",
   },
   {
     id: "discovery.wsdl",
     area: "discovery",
     name: "WSDL service descriptions",
-    status: "planned",
-    note: "Depends on SOAP support.",
+    status: "partial",
+    note: "A WSDL (1.1, document/literal) sets up one endpoint per operation named for reading. RPC-style services, and a sign-in in the envelope, are for connector code.",
   },
 
   /* ── network ───────────────────────────────────────────────────────── */
@@ -422,8 +422,8 @@ export const CAPABILITIES = [
     id: "data.history",
     area: "data",
     name: "History the API does not keep",
-    status: "planned",
-    note: "Only what the API returns now can be shown; past values of something the API overwrites are not kept.",
+    status: "partial",
+    note: "What each number tile showed is kept day by day, for 400 days, from the day the board was first looked after; its line says when its history starts. Nothing earlier is claimed, and nothing but number tiles is kept.",
   },
   {
     id: "data.writes",
@@ -445,8 +445,8 @@ export const CAPABILITIES = [
     id: "deployment.shared",
     area: "deployment",
     name: "Several people sharing one server",
-    status: "planned",
-    note: "Sign-in, members and permissions are not built yet.",
+    status: "partial",
+    note: "Sign-in through an OpenID Connect provider; members with roles and grants scoped to a connection or a record type, asked on every change and every read. With DASH_WORKSPACES=many, one server holds several workspaces, each with its own connections, boards, keys, chats, jobs and evidence. Tested in process, not yet against a live identity provider. The open-source build has one owner and no sign-in, on this machine only.",
   },
 ] as const satisfies readonly Capability[];
 

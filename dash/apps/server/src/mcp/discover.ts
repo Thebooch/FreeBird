@@ -4,7 +4,7 @@ import { fieldsFromSchema } from "../discovery/schema-fields.js";
 import { McpError, openMcpClient, type McpServerInfo } from "./client.js";
 
 /**
- * An MCP server as a connection (plan, track A): its tools that only read
+ * An MCP server as a connection: its tools that only read
  * become the connection's endpoints.
  *
  * A tool is a call, and nothing about the protocol says a call reads. So a

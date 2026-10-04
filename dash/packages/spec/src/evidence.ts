@@ -40,6 +40,12 @@ export const evidenceSchema = z.object({
       params: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
       /** The account, when the connection has an address with blanks. */
       account: z.string().max(200).optional(),
+      /**
+       * The read's whole scope as a digest — address, inputs, filters, range
+       * (`resolveReadRequest`). A count proves something only about records
+       * read under the same one.
+       */
+      digest: z.string().max(64).optional(),
     })
     .default({}),
   /** `fingerprintConnection` of the configuration it was observed with. */
@@ -97,6 +103,81 @@ export const EVIDENCE_WORDS: Record<EvidenceLevel, string> = {
   "metric-reconciled": "This number matches one worked out independently.",
 };
 
+/**
+ * How a read ended, as the reader of it saw it happen.
+ *
+ * `traversed`: the read reached the end its rule defines — the last page, a
+ * single answer the endpoint gives whole, code that says it read everything.
+ * `partial`: something stopped it first, and it says what. `unknown`: nothing
+ * says either way — paging never confirmed, or connector code that returned
+ * records without saying whether they were all of them. Never a claim the
+ * read cannot back: only `traversed` lets a tile say a read went to the
+ * end.
+ */
+export type CompletionState = "traversed" | "partial" | "unknown";
+
+export type CompletionReason =
+  /* traversed */
+  | "single-response"
+  | "empty-page"
+  | "short-page"
+  | "no-cursor"
+  | "has-more-false"
+  | "no-next"
+  | "past-last-page"
+  | "windows-covered"
+  | "connector-all"
+  /** A read made once per record of another endpoint, every part read to its end. */
+  | "each-read"
+  /* partial */
+  | "each-capped"
+  | "page-cap"
+  | "later-page-refused"
+  | "repeated-page"
+  | "rows-missing"
+  | "unmerged"
+  | "stream-window"
+  | "reported-more"
+  /** The answer itself says there is more — `isLast: false`, a next token — and nothing read it. */
+  | "said-more"
+  | "connector-partial"
+  | "run-limit"
+  /* unknown */
+  | "unconfirmed-paging"
+  | "connector-silent"
+  | "each-unsure";
+
+export interface ReadCompletion {
+  readonly state: CompletionState;
+  readonly reason: CompletionReason;
+}
+
+/** What a read says about itself, as far as how much of it there is. */
+export interface ReadExtent {
+  readonly pages: number;
+  readonly truncated: boolean;
+  readonly reportedTotal?: number | undefined;
+  readonly completion?: ReadCompletion | undefined;
+  /** What the read asked for, as a digest: see `resolveReadRequest`. */
+  readonly scope?: string | undefined;
+  /** The scope the stated total was given under, when it was given under this read's own. */
+  readonly totalScope?: string | undefined;
+}
+
+/**
+ * Whether every record the API says it holds was read: the count matches,
+ * nothing cut the read short or left its end unsaid, and the count was stated
+ * under the read's own scope — the same filters, account and range. A total
+ * of every order is no evidence about a read of last month's.
+ */
+export const countReconciled = (read: ReadExtent, records: number): boolean =>
+  !read.truncated &&
+  read.completion?.state !== "partial" &&
+  read.completion?.state !== "unknown" &&
+  read.reportedTotal !== undefined &&
+  read.reportedTotal === records &&
+  (read.scope === undefined || read.totalScope === read.scope);
+
 /** How far one read of a tile got, from what the read itself shows. */
 export interface ReadCoverage {
   readonly level: Extract<EvidenceLevel, "accepted" | "traversed" | "count-reconciled">;
@@ -108,23 +189,28 @@ export interface ReadCoverage {
 
 /**
  * The strongest claim a tile's own read supports, in plain words — the ladder
- * on the tile, not only in the check's records (plan, track D).
+ * on the tile, not only in the check's records.
  *
- * Only what this read shows: its pages, whether the cap stopped it, and the
- * API's own count where it gave one. Null when the read was cut short, which
- * is said elsewhere, in the words that say what was left out.
+ * Only what this read shows: how it ended, its pages, and the API's own count
+ * where it gave one under the same scope. Null when the read was cut short or
+ * cannot say where it ended — each says so elsewhere, in the words that say
+ * what may be missing.
  */
-export const readCoverage = (
-  read: { readonly pages: number; readonly truncated: boolean; readonly reportedTotal?: number | undefined },
-  records: number,
-): ReadCoverage | null => {
-  if (read.truncated) return null;
+export const readCoverage = (read: ReadExtent, records: number): ReadCoverage | null => {
+  if (read.truncated || read.completion?.state === "partial" || read.completion?.state === "unknown") return null;
   const n = records.toLocaleString("en-US");
-  if (read.reportedTotal !== undefined && read.reportedTotal === records) {
+  if (countReconciled(read, records)) {
     return {
       level: "count-reconciled",
       said: `all ${n} read`,
       detail: `All ${n} records were read — as many as the API says it holds.`,
+    };
+  }
+  if (read.completion?.reason === "connector-all") {
+    return {
+      level: "traversed",
+      said: "read to the end",
+      detail: `The connector read to the end, by its own account: ${n} records. The API did not say how many it holds, so nothing checks the count.`,
     };
   }
   if (read.pages > 1) {

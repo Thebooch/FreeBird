@@ -447,7 +447,8 @@
       index++;
       request = hooks.paginate ? await hooks.paginate({ request, response, rows: page.rows, index }, ctx) : null;
     }
-    return { rows, total, complete: !request, pages: index };
+    /* Read to the end only where paginate() said there was no next page; with no paginate(), nothing says. */
+    return { rows, total, done: request ? "partial" : hooks.paginate ? "all" : undefined, pages: index };
   };
 
   globalThis.__invoke = async (hook, argsJson) => {

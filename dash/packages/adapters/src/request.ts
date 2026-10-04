@@ -1,10 +1,19 @@
 import {
+  fnv1a,
+  hasTokens,
   interpolate,
+  interpolatePath,
+  missingInputs,
+  pagingParamNames,
+  pathParamNames,
+  type ConnectionSpec,
   type OpSpec,
   type ParamDef,
   type ReadBody,
   type ResolvedParams,
 } from "@freebirdai/dash-spec";
+import { firstPageParams } from "./paginate.js";
+import { AdapterError } from "./types.js";
 
 /**
  * Building a read's request: where each input goes, how a list is written,
@@ -191,4 +200,172 @@ export const renderBody = (
     for (const [name, value] of Object.entries(paging))
       setAtPath(document as Record<string, unknown>, name, pagingValue(value));
   return { text: JSON.stringify(document ?? {}), contentType: "application/json" };
+};
+
+/**
+ * A read's first request, with every input in place and no credential: the
+ * request REST sends, and the one connector code is handed.
+ *
+ * One resolver, so an endpoint read by connector code asks for exactly the
+ * records the same endpoint read by REST would: the widget's own values, the
+ * board's filters and range, each parameter's documented default. Before
+ * this, a connector's request was rebuilt from the endpoint's defaults alone,
+ * and a widget narrowed by a value read every record.
+ */
+export interface ResolvedReadRequest {
+  readonly method: "GET" | "POST";
+  /** The base address and the path, with no query string. */
+  readonly address: string;
+  /** The first page's query string. Credentials are the caller's to add. */
+  readonly query: URLSearchParams;
+  readonly url: string;
+  readonly headers: Record<string, string>;
+  /** Whether the paging rule's values travel in the body rather than the query string. */
+  readonly pagingInBody: boolean;
+  /** What a body template's tokens read, page after page. */
+  readonly bodyParams: ResolvedParams;
+  /** The first page's body, where the read sends one. */
+  readonly body?: { readonly text: string; readonly contentType: string };
+  /** Every value the read is given, by name: defaults, then the board's filters, then the widget's own. */
+  readonly inputs: Readonly<Record<string, Value>>;
+  /** Inputs the read needs and nothing supplied: refused by REST, left to connector code to supply. */
+  readonly unresolved: readonly string[];
+  /**
+   * What this read asks for, as a digest: the address, path, inputs, headers,
+   * body and — where the endpoint reads one — the time range. Never paging,
+   * never a credential. A count is only evidence about records read under
+   * the same scope.
+   */
+  readonly scope: string;
+}
+
+const withQueryString = (address: string, query: URLSearchParams): string => {
+  const text = query.toString();
+  return text ? `${address}${address.includes("?") ? "&" : "?"}${text}` : address;
+};
+
+export const resolveReadRequest = (
+  connection: Pick<ConnectionSpec, "baseUrl">,
+  op: OpSpec,
+  overrides: Readonly<Record<string, Value>>,
+  params: ResolvedParams,
+  options: {
+    /** Values the credential puts on the query string: they satisfy an input of the same name. */
+    readonly credentialQuery?: ReadonlyArray<readonly [string, string]>;
+  } = {},
+): ResolvedReadRequest => {
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(op.headers)) headers[name] = interpolate(value, params);
+
+  /*
+   * Each supplied value goes where the endpoint declares it: the query
+   * string, a header, a cookie, or the body. Paging parameters go wherever
+   * the paging rule says — the query string, or into the body.
+   */
+  const pagingInBody = "in" in op.pagination && op.pagination.in === "body";
+  const located = locateInputs(op, overrides);
+  const byName = new Map(op.params.map((param) => [param.name, param]));
+  const query = new URLSearchParams(pagingInBody ? {} : firstPageParams(op.pagination));
+  for (const [name, value] of Object.entries(op.query)) {
+    const resolved = interpolate(String(value), params);
+    /*
+     * A value built from a token that resolves to nothing is left out, as a
+     * body's is: a read over every record asks without date bounds, rather
+     * than with `created[gte]=`, which an API refuses.
+     */
+    if (resolved === "" && hasTokens(String(value))) continue;
+    setQueryValue(query, name, resolved, byName.get(name));
+  }
+  for (const [name, value] of Object.entries(located.query)) {
+    const resolved = typeof value === "string" ? interpolate(value, params) : String(value);
+    // An empty override means "no filter", not "filter by empty string".
+    if (resolved === "") query.delete(name);
+    else setQueryValue(query, name, resolved, byName.get(name));
+  }
+  for (const [name, value] of Object.entries(located.header)) {
+    const resolved = interpolate(value, params);
+    if (resolved !== "") headers[name] = resolved;
+  }
+  const cookies = Object.entries(located.cookie)
+    .map(([name, value]) => [name, interpolate(value, params)] as const)
+    .filter(([, value]) => value !== "")
+    .map(([name, value]) => `${name}=${encodeURIComponent(value)}`);
+  /* A key in a cookie is kept beside an endpoint's own cookies, not replaced by them. */
+  if (cookies.length > 0) headers.cookie = [headers.cookie, ...cookies].filter(Boolean).join("; ");
+
+  if (!pagingInBody)
+    for (const [name, value] of Object.entries(firstPageParams(op.pagination))) {
+      if (query.get(name) !== value)
+        throw new AdapterError(
+          `Pagination input ${name} conflicts with this endpoint's pagination settings. Update the endpoint settings before loading it.`,
+          { status: 400 },
+        );
+    }
+
+  /* The body's tokens read the supplied values, with body parameters' defaults beside them. */
+  const bodyParams: ResolvedParams = { ...params, filters: { ...params.filters, ...located.body } };
+
+  /*
+   * What this endpoint needs before it can be called, asked of the spec
+   * rather than re-derived here. `missingInputs` checks the declared
+   * parameters *and* the path template — see its comment for why the path
+   * case is the dangerous one.
+   */
+  const asked = new URLSearchParams(query);
+  for (const [name, value] of options.credentialQuery ?? []) asked.set(name, value);
+  const supplied: Record<string, Value> = {
+    ...Object.fromEntries(asked),
+    ...located.header,
+    ...located.cookie,
+    ...located.body,
+    ...params.filters,
+  };
+  // Query values are validated where they are sent; path values come only
+  // from path inputs, so a query parameter cannot satisfy a missing path id.
+  for (const param of op.params) {
+    if (param.in === "query") supplied[param.name] = asked.get(param.name) ?? "";
+  }
+  const unresolved = missingInputs(op, supplied);
+  for (const name of pathParamNames(op.path)) {
+    if ((params.filters[name] === undefined || params.filters[name] === "") && !unresolved.includes(name)) unresolved.push(name);
+  }
+
+  const path = interpolatePath(op.path, params);
+  const base = (connection.baseUrl ?? "").replace(/\/+$/, "");
+  const address = `${base}${path.startsWith("/") ? path : `/${path}`}`;
+  const method = op.method;
+  const body =
+    method === "POST" && op.body ? renderBody(op.body, bodyParams, pagingInBody ? firstPageParams(op.pagination) : {}) : undefined;
+
+  const defaults: Record<string, Value> = {};
+  for (const param of op.params) if (param.default !== undefined) defaults[param.name] = param.default;
+  const inputs: Record<string, Value> = { ...defaults, ...params.filters, ...overrides };
+
+  const paging = new Set(pagingParamNames(op.pagination));
+  const sorted = (entries: Iterable<readonly [string, string]>) =>
+    [...entries].filter(([name]) => !paging.has(name)).sort(([a, x], [b, y]) => (a === b ? x.localeCompare(y) : a.localeCompare(b)));
+  const scope = fnv1a(
+    JSON.stringify({
+      op: op.id,
+      address,
+      query: sorted(query),
+      headers: sorted(Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value] as const)),
+      body: method === "POST" && op.body ? renderBody(op.body, bodyParams, {}).text : null,
+      range: op.usesRange ? [params.range.all ? "all" : params.range.start, params.range.all ? "all" : params.range.end] : null,
+    }),
+  );
+
+  return {
+    method,
+    address,
+    query,
+    url: withQueryString(address, query),
+    headers,
+    pagingInBody,
+    bodyParams,
+    ...(body ? { body } : {}),
+    inputs,
+    unresolved,
+    scope,
+  };
 };

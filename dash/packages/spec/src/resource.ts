@@ -134,7 +134,7 @@ export const resourceSchema = z.object({
    * `/orders/count`), where a read confirmed it: its number matched a
    * complete read of the list, or the count the list itself stated. "How
    * many" is then one request, however many records there are — a list read
-   * page by page stops at its ceiling (plan, track D).
+   * page by page stops at its ceiling.
    *
    * Never installed from a name alone: an endpoint called `count` that counts
    * something else would be a wrong number that looks right.

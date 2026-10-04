@@ -5,7 +5,7 @@ import type { HistoryPoint, HistorySource } from "./context.jsx";
  * What a number was, day by day, under the number: a small line and the day
  * its history starts. History the API does not keep is kept by the host
  * while the board is looked after, so it starts when it started — never
- * earlier, and it says which day (plan, track D).
+ * earlier, and it says which day.
  *
  * Nothing until there are two days to draw: one point is not a history.
  */

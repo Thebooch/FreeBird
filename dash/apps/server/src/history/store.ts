@@ -8,7 +8,7 @@ import type { DashDb } from "../platform/db.js";
  * asked what a count was then. So each number tile's value is kept once a day
  * while its board is looked after (`record.ts`), and the tile shows it with
  * the day it started: history starts when it was first kept, never earlier,
- * and says so (plan, track D).
+ * and says so.
  *
  * The account's own numbers: kept per workspace, forgotten with the board,
  * and pruned past the retention. A plug-in point: memory in tests, Dash's

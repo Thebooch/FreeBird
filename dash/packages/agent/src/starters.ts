@@ -10,7 +10,7 @@ import {
   compileBrief,
   entityById,
   fnv1a,
-  missingInputs,
+  boardInputs,
   starterSchema,
   widgetSources,
 } from "@freebirdai/dash-spec";
@@ -412,7 +412,7 @@ export const startersFromProposal = (input: {
         ? widgetSources(compiled.widget).flatMap((source) => {
             if (source.fanOut) return [];
             const def = input.check!.opDefs!.find((one) => one.id === source.op);
-            return def ? missingInputs(def, source.params) : [];
+            return def ? boardInputs(def, source.params) : [];
           })
         : [];
       if (needs.length > 0) {

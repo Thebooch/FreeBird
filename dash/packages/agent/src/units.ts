@@ -4,8 +4,8 @@
  * Asked for "delivered kilograms", a brief named the field `kilograms` — the
  * unit the request was in — where the record type holds the number as
  * `weight_kg`. No record has a field called that, so the widget could not be
- * built, and the brief said "none of these" rather than count the wrong thing
- * (checkpoint 3). A field whose name carries the unit is the field the unit was
+ * built, and the brief said "none of these" rather than count the wrong
+ * thing. A field whose name carries the unit is the field the unit was
  * written for, when exactly one does.
  *
  * Spellings of one unit, most specific first. No single letters: `m` or `s` at

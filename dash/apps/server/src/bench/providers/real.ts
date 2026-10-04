@@ -15,7 +15,7 @@ import type { MockProvider } from "../types.js";
  * provider is scored the snapshot is compared with the live API: if the data
  * has changed, the scenario is reported as a stale key rather than scored.
  *
- * No account, no key — the owner's choice at checkpoint 1. Run by hand
+ * No account and no key, so anyone can run them. Run by hand
  * (`pnpm bench --split real --live`), never in CI.
  */
 

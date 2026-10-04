@@ -353,6 +353,8 @@ interface EachPlan {
 
 /** How often a tile asks how far the host has got. */
 const EACH_ASK_MS = 3_000;
+/** How often a tile whose read is carried on in the background looks again. */
+const READING_ON_ASK_MS = 5_000;
 const NO_ANSWERS: Readonly<Record<string, EachAnswer>> = {};
 
 /**
@@ -709,6 +711,22 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
   }, [everyMs, reread]);
 
   /*
+   * A read the host is carrying on in the background (`readingOn`): looked at
+   * again until the whole answer has replaced the first pages. In view mode,
+   * so it costs the API nothing — the host answers from what it holds.
+   */
+  const readingOn = entries.some(({ entry }) => entry?.meta?.readingOn !== undefined);
+  const [readingTick, setReadingTick] = useState(0);
+  useEffect(() => {
+    if (!readingOn) return;
+    const timer = setTimeout(() => {
+      if (typeof document === "undefined" || !document.hidden) reread();
+      setReadingTick((tick) => tick + 1);
+    }, READING_ON_ASK_MS);
+    return () => clearTimeout(timer);
+  }, [readingOn, readingTick, reread]);
+
+  /*
    * The rest of a per-record source, read by the host.
    *
    * A tile reads its first twenty-five records' related records itself, so it
@@ -990,7 +1008,8 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
             read: asked.reduce((sum, { answer }) => sum + answer.read, 0),
             asked: asked.reduce((sum, { answer }) => sum + answer.of, 0),
             beyond: asked.reduce((sum, { plan }) => sum + (plan.of - plan.values.length), 0),
-            failed: asked.reduce((sum, { answer }) => sum + answer.failed, 0),
+            /* A record the API would not let this key read is not read either. */
+            failed: asked.reduce((sum, { answer }) => sum + answer.failed + (answer.denied ?? 0), 0),
             notes: asked.flatMap(({ answer }) => answer.notes ?? []),
             ...(stopped !== undefined ? { stopped } : {}),
           };

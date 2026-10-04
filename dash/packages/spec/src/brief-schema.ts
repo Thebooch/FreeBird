@@ -165,7 +165,7 @@ export interface WidgetBrief {
      * Only records where this field holds nothing (`true`) or something
      * (`false`). "Leave out cancelled orders" is a cancelled date that is
      * empty; with no way to say it, it was dropped, and a total counted the
-     * cancelled ones silently (checkpoint 4).
+     * cancelled ones silently.
      */
     readonly empty?: boolean;
   }[];
@@ -205,7 +205,7 @@ export interface WidgetBrief {
   /**
    * A word in the request that reads several ways, and the reading built:
    * "revenue", read as invoiced totals. Said on the widget, so a reader sees
-   * which "revenue" the number is before acting on it (plan, track E). The
+   * which "revenue" the number is before acting on it. The
    * other reading is offered beside it, as `alternative`.
    */
   readonly reading?: { readonly term: string; readonly as: string } | undefined;

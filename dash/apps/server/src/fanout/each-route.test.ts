@@ -10,7 +10,7 @@ import { KeyStore, LocalAesVault } from "../vault.js";
 
 /*
  * `/api/query/each`: every vendor's bills, past the twenty-five a tile reads
- * itself, read by the server in the background (plan, track D).
+ * itself, read by the server in the background.
  */
 
 let dir: string;

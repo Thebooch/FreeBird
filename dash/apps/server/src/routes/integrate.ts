@@ -1,6 +1,7 @@
 import type { HttpFetch } from "@freebirdai/dash-adapters";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
 import {
+  boardInputs,
   connectionKeyRefs,
   connectionNeedsAddress,
   fingerprintConnection,
@@ -14,7 +15,11 @@ import {
 import type { FastifyInstance } from "fastify";
 import type { EvidenceStore } from "../evidence/store.js";
 import { integrate, type IntegrateDeps, type IntegrationReport } from "../integrate/agent.js";
+import { seekRecords } from "../integrate/seek.js";
 import type { ConnectorKit } from "../integrate/connector.js";
+import { inputSources } from "../integrate/inputs.js";
+import { CheckQueue, type BlockedBecause } from "../jobs/check-queue.js";
+import { MemoryJobStore } from "../jobs/store.js";
 
 /**
  * The integration loop, for a connection somebody has just given a key to.
@@ -30,7 +35,8 @@ import type { ConnectorKit } from "../integrate/connector.js";
  *   already running. API requests, bounded; model calls only when the
  *   built-in repairs are not enough. Reads only: it never changes the account.
  * - `GET  /api/connections/:id/evidence` — what has been observed about each
- *   endpoint under the connection's current configuration. Free.
+ *   endpoint under the connection's current configuration, and which
+ *   endpoints wait for a check (and why one is blocked). Free.
  */
 
 export interface IntegrateRouteDeps {
@@ -63,6 +69,8 @@ export interface IntegrateRouteDeps {
   readonly auto: boolean;
   /** The endpoints boards read on a connection, checked before any other. */
   readonly usedOps?: (connection: string) => readonly string[];
+  /** Which endpoints are due a check, kept so a restart does not forget them. Memory unless supplied. */
+  readonly queue?: CheckQueue;
   readonly log?: (message: string) => void;
   readonly now?: () => number;
   /** Running connector code. Absent: the check repairs in the connection's own vocabulary only. */
@@ -83,6 +91,16 @@ export interface IntegrateRouteDeps {
   readonly sleep?: (ms: number) => Promise<void>;
   /** Keep what the records held, per connection: this account's, so never with the catalog. */
   readonly recordValues?: (connection: ConnectionSpec, values: IntegrationReport["values"]) => Promise<void>;
+  /**
+   * What a search for a request's records found, kept on the catalog entry
+   * and described before it returns — the brief that asked is written again
+   * over it straight away. Absent, it is kept as a check's reads are.
+   */
+  readonly recordFound?: (
+    connection: ConnectionSpec,
+    observed: IntegrationReport["observed"],
+    added: NonNullable<IntegrationReport["added"]>,
+  ) => Promise<void>;
 }
 
 /** How many endpoints a check settles, and what it may spend doing it. */
@@ -119,16 +137,19 @@ export const samplingTargets = (
     .filter((opId, index, all) => all.indexOf(opId) === index)
     .slice(0, MAX_SAMPLES);
 
-export const integrationTargets = (
-  connection: ConnectionSpec,
-  options: { canWriteCode?: boolean; used?: readonly string[] } = {},
-): string[] => {
+/** Every endpoint a check can read, most important first: what boards read, then each record type's list. */
+export const integrationCandidates = (connection: ConnectionSpec, options: { used?: readonly string[] } = {}): string[] => {
   const readable = (opId: string | undefined): opId is string => {
     const op = opId ? getOp(connection, opId) : undefined;
+    if (!op) return false;
     /* A connector reads its endpoint its own way: the path's ids are its requests' business. */
-    return (
-      !!op && (op.servedBy === "connector" || pathParamNames(op.path).length === 0) && missingInputs(op, {}).length === 0
-    );
+    if (op.servedBy === "connector") return missingInputs(op, {}).length === 0;
+    /*
+     * An input no board gives, but another list's records can: readable, the
+     * check reading that list first. Such endpoints
+     * were left out, and their records could never be counted.
+     */
+    return boardInputs(op, {}).length === 0 || (inputSources(connection, op.id)?.length ?? 0) > 0;
   };
   /* What boards read comes first: a widget over an endpoint no check reached reads one unconfirmed page. */
   const ordered = [
@@ -136,7 +157,14 @@ export const integrationTargets = (
     ...(options.used ?? []),
     ...connection.resources.map((resource) => resource.listOp),
   ];
-  const targets = [...new Set(ordered.filter(readable))].slice(0, MAX_TARGETS);
+  return [...new Set(ordered.filter(readable))];
+};
+
+export const integrationTargets = (
+  connection: ConnectionSpec,
+  options: { canWriteCode?: boolean; used?: readonly string[] } = {},
+): string[] => {
+  const targets = integrationCandidates(connection, options).slice(0, MAX_TARGETS);
   /*
    * Nothing is readable as the documentation describes it and the sign-in is
    * one no connection can send: the endpoint discovery chose to validate with
@@ -185,56 +213,121 @@ export interface IntegrationRunner {
   whenReady(connection: ConnectionSpec): void;
   /** Check a connection by itself when boards read endpoints of it no check has settled. */
   whenUsed(connection: ConnectionSpec, ops: readonly string[]): void;
+  /** These endpoints changed since they were checked: checked again, before anything else. */
+  recheck(connection: ConnectionSpec, ops: readonly string[]): void;
+  /** Each endpoint's place in the queue: settled, due, or waiting after a failure, and why. */
+  queued(id: string): ReturnType<CheckQueue["list"]>;
   running(id: string): boolean;
+  /**
+   * Look for what a request is about among the endpoints the documentation
+   * names and the import missed, check each, and keep what answers with
+   * records. The endpoints added; none when nothing
+   * was found.
+   */
+  seek(id: string, request: string): Promise<{ readonly added: readonly string[]; readonly log: readonly string[] }>;
 }
+
+/** Checks one trigger may run back to back while endpoints are still due: eight endpoints each. */
+const MAX_CHAIN = 6;
+
+/** Why a check could not settle an endpoint, from what it said. */
+const becauseOf = (note: string): BlockedBecause =>
+  /\b429\b|rate.?limit|too many requests|try again in/i.test(note)
+    ? "rate-limit"
+    : /needs? (a )?value|input|cannot supply|supply/i.test(note)
+      ? "needs-input"
+      : /\b40[13]\b|key|credential|sign in|signing in|refused|forbidden|unauthori[sz]ed/i.test(note)
+        ? "needs-credential"
+        : "failed";
 
 export const createIntegrationRunner = (deps: IntegrateRouteDeps): IntegrationRunner => {
   const inFlight = new Map<string, Promise<IntegrationRun>>();
-  /* The endpoints a check has settled on each connection since the server started. */
-  const settled = new Map<string, Set<string>>();
-  const covered = (connection: string): Set<string> => {
-    const known = settled.get(connection) ?? new Set<string>();
-    settled.set(connection, known);
-    return known;
+  /* Which endpoints are due a check, and which are settled: kept, so a restart forgets none of it. */
+  const queue = deps.queue ?? new CheckQueue({ store: new MemoryJobStore(), now: deps.now ?? Date.now });
+  /* Checks run back to back for one trigger, so one with many endpoints due cannot run without end. */
+  const chains = new Map<string, number>();
+
+  /** What the integration loop runs with, for one connection. */
+  const loopDeps = (connection: ConnectionSpec, background: boolean): IntegrateDeps => ({
+    http: deps.http,
+    resolveSecret: deps.resolveSecret,
+    fetchDocument: deps.fetchDocument,
+    now: deps.now ?? Date.now,
+    llm: deps.llm(),
+    around: deps.around(connection.id, background),
+    ...(deps.onRead ? { onRead: deps.onRead } : {}),
+    ...(deps.refresh ? { refresh: deps.refresh } : {}),
+    ...(deps.sleep ? { sleep: deps.sleep } : {}),
+    ...(deps.connectors ? { connectors: deps.connectors } : {}),
+    ...(deps.connectorLlm ? { connectorLlm: deps.connectorLlm() } : {}),
+  });
+
+  /**
+   * The endpoints this check reads: the most pressing of those due. What
+   * boards read and what no check has settled wait in the queue; a check
+   * somebody asked for checks its first endpoints again too.
+   */
+  const targetsFor = async (connection: ConnectionSpec, background: boolean): Promise<string[]> => {
+    const used = deps.usedOps ? [...deps.usedOps(connection.id)] : [];
+    const candidates = integrationCandidates(connection, { used });
+    const unconfirmed = (opId: string) => !getOp(connection, opId)?.paginationChecked;
+    await queue.enqueue(connection, used.filter((opId) => candidates.includes(opId) && unconfirmed(opId)), "used");
+    await queue.enqueue(connection, candidates.filter(unconfirmed), "unsettled");
+    const first = integrationTargets(connection, { canWriteCode: !!deps.connectors, used });
+    if (!background) await queue.enqueue(connection, first, "rest", { again: true });
+    const taken = await queue.take(connection, MAX_TARGETS);
+    /*
+     * Nothing readable as documented, and a sign-in only code can send: the
+     * endpoint connector code starts on, which no queue holds.
+     */
+    if (taken.length === 0 && candidates.length === 0) return first;
+    return taken;
+  };
+
+  /** What the check found for each endpoint it was given: settled with evidence, or due again later. */
+  const recordOutcomes = async (saved: ConnectionSpec, targets: readonly string[], report: IntegrationReport): Promise<void> => {
+    const evidenced = new Set(report.evidence.map((one) => one.op));
+    const settled = report.ops.filter((one) => one.outcome === "ready" && evidenced.has(one.op)).map((one) => one.op);
+    await queue.settle(saved, settled);
+    for (const opId of targets) {
+      if (settled.includes(opId) || !getOp(saved, opId)) continue;
+      const outcome = report.ops.find((one) => one.op === opId);
+      const note = outcome?.note ?? report.blocked ?? "The check did not reach it.";
+      /* Never settled without evidence: due again after a wait, so a read nothing can settle is not checked on every tick. */
+      await queue.block(saved, opId, outcome?.outcome === "blocked" ? becauseOf(note) : "failed", note);
+    }
   };
 
   const check = async (id: string, background: boolean): Promise<IntegrationRun> => {
     const connection = deps.getConnection(id);
     if (!connection) return { error: "no such connection", status: 404 };
-    const targets = integrationTargets(connection, {
-      canWriteCode: !!deps.connectors,
-      ...(deps.usedOps ? { used: deps.usedOps(connection.id) } : {}),
-    });
+    const targets = await targetsFor(connection, background);
     /* An MCP server's endpoints are its tools, which the check itself asks for. */
     if (targets.length === 0 && connection.kind !== "mcp")
-      return { error: "This connection has no endpoint a check can read without an input.", status: 409 };
+      return background
+        ? { error: "Every endpoint a check can read is settled.", status: 409 }
+        : { error: "This connection has no endpoint a check can read without an input.", status: 409 };
     const entry = (connection.catalog ? deps.catalogEntry(connection.catalog) : undefined) ?? undefined;
     const now = deps.now ?? Date.now;
-    for (const opId of targets) covered(connection.id).add(opId);
 
-    const report = await integrate(
-      connection,
-      {
-        targets,
-        entry,
-        requests: REQUESTS,
-        traverseUpTo: TRAVERSE_UP_TO,
-        sample: samplingTargets(connection, entry, targets),
-      },
-      {
-        http: deps.http,
-        resolveSecret: deps.resolveSecret,
-        fetchDocument: deps.fetchDocument,
-        now,
-        llm: deps.llm(),
-        around: deps.around(connection.id, background),
-        ...(deps.onRead ? { onRead: deps.onRead } : {}),
-        ...(deps.refresh ? { refresh: deps.refresh } : {}),
-        ...(deps.sleep ? { sleep: deps.sleep } : {}),
-        ...(deps.connectors ? { connectors: deps.connectors } : {}),
-        ...(deps.connectorLlm ? { connectorLlm: deps.connectorLlm() } : {}),
-      },
-    );
+    let report: IntegrationReport;
+    try {
+      report = await integrate(
+        connection,
+        {
+          targets,
+          entry,
+          requests: REQUESTS,
+          traverseUpTo: TRAVERSE_UP_TO,
+          sample: samplingTargets(connection, entry, targets),
+        },
+        loopDeps(connection, background),
+      );
+    } catch (error) {
+      /* Stopped part-way: what it was given waits again, as it was. */
+      await queue.release(connection.id, targets);
+      throw error;
+    }
     /*
      * Evidence is worth keeping, and not worth losing a check over: an
      * embedded database left damaged by a hard stop refuses writes, and the
@@ -257,6 +350,7 @@ export const createIntegrationRunner = (deps: IntegrateRouteDeps): IntegrationRu
      */
     const latest = deps.getConnection(id);
     if (!latest || fingerprintConnection(latest) !== fingerprintConnection(connection)) {
+      await queue.release(connection.id, targets);
       return { error: "The connection changed while it was being checked.", status: 409 };
     }
 
@@ -268,19 +362,23 @@ export const createIntegrationRunner = (deps: IntegrateRouteDeps): IntegrationRu
     const moved =
       report.connection.baseUrl !== connection.baseUrl ||
       JSON.stringify(report.connection.auth) !== JSON.stringify(connection.auth);
-    deps.saveConnection(
-      {
-        ...report.connection,
-        ...(moved ? { credentialsRevision: (connection.credentialsRevision ?? 0) + 1 } : {}),
-        integration: {
-          at: new Date(now()).toISOString(),
-          outcome: report.outcome,
-          changes: report.changes.slice(0, 20).map((change) => change.slice(0, 400)),
-          notes: report.ops.slice(0, 20).map((one) => `${one.title}: ${one.note}`.slice(0, 400)),
-        },
+    const saved: ConnectionSpec = {
+      ...report.connection,
+      ...(moved ? { credentialsRevision: (connection.credentialsRevision ?? 0) + 1 } : {}),
+      integration: {
+        at: new Date(now()).toISOString(),
+        outcome: report.outcome,
+        changes: report.changes.slice(0, 20).map((change) => change.slice(0, 400)),
+        notes: report.ops.slice(0, 20).map((one) => `${one.title}: ${one.note}`.slice(0, 400)),
       },
-      report.changed,
-    );
+    };
+    deps.saveConnection(saved, report.changed);
+    /* Settled under what was saved, never before the check ran: what it changed is what it settled. */
+    try {
+      await recordOutcomes(saved, targets, report);
+    } catch (error) {
+      deps.log?.(`which of ${connection.id}'s endpoints are settled could not be kept: ${error instanceof Error ? error.message : String(error)}`);
+    }
     deps.log?.(
       `checked ${connection.id}: ${report.outcome}, ${report.changes.length} change(s), ${report.requests} request(s)`,
     );
@@ -322,9 +420,28 @@ export const createIntegrationRunner = (deps: IntegrateRouteDeps): IntegrationRu
         error: error instanceof Error ? error.message : String(error),
         status: 500,
       }))
-      .finally(() => inFlight.delete(id));
+      .finally(() => {
+        inFlight.delete(id);
+        void rearm(id).catch((error: unknown) => deps.log?.(`checking ${id} again failed: ${String(error)}`));
+      });
     inFlight.set(id, started);
     return started;
+  };
+
+  /*
+   * Endpoints still due once a check ends — the ninth a board reads, a change
+   * seen while it ran: checked next, by itself, a bounded number of times
+   * back to back. Never past what is due: a blocked endpoint waits its turn.
+   */
+  const rearm = async (id: string): Promise<void> => {
+    const connection = deps.getConnection(id);
+    const chain = (chains.get(id) ?? 0) + 1;
+    if (!deps.auto || !connection || chain > MAX_CHAIN || (await queue.remaining(connection)) === 0) {
+      chains.delete(id);
+      return;
+    }
+    chains.set(id, chain);
+    whenReady(connection);
   };
 
   const whenReady: IntegrationRunner["whenReady"] = (connection) => {
@@ -338,19 +455,57 @@ export const createIntegrationRunner = (deps: IntegrateRouteDeps): IntegrationRu
   };
 
   /*
-   * A board began reading an endpoint no check has settled: check again, by
-   * itself, so its paging is confirmed and its filters found. Once per
-   * endpoint per run of the server, so saving a board is never a loop of checks.
+   * A board began reading an endpoint no check has settled: due a check, by
+   * itself, so its paging is confirmed and its filters found. Settled once,
+   * under its configuration — kept across restarts — so saving a board is
+   * never a loop of checks, and one that failed waits before it is tried again.
    */
   const whenUsed: IntegrationRunner["whenUsed"] = (connection, ops) => {
     const fresh = ops.filter((opId) => {
       const op = getOp(connection, opId);
-      return !!op && !op.paginationChecked && !covered(connection.id).has(opId);
+      return !!op && !op.paginationChecked;
     });
-    if (fresh.length > 0) whenReady(connection);
+    if (fresh.length === 0) return;
+    void (async () => {
+      await queue.enqueue(connection, fresh, "used");
+      if ((await queue.remaining(connection)) > 0) whenReady(connection);
+    })().catch((error: unknown) => deps.log?.(`checking ${connection.id}'s endpoints could not be queued: ${String(error)}`));
   };
 
-  return { run, whenReady, whenUsed, running: (id) => inFlight.has(id) };
+  /* A change seen on these endpoints: checked again, first — the endpoints themselves, not the whole connection. */
+  const recheck: IntegrationRunner["recheck"] = (connection, ops) => {
+    void (async () => {
+      await queue.enqueue(connection, ops, "drift");
+      whenReady(connection);
+    })().catch((error: unknown) => deps.log?.(`checking ${connection.id} again could not be queued: ${String(error)}`));
+  };
+
+  const seek: IntegrationRunner["seek"] = async (id, request) => {
+    const connection = deps.getConnection(id);
+    const entry = connection?.catalog ? deps.catalogEntry(connection.catalog) : undefined;
+    if (!connection || !entry) return { added: [], log: [] };
+    const sought = await seekRecords({ connection, entry, request, deps: loopDeps(connection, false) });
+    if (!sought || sought.added.length === 0) return { added: [], log: sought?.log ?? [] };
+    /* Changed meanwhile — a new key, a new address: what was found describes the old one. */
+    const latest = deps.getConnection(id);
+    if (!latest || fingerprintConnection(latest) !== fingerprintConnection(connection)) return { added: [], log: sought.log };
+    deps.saveConnection(sought.connection, true);
+    const added = {
+      ops: sought.entry.ops.filter((op) => sought.added.includes(op.id)),
+      resources: sought.entry.resources.filter((one) => one.listOp !== undefined && sought.added.includes(one.listOp)),
+      replaced: [] as string[],
+    };
+    try {
+      if (deps.recordFound) await deps.recordFound(sought.connection, sought.report.observed, added);
+      else deps.recordObserved?.(sought.connection, sought.report.observed, added);
+    } catch (error) {
+      deps.log?.(`what was found for ${id} could not be kept: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    deps.log?.(`looked for "${request.slice(0, 80)}" on ${id}: added ${sought.added.join(", ")}`);
+    return { added: sought.added, log: sought.log };
+  };
+
+  return { run, whenReady, whenUsed, recheck, queued: (id) => queue.list(id), running: (id) => inFlight.has(id), seek };
 };
 
 export const integrateRoutes =
@@ -376,8 +531,11 @@ export const integrateRoutes =
       const current = fingerprintConnection(connection);
       const byOp = new Map<string, typeof records>();
       for (const record of records) byOp.set(record.op, [...(byOp.get(record.op) ?? []), record]);
+      /* Which endpoints wait for a check, and why one that failed is waiting: said, not hidden. */
+      const waiting = (await runner.queued(connection.id).catch(() => [])).filter((one) => one.state !== "done");
       return {
         checking: runner.running(connection.id),
+        waiting,
         ops: [...byOp].map(([op, list]) => ({
           op,
           title: getOp(connection, op)?.title ?? op,

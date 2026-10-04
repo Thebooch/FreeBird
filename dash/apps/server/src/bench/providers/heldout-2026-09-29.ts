@@ -4,7 +4,7 @@ import type { BenchRequest, BenchResponse, MockProvider } from "../types.js";
 
 /**
  * A held-out provider written on 2026-09-29 to replace chargebolt, which moved
- * to the dev set after checkpoint 3. Written by the session that wrote
+ * to the dev set after checkpoint 3. Written by the author of
  * `heldout-2026-09-28.ts`, under the same rules (`dash/bench/HELDOUT-AUTHORING.md`):
  * without reading the integration loop, the importers or any result.
  *

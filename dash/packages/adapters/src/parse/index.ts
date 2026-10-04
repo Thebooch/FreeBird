@@ -3,7 +3,7 @@ import { parseDelimited, parseEvents, parseNdjson } from "./delimited.js";
 import { XmlError, looksLikeXml, parseXml } from "./xml.js";
 
 /**
- * An answer's body as plain values, whatever it was written in (plan, track A).
+ * An answer's body as plain values, whatever it was written in.
  *
  * The format is the answer's own word for itself — its content type — and
  * never a guess from its first characters, with one exception: a body that

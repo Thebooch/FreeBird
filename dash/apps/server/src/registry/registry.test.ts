@@ -7,7 +7,7 @@ import { CatalogStore } from "../catalog.js";
 import { connectorHash } from "../connector/adapter.js";
 import { fromRegistry, httpRegistry, registryIndex, syncRegistry } from "./registry.js";
 
-/* Plan, track H: catalog entries pulled from a read-only registry, and what is never taken from one. */
+/* Catalog entries pulled from a read-only registry, and what is never taken from one. */
 
 const BASE = "https://registry.example.test/dash/";
 

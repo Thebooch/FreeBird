@@ -1,4 +1,5 @@
 import type { LlmAdapter } from "@freebirdai/dash-agent";
+import { benchTooling } from "./integrator.js";
 import { PROVIDERS, providersIn } from "./providers/index.js";
 import { BENCH_NOW } from "./seed.js";
 import { scoreOutcome } from "./score.js";
@@ -59,6 +60,11 @@ export const runSuite = async (options: SuiteOptions): Promise<ScenarioScore[]> 
     (provider) => !options.only || options.only.includes(provider.id),
   );
   for (const provider of providers) {
+    /* Documentation only a browser can read, and no browser here: skipped, and said — never downloaded. */
+    if (provider.needs === "browser" && benchTooling.status().state !== "ready") {
+      console.warn(`Skipped ${provider.id}: its documentation is drawn by scripts, and Playwright's Chromium is not installed here.`);
+      continue;
+    }
     /*
      * A real API's answer keys hold only while its data is what the snapshot
      * says. Checked once per provider, before anything is scored.

@@ -1,3 +1,5 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
 import {
   ALL_ROWS,
@@ -14,13 +16,16 @@ import {
 import { connectionFromCatalog } from "../catalog.js";
 import { AUTO_INDEX_PAGES, discover } from "../discovery/index.js";
 import { integrate } from "../integrate/agent.js";
-import { RestAdapter } from "@freebirdai/dash-adapters";
+import { DependentAdapter, RestAdapter } from "@freebirdai/dash-adapters";
 import { getOp, paramsForWidget, resolveRange } from "@freebirdai/dash-spec";
 import { OAuthRetryAdapter, RateLimitWaitAdapter } from "../auth/retry-adapter.js";
 import { ConnectorAdapter } from "../connector/adapter.js";
 import { withAddedReads, withEntryResources, withObservedFields } from "../integrate/observed.js";
+import { seekRecords } from "../integrate/seek.js";
 import type { SeenSet } from "../integrate/values.js";
 import { integrationTargets, samplingTargets } from "../routes/integrate.js";
+import { BrowserDocsRenderer } from "../discovery/render/browser.js";
+import { RendererTooling } from "../discovery/render/tooling.js";
 import { chooseByBrief, observeFirstRead } from "./brief-choice.js";
 import { benchConnectors } from "./connectors.js";
 import { benchCredentials, signInAsThePerson } from "./oauth.js";
@@ -40,6 +45,16 @@ import type {
  * Built the way a total is built everywhere else — grouped on the constant
  * `ALL_ROWS` — so the benchmark exercises the same runtime a board does.
  */
+/** Playwright's Chromium where it is installed, never fetched: its requests answered by the benchmark's own transport. */
+export const benchRenderer = (fetchDocument: IntegrationEnv["fetchDocument"]): BrowserDocsRenderer =>
+  new BrowserDocsRenderer({
+    tooling: benchTooling,
+    fetch: async (url) => ({ ...(await fetchDocument(url)), contentType: null }),
+  });
+
+/* A folder of its own, with no agreement in it: the benchmark can draw with a browser already here, and never fetches one. */
+export const benchTooling = new RendererTooling({ dir: join(tmpdir(), "dash-bench-tooling"), mode: "ask" });
+
 export const widgetFor = (
   connection: ConnectionSpec,
   opId: string,
@@ -80,7 +95,17 @@ const opAt = (connection: ConnectionSpec, path: string): string | null => {
   } catch {
     /* An address with a blank in it: its own paths only. */
   }
-  return connection.ops.find((op) => op.path === path || `${base}${op.path}` === path)?.id ?? null;
+  const exact = connection.ops.find((op) => op.path === path || `${base}${op.path}` === path);
+  if (exact) return exact.id;
+  /*
+   * A scripted path written against an address that holds more of the path —
+   * `/search/jql` under `…/rest/api/3` — names the one endpoint whose path ends
+   * with it at a segment, where only one does (seen with the trackwell mock
+   * API).
+   */
+  if (!path.startsWith("/")) return null;
+  const ending = connection.ops.filter((op) => `${base}${op.path}`.endsWith(path));
+  return ending.length === 1 ? ending[0]!.id : null;
 };
 
 /** A model that counts its calls, so a run's cost is reported. */
@@ -195,6 +220,8 @@ const connectFromDocs = async (
     llm,
     search: null,
     readIndexUpTo: AUTO_INDEX_PAGES,
+    /* Documentation drawn by scripts is drawn, where Chromium is installed; the benchmark never downloads it. */
+    renderDocs: benchRenderer(env.fetchDocument),
   });
   notes.push(found.note, ...found.warnings);
   if (!found.entry) return stop("discover", "Discovery found nothing to connect to.");
@@ -275,7 +302,7 @@ const signInIfAsked = async (
 };
 
 /**
- * The integration loop (plan step 2): the baseline's first steps, then
+ * The integration loop: the baseline's first steps, then
  * `integrate` over the endpoint the objective reads — repairs, the paging
  * probe and evidence — before the widget is built.
  *
@@ -323,25 +350,41 @@ export const agentIntegrator = (options: { llm?: LlmAdapter | null; requests?: n
     let targets: string[];
     let chosen: WidgetSpec | null = null;
     let compiledFrom: { brief: import("@freebirdai/dash-spec").WidgetBrief; entity: import("@freebirdai/dash-spec").EntitySpec } | null = null;
-    /** The integration loop over some endpoints, with this scenario's credentials and connector kit. */
+    /** What the integration loop runs with: this scenario's credentials and connector kit. */
+    const checkDeps = {
+      http: env.http,
+      resolveSecret: broker.resolve,
+      refresh: broker.refresh,
+      fetchDocument: env.fetchDocument,
+      now: () => env.now,
+      llm: model.llm,
+      connectors,
+      /* A short rate limit is waited out, as the product's check does. */
+      sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    };
+    /** The integration loop over some endpoints. */
     const settleOps = (ops: readonly string[], requests: number, sample: readonly string[] = []) =>
       integrate(
         connection,
-        { targets: ops, entry, docsUrl: input.docsUrl, requests, traverseUpTo: 50, sample },
-        {
-          http: env.http,
-          resolveSecret: broker.resolve,
-          refresh: broker.refresh,
-          fetchDocument: env.fetchDocument,
-          now: () => env.now,
-          llm: model.llm,
-          connectors,
-          /* A short rate limit is waited out, as the product's check does. */
-          sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-        },
+        /* With the request: an input another list supplies is settled to the record it names, else read for every one. */
+        { targets: ops, entry, docsUrl: input.docsUrl, requests, traverseUpTo: 50, sample, objective: input.objective.request },
+        checkDeps,
       );
     if (choice) {
-      const opId = opAt(connection, choice.path);
+      let opId = opAt(connection, choice.path);
+      /*
+       * Not imported: looked for as the product would, from the request's own
+       * words among the endpoints the documentation names — never from the
+       * scripted path, which a person never gives.
+       */
+      if (!opId) {
+        const sought = await seekRecords({ connection, entry, request: input.objective.request, docsUrl: input.docsUrl, deps: checkDeps });
+        if (sought) notes.push(...sought.log);
+        if (sought && sought.added.length > 0) {
+          connection = sought.connection;
+          opId = opAt(connection, choice.path);
+        }
+      }
       if (!opId) return stop("choose", `No endpoint at ${choice.path} was imported.`);
       targets = [opId];
     } else {
@@ -375,15 +418,40 @@ export const agentIntegrator = (options: { llm?: LlmAdapter | null; requests?: n
         if (described !== entry)
           notes.push(`The first check read fields the documentation did not declare, for ${Object.keys(precheck.observed).join(", ")}.`);
       }
-      const brief = await chooseByBrief({
-        connection,
-        entry: described,
-        request: input.objective.request,
-        llm: model.llm,
-        today: new Date(env.now).toISOString().slice(0, 10),
-        seen,
-      });
+      const writeBriefOver = (over: CatalogEntry) =>
+        chooseByBrief({
+          connection,
+          entry: over,
+          request: input.objective.request,
+          llm: model.llm!,
+          today: new Date(env.now).toISOString().slice(0, 10),
+          seen,
+        });
+      let brief = await writeBriefOver(described);
       notes.push(...brief.notes);
+      /*
+       * No record type is what the request is about, or none could be
+       * described: the documentation is read again for the endpoints it names
+       * that the import missed, each checked, and the brief written once more
+       * — as the product does.
+       */
+      if ("stop" in brief && (brief.stop === "describe" || brief.stop === "choose")) {
+        const sought = await seekRecords({
+          connection,
+          entry: described,
+          request: input.objective.request,
+          docsUrl: input.docsUrl,
+          deps: checkDeps,
+        });
+        if (sought) notes.push(...sought.log);
+        if (sought && sought.added.length > 0) {
+          connection = withEntryResources(sought.connection, sought.entry);
+          described = sought.entry;
+          seen = { ...seen, ...sought.report.values };
+          brief = await writeBriefOver(described);
+          notes.push(...brief.notes);
+        }
+      }
       if ("stop" in brief) return stop(brief.stop, brief.why);
       chosen = brief.widget;
       compiledFrom = { brief: brief.brief, entity: brief.entity };
@@ -414,7 +482,7 @@ export const agentIntegrator = (options: { llm?: LlmAdapter | null; requests?: n
         const rest = connection.connector
           ? new ConnectorAdapter(env.http, connectors)
           : new RateLimitWaitAdapter(new RestAdapter(env.http));
-        const adapter = new OAuthRetryAdapter(rest, broker);
+        const adapter = new DependentAdapter(new OAuthRetryAdapter(rest, broker));
         const op = getOp(connection, targets[0]);
         if (op) {
           const read = await adapter.fetch(connection, op, {}, {

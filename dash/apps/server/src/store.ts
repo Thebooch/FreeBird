@@ -12,8 +12,8 @@ import { writeJsonAtomic } from "./json-file.js";
  * entry in the encrypted vault.
  */
 /**
- * Where boards, connections and their capability reports are kept (plan,
- * track G). The server depends on this, not on the file store below, so a
+ * Where boards, connections and their capability reports are kept. The
+ * server depends on this, not on the file store below, so a
  * hosted build can keep the same shapes in its own database.
  */
 export interface SpecRepository {

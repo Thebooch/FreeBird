@@ -9,12 +9,17 @@ import { rolePolicy } from "../identity/policy.js";
 import { DbLeaseLock } from "./lease.js";
 import { allowlistEgress, configureEgress, fetchPublicDocument } from "../safe-fetch.js";
 import { openChatDb } from "../chat/db.js";
-import { DbEvidenceStore, type EvidenceStore } from "../evidence/store.js";
+import { DbEvidenceStore, scopedEvidence, type EvidenceStore } from "../evidence/store.js";
 import { openDashDb } from "./db.js";
 import { DbWriteJournal } from "../writes/journal-db.js";
 import { DbCredentialMetaStore } from "../auth/credential-meta.js";
 import { DbSeenValueStore } from "../values/store.js";
 import { DbShapeStore } from "../drift/store.js";
+import { DbJobStore } from "../jobs/store.js";
+import { LOCAL_WORKSPACE_ID, type IdentityResolver } from "../identity/resolver.js";
+import { isWorkspaceId } from "./workspaces.js";
+import { BrowserDocsRenderer } from "../discovery/render/browser.js";
+import { RendererTooling, type RendererMode } from "../discovery/render/tooling.js";
 import { DbSnapshotStore } from "../history/store.js";
 import type { SearchProvider } from "../discovery/search.js";
 import { searchFromEnv } from "../discovery/search.js";
@@ -31,7 +36,7 @@ import { KeyStore, LocalAesVault } from "../vault.js";
 
 
 /**
- * Everything the server plugs in, built for one machine (plan, track G).
+ * Everything the server plugs in, built for one machine.
  *
  * `buildServer` takes every piece of infrastructure it depends on as an
  * option — the plug-in points in `PLATFORM.md` — and this is the open-source
@@ -50,13 +55,26 @@ export interface LocalPlatform {
   readonly modelFor: (task?: string) => string | null;
   readonly llm: (label?: string) => LlmAdapter | null;
   readonly search: () => SearchProvider | null;
+  /**
+   * Who signs requests in, when something does: a host holding several
+   * workspaces resolves each request with it to pick the workspace's server.
+   */
+  readonly identity?: IdentityResolver;
+  /** The workspace the open-source build, or a host's first workspace, keeps its data under. */
+  readonly defaultWorkspace: string;
+  /**
+   * One workspace's server options: its own folders, its own key in every
+   * database store, its own chat tenant. The default
+   * workspace's are `platform` itself, with its data where it always was.
+   */
+  forWorkspace(workspace: string): DashPlatform;
   /** Close what was opened, on the way out: an embedded database killed open can be damaged. */
   close(): Promise<void>;
 }
 
 /** `here` is the server's source directory, which the shipped catalog and parts are found beside. */
 export const createLocalPlatform = async (here: string): Promise<LocalPlatform> => {
-  /* Private addresses an operator allows connections to reach, when they opt in (plan, track F). */
+  /* Private addresses an operator allows connections to reach, when they opt in. */
   if (process.env.DASH_PRIVATE_EGRESS) configureEgress(allowlistEgress(process.env.DASH_PRIVATE_EGRESS));
   const root = resolve(process.env.DASH_ROOT ?? process.cwd());
   const stateDir = join(root, ".dash");
@@ -82,11 +100,8 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
    */
   const registryUrl = process.env.DASH_CATALOG_REGISTRY;
   const registryDir = join(stateDir, "registry");
-  const catalog = new CatalogStore(
-    process.env.DASH_CATALOG_DIR ?? join(repoRoot, "catalog"),
-    join(stateDir, "catalog"),
-    registryUrl ? registryDir : undefined,
-  );
+  const seedDir = process.env.DASH_CATALOG_DIR ?? join(repoRoot, "catalog");
+  const catalog = new CatalogStore(seedDir, join(stateDir, "catalog"), registryUrl ? registryDir : undefined);
   if (registryUrl) {
     const pull = async (): Promise<void> => {
       try {
@@ -235,7 +250,7 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
   }
 
   /*
-   * Who is asking (plan, track G). The open-source build has one owner and no
+   * Who is asking. The open-source build has one owner and no
    * sign-in, which is safe only on this machine. A hosted or shared instance
    * names an OpenID Connect issuer: every request then carries a token it
    * signed, the workspace's members say what each person may do, and the first
@@ -251,6 +266,11 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     throw new Error(bind.reason);
   }
   const memberships = signsIn ? (dashDb ? new DbMembershipStore(dashDb) : new MemoryMembershipStore()) : undefined;
+  /*
+   * The workspace whose data is where it always was — the root folders, the
+   * `local` key: the open-source build's only one, or a host's first.
+   */
+  const defaultWorkspace = signsIn ? (process.env.DASH_WORKSPACE ?? "main") : LOCAL_WORKSPACE_ID;
   if (memberships && process.env.DASH_OWNER_SUB) {
     const workspaceId = process.env.DASH_WORKSPACE ?? "main";
     const now = new Date().toISOString();
@@ -279,8 +299,30 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
         })
       : undefined;
 
+  /*
+   * Playwright's own Chromium, for documentation drawn by scripts: asked for
+   * before it is downloaded here; in a hosted image already (`DASH_RENDERER=hosted`);
+   * or not at all (`off`).
+   */
+  const rendererMode: RendererMode =
+    process.env.DASH_RENDERER === "hosted" || process.env.DASH_RENDERER === "off" ? process.env.DASH_RENDERER : "ask";
+  const rendererTooling = new RendererTooling({
+    dir: join(stateDir, "tooling"),
+    mode: rendererMode,
+    log: (line) => console.log(`[renderer] ${line}`),
+  });
+  const renderDocs = new BrowserDocsRenderer({
+    tooling: rendererTooling,
+    fetch: async (url) => {
+      const response = await fetchPublicDocument(url);
+      return { status: response.status, text: response.text, url: response.url, contentType: response.headers.get("content-type") };
+    },
+  });
+
   const platform: DashPlatform = {
     ...(identity && memberships ? { identity, policy: rolePolicy(memberships) } : {}),
+    /* Its rows under `local`, as they always were, whatever the workspace is called. */
+    workspace: { id: defaultWorkspace, key: LOCAL_WORKSPACE_ID },
     /* Several servers on one shared database: one keeper per connection among them. */
     ...(dashDb && process.env.DATABASE_URL ? { leases: new DbLeaseLock(dashDb) } : {}),
     // The keeper: see `keeper/keeper.ts`. On here, off in tests.
@@ -308,9 +350,46 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     ...(dashDb ? { credentialMeta: new DbCredentialMetaStore(dashDb) } : {}),
     ...(dashDb ? { seenValues: new DbSeenValueStore(dashDb) } : {}),
     ...(dashDb ? { shapes: new DbShapeStore(dashDb) } : {}),
+    // Reads carried on past a tile's limits, their records sealed with the vault's key until they finish.
+    ...(dashDb ? { jobs: new DbJobStore(dashDb, vault) } : {}),
+    ...(rendererMode !== "off" ? { renderDocs, rendererSetup: rendererTooling } : {}),
     ...(dashDb ? { snapshots: new DbSnapshotStore(dashDb) } : {}),
     logger: true,
   };
+  /*
+   * Another workspace on the same host: everything that holds an account's
+   * data, its own; the catalog's shipped and registry tiers, the models, the
+   * renderer and the databases' connections, shared.
+   */
+  const forWorkspace = (workspace: string): DashPlatform => {
+    if (workspace === defaultWorkspace) return platform;
+    if (!isWorkspaceId(workspace)) throw new Error(`"${workspace}" is not a workspace this host can hold.`);
+    const filesAt = join(root, "workspaces", workspace);
+    const stateAt = join(stateDir, "workspaces", workspace);
+    return {
+      ...platform,
+      workspace: { id: workspace, key: workspace },
+      store: new SpecStore(join(filesAt, "dashboards"), join(filesAt, "connections"), join(filesAt, "reports")),
+      keys: new KeyStore(vault, join(stateAt, "vault.json")),
+      grants: new GrantStore(join(stateAt, "grants.json")),
+      narrowings: new NarrowingStore(join(stateAt, "narrowings")),
+      rhythms: new RhythmStore(join(stateAt, "rhythm")),
+      catalog: new CatalogStore(seedDir, join(stateAt, "catalog"), registryUrl ? registryDir : undefined),
+      ...(evidence ? { evidence: scopedEvidence(evidence, workspace) } : {}),
+      ...(dashDb
+        ? {
+            journal: new DbWriteJournal(dashDb, workspace),
+            credentialMeta: new DbCredentialMetaStore(dashDb, workspace),
+            seenValues: new DbSeenValueStore(dashDb, workspace),
+            shapes: new DbShapeStore(dashDb, workspace),
+            jobs: new DbJobStore(dashDb, vault, workspace),
+            snapshots: new DbSnapshotStore(dashDb, workspace),
+          }
+        : {}),
+      ...(dashDb && process.env.DATABASE_URL ? { leases: new DbLeaseLock(dashDb, workspace) } : {}),
+    };
+  };
+
   return {
     platform,
     root,
@@ -319,6 +398,9 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     modelFor,
     llm,
     search,
+    ...(identity ? { identity } : {}),
+    defaultWorkspace,
+    forWorkspace,
     close: async () => {
       await chat?.close().catch(() => undefined);
       await dashDb?.close().catch(() => undefined);

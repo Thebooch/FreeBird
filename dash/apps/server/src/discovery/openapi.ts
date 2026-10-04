@@ -286,7 +286,7 @@ export const addressFrom = (doc: Json, specUrl: string): ApiAddress | undefined 
      * No servers at all means one at "/", relative to the document, by
      * OpenAPI 3's own rule — not a guess. Asked for an address anyway, a
      * public API whose document leaves them out could never be read without
-     * a person typing what the specification had already said (checkpoint 2).
+     * a person typing what the specification had already said.
      */
     if (!Array.isArray(doc.servers) || doc.servers.length === 0) {
       try {
@@ -507,7 +507,7 @@ const issuedByLogin = (doc: Json, scheme: Json): boolean => {
 /**
  * AWS Signature Version 4, as API Gateway's exports mark it: an `apiKey`
  * scheme named `Authorization` carrying `x-amazon-apigateway-authtype`.
- * Signed by the built-in signer (plan, track B), never pasted as a header.
+ * Signed by the built-in signer, never pasted as a header.
  */
 const awsSigned = (scheme: Json): boolean =>
   /^aws_?sigv4$/i.test(str(scheme["x-amazon-apigateway-authtype"]) ?? "") ||
@@ -828,7 +828,7 @@ const authFrom = (doc: Json, keyRef: string): DialectAuth => {
         (where === "header" || where === "query" || where === "cookie") &&
         str(scheme.name)
       ) {
-        /* Wherever each key goes: a header, the query string, a cookie (plan, track B). */
+        /* Wherever each key goes: a header, the query string, a cookie. */
         parts.push({
           header: str(scheme.name)!,
           keyRef: `${keyRef}-${index + 1}`,
@@ -879,7 +879,7 @@ const authFrom = (doc: Json, keyRef: string): DialectAuth => {
           auth: { type: "basic", usernameRef: `${keyRef}-user`, keyRef },
         });
       }
-      /* HTTP Digest: the same two values, answered to the server's challenge (plan, track B). */
+      /* HTTP Digest: the same two values, answered to the server's challenge. */
       if (httpScheme === "digest") {
         candidates.push({
           rank: 3 - preferred,
@@ -1387,7 +1387,7 @@ export const parseOpenApi = (
   const auth = labelled(authFrom(doc, keyRef));
   /*
    * A client certificate (mutual TLS), where a requirement the API states
-   * asks for one — alone, or beside a key (plan, track B).
+   * asks for one — alone, or beside a key.
    */
   const mutualTls = (() => {
     const schemes = schemesOf(doc);

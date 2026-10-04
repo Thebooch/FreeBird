@@ -53,6 +53,12 @@ export interface ConnectorSandbox {
   /** Load the code and stand ready to call its hooks. Rejects when the code does not load. */
   open(options: {
     readonly code: string;
+    /**
+     * One endpoint's own reading code, loaded after `code` in a scope of its
+     * own: it sees the shared code's functions, and its own names never clash
+     * with them. Its `read`, `parse` and `paginate` are the run's.
+     */
+    readonly module?: string;
     readonly host: SandboxHost;
     readonly limits?: Partial<SandboxLimits>;
     readonly seed?: number;
@@ -105,6 +111,7 @@ export class QuickJsSandbox implements ConnectorSandbox {
 
   async open(options: {
     readonly code: string;
+    readonly module?: string;
     readonly host: SandboxHost;
     readonly limits?: Partial<SandboxLimits>;
     readonly seed?: number;
@@ -116,6 +123,7 @@ export class QuickJsSandbox implements ConnectorSandbox {
       workerData: {
         wasmModule,
         code: options.code,
+        module: options.module ?? null,
         prelude,
         limits,
         now: host.now(),

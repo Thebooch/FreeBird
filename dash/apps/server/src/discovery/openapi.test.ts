@@ -423,11 +423,11 @@ describe("parseOpenApi", () => {
         type: "query",
         param: "api_key",
       });
-      /* Plan, track B: the same two values, answered to a challenge. */
+      /* The same two values, answered to a challenge. */
       expect(authOf({ a: { type: "http", scheme: "digest" } })).toMatchObject({ type: "basic", digest: true });
     });
 
-    /* Plan, track B: a key in a cookie, and keys that go in different places together. */
+    /* A key in a cookie, and keys that go in different places together. */
     it("sends a key in a cookie, and keeps every key a requirement asks for together, wherever each goes", () => {
       expect(authOf({ a: { type: "apiKey", in: "cookie", name: "session_key" } })).toMatchObject({
         type: "headers",
@@ -451,7 +451,7 @@ describe("parseOpenApi", () => {
       });
     });
 
-    /* Plan, track B: AWS Signature V4, as API Gateway's own exports mark it. */
+    /* AWS Signature V4, as API Gateway's own exports mark it. */
     it("signs for AWS where the specification marks its Authorization key as awsSigv4", () => {
       const sigv4 = { type: "apiKey", in: "header", name: "Authorization", "x-amazon-apigateway-authtype": "awsSigv4" };
       /* Never a header somebody pastes a value into: two keys, and a signature made here. */
@@ -469,7 +469,7 @@ describe("parseOpenApi", () => {
       expect(metered).toEqual({ ...signed, apiKey: { header: "x-api-key", keyRef: "billing-api-key-api" } });
     });
 
-    /* Plan, track B: a client certificate, alone or beside a key. */
+    /* A client certificate, alone or beside a key. */
     it("asks for a client certificate where a requirement names mutual TLS", () => {
       const entry = parseOpenApi(
         spec({
@@ -673,7 +673,7 @@ describe("parseOpenApi", () => {
       expect(names).toEqual(expect.arrayContaining(["filter[account]", "filter[year]"]));
     });
 
-    /* Plan, track A: a table of rows, a record a line and XML are read as they are. */
+    /* A table of rows, a record a line and XML are read as they are. */
     it("says nothing against an endpoint that answers in CSV or XML, and names one that answers with a file of bytes", () => {
       const warningsFor = (type: string) =>
         parseOpenApi(withRefunds({ responses: { "200": { content: { [type]: { schema: { type: "string" } } } } } }), SPEC_URL)!.warnings.join(" ");
@@ -1701,7 +1701,7 @@ describe("where the API lives, and what it asks for", () => {
     expect(entry.keyHelp).not.toMatch(/curl/);
   });
 
-  /* Checkpoint 2: a public API whose document names no server was asked for an address the specification had given. */
+  /* Regression: a public API whose document names no server was asked for an address the specification had given. */
   it("takes a document that names no server at its word — the host that serves it — and says so", () => {
     const { entry, warnings } = parseOpenApi(spec({ servers: [] }), SPEC_URL)!;
     expect(entry.baseUrlGuessed).toBeUndefined();

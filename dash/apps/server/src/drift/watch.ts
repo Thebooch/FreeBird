@@ -3,8 +3,7 @@ import { driftBetween, driftFields, driftNote, shapeOf, type AcceptedShape } fro
 import type { ShapeStore } from "./store.js";
 
 /**
- * Holding each fresh answer against the shape its endpoint was accepted in
- * (plan, track H).
+ * Holding each fresh answer against the shape its endpoint was accepted in.
  *
  * The keeper reads every endpoint a board uses, on a rhythm; each answer it
  * brings back is looked at here. A change is never repaired into a saved
@@ -18,8 +17,8 @@ export interface DriftWatchDeps {
   readonly now: () => number;
   /** The boards as saved, to ask whether any of them reads what changed. */
   readonly dashboards: () => readonly DashboardSpec[];
-  /** Check the connection again, by itself: a change is when what was confirmed may no longer hold. */
-  readonly recheck?: (connection: ConnectionSpec) => void;
+  /** Check these endpoints again, by themselves, first: a change is when what was confirmed may no longer hold. */
+  readonly recheck?: (connection: ConnectionSpec, ops: readonly string[]) => void;
   readonly log?: (line: string) => void;
 }
 
@@ -122,7 +121,7 @@ export class DriftWatch {
     notes.set(op.id, driftNote(op.title, accepted, drift));
     if (fresh) {
       this.deps.log?.(`${connection.id}/${op.id} has changed since it was checked: ${notes.get(op.id)}`);
-      this.deps.recheck?.(connection);
+      this.deps.recheck?.(connection, [op.id]);
     }
   }
 

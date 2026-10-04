@@ -1,4 +1,4 @@
-import type { ConnectionSpec, OpSpec, ResolvedParams } from "@freebirdai/dash-spec";
+import type { ConnectionSpec, OpSpec, ReadCompletion, ResolvedParams } from "@freebirdai/dash-spec";
 
 /**
  * Where an adapter is allowed to run.
@@ -19,16 +19,40 @@ export interface FetchMeta {
   readonly status: number;
   readonly fetchedAt: number;
   readonly durationMs: number;
-  /** How many pages were combined into this body. */
+  /** How many pages of records were combined into this body: never a sign-in or an export being prepared. */
   readonly pages: number;
+  /** Every request the read sent, sign-ins and export preparation included, where that differs from `pages`. */
+  readonly requests?: number;
   /** Set when the page cap stopped us before the data ran out. */
   readonly truncated: boolean;
+  /**
+   * How the read ended: reached its end, stopped short, or cannot say — and
+   * why. Only `traversed` lets anything claim the read went to the end; a
+   * read that says nothing about its end is `unknown`, never complete by
+   * default. Absent on a copy made before reads said so.
+   */
+  readonly completion?: ReadCompletion;
+  /** What the read asked for, as a digest (`resolveReadRequest`): the scope any count here is about. */
+  readonly scope?: string;
+  /** The scope `reportedTotal` was stated under, when it was this read's own. */
+  readonly totalScope?: string;
   /**
    * How many records the API says match in all, when it says — a total in
    * the response or an `X-Total-Count` header. What a read is checked
    * against, and what "read 500 of 12,431" is counted from.
    */
   readonly reportedTotal?: number;
+  /**
+   * Where a read stopped at its own limit — a page ceiling, a connector's
+   * runs — with more to read: handed back as `continueFrom` to carry it on.
+   * Only on a read that stopped there.
+   */
+  readonly continuation?: Continuation;
+  /**
+   * The rest of this read is being read in the background, and how far it has
+   * got: the tile looks again until the whole answer replaces this one.
+   */
+  readonly readingOn?: { readonly read: number; readonly of?: number };
   readonly warnings: readonly string[];
   /**
    * Whether this came from the server's cache, and how.
@@ -46,6 +70,30 @@ export interface FetchMeta {
    * an empty string here would be a banner saying nothing.
    */
   readonly staleReason?: string;
+}
+
+/**
+ * A read carried on from where an earlier one stopped.
+ *
+ * Opaque to everyone but the adapter that wrote it, and never holding a
+ * credential: a key sent in the query is left out of `url`, and put back by
+ * whoever sends it. Kept on disk while a long read runs, so nothing secret
+ * may go in it.
+ */
+export interface Continuation {
+  readonly kind: "rest" | "connector";
+  /** The read it carries on (`resolveReadRequest`'s digest): another read's is refused. */
+  readonly scope?: string;
+  /** REST: the next request's address, credentials left out, and the paging values its body carries. */
+  readonly url?: string;
+  readonly paging?: Readonly<Record<string, string>>;
+  /** Pages and records read before it, and what its first page said: what paging by count goes on from. */
+  readonly pageIndex: number;
+  readonly collected: number;
+  readonly firstPageRows?: number;
+  readonly reportedTotal?: number;
+  /** Connector code: what it returned as `resume`, handed to its next run. */
+  readonly resume?: unknown;
 }
 
 export interface FetchResult {
@@ -107,11 +155,16 @@ export interface FetchContext {
   /**
    * Waiting, for a short rate limit part-way through: a page refused with
    * "try again in 10s" is waited for and read again, so a read of forty pages
-   * behind a limit of thirty is not refused at page thirty-one every time
-   * (checkpoint 2). Only for reads safe to send twice; absent, a rate limit
+   * behind a limit of thirty is not refused at page thirty-one every time.
+   * Only for reads safe to send twice; absent, a rate limit
    * ends the read, as it always did.
    */
   readonly sleep?: (ms: number) => Promise<void>;
+  /**
+   * Carry on a read from where an earlier one stopped (`FetchMeta.continuation`),
+   * rather than from its first page. `maxPages` counts this read's own pages.
+   */
+  readonly continueFrom?: Continuation;
 }
 
 export interface SourceAdapter {

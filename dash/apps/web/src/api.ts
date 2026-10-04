@@ -121,6 +121,22 @@ export interface DiscoveryResult {
   tried: string[];
   /** Present when the site publishes a page index the ladder found. */
   index?: DocsIndex;
+  /**
+   * The documentation is drawn by its own scripts, and reading it needs
+   * Chromium, which is not here yet: the person is asked once.
+   */
+  needsRenderer?: boolean;
+}
+
+/** Chromium for reading documentation drawn by scripts: whether it is here, and the download's progress. */
+export interface RendererStatus {
+  state: "ready" | "missing" | "installing" | "failed" | "off";
+  progress?: number;
+  /** Which file of the download is coming: Chromium comes in more than one. */
+  part?: number;
+  error?: string;
+  consented: boolean;
+  downloadMb: number;
 }
 
 export interface ModelOption {
@@ -1068,6 +1084,12 @@ export const api = {
     request("/api/discover/read-index", json({ url })),
 
   discover: (url: string): Promise<DiscoveryResult> => request("/api/discover", json({ url })),
+
+  /** Whether documentation drawn by scripts can be read here, and how far a download has got. */
+  rendererStatus: (): Promise<RendererStatus> => request("/api/discover/renderer"),
+
+  /** The person agreed: the one-time download starts, and the answer is kept. */
+  installRenderer: (): Promise<RendererStatus> => request("/api/discover/renderer", json({})),
 
   saveCatalogEntry: (entry: CatalogEntry): Promise<CatalogEntry> =>
     request(`/api/catalog/${entry.id}`, {

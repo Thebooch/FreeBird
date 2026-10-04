@@ -46,7 +46,7 @@ Each provider (`MockProvider` in `bench/types.ts`) needs:
 - the internals of `apps/server/src/connector/` (beyond `connectorHash`);
 - `packages/agent/`;
 - `bench/results/` — what the loop has passed and failed;
-- the existing held-out and dev providers' designs, beyond one file for the format (`providers/heldout-step3.ts`).
+- the existing held-out and dev providers' designs, beyond one file for the format (`providers/heldout-ledgerline-quotient.ts`).
 
 ## How to check your work
 

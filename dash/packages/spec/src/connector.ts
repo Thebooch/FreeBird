@@ -78,11 +78,70 @@ export const connectorExchangeSchema = z.object({
   fields: z.array(z.string().min(1).max(120)).max(8).default([]),
 });
 
+/**
+ * What a request is for. Reads and searches read; an exchange signs in; an
+ * export is created, then its status asked, then downloaded. Each is allowed
+ * apart, so a grant to start an export is not a grant to send anything else.
+ */
+export const CONNECTOR_PURPOSES = ["read", "search", "exchange", "export-create", "export-status", "download"] as const;
+export type ConnectorPurpose = (typeof CONNECTOR_PURPOSES)[number];
+
+/** `{name}` stands for one path segment; `/**` at the end of a GET's path, for anything below it. */
+const templatePathSchema = z
+  .string()
+  .min(1)
+  .max(300)
+  .regex(/^\/[^?#\s]*$/, "a path starting with /, with no query string");
+
+/**
+ * One request the connector may send: the method, the host, the path (a
+ * template), what it is for, and which credentials it may carry. Checked
+ * before anything leaves; a request no template allows is refused unsent.
+ *
+ * Only a GET may cover a whole subtree (`/**`). A POST names its one path,
+ * so permission to search is never permission to post anywhere on the host.
+ */
+export const connectorRequestSchema = z
+  .object({
+    id: z.string().regex(/^[a-z][a-z0-9_-]{0,39}$/),
+    purpose: z.enum(CONNECTOR_PURPOSES),
+    method: z.enum(CONNECTOR_METHODS),
+    host: hostSchema,
+    path: templatePathSchema,
+    credentials: z.array(credentialNameSchema).max(8).default([]),
+    /** What a POST's body may be. `keys`: the top-level fields a JSON or form body may carry. */
+    body: z
+      .object({
+        type: z.enum(["json", "form", "xml", "graphql", "text"]),
+        keys: z.array(z.string().min(1).max(80)).max(40).optional(),
+      })
+      .optional(),
+    /** Which endpoints may send it. Absent: any the connector serves or signs. */
+    ops: z.array(idSchema).max(50).optional(),
+  })
+  .superRefine((request, context) => {
+    if (request.method !== "GET" && /\*/.test(request.path))
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["path"], message: "only a GET may cover more than one path" });
+    if (/\*/.test(request.path) && !/^[^*]*\/\*\*$/.test(request.path))
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["path"], message: "a wildcard is only /** at the end" });
+    if (request.purpose === "download" && (request.method !== "GET" || request.credentials.length > 0))
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["purpose"], message: "a download is a GET that carries no credential" });
+    if (request.body && request.method !== "POST")
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["body"], message: "only a POST sends a body" });
+  });
+export type ConnectorRequest = z.infer<typeof connectorRequestSchema>;
+
 /** What the connector is allowed to do, checked by the server on every request it asks for. */
 export const connectorAuthoritySchema = z
   .object({
     destinations: z.array(connectorDestinationSchema).min(1).max(8),
     exchanges: z.array(connectorExchangeSchema).max(4).default([]),
+    /**
+     * Every request the code may send, as templates. Absent on a connector
+     * written before templates existed: its hosts and methods are its limit
+     * until a check declares the requests it really sends.
+     */
+    templates: z.array(connectorRequestSchema).max(40).optional(),
     /** Times a failed read (never a POST) may be sent again. */
     retries: z.number().int().min(0).max(3).default(1),
     /** Requests one run may send. */
@@ -96,27 +155,98 @@ export const connectorAuthoritySchema = z
     const hosts = authority.destinations.map((one) => one.host);
     if (new Set(hosts).size !== hosts.length)
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["destinations"], message: "each host is listed once" });
+    const ids = (authority.templates ?? []).map((one) => one.id);
+    if (new Set(ids).size !== ids.length)
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["templates"], message: "each request is named once" });
+    for (const [index, template] of (authority.templates ?? []).entries()) {
+      if (!hosts.includes(template.host))
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["templates", index, "host"], message: `${template.host} is not a destination` });
+    }
   });
 export type ConnectorAuthority = z.infer<typeof connectorAuthoritySchema>;
 
+const authorSchema = z.object({
+  by: z.enum(["model", "person", "built-in"]),
+  model: z.string().max(80).optional(),
+  at: z.string().datetime(),
+});
+
+/** The hooks an endpoint's own module may define: how it reads, never how the connection signs in. */
+export const OPERATION_HOOKS = ["read", "paginate", "parse"] as const;
+
+/**
+ * One endpoint's reading code, apart from the shared sign-in. Written for that
+ * endpoint alone, so writing code for a second endpoint never replaces the
+ * code that reads the first.
+ */
+export const connectorOperationSchema = z.object({
+  code: z.string().min(1).max(64_000),
+  hash: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+  hooks: z.array(z.enum(OPERATION_HOOKS)).min(1),
+  /** The templates this endpoint's code sends, by id: what it was written to need. */
+  templates: z.array(z.string().max(40)).max(20).default([]),
+  summary: z.string().max(600).optional(),
+  author: authorSchema,
+});
+export type ConnectorOperation = z.infer<typeof connectorOperationSchema>;
+
 export const connectorSchema = z.object({
-  /** Plain JavaScript that defines some of the hooks. Runs only in the sandbox. */
+  /**
+   * Plain JavaScript that defines some of the hooks. Runs only in the sandbox.
+   * Shared by every endpoint: the sign-in (`authenticate`, `signRequest`) and,
+   * for a connector written before endpoints had modules of their own, the
+   * reading too.
+   */
   code: z.string().min(1).max(64_000),
   /** `sha256:<hex>` of `code`. Checked before every run; code that does not match is not run. */
   hash: z.string().regex(/^sha256:[0-9a-f]{64}$/),
-  hooks: z.array(z.enum(CONNECTOR_HOOKS)).min(1),
+  hooks: z.array(z.enum(CONNECTOR_HOOKS)).default([]),
   /** Endpoints the connector reads itself, rather than the connection's declared request. */
   serves: z.array(idSchema).max(50).default([]),
+  /** Each endpoint's own reading code, by endpoint. Loaded after `code`, for that endpoint's reads only. */
+  operations: z.record(idSchema, connectorOperationSchema).default({}),
   authority: connectorAuthoritySchema,
+  /** Raised each time the shared code is replaced; installed whole, never piece by piece. */
+  version: z.number().int().min(1).default(1),
+  /** The shared code this replaced, kept for one rollback. */
+  previous: z
+    .object({
+      code: z.string().min(1).max(64_000),
+      hash: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+      hooks: z.array(z.enum(CONNECTOR_HOOKS)).default([]),
+      version: z.number().int().min(1),
+    })
+    .optional(),
   /** What it does, in plain words, for whoever reviews it. */
   summary: z.string().max(600).optional(),
-  author: z.object({
-    by: z.enum(["model", "person", "built-in"]),
-    model: z.string().max(80).optional(),
-    at: z.string().datetime(),
-  }),
+  author: authorSchema,
 });
 export type ConnectorSpec = z.infer<typeof connectorSchema>;
+
+/** Whether the connector reads this endpoint itself: by its own module, or by its shared code's `read`. */
+export const connectorServes = (connector: ConnectorSpec, opId: string): boolean =>
+  connector.serves.includes(opId) || connector.operations[opId] !== undefined;
+
+/**
+ * Whether a request is one a template allows: the same method and host, and
+ * a path the template's matches — `{name}` one segment, a GET's trailing `/**`
+ * anything below. Nothing about the query string: a template is the endpoint,
+ * the query its inputs.
+ */
+export const requestMatches = (
+  template: { readonly method: string; readonly host: string; readonly path: string },
+  method: string,
+  host: string,
+  path: string,
+): boolean => {
+  if (template.method.toUpperCase() !== method.toUpperCase() || template.host.toLowerCase() !== host.toLowerCase()) return false;
+  const want = template.path.replace(/\/+$/, "").split("/");
+  const got = path.replace(/\/+$/, "").split("/");
+  const subtree = want[want.length - 1] === "**";
+  const fixed = subtree ? want.slice(0, -1) : want;
+  if (subtree ? got.length < fixed.length : got.length !== fixed.length) return false;
+  return fixed.every((segment, index) => /^\{[^/{}]+\}$/.test(segment) ? got[index] !== "" : segment === got[index]);
+};
 
 /**
  * The contract, in words: what a connector's code may define, and what it is
@@ -132,8 +262,9 @@ export const CONNECTOR_CONTRACT = `A connector is plain JavaScript (no imports, 
     Called for every request before it is sent — your own http.request calls, and every request the connection's declared endpoints send. Receives { method, url, headers, body } and returns it, changed as the API's sign-in requires (usually headers added). body is a string or undefined.
 
   async function read(ctx)
-    Reads one endpoint the connector serves: every record it holds, however many requests that takes. Returns { rows: [...records], total?: number, complete?: boolean, resume?: any }. Set complete: false when you know records were left out — the read is then not accepted.
-    One run may send about 100 requests and last about a minute. When every record needs more than that, do not stop short and do not return complete: false: count your requests, and before the allowance runs out return the records read so far with resume set to a small JSON value saying where you got to (a page number, a date, a cursor, a list of ids still to read). read() is then called again in a new run, with a new allowance, and ctx.resume holds that value: carry on from there and return only the records not yet returned. Leave resume out when everything has been read.
+    Reads one endpoint the connector serves: every record it holds, however many requests that takes. Returns { rows: [...records], done: "all" | "partial", reason?: string, total?: number, pages?: number, resume?: any }.
+    done says how the read ended, and nothing else does: "all" only when the API itself showed there is nothing more — an empty or short last page, no next cursor, has_more false, every id an export listed, every window of the range. "partial" when you know records were left out, with reason saying why (the read is then not accepted). Leave done out and the read counts as never having said it reached the end: it is shown as possibly incomplete. pages is how many pages of records were read (not sign-ins or export requests).
+    One run may send about 100 requests and last about a minute. When every record needs more than that, do not stop short and do not return done: "partial": count your requests, and before the allowance runs out return the records read so far with resume set to a small JSON value saying where you got to (a page number, a date, a cursor, a list of ids still to read). read() is then called again in a new run, with a new allowance, and ctx.resume holds that value: carry on from there and return only the records not yet returned. Leave resume out when everything has been read, and say done: "all" on that last run.
 
   async function paginate(page, ctx)
     Used only when there is no read(): given { request, response, rows, index } for the page just read, returns the next request ({ method?, url, headers?, body? }) or null when there are no more.
@@ -141,7 +272,9 @@ export const CONNECTOR_CONTRACT = `A connector is plain JavaScript (no imports, 
   async function parse(response, ctx)
     Used only when there is no read(): turns one response into { rows, total? } (or an array of records).
 
-ctx is { op: { id, title, path, method, query, params }, baseUrl, inputs, range: { start, end }, maxPages, resume? }. maxPages is the most pages one run may read, not a page size or a place to stop.
+ctx is { op: { id, title, path, method, query, params }, baseUrl, inputs, request?, range: { start, end }, maxPages, resume? }. maxPages is the most pages one run may read, not a page size or a place to stop.
+ctx.inputs is every value this read was asked with, by parameter name: what the widget asked for, the board's filters, and each parameter's documented default. Honour every one of them — a widget narrowed by a value must get only the records with that value — and send each where the API takes it.
+ctx.request, for an endpoint the connector reads, is the endpoint's own first request with those inputs already in place and no credential: { method, url, headers, body?, missing? }. missing lists inputs nobody supplied (an id the code must find first, say).
 ctx.range is the window the widget reads: start and end are ISO 8601 strings (new Date(ctx.range.start) reads one; end is exclusive), or ctx.range is null when no window applies. When it is given, read every record in it: where the API allows only a shorter window per request, ask window by window until the whole range is covered. Never replace it with a window of your own.
 
 What the environment provides (everything else is absent — no fetch, no timers, no Date of your own):
@@ -170,4 +303,4 @@ What the environment provides (everything else is absent — no fetch, no timers
   log(message)  — a line for whoever reviews the run. Never log anything secret; there is nothing secret to log.
   base64.encode(text), base64.decode(text), encodeURIComponent, URL and URLSearchParams (for building and reading addresses), JSON, Math.
 
-Rules: records are plain objects. Keep numbers as numbers. Read every page or part there is; if you must stop early, say complete: false.`;
+Rules: records are plain objects. Keep numbers as numbers. Read every page or part there is, and say done: "all" when the API showed you reached the end; if you must stop early, say done: "partial".`;

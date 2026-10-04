@@ -31,7 +31,7 @@ import {
   fnv1a,
   getOp,
   interpolateValue,
-  missingInputs,
+  boardInputs,
   onboardingChoicesSchema,
   onboardingSchema,
   opDefSchema,
@@ -831,10 +831,10 @@ export class OnboardingService {
           return { status: "unavailable", message: "It reads an endpoint this connection does not carry." };
         }
         const filled = interpolated(source.params, params);
-        if (!source.fanOut && missingInputs(op, filled).length > 0) {
+        if (!source.fanOut && boardInputs(op, filled).length > 0) {
           return {
             status: "missingInput",
-            message: `It needs ${missingInputs(op, filled).join(", ")}, which a board has no way to supply.`,
+            message: `It needs ${boardInputs(op, filled).join(", ")}, which a board has no way to supply.`,
           };
         }
       }
@@ -871,7 +871,7 @@ export class OnboardingService {
           }
           const values = { ...interpolated(source.params, params), [fan.as ?? fan.field]: value as string | number };
           const op = getOp(connection, source.op)!;
-          if (missingInputs(op, values).length > 0) {
+          if (boardInputs(op, values).length > 0) {
             return { status: "missingInput", message: "It needs more inputs than the records around it give." };
           }
           bodies[source.as] = await read(source.op, values);

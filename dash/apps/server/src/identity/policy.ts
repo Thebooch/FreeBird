@@ -26,8 +26,8 @@ const ALLOWED: PolicyDecision = Object.freeze({ ok: true as const });
  * member's role and grants — see `@freebirdai/dash-spec`'s `access.ts`.
  */
 /**
- * Each member's role, and the grants they were given on top of it (plan,
- * track G): what a hosted build's workspaces use. A grant scoped to one
+ * Each member's role, and the grants they were given on top of it: what a
+ * hosted build's workspaces use. A grant scoped to one
  * connection, or one record type on it, allows only there; an unscoped one
  * everywhere. Somebody who is no longer a member may do nothing.
  */

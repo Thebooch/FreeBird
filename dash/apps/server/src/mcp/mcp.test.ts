@@ -14,7 +14,7 @@ import { openMcpClient, rpcAnswerIn } from "./client.js";
 import { discoverMcp, looksLikeMcpAddress, readGround } from "./discover.js";
 
 /*
- * An MCP server as a connection (plan, track A): a small server that speaks
+ * An MCP server as a connection: a small server that speaks
  * streamable HTTP, answered in process through the transport every other
  * connection uses.
  */

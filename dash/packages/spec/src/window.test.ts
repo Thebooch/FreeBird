@@ -4,7 +4,7 @@ import { interpolate, paramsForWidget, rangeForWindow, resolveRange } from "./pa
 
 /*
  * A widget's own time: the window its request named, in place of the board's.
- * Checkpoint 3: read within the board's thirty days, "since 1 June" counted
+ * Regression: read within the board's thirty days, "since 1 June" counted
  * one month of it.
  */
 
@@ -61,7 +61,7 @@ describe("a widget's own time window", () => {
   });
 });
 
-/* Checkpoint 4, the owner's decision: a number whose request named no time counts every record. */
+/* A number whose request named no time counts every record: "how many" reads as "ever". */
 describe("all time", () => {
   it("asks without date bounds: range tokens resolve to nothing", () => {
     const params = paramsForWidget({ timeWindow: { all: true } }, { range: board, filters: {} }, NOW);

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { graphqlReads, looksLikeSdl, parseIntrospection, parseSdl, withGraphqlReads } from "./graphql.js";
 
 /*
- * A GraphQL API set up from its schema (plan, track A): the reads are written
+ * A GraphQL API set up from its schema: the reads are written
  * from what the schema declares, the same way every time.
  */
 
@@ -113,13 +113,18 @@ describe("a GraphQL schema, as SDL", () => {
     expect(() => catalogEntrySchema.parse({ id: "s", title: "S", baseUrl: "https://s.test", dialect: { auth: { type: "none" }, pagination: { kind: "none" } }, ops: reads.ops, resources: reads.resources })).not.toThrow();
   });
 
-  it("pages through edges where there are no nodes, counts where the connection says, and leaves out what needs an input", () => {
+  it("pages through edges where there are no nodes, counts where the connection says, and keeps what needs an input as an input", () => {
     const reads = graphqlReads(schema, { path: "/graphql" });
     const customers = reads.ops.find((op) => op.id === "customers")!;
     expect(customers.rowsPath).toBe("$.data.customers.edges[*].node");
     expect(customers.totalPath).toBe("$.data.customers.totalCount");
-    expect(reads.ops.map((op) => op.id)).toEqual(["orders", "customers"]);
-    expect(reads.skipped).toEqual(["search needs term, which nothing here supplies"]);
+    expect(reads.ops.map((op) => op.id)).toEqual(["orders", "customers", "search"]);
+    expect(reads.skipped).toEqual([]);
+    /* An argument it insists on is the read's input, filled into the query's variables. */
+    const search = reads.ops.find((op) => op.id === "search")!;
+    expect(search.params).toEqual([{ name: "term", in: "body", type: "string", required: true }]);
+    expect(search.body).toMatchObject({ type: "graphql", variables: { term: "{{param.term}}" } });
+    expect((search.body as { query: string }).query).toMatch(/query DashSearch\(\$term: String!\) \{ search\(term: \$term\)/);
     expect(reads.resources.map((one) => [one.id, one.listOp])).toEqual([
       ["order", "orders"],
       ["customer", "customers"],
@@ -224,16 +229,17 @@ describe("a GraphQL schema the documentation publishes", () => {
     expect(found?.entry.ops.map((op) => [op.id, op.path])).toEqual([
       ["orders", "/graphql.json"],
       ["customers", "/graphql.json"],
+      ["search", "/graphql.json"],
     ]);
     expect(found?.entry.resources.map((one) => one.id)).toEqual(["order", "customer"]);
     /* Sign-in is the prose read's, kept. */
     expect(found?.entry.dialect.auth).toMatchObject({ type: "header", header: "X-Token" });
-    expect(found?.warnings).toEqual(["Not set up: search needs term, which nothing here supplies."]);
+    expect(found?.warnings).toEqual([]);
   });
 
   it("reads a schema written into the page, and says nothing when there is none", async () => {
     const inline = { url: page.url, html: `<pre>POST https://api.store.test/admin/2026-07/graphql.json</pre><pre>${STORE_SDL.replace(/</g, "&lt;")}</pre>` };
-    expect((await withGraphqlReads(entry, inline, async () => ({ status: 404, text: "", url: "" })))?.entry.ops).toHaveLength(2);
+    expect((await withGraphqlReads(entry, inline, async () => ({ status: 404, text: "", url: "" })))?.entry.ops).toHaveLength(3);
     expect(await withGraphqlReads(entry, { url: page.url, html: "<p>No schema here.</p>" }, async () => ({ status: 404, text: "", url: "" }))).toBeNull();
   });
 });

@@ -216,8 +216,8 @@ export const connectionSchema = z.object({
   /**
    * A client certificate the API asks for (mutual TLS), beside whatever the
    * sign-in sends: the certificate and its private key, both in the vault,
-   * sent with every request to this connection's host and nowhere else
-   * (plan, track B). PEM, as the provider issued them.
+   * sent with every request to this connection's host and nowhere else.
+   * PEM, as the provider issued them.
    */
   clientCertificate: z
     .object({
@@ -384,7 +384,11 @@ export const opUsesRange = (connection: ConnectionSpec, def: OpDef): boolean => 
    * the window, so the window is part of what it is cached under — or a
    * thirty-day read stands in for one since June.
    */
-  if (def.servedBy === "connector" && /\brange\b/.test(connection.connector?.code ?? "")) return true;
+  if (
+    def.servedBy === "connector" &&
+    /\brange\b/.test(`${connection.connector?.code ?? ""}\n${connection.connector?.operations[def.id]?.code ?? ""}`)
+  )
+    return true;
 
   const timeFiltered = def.timeFiltered ?? ARCHETYPES[def.archetype ?? "list"].timeFiltered;
   return Boolean(timeFiltered && connection.dialect?.timeFilter);
@@ -512,6 +516,17 @@ export const requiredInputs = (op: OpSpec | OpDef): string[] => {
     .map((param) => param.name);
   return [...new Set([...pathParamNames(op.path), ...declared])];
 };
+
+/**
+ * What still has to come from a board: the inputs missing from the bag that
+ * no other endpoint's records supply (`ParamDef.valueFrom`). An organisation's
+ * projects need its id, and the organisations list gives it — so a board
+ * reading every project needs nothing.
+ */
+export const boardInputs = (
+  op: OpSpec | OpDef,
+  supplied: Readonly<Record<string, string | number | boolean>>,
+): string[] => missingInputs(op, supplied).filter((name) => !op.params.find((param) => param.name === name)?.valueFrom);
 
 /** Which of `requiredInputs` has no value in the supplied bag. */
 export const missingInputs = (

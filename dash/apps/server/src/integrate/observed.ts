@@ -40,7 +40,7 @@ export const observedShape = (body: unknown, rowsPath: string | undefined): Obse
  * else. Connector code that reads a manifest, then the files it lists, returns
  * the shipments in the files; the specification describes the manifest — its
  * `files` and `columns` — and a record type described from that had no weight
- * to add up, so "kilograms delivered" had nothing to reach (checkpoint 3).
+ * to add up, so "kilograms delivered" had nothing to reach.
  */
 const describesOther = (
   declared: readonly { readonly name: string }[],
@@ -50,6 +50,27 @@ const describesOther = (
   const top = (name: string) => name.split(".")[0]!.split("[")[0]!;
   const held = new Set(observed.map((field) => top(field.name)));
   return !declared.some((field) => held.has(top(field.name)));
+};
+
+/**
+ * Observed fields beneath a declared field the declaration leaves open — an
+ * object it says nothing inside of (`additionalProperties: true`). Only a read
+ * can say what the records hold there. An issue's `fields` held its type,
+ * status and project, and a record type described from the declaration alone
+ * had none of them, so open bugs could not be told from closed tasks (seen
+ * with the trackwell mock API).
+ */
+const beneathOpen = (
+  declared: readonly { readonly name: string }[],
+  observed: readonly NonNullable<CatalogEntry["ops"][number]["fields"]>[number][],
+): NonNullable<CatalogEntry["ops"][number]["fields"]>[number][] => {
+  const named = new Set(declared.map((field) => field.name));
+  const open = declared.filter(
+    (field) => !declared.some((other) => other.name.startsWith(`${field.name}.`) || other.name.startsWith(`${field.name}[`)),
+  );
+  return observed.filter(
+    (field) => !named.has(field.name) && open.some((parent) => field.name.startsWith(`${parent.name}.`)),
+  );
 };
 
 /**
@@ -65,11 +86,14 @@ export const withObservedFields = (
   let changed = false;
   const ops = entry.ops.map((op) => {
     const shape = observed[op.id];
-    if (
-      !shape ||
-      (op.fields && op.fields.length > 0 && op.fieldsFrom !== "observed" && !describesOther(op.fields, shape.fields))
-    )
-      return op;
+    if (!shape) return op;
+    if (op.fields && op.fields.length > 0 && op.fieldsFrom !== "observed" && !describesOther(op.fields, shape.fields)) {
+      /* The declaration stands; what it leaves open inside an object is what the records were read to hold there. */
+      const inside = beneathOpen(op.fields, shape.fields);
+      if (inside.length === 0) return op;
+      changed = true;
+      return { ...op, fields: [...op.fields, ...inside] };
+    }
     if (op.fieldsFrom === "observed" && JSON.stringify(op.fields) === JSON.stringify(shape.fields)) return op;
     changed = true;
     return { ...op, fields: [...shape.fields], fieldsFrom: "observed" as const };

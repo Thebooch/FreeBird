@@ -1,5 +1,5 @@
 /**
- * XML, read into the same plain values JSON gives (plan, track A).
+ * XML, read into the same plain values JSON gives.
  *
  * Hand-rolled and small on purpose, like `@freebirdai/dash-expr`: an API's
  * answer is untrusted input, and the dangerous parts of XML are the parts a

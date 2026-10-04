@@ -466,6 +466,56 @@ describe("documentation drawn in the browser", () => {
     /* Past the renderer, the page reaches the next rung: reading it needs a model, and says so. */
     expect(drawn.note + drawn.warnings.join(" ")).toMatch(/needs an AI key/);
   });
+
+  it("imports the specification only the drawn page links to", async () => {
+    const docs = documents({
+      "https://docs.widgets.dev/": { text: shell },
+      "https://docs.widgets.dev/assets/widgets-openapi.json": { text: SPEC },
+    });
+    const drawn = await discover("https://docs.widgets.dev/", {
+      fetchDocument: docs.fetchDocument,
+      llm: null,
+      search: null,
+      renderDocs: {
+        render: async (url) => ({ html: `<html><body><a href="/assets/widgets-openapi.json">OpenAPI</a></body></html>`, url }),
+      },
+    });
+    expect(drawn.source).toBe("openapi");
+    expect(drawn.note).toMatch(/linked from the documentation as drawn/);
+  });
+
+  it("imports the specification the drawn page fetched for itself, though it links to none", async () => {
+    const docs = documents({
+      "https://docs.widgets.dev/": { text: shell },
+      "https://cdn.widgets.dev/reference/v3.json": { text: SPEC },
+    });
+    const drawn = await discover("https://docs.widgets.dev/", {
+      fetchDocument: docs.fetchDocument,
+      llm: null,
+      search: null,
+      renderDocs: {
+        render: async (url) => ({ html: drawnHtml, url, specs: ["https://cdn.widgets.dev/reference/v3.json"] }),
+      },
+    });
+    expect(drawn.source).toBe("openapi");
+    expect(drawn.note).toMatch(/fetched to draw itself/);
+  });
+
+  it("asks before fetching the browser, and searches nothing past the page meanwhile", async () => {
+    const docs = documents({ "https://docs.widgets.dev/": { text: shell } });
+    const searched: string[] = [];
+    const rendered: string[] = [];
+    const waiting = await discover("https://docs.widgets.dev/", {
+      fetchDocument: docs.fetchDocument,
+      llm: null,
+      search: { name: "test", search: async (query) => (searched.push(query), []) },
+      renderDocs: { ready: async () => "needs-install", render: async (url) => (rendered.push(url), null) },
+    });
+    expect(waiting).toMatchObject({ entry: null, needsRenderer: true });
+    expect(waiting.note).toMatch(/one-time download of about 150 MB/);
+    expect(rendered).toEqual([]);
+    expect(searched).toEqual([]);
+  });
 });
 
 describe("mapDialectProposal", () => {
@@ -482,7 +532,7 @@ describe("mapDialectProposal", () => {
     expect(entry?.origin).toBe("docs");
   });
 
-  /* Plan, track B: sign-ins prose names that used to be "not supported". */
+  /* Sign-ins prose names that used to be "not supported". */
   it("reads a cookie key, a Digest login and an AWS signature from prose as sign-ins it can send", () => {
     expect(mapDialectProposal({ ...base, authType: "cookie", authName: "session_key" }).entry?.dialect.auth).toEqual({
       type: "headers",
@@ -524,7 +574,7 @@ describe("mapDialectProposal", () => {
     expect(entry?.resources).toEqual([expect.objectContaining({ id: "thing", listOp: "things" })]);
   });
 
-  /* Checkpoint 2: 18 of 158 sections were read, and the collection a request was about was never imported. */
+  /* Regression: 18 of 158 sections were read, and the collection a request was about was never imported. */
   it("adds the reads the whole page names under the API's address, and the collections their records belong to", () => {
     const { entry, warnings } = mapDialectProposal(base, [
       "GET https://api.thing.dev/things/{id}",
@@ -547,7 +597,7 @@ describe("mapDialectProposal", () => {
     expect(warnings.join(" ")).toMatch(/5 endpoint\(s\) the documentation names were added/);
   });
 
-  /* Checkpoint 2: a page's examples — /character/361, an avatar image — became twenty collections of their own. */
+  /* Regression: a page's examples — /character/361, an avatar image — became twenty collections of their own. */
   it("reads an example id in a named address as the record's id, and skips files", () => {
     const { entry } = mapDialectProposal(base, [
       "https://api.thing.dev/episodes/27",
@@ -558,7 +608,7 @@ describe("mapDialectProposal", () => {
     expect(entry?.ops.map((op) => op.path)).toEqual(["/things", "/episodes/{{param.id}}", "/episodes"]);
   });
 
-  /* Checkpoint 2: a table of resources read `/todos`, and the to-dos were never imported. */
+  /* Regression: a table of resources read `/todos`, and the to-dos were never imported. */
   it("takes a path written on its own, under the API's own address", () => {
     const named = endpointsNamed(analysePage("<table><tr><td>/posts</td><td>100 posts</td></tr><tr><td>/todos</td><td>200 todos</td></tr></table><p>See 1/2 of it.</p>"));
     expect(named).toEqual(expect.arrayContaining(["PATH /posts", "PATH /todos"]));
@@ -584,7 +634,7 @@ describe("mapDialectProposal", () => {
     expect(named).not.toContain("https://api.thing.dev/v1/things?page=2");
   });
 
-  /* Checkpoint 2: an API that filters by state and type was imported with no way to ask it to. */
+  /* Regression: an API that filters by state and type was imported with no way to ask it to. */
   it("keeps the parameters an endpoint documents for narrowing, as optional inputs, and never paging ones", () => {
     const { entry } = mapDialectProposal({
       ...base,

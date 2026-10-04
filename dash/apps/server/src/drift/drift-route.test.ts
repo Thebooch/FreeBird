@@ -9,7 +9,7 @@ import { SpecStore } from "../store.js";
 import { KeyStore, LocalAesVault } from "../vault.js";
 
 /*
- * An API that renames a field after a board was built on it (plan, track H):
+ * An API that renames a field after a board was built on it:
  * the tile reading it says so, the connection lists the change, and nothing
  * rewrites the saved widget.
  */

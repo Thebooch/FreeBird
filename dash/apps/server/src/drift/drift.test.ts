@@ -9,7 +9,7 @@ import { driftBetween, driftNote, likelyRenames, shapeOf } from "./detect.js";
 import { DbShapeStore, MemoryShapeStore } from "./store.js";
 import { DriftWatch, savedReads } from "./watch.js";
 
-/* Plan, track H: an endpoint whose answers change shape after it was accepted. */
+/* An endpoint whose answers change shape after it was accepted. */
 
 const NOW = Date.UTC(2026, 8, 30);
 const invoices = (count: number, extra: (index: number) => Record<string, unknown> = () => ({})) => ({
@@ -108,20 +108,20 @@ describe("holding fresh answers against the accepted shape", () => {
       shapes: new MemoryShapeStore(),
       now: () => NOW,
       dashboards: () => dashboards,
-      recheck: (one) => rechecked.push(one.id),
+      recheck: (one, ops) => rechecked.push(`${one.id}/${ops.join(",")}`),
     });
     return { watch, rechecked };
   };
   const renamed = { data: invoices(9).data.map(({ amount, ...rest }) => ({ ...rest, amount_cents: amount * 100 })) };
 
-  it("says what changed on the tiles that read it, checks the connection again once, and stops when the shape is back", async () => {
+  it("says what changed on the tiles that read it, checks that endpoint again once, and stops when the shape is back", async () => {
     const { watch, rechecked } = watchOf([board("amount")]);
     await watch.accept(connection, op, invoices(12));
     expect(await watch.noteFor(connection, "invoices")).toBeNull();
     await watch.observe(connection, op, renamed);
     await watch.observe(connection, op, renamed);
     expect(await watch.noteFor(connection, "invoices")).toMatch(/no longer hold “amount”/);
-    expect(rechecked).toEqual(["billing"]);
+    expect(rechecked).toEqual(["billing/invoices"]);
     expect(await watch.open(connection)).toEqual([expect.objectContaining({ op: "invoices", title: "List invoices", since: new Date(NOW).toISOString() })]);
     await watch.observe(connection, op, invoices(8));
     expect(await watch.noteFor(connection, "invoices")).toBeNull();

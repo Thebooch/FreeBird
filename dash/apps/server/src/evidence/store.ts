@@ -22,6 +22,17 @@ export interface EvidenceStore {
 /** How many records are kept per endpoint. */
 export const EVIDENCE_PER_OP = 20;
 
+/**
+ * One workspace's view of a store several share:
+ * what it records is its own, whatever the record says, and it sees nothing
+ * of any other workspace's.
+ */
+export const scopedEvidence = (store: EvidenceStore, workspace: string): EvidenceStore => ({
+  record: (evidence) => store.record({ ...evidence, workspace }),
+  forConnection: (connection) => store.forConnection(connection, workspace),
+  forget: (connection) => store.forget(connection, workspace),
+});
+
 export class MemoryEvidenceStore implements EvidenceStore {
   private readonly rows: Evidence[] = [];
 

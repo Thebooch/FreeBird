@@ -85,7 +85,7 @@ export interface CompileBriefInput {
    * The query parameter a read confirmed narrows an endpoint by a field
    * (`filterParamsOf`). A number or chart narrowed to one value asks the API
    * for those records alone, rather than reading pages until the cap: 11,848
-   * breweries were read five pages deep to count Oregon's 295 (checkpoint 2).
+   * breweries were read five pages deep to count Oregon's 295.
    * The local narrowing stays as well, so the API's filter only ever reads less.
    */
   readonly filterParamOf?: ((op: string, field: string) => string | undefined) | undefined;
@@ -1420,7 +1420,7 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
   /*
    * Amounts in more than one currency, added up as if they were one. A total
    * of dollars and euros is valid arithmetic and the wrong answer, and nothing
-   * about the number says so (plan, track E). Where the records carry a
+   * about the number says so. Where the records carry a
    * currency code and the request did not narrow to one, the total also
    * counts the codes it added, and the tile says so when there is more than
    * one. A single number only: a chart would draw the count as a series.
@@ -1453,7 +1453,7 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
    * Fields that should add up to the total being added: subtotal, tax,
    * shipping and discount beside a total. Read from the fields' names, so a
    * mismatch is a question the tile asks — the total may hold something the
-   * parts do not name — never an error, and never a correction (plan, track E).
+   * parts do not name — never an error, and never a correction.
    */
   const checks: ReconcileRule[] =
     brief.intent === "measure" && !pair && measure.agg === "sum" && measured
@@ -1503,7 +1503,7 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
   /**
    * What the request asked to narrow by that nothing here expresses: the
    * brief's own `unmet`, and anything that could not be applied. Said on the
-   * widget, every time it is read, never dropped in silence (checkpoint 4).
+   * widget, every time it is read, never dropped in silence.
    */
   const unmet: string[] = [...(brief.unmet ?? [])];
   /** What the API itself is asked to narrow by: a confirmed filter parameter and the one value wanted. */
@@ -1794,8 +1794,8 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
   /*
    * A time the request named is the window the widget reads, not only a
    * narrowing of what the board's window returned. Narrowed within the board's
-   * thirty days, "since 1 June" counted one month of it and said nothing
-   * (checkpoint 3). One time range only: two on different fields have no one
+   * thirty days, "since 1 June" counted one month of it and said nothing.
+   * One time range only: two on different fields have no one
    * window that is right for both, and the board's stays.
    */
   const timed = ranges.filter((range) => range.from !== undefined || range.to !== undefined);
@@ -1812,7 +1812,7 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
    * "How many", answered by the API's own count, where a read confirmed it
    * counts these records (`ResourceSpec.count`) — and confirmed it honours
    * every narrowing asked for. One request, however many records there are;
-   * a list read page by page stops at its ceiling (plan, track D). Anything
+   * a list read page by page stops at its ceiling. Anything
    * the count cannot say — a range, a flag, a value it was not checked
    * under — reads the records instead.
    */
@@ -1841,8 +1841,8 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
   /*
    * A number or a breakdown whose request named no time counts every record,
    * whatever the board's range: "how many refunded payments" means ever, and
-   * read within the board's thirty days it counted 46 of 1,840 (checkpoint 4,
-   * the owner's decision). Only where the endpoint reads the range at all;
+   * read within the board's thirty days it counted 46 of 1,840. Only where
+   * the endpoint reads the range at all;
    * lists and charts over time keep the board's, which is what their axis is.
    */
   const allTime =
@@ -1867,7 +1867,7 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
   }
 
   /*
-   * What the number means, stated (plan, track E): shown on the tile where the
+   * What the number means, stated: shown on the tile where the
    * widget has no description of its own, so a reader can check a number
    * against what it counts before acting on it. Numbers and charts only; a
    * list's records speak for themselves.

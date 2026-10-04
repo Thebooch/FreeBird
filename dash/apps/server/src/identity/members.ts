@@ -4,7 +4,7 @@ import type { DashDb } from "../platform/db.js";
 import type { MembershipStore } from "./membership.js";
 
 /**
- * Workspaces, members and invitations (plan, track G): the `MembershipStore`
+ * Workspaces, members and invitations: the `MembershipStore`
  * a hosted build's role policy reads. In memory for tests, in Dash's database
  * otherwise. An invitation is kept by the hash of its token, never the token.
  */

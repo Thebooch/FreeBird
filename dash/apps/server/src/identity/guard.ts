@@ -3,8 +3,8 @@ import type { FastifyInstance } from "fastify";
 import type { Policy } from "./policy.js";
 
 /**
- * Every route that changes stored state, and the permission it needs (plan,
- * track G; the list in `identity/README.md`).
+ * Every route that changes stored state, and the permission it needs (the
+ * list in `identity/README.md`).
  *
  * One table rather than a check inside each handler, so what is guarded can be
  * read in one place and a new route that changes something is one line here.

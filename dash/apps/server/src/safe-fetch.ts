@@ -114,7 +114,7 @@ export const assertPublicHttpUrl = async (raw: string): Promise<URL> => {
 };
 
 /**
- * Where requests may go (plan, track F): a plug-in point, public addresses
+ * Where requests may go: a plug-in point, public addresses
  * only unless the operator says otherwise.
  *
  * A self-hosted instance often needs an API on its own network — an ERP in
@@ -281,7 +281,7 @@ export interface GuardedInit {
 }
 
 /**
- * One request presenting a client certificate (mutual TLS, plan track B),
+ * One request presenting a client certificate (mutual TLS),
  * answered as a standard `Response` so the guarded loop around it — public
  * addresses only, the connection's own host on every redirect hop, the size
  * cap — is the same one every other request goes through. Over https only:
