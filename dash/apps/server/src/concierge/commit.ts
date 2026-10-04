@@ -1,6 +1,6 @@
 import type { BuildAllResult } from "@freebirdai/dash-agent";
 import type { DashboardSpec, FilterDecl, LayoutCell, WidgetSpec } from "@freebirdai/dash-spec";
-import { groupSize, parseDashboard, parseWidget } from "@freebirdai/dash-spec";
+import { groupSize, parseDashboard, parseWidget, withoutWidget } from "@freebirdai/dash-spec";
 
 /**
  * Writing a finished setup onto a board.
@@ -140,5 +140,87 @@ export const commitSetup = (input: {
     widgets,
     ...(wantsGroup ? { groupId } : {}),
     filtersAdded: added.map((filter) => filter.key),
+  };
+};
+
+/** Where a setup's widgets already sit on the board, as the draft records it. */
+export interface Placement {
+  readonly widgetIds: readonly string[];
+  readonly groupId?: string | undefined;
+}
+
+/** The board without the widgets a setup placed, and any frame they leave empty. */
+export const withoutPlaced = (board: DashboardSpec, placed: Placement): DashboardSpec =>
+  placed.widgetIds.reduce((current, id) => withoutWidget(current, id), board);
+
+/**
+ * Write a setup, or rewrite the widgets it already placed.
+ *
+ * The second case is what lets somebody keep talking after a widget lands:
+ * "make it a bar chart" changes the tile that is there rather than adding a
+ * second one beside it. Where the shape is the same — as many widgets, and no
+ * frame on either side — each keeps its id and therefore its place, size and
+ * everything else the layout says about it. Where the shape changed (one
+ * widget became two, or a frame came or went) there is no tile to keep, so
+ * the old ones come off and the new ones go on through the same door a fresh
+ * setup uses.
+ */
+export const placeSetup = (input: {
+  readonly board: DashboardSpec;
+  readonly built: BuildAllResult;
+  readonly placed?: Placement | undefined;
+}): CommitResult & { readonly replaced: boolean } => {
+  const { board, built, placed } = input;
+  const onBoard = (placed?.widgetIds ?? []).filter((id) =>
+    board.widgets.some((widget) => widget.id === id),
+  );
+  if (!placed || onBoard.length === 0) {
+    // Never placed, or removed from the board since: a fresh write either way.
+    return { ...commitSetup({ board, built }), replaced: false };
+  }
+
+  const framed = board.layout.cells.some(
+    (cell) => onBoard.includes(cell.widgetId) && cell.group !== undefined,
+  );
+  if (
+    onBoard.length !== built.widgets.length ||
+    framed ||
+    built.group !== undefined ||
+    built.errors.length > 0
+  ) {
+    const result = commitSetup({ board: withoutPlaced(board, placed), built });
+    return { ...result, replaced: result.ok };
+  }
+
+  const widgets: WidgetSpec[] = [];
+  for (const [index, candidate] of built.widgets.entries()) {
+    const revalidated = parseWidget({ ...candidate, id: onBoard[index]! });
+    if (!revalidated.ok || !revalidated.value) {
+      return {
+        ...failed(revalidated.errors.join("; ") || "it no longer validates"),
+        replaced: false,
+      };
+    }
+    widgets.push(revalidated.value);
+  }
+
+  const declared = new Set(board.params.filters.map((filter) => filter.key));
+  const added: FilterDecl[] = built.requiresFilters.filter((filter) => !declared.has(filter.key));
+  const byId = new Map(widgets.map((widget) => [widget.id, widget]));
+  const next = parseDashboard({
+    ...board,
+    params: { ...board.params, filters: [...board.params.filters, ...added] },
+    widgets: board.widgets.map((widget) => byId.get(widget.id) ?? widget),
+  });
+  if (!next.ok || !next.value) {
+    return { ...failed(next.errors.join("; ") || "the board did not validate"), replaced: false };
+  }
+
+  return {
+    ok: true,
+    next: next.value,
+    widgets,
+    filtersAdded: added.map((filter) => filter.key),
+    replaced: true,
   };
 };

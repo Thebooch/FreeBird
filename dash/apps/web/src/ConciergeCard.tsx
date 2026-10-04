@@ -1,6 +1,6 @@
 import { WidgetShell, useWidgetData } from "@freebirdai/dash-react";
 import type { WidgetSpec } from "@freebirdai/dash-spec";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ApiError,
   api,
@@ -842,6 +842,18 @@ export const ConciergeCard = ({
    * the conversational flow replaced.
    */
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /*
+   * Whether the hands-on controls are showing.
+   *
+   * Closed by default and never required. Asking for a widget in plain words
+   * is the whole path; the settings, the other arrangements and the other
+   * reading are for somebody who would rather reach in and set things
+   * themselves, and a person who never opens this never has to know they
+   * exist.
+   */
+  const [adjusting, setAdjusting] = useState(false);
+  /** The widgets the card last tried to place by itself, so a failure is not retried in a loop. */
+  const autoTried = useRef<string | null>(null);
 
   /**
    * Swap the arrangement, and say so if it could not be done.
@@ -953,6 +965,58 @@ export const ConciergeCard = ({
     onActiveChange?.(active);
   }, [active, onActiveChange]);
 
+  /*
+   * Ask, and receive: the widget goes onto the board by itself.
+   *
+   * There used to be an "Add it to the board" button here, and before that a
+   * confirmation card in the chat — two more decisions for somebody who had
+   * already said what they wanted. The one thing that still has to happen
+   * first is the preview check, because the server will not write a widget
+   * whose data nobody has looked at; so this waits for exactly that, and then
+   * places it. A placed setup that has changed since is written over the same
+   * tiles the same way.
+   *
+   * Assisted setups only. The wizard is somebody answering questions by hand
+   * with no model to propose anything, and its last answer is still theirs to
+   * give with the button.
+   */
+  const placeTargets =
+    state?.active === true
+      ? state.widgets.length > 0
+        ? state.widgets
+        : state.widget
+          ? [state.widget]
+          : []
+      : [];
+  const placeKey = JSON.stringify(placeTargets);
+  const previewsChecked =
+    placeTargets.length > 0 &&
+    placeTargets.every((widget) => previewChecks[JSON.stringify(widget)] === true);
+  const wantsPlacing =
+    state?.active === true &&
+    state.mode === "assisted" &&
+    state.ready &&
+    !state.step &&
+    state.placed?.current !== true;
+  useEffect(() => {
+    if (!engaged || !wantsPlacing || !previewsChecked || busy || editing) return;
+    if (autoTried.current === placeKey) return;
+    autoTried.current = placeKey;
+    setBusy(true);
+    setError(null);
+    void (async () => {
+      try {
+        const result = await api.confirmSetup(dashboardId);
+        onAdded(result.widgetId);
+        setState(await api.concierge(dashboardId));
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      } finally {
+        setBusy(false);
+      }
+    })();
+  }, [engaged, wantsPlacing, previewsChecked, busy, editing, placeKey, dashboardId, onAdded]);
+
   if (!state?.active) return null;
 
   const run = async (work: () => Promise<ConciergeState | null>): Promise<void> => {
@@ -983,6 +1047,8 @@ export const ConciergeCard = ({
    * asked.
    */
   if (!engaged) {
+    // Already on the board and nothing waiting: there is nothing to resume.
+    if (state.placed?.current) return null;
     const what = state.summary?.title || state.intent || "a widget";
     return (
       <div className="dash-setup" data-testid="concierge-resume">
@@ -1042,6 +1108,131 @@ export const ConciergeCard = ({
   };
 
   const openControl = state.controls.find((control) => control.stepId === editing);
+  const assisted = state.mode === "assisted";
+  /** On the board and showing what the draft describes: nothing left to do but talk. */
+  const onBoard = assisted && state.placed?.current === true;
+
+  /** Take back what the setup placed, from the card that placed it. */
+  const undo = (): void =>
+    void run(async () => {
+      await api.undoSetup(dashboardId);
+      onDismissed?.();
+      return { active: false };
+    });
+
+  /** Finished with it: the widget stays, the setup goes. */
+  const done = (): void =>
+    void run(async () => {
+      await api.cancelSetup(dashboardId);
+      onDismissed?.();
+      return { active: false };
+    });
+
+  /*
+   * Everything for doing it by hand, in one place and out of the way.
+   *
+   * The settings, the other arrangements and the other reading all used to sit
+   * under the preview as things to pick from. For somebody who just asked for a
+   * widget, each was one more decision between them and it. They are all still
+   * here — behind one link, for whoever wants them.
+   */
+  const handControls = (
+    <>
+      {state.widget && (
+        <ArrangementChips options={state.arrangements} busy={busy} onPick={pickArrangement} />
+      )}
+      {state.widget && state.alternative && (
+        <ReadingChip label={state.alternative.label} busy={busy} onTake={takeReading} />
+      )}
+      {!state.step && state.controls.length > 0 && (
+        <ProminentSettings
+          controls={state.controls.filter((control) => PROMINENT.has(bareStep(control.stepId)))}
+          busy={busy}
+          onEdit={setEditing}
+        />
+      )}
+      {!state.step && state.controls.length > 0 && (
+        <SettingsPanel
+          controls={state.controls.filter((control) => !PROMINENT.has(bareStep(control.stepId)))}
+          busy={busy}
+          open={settingsOpen}
+          onToggle={() => setSettingsOpen((value) => !value)}
+          onEdit={setEditing}
+        />
+      )}
+    </>
+  );
+
+  const adjustToggle = (
+    <button
+      type="button"
+      className="dash-settings__toggle"
+      aria-expanded={adjusting}
+      disabled={busy}
+      data-testid="concierge-adjust"
+      onClick={() => setAdjusting((value) => !value)}
+    >
+      <span className="dash-settings__chevron" aria-hidden="true">
+        ▸
+      </span>
+      <span className="dash-settings__label">Adjust it yourself</span>
+      <span className="dash-settings__summary">optional</span>
+    </button>
+  );
+
+  /*
+   * Landed. The board is showing it, so the card does not show it a second
+   * time: it says what it is, that talking is how to change it, and offers the
+   * way back.
+   */
+  if (onBoard && !openControl) {
+    return (
+      <div
+        className="dash-setup"
+        data-mode={state.mode}
+        data-placed="true"
+        data-testid="concierge-card"
+      >
+        <div className="dash-setup__head">
+          <span className="dash-setup__badge">On your board</span>
+        </div>
+        <div className="dash-setup__body">
+          {state.summary && <p className="dash-setup__help">{state.summary.headline}</p>}
+          {state.warnings.map((warning) => (
+            <p key={warning} className="dash-setup__warn">
+              {warning}
+            </p>
+          ))}
+          <p className="dash-setup__help">
+            Ask for any change in the chat and it updates right there.
+          </p>
+          {adjustToggle}
+          {adjusting && handControls}
+          {error && <p className="dash-setup__error">{error}</p>}
+          <div className="dash-row dash-row--end" style={{ marginTop: 10, gap: 6 }}>
+            <button
+              className="dash-control"
+              disabled={busy}
+              data-testid="concierge-undo"
+              onClick={undo}
+            >
+              Undo
+            </button>
+            <button
+              className="dash-control"
+              disabled={busy}
+              data-testid="concierge-done"
+              onClick={done}
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const placed = assisted && state.placed !== null;
 
   return (
     <div
@@ -1052,7 +1243,11 @@ export const ConciergeCard = ({
     >
       <div className="dash-setup__head">
         <span className="dash-setup__badge">
-          {state.widget ? "Building a widget" : "Setting up a widget"}
+          {placed
+            ? "Updating your widget"
+            : state.widget
+              ? "Building a widget"
+              : "Setting up a widget"}
         </span>
         {!state.widget && state.step && state.remaining > 1 && (
           <span className="dash-setup__count">
@@ -1065,18 +1260,17 @@ export const ConciergeCard = ({
        * The preview, whenever there is something to preview.
        *
        * `WidgetShell` with no remove or customise handlers, so it draws no
-       * control it could not honour — this widget is not on a board yet.
+       * control it could not honour — this widget is not on a board yet. It is
+       * also what checks the data, which is the one thing that has to happen
+       * before the widget can be placed.
        */}
       {state.widget && (
         <div className="dash-setup__preview" data-testid="concierge-preview">
           {/*
-           * Every widget the setup will write, not just the first.
-           *
-           * A setup usually produces one and this is a list of one. When the
-           * request was for separate things seen together it produces two, and
-           * previewing only the first would be the same failure the whole
-           * change exists to fix — the user told the second one was there
-           * while looking at a card that shows one.
+           * Every widget the setup will write, not just the first. A request
+           * for separate things seen together produces two, and previewing
+           * only the first would tell the user the second was there while
+           * showing one.
            */}
           {(state.widgets.length > 0 ? state.widgets : [state.widget]).map((entry) => (
             <CheckedPreview
@@ -1095,57 +1289,12 @@ export const ConciergeCard = ({
       )}
 
       {/*
-       * The alternates, beside the thing itself.
-       *
-       * Never a question and never a gate: what is on screen is what happens
-       * if nobody touches these, which is the same rule the reading chip
-       * below follows. They appear only when there is genuinely more than one
-       * way to show what was asked for, so an ordinary one-widget build never
-       * sees them.
+       * By hand, for whoever wants it. The wizard keeps its controls in the
+       * open, because a person answering questions one at a time is already
+       * doing it by hand; an assisted setup keeps them behind one link.
        */}
-      {state.widget && (
-        <ArrangementChips options={state.arrangements} busy={busy} onPick={pickArrangement} />
-      )}
-
-      {/*
-       * Under the preview, because it is about the thing being looked at:
-       * "this is what I built, and here is the other thing your words could
-       * have meant". Above the settings, because it replaces the widget rather
-       * than adjusting it.
-       */}
-      {state.widget && state.alternative && (
-        <ReadingChip label={state.alternative.label} busy={busy} onTake={takeReading} />
-      )}
-
-      {/*
-       * The decisions, behind one disclosure, directly under the thing they
-       * describe.
-       *
-       * They used to be a wrapped row of pill buttons with no heading, no
-       * grouping and an affordance you had to already know about. Order
-       * matters as much as the grouping did: the preview is what somebody is
-       * judging, so it comes first and the controls sit beneath it, in reach
-       * without being in the way. Asking for a change in the conversation is
-       * still the main path — this is for somebody who would rather reach in
-       * and set it, which is why it is closed by default.
-       */}
-      {!state.step && !openControl && state.controls.length > 0 && (
-        <ProminentSettings
-          controls={state.controls.filter((control) => PROMINENT.has(bareStep(control.stepId)))}
-          busy={busy}
-          onEdit={setEditing}
-        />
-      )}
-
-      {!state.step && !openControl && state.controls.length > 0 && (
-        <SettingsPanel
-          controls={state.controls.filter((control) => !PROMINENT.has(bareStep(control.stepId)))}
-          busy={busy}
-          open={settingsOpen}
-          onToggle={() => setSettingsOpen((value) => !value)}
-          onEdit={setEditing}
-        />
-      )}
+      {!openControl && (assisted ? adjustToggle : null)}
+      {!openControl && (assisted ? adjusting && handControls : handControls)}
 
       <div className="dash-setup__body">
         {/* One thing at a time: an open control, else a question, else the card. */}
@@ -1179,22 +1328,20 @@ export const ConciergeCard = ({
               </p>
             )}
 
-            {/*
-             * Names both ways of changing it, in that order. The conversation
-             * is the better one — it can weigh a request and suggest something
-             * — and Settings is there for when somebody would rather just set
-             * the thing themselves.
-             */}
             {state.widget && (
               <p className="dash-setup__help">
-                Ask for changes below, or open Settings to adjust it directly.
+                {assisted && state.ready
+                  ? placed
+                    ? "Applying the change to your board once the preview checks out."
+                    : "Adding it to your board as soon as the preview checks out."
+                  : "Ask for changes below, or open Settings to adjust it directly."}
               </p>
             )}
 
             {/*
-             * Shown before the confirm, never after. A join that can repeat a
-             * row turns a total into a number that is wrong and looks right,
-             * and reading it once in good faith is the failure.
+             * Shown before it lands, never after. A join that can repeat a row
+             * turns a total into a number that is wrong and looks right, and
+             * reading it once in good faith is the failure.
              */}
             {state.warnings.map((warning) => (
               <p key={warning} className="dash-setup__warn">
@@ -1231,36 +1378,41 @@ export const ConciergeCard = ({
             <button
               className="dash-control"
               disabled={busy}
-              onClick={() =>
-                void run(async () => {
-                  await api.cancelSetup(dashboardId);
-                  onDismissed?.();
-                  return { active: false };
-                })
+              data-testid={placed ? "concierge-undo" : undefined}
+              onClick={
+                placed
+                  ? undo
+                  : () =>
+                      void run(async () => {
+                        await api.cancelSetup(dashboardId);
+                        onDismissed?.();
+                        return { active: false };
+                      })
               }
             >
-              Discard
+              {placed ? "Undo" : "Discard"}
             </button>
-            <button
-              className="dash-control"
-              disabled={
-                busy ||
-                !state.ready ||
-                !(state.widgets?.length ? state.widgets : state.widget ? [state.widget] : []).every(
-                  (widget) => previewChecks[JSON.stringify(widget)] === true,
-                )
-              }
-              data-testid="concierge-confirm"
-              onClick={() =>
-                void run(async () => {
-                  const result = await api.confirmSetup(dashboardId);
-                  onAdded(result.widgetId);
-                  return { active: false };
-                })
-              }
-            >
-              Add it to the board
-            </button>
+            {/*
+             * The wizard's last answer is still a click. An assisted setup
+             * places itself, so the button only appears when that did not
+             * work — as the way to try again once whatever stopped it is fixed.
+             */}
+            {(!assisted || error !== null) && (
+              <button
+                className="dash-control"
+                disabled={busy || !state.ready || !previewsChecked}
+                data-testid="concierge-confirm"
+                onClick={() =>
+                  void run(async () => {
+                    const result = await api.confirmSetup(dashboardId);
+                    onAdded(result.widgetId);
+                    return assisted ? null : { active: false };
+                  })
+                }
+              >
+                {assisted ? "Try again" : "Add it to the board"}
+              </button>
+            )}
           </div>
         )}
       </div>

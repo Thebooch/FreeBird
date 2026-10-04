@@ -9,6 +9,7 @@ import {
   fieldPool,
   newDraft,
   nextStepAcross,
+  placeDraft,
   readinessAcross,
   revise,
   skipStepAcross,
@@ -16,7 +17,7 @@ import {
 import type { DashboardSpec, FilterDecl } from "@freebirdai/dash-spec";
 import { COMPONENT_CONTRACTS, parseWidget } from "@freebirdai/dash-spec";
 import type { ComponentDefinition } from "@freebirdai/core";
-import { commitSetup } from "../concierge/commit.js";
+import { placeSetup } from "../concierge/commit.js";
 import { conciergeState } from "../concierge/state.js";
 import { settleDetail } from "../concierge/detail.js";
 import type { DetailPlanRequest, DetailSetup } from "../concierge/detail.js";
@@ -621,8 +622,9 @@ export const conciergeActions = (ops: ConciergeOps): ComponentDefinition["action
       "Build a widget from what the user described. Pass their own words as `intent` — that " +
       "is the whole call. The endpoint, the view and the field for each role are worked out " +
       "here, against every endpoint the connection has, so you do not need to name any of " +
-      "them and should not guess. The reply says which records were chosen and why. Discards " +
-      "any setup in progress.",
+      "them and should not guess. The widget goes onto the board by itself as soon as its " +
+      "preview checks out, so there is nothing for the user to choose or confirm. The reply " +
+      "says which records were chosen and why. Discards any setup in progress.",
     schema: startSetupSchema,
     requiresConfirmation: "none",
     readCurrent: async () => {
@@ -686,7 +688,20 @@ export const conciergeActions = (ops: ConciergeOps): ComponentDefinition["action
         rejected: rejectionsFor(result.rejected),
         ...(narrowed?.found ? { narrowing: narrowed.found } : {}),
         ...(derived?.reason ? { picked: derived.reason } : {}),
-        ...(derived?.alternative ? { otherReading: derived.alternative.label } : {}),
+        ...(derived?.alternative
+          ? {
+              otherReading: derived.alternative.label,
+              /*
+               * Kept for the assistant rather than offered as a choice. A
+               * request that comes back as "this, or did you mean that?" is a
+               * question somebody did not want to answer — they asked for a
+               * widget, and the likelier reading is the one they get.
+               */
+              otherReadingGuidance:
+                "Another reading of their words. Do not offer it as a choice. If they say the " +
+                "widget is not what they meant, rebuild it from this reading with start_setup.",
+            }
+          : {}),
         ...(derived && derived.notes.length > 0
           ? {
               notes: derived.notes,
@@ -736,11 +751,13 @@ export const conciergeActions = (ops: ConciergeOps): ComponentDefinition["action
                 options: item.options,
               })),
               unsureGuidance:
-                "You raised these while building it, and they matter more than any question " +
-                "the card derives — they are about what was asked for, not about which column " +
-                "to use. Put the important one to the user in your own words before saying the " +
-                "widget is ready. If one of them says the data needed is not in this endpoint, " +
-                "say that plainly instead of presenting the widget as an answer.",
+                "You raised these while building it. The widget was built from the likeliest " +
+                "reading and is going onto the board anyway, so do not hold it up with a " +
+                "question or a list of options: after saying what you built, name the one " +
+                "assumption that matters in a short sentence, so they can correct it by just " +
+                "saying so. If one of them says the data needed is not in this endpoint, say " +
+                "that plainly instead of presenting the widget as an answer, and offer to take " +
+                "it back off the board.",
             }
           : {}),
       };
@@ -890,8 +907,9 @@ export const conciergeActions = (ops: ConciergeOps): ComponentDefinition["action
      */
     id: "confirm_setup",
     description:
-      "Add the widget the setup produced to the dashboard. Only valid once every question " +
-      "has been answered.",
+      "Rarely needed: the widget goes onto the board by itself once its preview checks out, " +
+      "and later changes update it in place. Only call this if the user explicitly asks to " +
+      "add it and it has not appeared.",
     schema: confirmSetupSchema,
     requiresConfirmation: "preview",
     authorize: async () => {
@@ -957,7 +975,7 @@ export const conciergeActions = (ops: ConciergeOps): ComponentDefinition["action
       const built = buildAll(named, ops.context, {
         taken: new Set(board.widgets.map((widget) => widget.id)),
       });
-      const commit = commitSetup({ board, built });
+      const commit = placeSetup({ board, built, placed: draft.placed });
       const previewFailure = ops.checkPreview?.(built.widgets);
       if (previewFailure) throw new Error(previewFailure);
       if (!commit.ok || !commit.next) {
@@ -985,11 +1003,24 @@ export const conciergeActions = (ops: ConciergeOps): ComponentDefinition["action
         });
       }
 
-      await ops.clearDraft();
+      // Kept, pointed at what it wrote, so the next change lands on the same
+      // tile; the wizard has nobody to ask for one, so it is spent.
+      if (draft.mode === "assisted") {
+        await ops.putDraft(
+          placeDraft(
+            named,
+            commit.widgets.map((widget) => widget.id),
+            commit.groupId,
+          ),
+        );
+      } else {
+        await ops.clearDraft();
+      }
       ops.onChanged?.();
 
       return {
         added: true,
+        replaced: commit.replaced,
         // The primary, under its old name. Everything that only ever cared
         // about one widget goes on reading this and is right.
         widgetId: parsed.value.id,
@@ -1078,7 +1109,9 @@ export const conciergeKnowledge = (ops: ConciergeOps): Array<{ text: string }> =
 
   facts.push({
     text:
-      `BUILDING A WIDGET (draft ${draft.id}) — the user asked for: ` +
+      (draft.placed
+        ? `THE WIDGET JUST BUILT, now on the board (draft ${draft.id}) — the user asked for: `
+        : `BUILDING A WIDGET (draft ${draft.id}) — the user asked for: `) +
       `"${draft.intent ?? "something they described earlier"}". ` +
       `Right now it is: ${describeDraft(draft)}.`,
   });
@@ -1107,10 +1140,13 @@ export const conciergeKnowledge = (ops: ConciergeOps): Array<{ text: string }> =
     });
   } else {
     facts.push({
-      text:
-        "It is buildable, and the user is looking at a live preview of it right now. " +
-        "Say briefly what you made and invite them to change it. When they are happy, " +
-        "`confirm_setup` puts it on the board — they see a confirmation card first.",
+      text: draft.placed
+        ? "It is ON THE BOARD already. Every change they ask for about it is `revise_setup`, " +
+          "and it updates that same widget in place once the new preview checks out — never " +
+          "start a second one for a change to this one. Do not call `confirm_setup`."
+        : "It is buildable, and it goes onto the board by itself as soon as its preview checks " +
+          "out — the user does not pick or confirm anything. Say briefly what you made and " +
+          "that they can ask for any change. Do not call `confirm_setup`.",
     });
   }
 
@@ -1220,9 +1256,13 @@ const idleGuidance = (ops: ConciergeOps): string => {
     "role are worked out from every available endpoint — you are not choosing from a list here",
     "and you do not need one.",
     "",
-    "The user then sees a live preview with a control for every decision, and you refine it",
-    "with `revise_setup`. The reply tells you which records were chosen and why; read that",
-    "back to them in your own words rather than repeating endpoint ids.",
+    "The widget then goes onto the board by itself as soon as its preview checks out. Do not",
+    "offer the user a choice of styles or views, and do not ask them to confirm: pick the one",
+    "that best answers them and build it. Settings for adjusting it by hand are there for",
+    "anyone who wants them, but nobody has to touch them. Every change they ask for afterwards",
+    "is `revise_setup`, which updates that same widget on the board. The reply tells you which",
+    "records were chosen and why; read that back to them in your own words rather than",
+    "repeating endpoint ids.",
     "",
     "CLICKING A ROW: a table, list or card view can open the record behind a row, showing the",
     "fields worth reading and any related lists — a task's notes, a property's units. That is",
@@ -1324,14 +1364,15 @@ const materials = (draft: ConciergeDraft, ops: ConciergeOps): string => {
 const HOW_TO_BUILD = [
   "HOW TO BUILD IT — `revise_setup` sets any part of the widget, several at once.",
   "",
-  "  - Propose the whole thing in one call as soon as you know enough. Do not walk the",
-  "    user through it one decision at a time; they are looking at a preview, not a form.",
+  "  - Build the whole thing in one call as soon as you know enough. Do not walk the",
+  "    user through it one decision at a time, and do not offer a menu of styles to pick",
+  "    from — choose the one that best answers them. It lands on the board by itself.",
   "  - Never show them a list of field names and ask which one. Ask what they want to see",
   "    and pick the field yourself. Reciting the list back is the failure this replaces.",
   "  - Never invent a name to avoid asking. Anything not in the lists above is rejected and",
   "    handed back to you; a plausible wrong binding is worse than one more question.",
   "  - Every change they ask for afterwards is another `revise_setup` — 'make it a chart',",
-  "    'add the rent', 'group by status'. The preview updates as you go.",
+  "    'add the rent', 'group by status'. The widget on the board updates in place.",
   "  - If they describe something completely different, `start_setup` again.",
   "  - To show only some of the records, `narrowTo` with the user's own word for the subset.",
   "    The matching values are read out of the data here — never invent a filter yourself, and",

@@ -368,8 +368,6 @@ const ChatBody = ({
   const [startedHere, setStartedHere] = useState(false);
   /** The action the server is carrying out right now, if any. */
   const [running, setRunning] = useState<{ actionId: string; label?: string } | null>(null);
-  /** A different reading of the request, in the user's own words. */
-  const [otherReading, setOtherReading] = useState<string | null>(null);
 
   // Keep the newest message in view, including while a reply streams in.
   useEffect(() => {
@@ -402,27 +400,19 @@ const ChatBody = ({
 
         if (SETUP_ACTIONS.has(actionId)) {
           setSetupRevision((current) => current + 1);
-          if (actionId === "start_setup") {
-            setStartedHere(true);
-            /*
-             * The other reading of the same words, offered beside what was
-             * built rather than asked about first. Absent on almost every
-             * request, and it has to stay that way — an alternative on
-             * everything is a question on everything wearing different
-             * clothes.
-             */
-            const other = (event.result as { otherReading?: unknown } | null)?.otherReading;
-            setOtherReading(typeof other === "string" && other.trim() ? other.trim() : null);
-          }
+          /*
+           * No "or did you mean" chip any more. The other reading of the
+           * words stays with the assistant, which rebuilds from it if the
+           * widget turns out not to be what was meant — offering it beside
+           * every answer made each request a choice to make.
+           */
+          if (actionId === "start_setup") setStartedHere(true);
           // The setup is over, so the next draft to appear is a different one
           // and has to earn its own answer to this question.
           if (actionId === "confirm_setup") {
             setStartedHere(false);
-            setOtherReading(null);
             onDashboardChanged();
           }
-          // Any other change to the setup has moved past what was first built.
-          if (actionId === "revise_setup") setOtherReading(null);
           return;
         }
         if (CHANGE_ACTIONS.has(actionId)) {
@@ -590,28 +580,6 @@ const ChatBody = ({
                 </button>
               ))}
             </div>
-          </div>
-        )}
-
-        {/*
-         * The reading that was not chosen, as one click rather than a
-         * question. It sends an ordinary message, so switching goes through
-         * the same path as any other change of mind.
-         */}
-        {otherReading && !chat.streaming && (
-          <div className="dash-chat__coverage" data-testid="chat-other-reading">
-            <span className="dash-chat__coverage-note">or</span>
-            <button
-              type="button"
-              className="dash-chat__deeper"
-              data-testid="chat-switch-reading"
-              onClick={() => {
-                setOtherReading(null);
-                void chat.send(`Actually, show me ${otherReading} instead.`);
-              }}
-            >
-              {otherReading}
-            </button>
           </div>
         )}
 

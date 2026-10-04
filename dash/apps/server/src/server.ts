@@ -94,7 +94,12 @@ import { planDetailSetup } from "./concierge/detail.js";
 import type { DetailPlanRequest, DetailSetup } from "./concierge/detail.js";
 import { planNarrowing } from "./concierge/drilldown.js";
 import { NarrowingStore } from "./narrowings.js";
-import { MemoryDraftStore, ScratchDraftStore, type DraftStore } from "./concierge/store.js";
+import {
+  MemoryDraftStore,
+  ScratchDraftStore,
+  keepPlacement,
+  type DraftStore,
+} from "./concierge/store.js";
 import { CatalogStore, connectionFromCatalog, refreshCatalogConnection } from "./catalog.js";
 import { AUTO_INDEX_PAGES, discover, readIndex, type DocsRenderer } from "./discovery/index.js";
 import { RENDERER_DOWNLOAD_MB, type RendererStatus } from "./discovery/render/tooling.js";
@@ -1633,10 +1638,12 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   const memoryDrafts = new Map<string, MemoryDraftStore>();
   const draftsFor = (principal: Principal | null | undefined): DraftStore => {
     const userId = principal?.userId || LOCAL_USER_ID;
-    if (options.chat) return new ScratchDraftStore(options.chat.adapter, { userId, orgId: workspaceKey });
+    if (options.chat) {
+      return keepPlacement(new ScratchDraftStore(options.chat.adapter, { userId, orgId: workspaceKey }));
+    }
     const held = memoryDrafts.get(userId) ?? new MemoryDraftStore();
     memoryDrafts.set(userId, held);
-    return held;
+    return keepPlacement(held);
   };
 
   /*
