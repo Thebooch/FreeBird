@@ -37,6 +37,8 @@ export const INCOMPLETE = {
     "Nothing in this read says whether it reached the last record. What is shown may exclude additional records.",
   dependentCap: (read: number, of: number, source: string): string =>
     `Only ${read} of the ${of} ${source} were read for this, one request each. What is shown excludes the records of the rest.`,
+  dependentFailed: (failed: number, of: number, source: string): string =>
+    `The API would not answer for ${failed} of the ${of} ${source} read for this. What is shown excludes their records.`,
   saidMore:
     "The API's answer says it has more records than this read took, and nothing here reads the rest yet. What is shown excludes those additional records.",
   readingOn: (read: number, of?: number): string =>
@@ -59,6 +61,7 @@ const PAGE_CAP = /^Only the first \d+ page\(s\) were read, and this (endpoint|to
 const REPORTED_MORE = /^The API reports \d+ record\(s\) here and fewer were read\./;
 const STREAM_WINDOW = /^This endpoint is a stream: what is shown is what arrived in one window/;
 const DEPENDENT_CAP = /^Only \d+ of the \d+ .+ were read for this, one request each\./;
+const DEPENDENT_FAILED = /^The API would not answer for \d+ of the \d+ .+ read for this\./;
 const READING_ON = /^The rest is being read in the background: \d+( of \d+)? record\(s\) so far\./;
 
 /**
@@ -69,7 +72,7 @@ const READING_ON = /^The rest is being read in the background: \d+( of \d+)? rec
  * the rows are all there, and must not be shown as if they did.
  */
 export const isIncompleteNote = (warning: string): boolean =>
-  FIXED.has(warning) || PAGE_CAP.test(warning) || REPORTED_MORE.test(warning) || STREAM_WINDOW.test(warning) || DEPENDENT_CAP.test(warning) || READING_ON.test(warning);
+  FIXED.has(warning) || PAGE_CAP.test(warning) || REPORTED_MORE.test(warning) || STREAM_WINDOW.test(warning) || DEPENDENT_CAP.test(warning) || DEPENDENT_FAILED.test(warning) || READING_ON.test(warning);
 
 /**
  * What a read says when its endpoint no longer answers in the shape it was
