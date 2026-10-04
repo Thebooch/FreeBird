@@ -133,7 +133,7 @@ const permissionFor = (kind: WriteIntent["kind"]): Permission =>
 /**
  * A record type by its id, or — as the assistant says it — by its own name.
  *
- * "listing" is Buildium's `unit-2-listing`, whose name is Listing. Only a
+ * "listing" is one API's `unit-2-listing`, whose name is Listing. Only a
  * match that is unique counts: two record types that could both be meant is
  * a question for whoever asked, not a guess to make on their account.
  */
@@ -865,7 +865,7 @@ export class WriteService {
 /**
  * The fields of a target, for describing what a record type accepts.
  *
- * A form gets every option — Buildium's country list is two hundred and fifty
+ * A form gets every option — one API's country list is two hundred and fifty
  * long, and a picker missing the one somebody needs is a form they cannot
  * fill in. The assistant gets the first few, where the whole list would only
  * be tokens: `maxOptions`.

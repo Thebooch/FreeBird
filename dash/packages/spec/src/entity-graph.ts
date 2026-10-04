@@ -367,7 +367,7 @@ export interface EntityLinkView {
    * The endpoint listing these records, when one can be called on its own.
    *
    * Carried so a browser can resolve many of this type at once instead of one
-   * at a time. Measured on the real Buildium map: 80 of 121 reference links
+   * at a time. Measured on one real API's map: 80 of 121 reference links
    * cost a request each and point at only 24 record types, so a column with
    * twenty distinct vendors is twenty requests that one call to the vendors
    * list would answer — and that one answer then names vendors everywhere
@@ -540,7 +540,7 @@ export interface EntityPageField {
   readonly semantic?: SemanticType | undefined;
   /**
    * How to read the values, by the rule a compiled widget follows — see
-   * `fieldReading`. A flag Rentvine sends as 0/1 is read as a flag here too.
+   * `fieldReading`. A flag an API sends as 0/1 is read as a flag here too.
    */
   readonly coercion?: Coercion | undefined;
   /** What the values are once read, where that needs saying. */
@@ -675,7 +675,7 @@ export interface EntityPageView {
   /**
    * Other records the API sends inside these records' rows. Their fields are
    * left off this page; each one known is a link, and one of unknown type —
-   * a Rentvine `contact` could be a tenant, a vendor or an owner — is named
+   * a wrapped `contact` could be a tenant, a vendor or an owner — is named
    * here so the page can say it was left off rather than drop it silently.
    */
   readonly bundles?:
@@ -1154,7 +1154,7 @@ const rootOf = (path: string): string => (path.includes(".") ? (path.split(".")[
 /**
  * Of several candidate fields, the one sitting beside `near`.
  *
- * A Rentvine work order row carries `workOrder.propertyID` and also the
+ * A wrapped work order row carries `workOrder.propertyID` and also the
  * bundled `property.propertyID`; for the work order's own link, its own
  * wrapper's copy is the one that belongs to it. Then the shallowest.
  */
@@ -1183,7 +1183,7 @@ export const linkColumn = (
   if (reference.holds !== "objectRef" || /\.(id)$/i.test(field.path)) return field.path;
   /*
    * The id inside the object is the target's own identity field, read from
-   * inside its wrapper: a Rentvine `workOrder` holds `workOrderID`, a Buildium
+   * inside its wrapper: one API's `workOrder` holds `workOrderID`, another's
    * `Vendor` holds `Id`. Assuming `Id` everywhere matched nothing on every
    * API that does not happen to spell it that way.
    */
@@ -1310,7 +1310,7 @@ export const entityGraph = (input: EntityGraphInput): EntityGraph => {
    * The parent a scoped collection really lives under.
    *
    * The describe pass names one, and used to be believed outright. It picked
-   * the first collection whose path began the scoped one, so on Buildium
+   * the first collection whose path began the scoped one, so on one API
    * `/rentals/` beat `/rentals/units/` and a unit's listing, images and notes
    * were all filed under the property — whose page then fetched
    * `/rentals/units/{propertyId}/listing` with the property's id, and whose
@@ -1505,8 +1505,8 @@ export const entityGraph = (input: EntityGraphInput): EntityGraph => {
     }
     const actionIds = actions.map((action) => action.action!.id);
     /*
-     * An action with a step that undoes it can be undone — Buildium's
-     * inactivate has reactivate beside it — so it is not flagged as one that
+     * An action with a step that undoes it can be undone — an
+     * inactivate with a reactivate beside it — so it is not flagged as one that
      * cannot, whatever its name sounds like. The pairing is kept either way,
      * for whoever reverses a change later.
      */

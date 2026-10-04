@@ -6,8 +6,8 @@ import { idSchema, pathParamNames } from "./primitives.js";
  * rather than a flat list of URLs.
  *
  * Nearly every REST API is the same handful of shapes wearing different words:
- * a collection, a by-id detail, and foreign keys between them. Buildium has
- * leases and work orders; Stripe has charges and customers; GitHub has issues
+ * a collection, a by-id detail, and foreign keys between them. A
+ * property-management API has leases and work orders; Stripe has charges and customers; GitHub has issues
  * and repositories. Recording that structure once is what lets a row be
  * clicked, a record be opened, and two endpoints be joined — without any of
  * that logic knowing which vendor it is talking to.
@@ -275,7 +275,7 @@ export const commonPathPrefix = (paths: readonly string[]): number => {
 /**
  * Which of several same-named resources a reference means, or none of them.
  *
- * APIs reuse nouns across sections. Buildium has two endpoints called
+ * APIs reuse nouns across sections. One API has two endpoints called
  * "Retrieve all units" — `/v1/rentals/units` and `/v1/associations/units` —
  * and they are different kinds of unit. A `UnitId` on a lease row means the
  * rentals one; on an ownership account it means the associations one. Neither

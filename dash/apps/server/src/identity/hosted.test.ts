@@ -116,9 +116,9 @@ describe("what each member may do", () => {
     await memberships.putMember(member("editor"));
     expect((await policy.can(principal, "boards.edit")).ok).toBe(true);
     expect((await policy.can(principal, "connections.manage")).ok).toBe(false);
-    await memberships.putMember(member("viewer", [{ permission: "records.update", scope: { connection: "buildium", entity: "property" } }]));
-    expect((await policy.can(principal, "records.update", { connection: "buildium", entity: "property" })).ok).toBe(true);
-    expect((await policy.can(principal, "records.update", { connection: "buildium", entity: "lease" })).ok).toBe(false);
+    await memberships.putMember(member("viewer", [{ permission: "records.update", scope: { connection: "fabrikam", entity: "property" } }]));
+    expect((await policy.can(principal, "records.update", { connection: "fabrikam", entity: "property" })).ok).toBe(true);
+    expect((await policy.can(principal, "records.update", { connection: "fabrikam", entity: "lease" })).ok).toBe(false);
     expect((await policy.can(principal, "records.read")).ok).toBe(true);
     await memberships.removeMember("acme", "user-7");
     expect(await policy.can(principal, "records.read")).toEqual({ ok: false, reason: "You are no longer a member of this workspace." });
@@ -126,14 +126,14 @@ describe("what each member may do", () => {
 
   it("guards every route that changes stored state, and never a read", () => {
     expect(permissionFor("PUT", "/api/dashboards/main")).toBe("boards.edit");
-    expect(permissionFor("POST", "/api/connections/buildium/compile")).toBe("boards.edit");
-    expect(permissionFor("PUT", "/api/connections/buildium/key")).toBe("connections.manage");
-    expect(permissionFor("POST", "/api/connections/buildium/sample")).toBe("records.read");
+    expect(permissionFor("POST", "/api/connections/fabrikam/compile")).toBe("boards.edit");
+    expect(permissionFor("PUT", "/api/connections/fabrikam/key")).toBe("connections.manage");
+    expect(permissionFor("POST", "/api/connections/fabrikam/sample")).toBe("records.read");
     expect(permissionFor("PUT", "/api/parts/card/x")).toBe("boards.edit");
     expect(permissionFor("POST", "/api/query")).toBeNull();
     expect(permissionFor("GET", "/api/dashboards/main")).toBeNull();
     /* A change to an account checks the record type itself, on prepare and on commit. */
-    expect(permissionFor("POST", "/api/connections/buildium/writes/prepare")).toBeNull();
+    expect(permissionFor("POST", "/api/connections/fabrikam/writes/prepare")).toBeNull();
     expect(permissionFor("POST", "/api/writes/p1/commit")).toBeNull();
   });
 
@@ -208,13 +208,13 @@ describe("in Dash's database", () => {
       expect(await store.members("acme")).toHaveLength(2);
 
       const leases = new DbLeaseLock(db);
-      expect(await leases.acquire("keeper:buildium", "server-a", 60_000)).toBe(true);
-      expect(await leases.acquire("keeper:buildium", "server-b", 60_000)).toBe(false);
-      expect(await leases.acquire("keeper:buildium", "server-a", 60_000)).toBe(true);
-      await leases.release("keeper:buildium", "server-a");
-      expect(await leases.acquire("keeper:buildium", "server-b", 1)).toBe(true);
+      expect(await leases.acquire("keeper:fabrikam", "server-a", 60_000)).toBe(true);
+      expect(await leases.acquire("keeper:fabrikam", "server-b", 60_000)).toBe(false);
+      expect(await leases.acquire("keeper:fabrikam", "server-a", 60_000)).toBe(true);
+      await leases.release("keeper:fabrikam", "server-a");
+      expect(await leases.acquire("keeper:fabrikam", "server-b", 1)).toBe(true);
       await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(await leases.acquire("keeper:buildium", "server-a", 60_000)).toBe(true);
+      expect(await leases.acquire("keeper:fabrikam", "server-a", 60_000)).toBe(true);
     } finally {
       await db.close();
     }

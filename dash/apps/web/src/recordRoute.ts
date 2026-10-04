@@ -66,7 +66,7 @@ export type RecordTarget =
  * it, and losing that to gain consistency would be a plain regression.
  *
  * The identity is read by path, not by key. An API that wraps each record —
- * Rentvine's `{ property: { propertyID } }` — names its identity
+ * `{ property: { propertyID } }` — names its identity
  * `property.propertyID`, and a plain `row[identity]` found nothing there: the
  * row was drawn as clickable, the click returned here with null, and nothing
  * happened. It only ever worked on APIs whose identity is a top-level `Id`.

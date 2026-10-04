@@ -13,7 +13,7 @@ import type { Row } from "@freebirdai/dash-runtime";
  * screen fetched that row again from scratch. `recordIndex.ts` names this gap
  * in its own docblock and defers it; this is that index.
  *
- * Measured on the real Buildium map before building it: 80 of 121 reference
+ * Measured on one real API's map before building it: 80 of 121 reference
  * links cost a request each, and they point at only 24 distinct record types.
  * Most of those requests are for records something else already fetched.
  *

@@ -537,7 +537,7 @@ describe("QueryCache", () => {
       if (calls > 1) {
         throw new AdapterError("rate limited", {
           status: 429,
-          userMessage: "Buildium is rate limiting us.",
+          userMessage: "Fabrikam is rate limiting us.",
           retryAfter: "30",
         });
       }

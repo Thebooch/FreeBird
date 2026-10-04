@@ -10,7 +10,7 @@ import { UNTRUSTED_METADATA, callTool } from "./retry.js";
  * A replace sends the whole record, so every value it means to keep has to
  * be read off the record first. Most request fields share their name with
  * the record's (`mapWriteFields` handles those without any of this); a few
- * do not — Buildium's request says `PropertyManagerId`, its record says
+ * do not — one API's request says `PropertyManagerId`, its record says
  * `RentalManager.Id` — and those are the ones an edit would silently clear.
  *
  * Configuration time only, and only for the leftovers. The answer is checked

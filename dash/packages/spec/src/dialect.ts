@@ -215,7 +215,7 @@ export const catalogEntrySchema = z.object({
   baseUrl: z.string().url(),
   /**
    * The address as the documentation writes it, when part of it differs per
-   * account: `https://{account}.rentvine.com/api/manager`. Each connection
+   * account: `https://{account}.example.com/api/manager`. Each connection
    * fills in its own values; nothing account-specific is ever written here,
    * because this entry is shared with everybody who connects the API.
    */
@@ -400,8 +400,8 @@ export const catalogEntrySchema = z.object({
   /**
    * How often new records of each kind appear.
    *
-   * A fact about the API — new applications arrive all day on Buildium
-   * whoever is connected — so it sits here with the categories and the record
+   * A fact about the API — new applications arrive all day on a
+   * property-management API, whoever is connected — so it sits here with the categories and the record
    * types, read once by its own pass during onboarding. What one person did
    * with it afterwards is theirs and lives on their connection.
    */

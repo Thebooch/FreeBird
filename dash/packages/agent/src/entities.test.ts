@@ -117,7 +117,7 @@ describe("the prompt keeps to shapes, not vendors", () => {
   it("names no vendor and no vendor's endpoint", () => {
     // The guard `pick.test.ts` and `review.test.ts` already carry. A prompt
     // that teaches one API's vocabulary works worse on every other one.
-    for (const word of ["buildium", "stripe", "github", "rentals", "lease", "tenant"]) {
+    for (const word of ["fabrikam", "stripe", "github", "rentals", "lease", "tenant"]) {
       expect(ENTITY_SYSTEM_PROMPT.toLowerCase(), word).not.toContain(word);
     }
   });

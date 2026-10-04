@@ -61,7 +61,7 @@ export const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
 /**
  * Where a permission applies. Empty is everywhere; a connection narrows it to
  * one account, and a record type within it narrows it further — "may edit
- * properties on the Buildium account" and nothing else.
+ * properties on this account" and nothing else.
  */
 export const scopeSchema = z.object({
   connection: idSchema.optional(),

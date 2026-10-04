@@ -55,7 +55,7 @@ export const readWriteEndpoints = async (
 /**
  * Reads each entry's write endpoints once, in the background, one at a time.
  *
- * One at a time because each is a whole specification — Buildium's is
+ * One at a time because each is a whole specification — one real API's is
  * several megabytes — and nobody is waiting on it. Once per entry per run:
  * a specification that could not be read is not asked for again until the
  * server restarts or somebody asks under Connections → Changes.

@@ -351,7 +351,7 @@ describe("RestAdapter", () => {
       expect(call.headers.authorization).toBe(`Basic ${btoa("user:sk_test_secret")}`);
     });
 
-    /* Rentvine: "the access key as the username and secret as the password".
+    /* Contoso: "the access key as the username and secret as the password".
      * Both halves are the person's, and neither is "the first secret". */
     it("sends basic auth whose username is a stored credential too", async () => {
       const { http, calls } = stub([{ body: { data: [] } }]);
@@ -808,16 +808,16 @@ describe("RestAdapter", () => {
 });
 
 describe("multi-header auth", () => {
-  const buildium = (): ConnectionSpec =>
+  const fabrikam = (): ConnectionSpec =>
     connection({
-      id: "buildium",
-      title: "Buildium",
-      baseUrl: "https://api.buildium.com",
+      id: "fabrikam",
+      title: "Fabrikam",
+      baseUrl: "https://api.fabrikam.example",
       auth: {
         type: "headers",
         parts: [
-          { header: "x-buildium-client-id", keyRef: "buildium-id", label: "Client ID" },
-          { header: "x-buildium-client-secret", keyRef: "buildium-secret", label: "Client secret" },
+          { header: "x-fabrikam-client-id", keyRef: "fabrikam-id", label: "Client ID" },
+          { header: "x-fabrikam-client-secret", keyRef: "fabrikam-secret", label: "Client secret" },
         ],
       },
       ops: [{ id: "leases", title: "Leases", path: "/v1/leases", rowsPath: "$" }],
@@ -825,7 +825,7 @@ describe("multi-header auth", () => {
 
   it("sends every part as its own header", async () => {
     const { http, calls } = stub([{ body: [] }]);
-    const conn = buildium();
+    const conn = fabrikam();
 
     await new RestAdapter(http).fetch(
       conn,
@@ -835,17 +835,17 @@ describe("multi-header auth", () => {
         ...ctx(),
         // Each keyRef resolves to its own distinct secret.
         resolveSecret: async (ref: string) =>
-          ref === "buildium-id" ? "CLIENT-ID" : "CLIENT-SECRET",
+          ref === "fabrikam-id" ? "CLIENT-ID" : "CLIENT-SECRET",
       },
     );
 
-    expect(calls[0]?.headers["x-buildium-client-id"]).toBe("CLIENT-ID");
-    expect(calls[0]?.headers["x-buildium-client-secret"]).toBe("CLIENT-SECRET");
+    expect(calls[0]?.headers["x-fabrikam-client-id"]).toBe("CLIENT-ID");
+    expect(calls[0]?.headers["x-fabrikam-client-secret"]).toBe("CLIENT-SECRET");
   });
 
   it("refuses to fire when only one of the two secrets is stored", async () => {
     const { http } = stub([{ body: [] }]);
-    const conn = buildium();
+    const conn = fabrikam();
 
     // Half-configured auth would otherwise 401 with an opaque provider message.
     await expect(
@@ -855,10 +855,10 @@ describe("multi-header auth", () => {
         {},
         {
           ...ctx(),
-          resolveSecret: async (ref: string) => (ref === "buildium-id" ? "CLIENT-ID" : null),
+          resolveSecret: async (ref: string) => (ref === "fabrikam-id" ? "CLIENT-ID" : null),
         },
       ),
-    ).rejects.toThrow(/buildium-secret/);
+    ).rejects.toThrow(/fabrikam-secret/);
   });
 });
 

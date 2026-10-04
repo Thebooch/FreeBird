@@ -59,7 +59,7 @@ describe("collectRecords", () => {
   });
 
   it("reads an identity that nests, list and detail alike", () => {
-    /* Rentvine: every record wrapped in an object named after its type. */
+    /* Contoso: every record wrapped in an object named after its type. */
     const list = [{ property: { propertyID: 12, name: "Maple Court" } }, { property: { propertyID: 13 } }];
     expect(collectRecords(list, "property.propertyID").map((r) => r.id)).toEqual(["12", "13"]);
     const detail = collectRecords({ property: { propertyID: 12, name: "Maple Court" } }, "property.propertyID");

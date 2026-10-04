@@ -6,7 +6,7 @@ import { fakeLlm } from "./llm.js";
 /**
  * What a record shows, and the guards on the model that chooses it.
  *
- * The fixture is a real Buildium task, because it is a good example of the
+ * The fixture is a real API's task, because it is a good example of the
  * problem: roughly half of what the endpoint returns exists for the API rather
  * than for the person reading it — links back to the API, ids nobody can read,
  * and columns that are null on every record.
@@ -18,10 +18,10 @@ const taskFields: FieldInfo[] = [
   field("Id", ["number"], [5074917, 5074918]),
   field("TaskType", ["string"], ["Todo", "Request"]),
   field("Category.Name", ["string"], ["General Inquiry", "Maintenance Request"]),
-  field("Category.Href", ["string"], ["https://api.buildium.com/v1/tasks/categories/1687"]),
+  field("Category.Href", ["string"], ["https://api.fabrikam.example/v1/tasks/categories/1687"]),
   field("Title", ["string"], ["Rent Increase Evaluation"]),
   field("Description", ["string"], []),
-  field("Property.Href", ["string"], ["https://api.buildium.com/v1/rentals/218831"]),
+  field("Property.Href", ["string"], ["https://api.fabrikam.example/v1/rentals/218831"]),
   field("UnitId", ["number"], [637370]),
   field("UnitAgreement", ["null"], []),
   field("AssignedToUserId", ["number"], [2482651]),
@@ -58,7 +58,7 @@ describe("buildDetailPrompt", () => {
     const prompt = buildDetailPrompt({ recordTitle: "Task", fields: taskFields, children: [] });
 
     // `Href` is obvious from its value and invisible from its name.
-    expect(prompt).toContain('Category.Href: string — e.g. "https://api.buildium.com');
+    expect(prompt).toContain('Category.Href: string — e.g. "https://api.fabrikam.example');
     expect(prompt).toContain('Priority: string — e.g. "High", "Low"');
   });
 

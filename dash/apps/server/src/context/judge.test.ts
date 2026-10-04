@@ -18,19 +18,19 @@ import { fitRows } from "./judge.js";
  * answer is a bigger failure than quoting a field nobody can see.
  */
 
-/** Shaped like a real Buildium task: six useful fields, a lot of freight. */
+/** Shaped like a real API's task: six useful fields, a lot of freight. */
 const task = (i: number, title: string) => ({
   Id: 5259251 + i,
   TaskType: "Todo",
   Category: {
     Id: 28053,
     Name: "Inspections",
-    Href: "https://api.buildium.com/v1/tasks/categories/28053",
+    Href: "https://api.fabrikam.example/v1/tasks/categories/28053",
     SubCategory: null,
   },
   Title: title,
   Description: "Re Key\nFinal Inspection, and a good deal of further detail besides.",
-  Property: { Id: 213910, Type: "Rental", Href: "https://api.buildium.com/v1/rentals/213910" },
+  Property: { Id: 213910, Type: "Rental", Href: "https://api.fabrikam.example/v1/rentals/213910" },
   UnitId: 1234 + i,
   TaskStatus: "New",
   Priority: "High",

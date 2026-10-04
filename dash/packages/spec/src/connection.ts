@@ -198,7 +198,7 @@ export const connectionSchema = z.object({
   baseUrl: z.string().url().optional(),
   /**
    * The address template this connection's `baseUrl` was filled in from,
-   * with this account's values — `{ account: "123pm" }`. Kept so the values
+   * with this account's values — `{ account: "northgate" }`. Kept so the values
    * can be changed later without retyping the whole address, and so an
    * address that still has a blank in it is recognised as unfinished.
    */

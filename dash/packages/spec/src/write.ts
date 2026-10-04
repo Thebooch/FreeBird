@@ -34,7 +34,7 @@ export const WRITES_VERSION = 1;
  * Declared by the API, so it travels with the catalog entry. `readFrom` is
  * the one fact about it that is not in the specification: where the record's
  * *current* value lives on the read side. The two shapes are not the same —
- * Buildium sends `PropertyManagerId` and returns `RentalManager.Id` — and an
+ * one API takes `PropertyManagerId` and returns `RentalManager.Id` — and an
  * update that replaces the whole record has to send every value it means to
  * keep, so this mapping is what stops an edit to one field from clearing
  * another.

@@ -86,7 +86,7 @@ export class ProxyAdapter implements SourceAdapter {
        * Two fields, two jobs, and they are not interchangeable.
        *
        * `error` is the technical one — "rate limited by api.example.com",
-       * "cooling down for buildium" — and belongs on the Error for a
+       * "cooling down for this connection" — and belongs on the Error for a
        * developer. `userMessage` is the sentence the server wrote for a
        * person, and on a 429 it is the only place the wait is stated. Reading
        * `error` into both, as this did, meant `describeFailure`'s careful

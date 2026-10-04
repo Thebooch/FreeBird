@@ -15,10 +15,10 @@ import type { FinalReplyContext } from "@freebirdai/core";
 const rows = Array.from({ length: 50 }, (_, i) => ({
   Id: 5216600 + i,
   TaskType: "ResidentRequest",
-  Category: { Id: 28053, Name: "Inspections", Href: "https://api.buildium.com/v1/x/28053" },
+  Category: { Id: 28053, Name: "Inspections", Href: "https://api.example.com/v1/x/28053" },
   Title: i === 38 ? "Dishwasher" : "Rent Increase Evaluation",
   Description: "Re Key\nFinal Inspection, plus a good deal of further detail besides.",
-  Property: { Id: 213910, Type: "Rental", Href: "https://api.buildium.com/v1/rentals/213910" },
+  Property: { Id: 213910, Type: "Rental", Href: "https://api.example.com/v1/rentals/213910" },
   TaskStatus: "InProgress",
   Priority: "Normal",
   DueDate: i === 38 ? "2026-08-17" : "2026-08-06",

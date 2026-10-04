@@ -180,3 +180,7 @@ A report is never overwritten. A second run on the same day gets `-2`, and a `--
   - **A regression, caught by the dev run and fixed.** The brief's new feedback sent cashloom's answer back because "refunded" is also a status value, though it already narrowed by a field named for it. A word the answer covers in a field's own name is now taken as said. Cashloom is correct again in two live runs.
   - Dev unscripted after the fix: chargebolt's model-written connector stopped short once, flagged, which is the run-to-run variance recorded at checkpoint 6.
 - 2026-10-03: **Trackwell's replacement, written.** A separate author who never read the integration code wrote one held-out provider, `staffnest` (`providers/heldout-2026-10-03.ts`), and wired it in. Its reference connection proves both of its answer keys. The held-out set is 12 again.
+- 2026-10-04: **An exposure, recorded.**
+  - **What was seen.** A scan of the git history for real credentials, before the repository goes public, did not leave the held-out files out. It printed six mock credential values (keys and tokens) from held-out providers, and nothing else of them: no file name, documentation, data or pattern.
+  - **What was built from it:** nothing. Credentials are among the inputs the integrator is given in every run.
+  - Scans of the history leave `heldout*` out from now on, as searches of the source do.

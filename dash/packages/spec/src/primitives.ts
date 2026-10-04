@@ -54,8 +54,8 @@ export const authSchema = z.discriminatedUnion("type", [
    * HTTP Basic: a username and a password, joined and sent together.
    *
    * On most APIs that use it, *both* halves are credentials the person holds
-   * — Rentvine sends "the access key as the username and secret as the
-   * password" — so the username is a vault entry like the password
+   * — one API's documentation says "the access key as the username and
+   * secret as the password" — so the username is a vault entry like the password
    * (`usernameRef`), asked for beside it. `username` is a fixed value for the
    * rarer API that documents one, and for connections saved before the
    * username could be a secret; `usernameRef` wins when both are present.
@@ -79,8 +79,8 @@ export const authSchema = z.discriminatedUnion("type", [
    * Two or more secret headers sent together.
    *
    * Client-id + client-secret pairs are common enough to need first-class
-   * support — Buildium sends `x-buildium-client-id` and
-   * `x-buildium-client-secret`, and neither alone authenticates anything.
+   * support — one API takes an `x-…-client-id` and an
+   * `x-…-client-secret` header, and neither alone authenticates anything.
    * Modelling that as a single `header` forces the user to smuggle both
    * values into one field, which cannot work.
    *
@@ -448,7 +448,7 @@ export const authCredentials = (auth: AuthSpec): AuthCredential[] => {
  * A part of an API's address that differs from one account to the next.
  *
  * Read from an OpenAPI `servers[].variables` entry, or from documentation that
- * writes the address with a placeholder — `https://{account}.rentvine.com`.
+ * writes the address with a placeholder — `https://{account}.example.com`.
  * Many business APIs are hosted per customer, and without this the only
  * address an import could record was a placeholder host nobody's account
  * lives on.
@@ -515,7 +515,7 @@ export const looksLikePlaceholder = (variable: ServerVariable): boolean => {
  * Put values into an address template.
  *
  * Reports what is missing and what was refused rather than producing a
- * half-filled address: a request to `https://.rentvine.com` is not a
+ * half-filled address: a request to `https://.example.com` is not a
  * slower way of failing, it is a request to somebody else.
  */
 export const resolveServerUrl = (

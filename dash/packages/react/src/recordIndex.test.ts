@@ -125,7 +125,7 @@ describe("referenceLookups", () => {
   });
 
   /*
-   * Rentvine's units are `/properties/{propertyID}/units/{unitID}`. A work
+   * Contoso's units are `/properties/{propertyID}/units/{unitID}`. A work
    * order names both, so its unit is asked for with its property's id — and a
    * row that names no property cannot address the unit at all.
    */
@@ -401,9 +401,9 @@ describe("unnamedLinks", () => {
     const result = unnamedLinks({
       lookups,
       names: { VendorId: { "1": "Acme" } },
-      failureOf: (key) => (key === "k2" ? "Buildium is rate limiting us." : undefined),
+      failureOf: (key) => (key === "k2" ? "Fabrikam is rate limiting us." : undefined),
     });
-    expect(result).toEqual({ count: 2, reason: "Buildium is rate limiting us." });
+    expect(result).toEqual({ count: 2, reason: "Fabrikam is rate limiting us." });
   });
 
   /* The list was standing in for every per-record call, so its refusal is the
@@ -427,7 +427,7 @@ describe("unnamedLinks", () => {
 
 describe("a record type the account cannot read", () => {
   /* 403 is a fact about the credential and 429 is a fact about the moment.
-   * Buildium answers 403 for an account without the accounting module, on
+   * One real API answers 403 for an account without the accounting module, on
    * every call, forever. */
   it("knows which statuses will not change by asking again", () => {
     expect(isDenied(403)).toBe(true);

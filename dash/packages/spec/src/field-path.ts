@@ -2,7 +2,7 @@
  * One value off a row, by a field path that may nest.
  *
  * Record types name their fields the way the API spells them, so a field can
- * be `Id` on one API and `property.propertyID` on the next — Rentvine wraps
+ * be `Id` on one API and `property.propertyID` on the next, which wraps
  * every record in an object named after its type. A row that reached a reader
  * may carry that value three ways: under the dotted name itself, under the
  * column a `derive` step flattened it to (`property_propertyID`), or only

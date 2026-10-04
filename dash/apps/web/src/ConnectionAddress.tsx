@@ -8,7 +8,7 @@ import { api, type ConnectionSummary } from "./api.js";
  * Two kinds of API reach this step, and they need different questions:
  *
  * - **One hosted per account.** The documentation writes the address with a
- *   blank — `https://{account}.rentvine.com/api/manager` — and only the person
+ *   blank — `https://{account}.example.com/api/manager` — and only the person
  *   connecting knows what goes in it. Each blank is asked for on its own, with
  *   the documentation's own description beside it, and the finished address
  *   shown as it is typed.

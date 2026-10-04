@@ -105,7 +105,7 @@ export const labelColumns = (
 /**
  * The columns drawn from a flag, marked as flags.
  *
- * Rentvine sends its flags as 1 and 0, so the values alone look like numbers
+ * Some APIs send their flags as 1 and 0, so the values alone look like numbers
  * and print as numbers. The record type knows better — see `isFlagField` —
  * so a column derived from one of its flags reads Active or Inactive. A
  * format the widget states for the column still wins: `formatFor` reads the

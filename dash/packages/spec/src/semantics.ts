@@ -299,7 +299,7 @@ export const formatValue = (
   const semantic = format?.semantic ?? "text";
 
   /*
-   * A flag, said as a state. Rentvine sends its flags as 1 and 0; a field
+   * A flag, said as a state. Some APIs send their flags as 1 and 0; a field
    * known to be a flag reads "Active" either way.
    */
   if (semantic === "boolean") {

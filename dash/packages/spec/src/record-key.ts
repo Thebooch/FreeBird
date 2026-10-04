@@ -5,9 +5,9 @@ import { normaliseName } from "./semantics.js";
  * Where one record is, when its own id is not enough to find it.
  *
  * Most records are fetched by their id alone: `/vendors/{vendorId}`. A record
- * that lives under another one is not — a Rentvine unit is
- * `/properties/{propertyID}/units/{unitID}`, a Buildium lease note is
- * `/leases/{leaseId}/notes/{noteId}` — and on Buildium that is 43 of 109
+ * that lives under another one is not — a unit at
+ * `/properties/{propertyID}/units/{unitID}`, a lease note at
+ * `/leases/{leaseId}/notes/{noteId}` — and on one real API that is 43 of 109
  * record types. Everything that carried a record used to carry one id, so none
  * of those could ever be opened, looked up or named.
  *

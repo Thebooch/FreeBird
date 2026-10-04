@@ -143,7 +143,7 @@ export const planNarrowing = async (input: NarrowInput): Promise<NarrowPlan> => 
    *
    * The declared schema is not good enough for this. A field list read from
    * an OpenAPI document describes an endpoint's *shape*, and the thing being
-   * looked for is usually a level down inside it — Buildium's tasks carry
+   * looked for is usually a level down inside it — one API's tasks carry
    * their kind on `Category.Name`, and until that nesting survives into the
    * map the only fields on offer are the flat ones, none of which say
    * anything about maintenance.

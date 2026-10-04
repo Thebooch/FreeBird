@@ -51,7 +51,7 @@ describe("what a row click opens", () => {
   });
 
   /*
-   * Rentvine wraps every record in an object named after its type, so its
+   * Contoso wraps every record in an object named after its type, so its
    * identity is `property.propertyID`. The row was drawn as clickable and the
    * click did nothing, because the id was looked up as a flat key.
    */

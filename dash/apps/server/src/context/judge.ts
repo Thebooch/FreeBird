@@ -126,8 +126,8 @@ export const describeCoverage = (evidence: Evidence): string => {
  *
  * So the order of sacrifice is fixed, and it is the opposite of what a naive
  * cap does. Every row survives if at all possible, because a dropped row turns
- * "no match" into a confident lie. What gets dropped first is *width*: a
- * Buildium task row is 700 characters of nested objects and href URLs around
+ * "no match" into a confident lie. What gets dropped first is *width*: one
+ * real API's task row is 700 characters of nested objects and href URLs around
  * six fields anybody is actually looking at. Narrowing to the columns the tile
  * draws takes the same fifty rows to a tenth of the size.
  *

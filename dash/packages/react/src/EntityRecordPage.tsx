@@ -304,7 +304,7 @@ export const EntityRecordPage = ({
           {unknownBundles.length > 0 && (
             /*
              * Said rather than dropped. These arrive inside every row, but
-             * nothing says which kind of record they are — a Rentvine
+             * nothing says which kind of record they are — a wrapped
              * `contact` may be a tenant, a vendor or an owner — so they cannot
              * be linked, and listing their fields as this record's own is what
              * this page stopped doing.

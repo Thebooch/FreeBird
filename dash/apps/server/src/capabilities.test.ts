@@ -146,7 +146,7 @@ describe("pickIdField", () => {
   });
 
   /*
-   * Rentvine wraps every record in an object named after its type, so the top
+   * Contoso wraps every record in an object named after its type, so the top
    * level of a row holds no id at all — and no collection under a property
    * was ever opened, because no property ever had an id to open one with.
    */
@@ -197,7 +197,7 @@ describe("findForeignKeys", () => {
   });
 
   /*
-   * Two collections can answer to the same noun. Buildium has two endpoints
+   * Two collections can answer to the same noun. Fabrikam has two endpoints
    * titled "Retrieve all units", under /v1/rentals and /v1/associations, and
    * they hold different records.
    */
@@ -460,7 +460,7 @@ describe("analyseConnection", () => {
     };
 
     /*
-     * Rentvine: every record wrapped in its own name, so a crate's id is
+     * Contoso: every record wrapped in its own name, so a crate's id is
      * `crate.crateId` and nothing at the top level identifies it. Before, no
      * parent had an id and no child collection was ever opened.
      */

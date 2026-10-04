@@ -205,7 +205,7 @@ export const pickIdField = (
  * wrapper where the row has one.
  *
  * Some APIs send each record wrapped in an object named after its type —
- * Rentvine answers `{ property: { propertyID, name } }` — so the top level
+ * a property comes back as `{ property: { propertyID, name } }` — so the top level
  * holds no id and no name at all. Read only at the top level, no resource on
  * such an API ever had an identity, and no collection scoped under one was
  * ever opened: a property's units were never read.
@@ -359,7 +359,7 @@ export const findForeignKeys = (
     /*
      * Only collections callable on their own compete for a bare foreign key.
      *
-     * Buildium has three collections ending in `/vendors`, two of which are
+     * One API has three collections ending in `/vendors`, two of which are
      * `/v1/rentals/{propertyId}/vendors` and
      * `/v1/associations/{associationId}/vendors`. A `VendorId` cannot mean
      * either — there is no property or association in hand to scope them by,

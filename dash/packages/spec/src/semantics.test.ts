@@ -211,7 +211,7 @@ describe("applyCoercion", () => {
 });
 
 /*
- * Rentvine sends its flags as 1 and 0. A field known to be a flag reads as a
+ * Contoso sends its flags as 1 and 0. A field known to be a flag reads as a
  * state however it arrives, and a real true/false does too.
  */
 describe("flags", () => {

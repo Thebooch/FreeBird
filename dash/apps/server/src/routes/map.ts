@@ -84,7 +84,7 @@ export interface MapRouteDeps {
  * The two halves of an entry come from different places and improve on
  * different schedules. Field schemas, parameters and paths come from the
  * import, and improve whenever the importer does — the reason this exists is
- * that Buildium's map recorded every nested object as a string, so
+ * that one real API's map recorded every nested object as a string, so
  * `Category.Name` did not exist anywhere and nothing that reasons about nested
  * values could work. Descriptions and relations come from the model pass, cost
  * real money, and are the artifact the whole catalog idea is built on.

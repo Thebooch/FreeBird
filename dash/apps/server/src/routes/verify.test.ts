@@ -217,8 +217,8 @@ describe("verifyRecords", () => {
 });
 
 /*
- * A budget smaller than the API — sixty requests against Buildium's 108 record
- * types — used to be spent on the same first sixty every run. Each run now
+ * A budget smaller than the API — sixty requests against one real API's 108
+ * record types — used to be spent on the same first sixty every run. Each run now
  * starts with what has never been read and stamps what it read.
  */
 describe("verifyRecords, resuming", () => {

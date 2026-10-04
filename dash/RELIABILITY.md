@@ -366,4 +366,4 @@ The onboarding benchmark (`bench/PROTOCOL.md`, `pnpm bench`) measures the whole 
 
 Tests use deterministic responses and fake model outputs. Live-provider authentication, rate limits and pagination semantics must still be checked against the provider's actual contract. No live credentials are required to run the regression suite.
 
-On September 9, 2026, a bounded read against the existing Buildium connection returned HTTP 429. No retry was attempted. This exercised rate-limit reporting, but did not verify the provider's current response shape or pagination semantics.
+On September 9, 2026, a bounded read against a real property-management API returned HTTP 429. No retry was attempted. This exercised rate-limit reporting, but did not verify the provider's current response shape or pagination semantics.

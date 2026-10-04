@@ -4,7 +4,7 @@ import type { RelationGraphInput } from "./relations.js";
 import { resourceSchema } from "./resource.js";
 
 /**
- * Every case here is one the real Buildium map produced, reduced to the shape
+ * Every case here is one a real API's map produced, reduced to the shape
  * that caused it. None of them needs to know what a property or a unit is —
  * each is a statement about a field's kind, a path's parameters, or two ends of
  * one fact being recorded twice.

@@ -52,7 +52,7 @@ const str = (value: unknown): string | undefined =>
  * A spec's prose, with its markup taken out.
  *
  * Descriptions are written for a documentation site, so they arrive with HTML
- * in them — Buildium's carry a `<span class="permissionBlock">` naming the
+ * in them — one API's carry a `<span class="permissionBlock">` naming the
  * scope each endpoint needs. The *text* of that is worth keeping and is
  * genuinely useful: it says which permission a key must hold, which is exactly
  * what a 403 turns out to be about. The tags are only noise, and they would be
@@ -89,7 +89,7 @@ export const looksLikeOpenApi = (doc: unknown): boolean =>
  * That is not an edge case. It is what every generator that emits annotated
  * references produces, which is most enterprise specs — and unflattened it has
  * no `type`, no `properties` and no `items`, so a reader sees a schema that
- * declares nothing and treats it as a string. Buildium's whole API imported
+ * declares nothing and treats it as a string. One real API imported wholly
  * that way: `Category` and `Property` on a task became strings, no field name
  * with a dot in it existed anywhere in the map, and everything downstream that
  * reasons about nested values was reading a flat world. The structural
@@ -197,7 +197,7 @@ const humanise = (name: string): string => {
 };
 
 /**
- * A templated server — `https://{account}.rentvine.com/api/manager` — kept as
+ * A templated server — `https://{account}.example.com/api/manager` — kept as
  * a template, with what the spec says about each blank.
  *
  * These used to be skipped as "unusable as-is", which sent every request to
@@ -374,7 +374,7 @@ export const operationPath = (
  * The security scheme's own description first, then a section headed like
  * "Authentication", then the sentences of the overview that mention keys. A
  * spec can say perfectly clearly that the username is an access key and the
- * password a secret — Rentvine's does, under its Authentication tag — while
+ * password a secret — one real API's does, under its Authentication tag — while
  * its security scheme says only `http/basic`. That sentence is the one the
  * person connecting needs to read.
  */
@@ -1060,7 +1060,7 @@ const paramRole = (
    * Which END of a range this is, checked before anything else about dates.
    *
    * Vendors run the words together as often as they separate them —
-   * Buildium ships `lastupdatedfrom` and `lastupdatedto` — so a marker is
+   * one API ships `lastupdatedfrom` and `lastupdatedto` — so a marker is
    * matched as a plain suffix too. Getting this wrong labels both ends
    * `rangeStart`, and a range with two starts silently filters nothing.
    */

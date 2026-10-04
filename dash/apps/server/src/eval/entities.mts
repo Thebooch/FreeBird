@@ -6,7 +6,7 @@
  * worse than no coverage at all.
  *
  *   pnpm eval:entities                     every described API on disk
- *   pnpm eval:entities buildium            one entry
+ *   pnpm eval:entities <entry-id>          one entry
  *   pnpm eval:entities --model claude-sonnet-5
  *
  * It reads the catalog already on disk and calls only the describing pass, so

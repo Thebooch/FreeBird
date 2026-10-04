@@ -267,7 +267,7 @@ describe("chooseViews", () => {
 
 describe("the views prompt names no vendor and no domain", () => {
   const BANNED = [
-    "buildium",
+    "fabrikam",
     "stripe",
     "github",
     "lease",

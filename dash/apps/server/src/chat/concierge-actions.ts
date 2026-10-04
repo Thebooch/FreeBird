@@ -1062,8 +1062,8 @@ export const conciergeKnowledge = (ops: ConciergeOps): Array<{ text: string }> =
    * then offered to build a widget instead. It could only talk about the API
    * from inside the act of building against it.
    *
-   * Titles alone are the fix, and they are cheap: 988 bytes for all 59 of
-   * Buildium's. Fields are what made the old block enormous and they are what
+   * Titles alone are the fix, and they are cheap: 988 bytes for all 59 of one
+   * real API's. Fields are what made the old block enormous and they are what
    * `look_up_endpoint` now fetches on demand, so this stays a roster rather
    * than growing back into a catalogue.
    */

@@ -11,7 +11,7 @@ import { buildConciergeContext } from "./context.js";
 import { opensRecords, planDetailSetup, settleDetail } from "./detail.js";
 
 /**
- * The Buildium shape that prompted this: tasks, the notes that hang off one,
+ * The real API shape that prompted this: tasks, the notes that hang off one,
  * and a categories collection that does not hang off anything.
  *
  * The notes endpoint needs the task's id in its path, which is exactly what

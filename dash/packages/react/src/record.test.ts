@@ -8,7 +8,7 @@ const widget = (drilldown: Record<string, unknown>) =>
     id: "applicants",
     title: "Applicants",
     component: "table",
-    source: { connection: "buildium", op: "list" },
+    source: { connection: "fabrikam", op: "list" },
     drilldown,
   });
 

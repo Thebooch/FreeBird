@@ -234,7 +234,7 @@ describe("relationSchema", () => {
 /* ── telling two same-named collections apart ──────────────────────────── */
 
 describe("resolveSameNoun", () => {
-  /** Buildium's real shape: two "units" collections in different modules. */
+  /** A real API's shape: two "units" collections in different modules. */
   const rentalUnits = { id: "unit-2", path: "/v1/rentals/units" };
   const associationUnits = { id: "unit", path: "/v1/associations/units" };
   const both = [associationUnits, rentalUnits];

@@ -240,7 +240,7 @@ export const entityFieldSchema = z.object({
    * What a real response showed, where one was read.
    *
    * Kept apart from everything above, which is what the specification said
-   * or what a person set: the docs can be wrong — Rentvine declares flags
+   * or what a person set: the docs can be wrong — one API declares flags
    * boolean and sends 0 and 1, and a work order number "string" that arrives
    * as a number — and a reading learned from the account must never overwrite
    * a decision somebody made. So it lands here, and readers prefer a stated
@@ -385,7 +385,7 @@ const entityBodySchema = z.object({
    * Human, stable, and unique within the API.
    *
    * Not the resource id, which comes from a URL and reads like one:
-   * Buildium's properties live at `/v1/rentals`, so the resource is `rental`
+   * one API's properties live at `/v1/rentals`, so the resource is `rental`
    * and the second units collection is `unit-2`. Those are fine as internal
    * handles and wrong as names — an entity is what the chat, the tools and the
    * address bar say, so `-2` is not an acceptable answer and a real

@@ -496,7 +496,7 @@ describe("what the assistant is told about a setup", () => {
      * me", and offered to build a widget instead of answering.
      *
      * Fields were the expensive half and they are what `look_up_endpoint`
-     * fetches on demand. Names are cheap — 988 bytes for all 59 of Buildium's
+     * fetches on demand. Names are cheap — 988 bytes for all 59 of one real API's
      * — so they stay.
      */
     expect(text).toContain("List things");

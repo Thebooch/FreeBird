@@ -87,7 +87,7 @@ export const catalogEntryToVerify = (input: {
  * on the outcome. It stopped being defensible the moment `verified` started
  * depending on it: an importer that picks an endpoint belonging to a module
  * the account does not license leaves the entry permanently unproven, however
- * well every other endpoint works. Buildium reproduces this exactly —
+ * well every other endpoint works. One real API reproduces this exactly —
  * `/v1/associations` is chosen deterministically from a clean import and 403s
  * on an account without that module.
  *

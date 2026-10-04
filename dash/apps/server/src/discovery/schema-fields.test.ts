@@ -178,7 +178,7 @@ describe("a schema that never says what it is", () => {
         Id: { type: "integer" },
         TaskType: { type: "string" },
         Category: {
-          // No `type`. Buildium's shape, and most APIs' shape.
+          // No `type`. Fabrikam's shape, and most APIs' shape.
           properties: {
             Id: { type: "integer" },
             Name: { type: "string" },

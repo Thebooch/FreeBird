@@ -804,7 +804,7 @@ export const ConnectionManager = ({
    * Reading the account is part of connecting, not an extra.
    *
    * Record types are built from the documentation, and documentation can be
-   * wrong in ways that render confidently — Rentvine declares its flags
+   * wrong in ways that render confidently — one API declares its flags
    * boolean and sends 0 and 1. Reading real rows is what catches that, and an
    * optional button meant nobody ever pressed it. So it starts as soon as this
    * step opens, once per connection, within the budget the step states; "Skip

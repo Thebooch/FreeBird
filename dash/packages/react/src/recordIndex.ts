@@ -10,7 +10,7 @@ import type { Row } from "@freebirdai/dash-runtime";
  *
  * 1. **It is already on the row.** Plenty of APIs embed a name beside the id —
  *    `RentalManager.Id` next to `RentalManager.FirstName`. Free, and on the
- *    real Buildium map this covers 43 of the links.
+ *    map of one real API this covers 43 of the links.
  * 2. **It was fetched.** One request per distinct id, bounded and deduplicated,
  *    through the ordinary query cache — so two widgets naming the same vendor
  *    resolve it once, and a record already open costs nothing.
@@ -241,7 +241,7 @@ export const REFUSAL_STATUS = 429;
  * Statuses that say this record type cannot be read at all, ever.
  *
  * Different from a refusal in the one way that matters: waiting does not help.
- * A 429 is "not now" and a 403 is "not with this credential" — Buildium
+ * A 429 is "not now" and a 403 is "not with this credential" — one API
  * returns exactly that for an account without the accounting module, on every
  * call, forever.
  *

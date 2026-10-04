@@ -868,7 +868,7 @@ describe("a request, from words to a widget", () => {
  */
 describe("the brief prompt names no vendor and no domain", () => {
   const BANNED = [
-    "buildium",
+    "fabrikam",
     "stripe",
     "github",
     "lease",

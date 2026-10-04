@@ -98,7 +98,7 @@ export const verifyRecords = async (input: VerifyInput): Promise<VerifyResult> =
 
   /*
    * The ones never read first, then the longest since. A budget smaller than
-   * the API — sixty requests against Buildium's 108 record types — used to
+   * the API — sixty requests against one real API's 108 record types — used to
    * spend itself on the same first sixty every run and never reach the rest;
    * this way each run carries on where the last one stopped.
    */

@@ -7,9 +7,9 @@ import { resourceSchema } from "./resource.js";
 /**
  * Records an API sends inside another record's rows.
  *
- * Shaped like Rentvine, where every record is wrapped in an object named after
+ * Shaped like Contoso, where every record is wrapped in an object named after
  * its type and the records it relates to ride beside it: an invoice row is
- * `{ invoice, workOrder, contact }`. Buildium's records are not wrapped, and
+ * `{ invoice, workOrder, contact }`. Fabrikam's records are not wrapped, and
  * nothing about them may change.
  */
 
@@ -116,7 +116,7 @@ describe("bundlesOf", () => {
   });
 
   it("finds none on an API whose records are not wrapped", () => {
-    // Buildium: identities are a plain `Id`, and a nested object is part of the record.
+    // Fabrikam: identities are a plain `Id`, and a nested object is part of the record.
     const lease = entity({
       id: "lease",
       resource: "lease",

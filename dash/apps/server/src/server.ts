@@ -2960,7 +2960,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * Say where this connection's API lives.
    *
    * Two ways in, because there are two kinds of API. One whose address has a
-   * per-account blank — `https://{account}.rentvine.com/api/manager` — takes
+   * per-account blank — `https://{account}.example.com/api/manager` — takes
    * `values` for the blanks and is filled in here, where the template and its
    * rules are. One whose documentation never said, or said wrongly, takes the
    * whole `baseUrl`, and the template, if any, no longer applies.
@@ -3164,7 +3164,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
          * identically and trying them proves nothing.
          *
          * Everything else — 403, 404, 422, even a 500 — is this endpoint's
-         * problem. Buildium demonstrated why that distinction matters: three
+         * problem. One real API demonstrated why that distinction matters: three
          * refusals and a 422 stood between the importer's choice and the
          * endpoint that actually works, and stopping at any of them left the
          * dialect unprovable. The candidate cap is what keeps trying safe.

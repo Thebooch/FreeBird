@@ -1175,7 +1175,7 @@ describe("universality", () => {
    */
   it("puts no vendor or domain vocabulary in the questions", () => {
     const banned = [
-      "buildium",
+      "fabrikam",
       "lease",
       "tenant",
       "property",

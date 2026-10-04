@@ -639,7 +639,7 @@ describe("entityGraph", () => {
     ]);
     /*
      * And they read as two. Titled by the plural alone, a person's page showed
-     * "Tasks" twice — Buildium's task history shows it three times.
+     * "Tasks" twice — one real API's task history shows it three times.
      */
     expect(graph.backrefsOf("user").map((entry) => entry.title)).toEqual([
       "Tasks · Created by",
@@ -649,9 +649,9 @@ describe("entityGraph", () => {
 
   it("names each link by its role, and by its path where roles collide", () => {
     /*
-     * Measured: Buildium labels both `CreatedByUser.Id` and
+     * Measured: one real API labels both `CreatedByUser.Id` and
      * `LastUpdatedByUser.Id` "User ID", so the labels cannot tell them apart.
-     * Rentvine's invoice rows carry the work order's id twice — on the invoice
+     * Contoso's invoice rows carry the work order's id twice — on the invoice
      * and on the work order bundled beside it — so even the role repeats.
      */
     const invoice = entity({
@@ -901,8 +901,8 @@ describe("entityLinkViews", () => {
      *
      * `list` is one op id per record type — a few kilobytes across a whole
      * API — and it buys the browser the choice between fetching twenty
-     * records one at a time and fetching the type once. On the measured
-     * Buildium map that is the difference between twenty requests and one,
+     * records one at a time and fetching the type once. On one real API's
+     * measured map that is the difference between twenty requests and one,
      * so it earns its bytes many times over.
      */
     expect(Object.keys(task).sort()).toEqual([
@@ -964,10 +964,10 @@ describe("polymorphic references", () => {
 /**
  * Records that live under another record.
  *
- * Shaped like the two APIs this was found on. Rentvine's units are
+ * Shaped like the two real APIs this was found on. One's units are
  * `/properties/{propertyID}/units/{unitID}` and carry their property's id;
- * Buildium's lease notes are `/leases/{leaseId}/notes/{noteId}` and do not —
- * 43 of Buildium's 109 record types are like one or the other.
+ * the other's lease notes are `/leases/{leaseId}/notes/{noteId}` and do not —
+ * 43 of the second's 109 record types are like one or the other.
  */
 describe("record addresses", () => {
   const PROPERTY = entity({

@@ -15,8 +15,8 @@ import { looksLikeOpenApi, parseOpenApi, parseSpecDocument, type OpenApiResult }
  * the old reading; replacing the entry wholesale would fix that and throw the
  * second kind away.
  *
- * So the first kind is refreshed on its own. It is what was wrong about
- * Rentvine: an address pointing at the documentation site and a login with a
+ * So the first kind is refreshed on its own. It is what was wrong with one
+ * real connection: an address pointing at the documentation site and a login with a
  * placeholder username, both straight from the old importer, beside nothing
  * anybody had paid for yet — but on another API the same fix would land
  * beside a hundred described record types.

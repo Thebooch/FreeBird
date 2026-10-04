@@ -973,7 +973,7 @@ describe("specLinksIn", () => {
 describe("a spec that declares no security scheme", () => {
   const noScheme = {
     openapi: "3.0.0",
-    info: { title: "Buildium-like" },
+    info: { title: "Fabrikam-like" },
     servers: [{ url: "https://api.example.com" }],
     paths: {
       "/v1/leases": {
@@ -1025,7 +1025,7 @@ describe("choosing the validation endpoint", () => {
   });
 
   it("never picks a path that still needs a parameter", () => {
-    // The Buildium failure: validate hit /v1/applications/{applicationId}/…
+    // A real API's failure: validate hit /v1/applications/{applicationId}/…
     // and the unfilled placeholder went into the URL, returning 404 — which
     // reads as a bad key when the key was fine.
     const parsed = parseOpenApi(
@@ -1120,7 +1120,7 @@ describe("parameter metadata", () => {
   });
 
   it("labels both ends of a range when the vendor runs the words together", () => {
-    // Buildium ships `lastupdatedfrom` / `lastupdatedto` with no separator.
+    // One real API ships `lastupdatedfrom` / `lastupdatedto` with no separator.
     // Matching only `_to_` labelled both ends rangeStart, and a range with
     // two starts silently filters nothing.
     const ranged = parseOpenApi(
@@ -1657,7 +1657,7 @@ describe("a by-id response is one record", () => {
 });
 
 /*
- * Rentvine, as its published spec describes itself: every account at its own
+ * A real API, as its published spec describes itself: every account at its own
  * subdomain, HTTP Basic with no description on the scheme, and the only word
  * on which value goes where in a tag headed "Authentication".
  */
@@ -1665,7 +1665,7 @@ describe("where the API lives, and what it asks for", () => {
   const perAccount = spec({
     servers: [
       {
-        url: "https://{account}.rentvine.com/api/manager",
+        url: "https://{account}.contoso.example/api/manager",
         variables: { account: { description: "Your account subdomain", default: "example" } },
       },
     ],
@@ -1674,7 +1674,7 @@ describe("where the API lives, and what it asks for", () => {
       {
         name: "Authentication",
         description:
-          "<p>Requests are authenticated using <a href='x'>HTTP Basic Authentication</a> with the access key as the username and secret as the password.</p><pre># Use the -u flag with {access key}:{secret}\ncurl https://example.rentvine.com/api/manager/properties</pre>",
+          "<p>Requests are authenticated using <a href='x'>HTTP Basic Authentication</a> with the access key as the username and secret as the password.</p><pre># Use the -u flag with {access key}:{secret}\ncurl https://example.contoso.example/api/manager/properties</pre>",
       },
     ],
   });
@@ -1682,11 +1682,11 @@ describe("where the API lives, and what it asks for", () => {
   it("keeps a per-account address as a template, with what the spec says of the blank", () => {
     const entry = parseOpenApi(perAccount, SPEC_URL)!.entry;
     expect(entry.server).toMatchObject({
-      url: "https://{account}.rentvine.com/api/manager",
+      url: "https://{account}.contoso.example/api/manager",
       variables: [{ name: "account", description: "Your account subdomain", default: "example" }],
     });
     /* Still an address, so it parses — and nothing trusts it. */
-    expect(entry.baseUrl).toBe("https://example.rentvine.com/api/manager");
+    expect(entry.baseUrl).toBe("https://example.contoso.example/api/manager");
   });
 
   it("asks for both halves of a Basic login, by the names the docs use", () => {
