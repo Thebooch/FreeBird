@@ -4,18 +4,18 @@ import { importIsOutdated, refreshOutdatedConnectDetails } from "./connect-detai
 
 /**
  * An entry imported before the importer learned to read addresses and logins
- * properly — Rentvine as it was first imported: requests aimed at the docs
+ * properly — a real API as it was first imported: requests aimed at the docs
  * site, a Basic login with a placeholder username — beside work that was paid
  * for since. The refresh has to fix the first and keep the second.
  */
 
 const OLD = catalogEntrySchema.parse({
-  id: "rentvine-api-docs",
-  title: "Rentvine API Docs",
-  baseUrl: "https://docs.rentvine.com",
-  specUrl: "https://docs.rentvine.com/openapi.json",
+  id: "contoso-api-docs",
+  title: "Contoso API Docs",
+  baseUrl: "https://docs.contoso.example",
+  specUrl: "https://docs.contoso.example/openapi.json",
   origin: "openapi",
-  dialect: { auth: { type: "basic", username: "api", keyRef: "rentvine-api-docs-key" } },
+  dialect: { auth: { type: "basic", username: "api", keyRef: "contoso-api-docs-key" } },
   ops: [
     {
       id: "properties",
@@ -38,10 +38,10 @@ const OLD = catalogEntrySchema.parse({
 
 const SPEC = {
   openapi: "3.0.3",
-  info: { title: "Rentvine API Docs" },
+  info: { title: "Contoso API Docs" },
   servers: [
     {
-      url: "https://{account}.rentvine.com/api/manager",
+      url: "https://{account}.contoso.example/api/manager",
       variables: { account: { description: "Your account subdomain", default: "example" } },
     },
   ],
@@ -69,7 +69,7 @@ describe("refreshing how to connect", () => {
   it("fixes the address and the login, and keeps what was learned since", async () => {
     const { entry, refreshed } = await refreshOutdatedConnectDetails(OLD, fetchDocument);
     expect(refreshed).toBe(true);
-    expect(entry.server?.url).toBe("https://{account}.rentvine.com/api/manager");
+    expect(entry.server?.url).toBe("https://{account}.contoso.example/api/manager");
     expect(entry.dialect.auth).toMatchObject({
       type: "basic",
       usernameLabel: "Access key",

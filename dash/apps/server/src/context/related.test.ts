@@ -158,7 +158,7 @@ describe("readRelated — when it cannot be done", () => {
   it("passes the API's own reason through when it refuses", async () => {
     const refusing = (async () => ({
       ok: false as const,
-      reason: "Buildium accepted the key but will not allow access to this endpoint.",
+      reason: "Fabrikam accepted the key but will not allow access to this endpoint.",
     })) as OpReader;
     const result = await readRelated({
       focus: focus(),

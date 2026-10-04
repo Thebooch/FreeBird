@@ -91,9 +91,9 @@ describe("parseView", () => {
      * no widget, because the same vendor is the same page however somebody
      * reached it.
      */
-    expect(parseView("entity:buildium:vendor:350113")).toEqual({
+    expect(parseView("entity:fabrikam:vendor:350113")).toEqual({
       kind: "entity",
-      connectionId: "buildium",
+      connectionId: "fabrikam",
       entityId: "vendor",
       recordId: "350113",
     });

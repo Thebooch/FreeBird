@@ -4,7 +4,7 @@ import { readField } from "./field-path.js";
 /**
  * One value off a row, by a path that may nest.
  *
- * Rentvine's records arrive wrapped — `{ property: { propertyID, name } }` —
+ * Contoso's records arrive wrapped — `{ property: { propertyID, name } }` —
  * so its identity is `property.propertyID`, and a reader that only tried the
  * key as written found nothing on any of its rows.
  */

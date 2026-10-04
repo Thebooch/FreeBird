@@ -73,7 +73,7 @@ describe("MCP pagination", () => {
     );
     expect(calls).toEqual([{ page: "1", limit: "50" }]);
     expect(result.meta.truncated).toBe(true);
-    expect(result.meta.warnings.join(" ")).toContain("row list");
+    expect(result.meta.warnings.join(" ")).toContain("did not carry its records");
   });
 
   const paginated = () =>
@@ -124,7 +124,7 @@ describe("MCP pagination", () => {
     const result = await adapter.fetch(spec, op(spec), {}, { params, now: 0 });
     expect(result.meta.pages).toBe(2);
     expect(result.meta.truncated).toBe(true);
-    expect(result.meta.warnings.join(" ")).toContain("stopped after 2 page");
+    expect(result.meta.warnings.join(" ")).toContain("first 2 page(s) were read");
   });
 
   it("makes exactly one call when pagination is none", async () => {
@@ -156,7 +156,7 @@ describe("MCP pagination", () => {
 
     const result = await adapter.fetch(spec, op(spec), {}, { params, now: 0 });
     expect(calls).toHaveLength(1);
-    expect(result.meta.warnings.join(" ")).toContain("link-header");
+    expect(result.meta.warnings.join(" ")).toContain("the next page's address");
   });
 
   it("shares its page decision with REST", () => {

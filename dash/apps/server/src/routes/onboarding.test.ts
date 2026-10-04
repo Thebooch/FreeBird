@@ -651,6 +651,23 @@ describe("choose, preview, create", () => {
     await app.close();
   });
 
+  /* It works, so it is kept — but a read that may have stopped early is never "ready". */
+  it("keeps a widget whose read may be incomplete, and says so", async () => {
+    store.putConnection(connectionSchema.parse({ ...connection, paginationPending: true }));
+    const app = makeApp({ http: api() });
+    await choose(app, ["maintenance", "leasing"]);
+    const body = (await preview(app)).json() as Status;
+    expect(body.setup.preview?.boards.map((one) => one.board.title)).toEqual([
+      "Maintenance",
+      "Leasing",
+    ]);
+    const checks = body.setup.preview?.checks ?? [];
+    expect(checks.length).toBeGreaterThan(0);
+    expect(checks.every((one) => one.status === "partial")).toBe(true);
+    expect(checks[0]?.message).toMatch(/not every record was read.*may exclude additional records/);
+    await app.close();
+  });
+
   it("stops at a refused key and says to fix it", async () => {
     const app = makeApp({ http: api({ "/v1/tasks": 401, "/v1/leases": 401 }) });
     await choose(app, ["maintenance"]);

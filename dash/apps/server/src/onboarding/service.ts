@@ -26,11 +26,12 @@ import type {
 import {
   CATEGORY_VERSION,
   dashboardSchema,
+  paramsForWidget,
   fingerprintConnection,
   fnv1a,
   getOp,
   interpolateValue,
-  missingInputs,
+  boardInputs,
   onboardingChoicesSchema,
   onboardingSchema,
   opDefSchema,
@@ -91,16 +92,17 @@ export interface OnboardingDeps {
   /**
    * Read one endpoint through the query cache, exactly as a board would.
    *
-   * Resolves to the body. Throws an `AdapterError` when the API refused —
-   * including when a cached copy was served in place of a refusal, because
-   * checking a widget is asking whether it works *now*.
+   * Resolves to the body, and to what the read said about not having all of
+   * it. Throws an `AdapterError` when the API refused — including when a
+   * cached copy was served in place of a refusal, because checking a widget
+   * is asking whether it works *now*.
    */
   readonly read: (input: {
     readonly connection: ConnectionSpec;
     readonly op: string;
     readonly params: Values;
     readonly resolved: ResolvedParams;
-  }) => Promise<unknown>;
+  }) => Promise<{ readonly body: unknown; readonly incomplete: readonly string[] }>;
   /**
    * Give a connection somebody declined to set up the plain board it would
    * have had before onboarding existed, so there is somewhere to land.
@@ -731,10 +733,11 @@ export class OnboardingService {
 
       /* Try each widget. */
       const params = boardParams(dashboardSchema.parse({ id: "preview", title: "Preview", widgets: [] }), this.now());
-      const checker = this.checker(connection, params);
       const checked: Checked[] = [];
       for (const part of compiled) {
         for (const built of part.built) {
+          /* Each read with its own time, where its brief named one. */
+          const checker = this.checker(connection, paramsForWidget(built.widget, params, this.now()));
           checked.push({ built, ...(await checker(built.widget)) });
         }
       }
@@ -745,7 +748,7 @@ export class OnboardingService {
        */
       const keep = new Set(
         checked
-          .filter((one) => one.status === "ready" || one.status === "unchecked")
+          .filter((one) => one.status === "ready" || one.status === "partial" || one.status === "unchecked")
           .map((one) => one.built.widget.id),
       );
       const reserved = new Set(this.deps.dashboardIds());
@@ -802,19 +805,25 @@ export class OnboardingService {
     connection: ConnectionSpec,
     params: ResolvedParams,
   ): (widget: WidgetSpec) => Promise<{ status: WidgetCheckStatus; message: string }> {
-    const reads = new Map<string, Promise<unknown>>();
+    const reads = new Map<string, Promise<{ body: unknown; incomplete: readonly string[] }>>();
     const now = this.now();
-    const read = (op: string, values: Values): Promise<unknown> => {
-      const key = JSON.stringify([op, values]);
-      const known = reads.get(key);
-      if (known) return known;
-      if (reads.size >= PREVIEW_READ_BUDGET) return Promise.reject(new BudgetSpent());
-      const pending = this.deps.read({ connection, op, params: values, resolved: params });
-      reads.set(key, pending);
-      return pending;
-    };
 
     return async (widget) => {
+      /* What this widget's reads said about not having everything. */
+      const incomplete = new Set<string>();
+      const read = async (op: string, values: Values): Promise<unknown> => {
+        const key = JSON.stringify([op, values]);
+        let pending = reads.get(key);
+        if (!pending) {
+          if (reads.size >= PREVIEW_READ_BUDGET) throw new BudgetSpent();
+          pending = this.deps.read({ connection, op, params: values, resolved: params });
+          reads.set(key, pending);
+        }
+        const result = await pending;
+        for (const note of result.incomplete) incomplete.add(note);
+        return result.body;
+      };
+
       const sources = widgetSources(widget);
       for (const source of sources) {
         const op = getOp(connection, source.op);
@@ -822,10 +831,10 @@ export class OnboardingService {
           return { status: "unavailable", message: "It reads an endpoint this connection does not carry." };
         }
         const filled = interpolated(source.params, params);
-        if (!source.fanOut && missingInputs(op, filled).length > 0) {
+        if (!source.fanOut && boardInputs(op, filled).length > 0) {
           return {
             status: "missingInput",
-            message: `It needs ${missingInputs(op, filled).join(", ")}, which a board has no way to supply.`,
+            message: `It needs ${boardInputs(op, filled).join(", ")}, which a board has no way to supply.`,
           };
         }
       }
@@ -862,7 +871,7 @@ export class OnboardingService {
           }
           const values = { ...interpolated(source.params, params), [fan.as ?? fan.field]: value as string | number };
           const op = getOp(connection, source.op)!;
-          if (missingInputs(op, values).length > 0) {
+          if (boardInputs(op, values).length > 0) {
             return { status: "missingInput", message: "It needs more inputs than the records around it give." };
           }
           bodies[source.as] = await read(source.op, values);
@@ -899,6 +908,17 @@ export class OnboardingService {
         const executed = executeWidget(widget, widget.source ? bodies.main : bodies, { now, params });
         if (nonEmpty && !executed.ok) {
           return { status: "schema", message: "What this account returned does not fit this widget." };
+        }
+        /*
+         * It works, and the read stopped early. Kept, like a ready widget, but
+         * never reported as if everything was read: that is exactly the
+         * confidence a partial total must not borrow.
+         */
+        if (incomplete.size > 0) {
+          return {
+            status: "partial",
+            message: `Checked against your account, but not every record was read: ${[...incomplete][0]}`.slice(0, 600),
+          };
         }
         return {
           status: "ready",
@@ -989,7 +1009,7 @@ export class OnboardingService {
       }
 
       const refused = preview.checks
-        .filter((check) => check.status !== "ready" && check.status !== "unchecked")
+        .filter((check) => check.status !== "ready" && check.status !== "partial" && check.status !== "unchecked")
         .map((check) => `“${check.title}” was left off: ${check.message}`);
       this.save(id, {
         status: "complete",

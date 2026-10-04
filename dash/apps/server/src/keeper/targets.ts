@@ -10,6 +10,7 @@ import {
   interpolateValue,
   parseDuration,
   resolveRange,
+  safeByProtocol,
   widgetSources,
 } from "@freebirdai/dash-spec";
 import { buildQueryRequest } from "../query.js";
@@ -266,5 +267,14 @@ export const warmTargets = (input: TargetsInput): WarmTarget[] => {
   }
   for (const target of board) add({ ...target, ...everyOf(target.connection, target.op) });
 
-  return targets;
+  /*
+   * Never warmed in the background: a read whose safety rests on a reading
+   * of the documentation rather than on the protocol — a POST search, named
+   * like one. It is sent while somebody is looking at it, and only then.
+   */
+  return targets.filter((target) => {
+    const connection = byId.get(target.connection);
+    const op = connection ? getOp(connection, target.op) : undefined;
+    return !op || safeByProtocol(op.readSafety);
+  });
 };

@@ -390,7 +390,7 @@ describe("validate falls back past a 403", () => {
   });
 
   it("keeps going past an endpoint-specific failure that is not a refusal", async () => {
-    // Buildium showed why: three 403s and a 422 stood between the importer'''s
+    // A real API showed why: three 403s and a 422 stood between the importer'''s
     // choice and the endpoint that actually worked. Stopping at any of them
     // left the dialect unprovable.
     store.putConnection(multiOpConnection());

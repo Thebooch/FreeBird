@@ -20,7 +20,7 @@ import { describe, expect, it } from "vitest";
  */
 
 const BANNED = [
-  "buildium",
+  "fabrikam",
   "stripe",
   "github",
   "lease",

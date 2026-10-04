@@ -14,6 +14,11 @@ export type {
   DashboardContextValue,
   DashboardControls,
   DashboardProviderProps,
+  EachAnswer,
+  EachRequest,
+  EachSource,
+  HistoryPoint,
+  HistorySource,
   RecordChangeSignal,
 } from "./context.jsx";
 

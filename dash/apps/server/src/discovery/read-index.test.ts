@@ -79,6 +79,21 @@ const offline = { llm: null, search: null } as const;
 /** Injected so tests never actually wait out the pacing. */
 const instant = { sleep: async () => {} };
 
+describe("reading it by itself", () => {
+  it("reads a small section when nothing else answered, where the product asks it to", async () => {
+    const docs = site();
+    const result = await discover(OVERVIEW, { fetchDocument: docs.fetchDocument, ...offline, readIndexUpTo: 60 });
+    expect(result.entry?.ops.map((op) => op.path).sort()).toEqual(["/widgets", "/widgets/{{param.widgetId}}"]);
+  });
+
+  it("still only offers a section larger than that", async () => {
+    const docs = site();
+    const result = await discover(OVERVIEW, { fetchDocument: docs.fetchDocument, ...offline, readIndexUpTo: 2 });
+    expect(result.entry).toBeNull();
+    expect(result.index?.pages).toBe(3);
+  });
+});
+
 describe("offering the read", () => {
   it("reports the page count without spending anything extra", async () => {
     /*

@@ -1,3 +1,4 @@
+import { INCOMPLETE } from "./incomplete.js";
 import { evalPath, parsePath } from "@freebirdai/dash-expr";
 import type { PaginationSpec } from "@freebirdai/dash-spec";
 
@@ -67,13 +68,18 @@ export const withRows = (body: unknown, rowsPath: string | undefined, rows: unkn
   return rows;
 };
 
+/** Why there is no next page: the end a read records it reached (`ReadCompletion`). */
+export type EndOfPages = "single-response" | "empty-page" | "short-page" | "no-cursor" | "has-more-false" | "no-next";
+
 export type NextPage =
-  /** No further pages, for whatever reason the strategy gives. */
-  | { readonly kind: "none" }
+  /** No further pages, and why. */
+  | { readonly kind: "none"; readonly why: EndOfPages }
   /** Merge these into the next request's params or arguments. */
   | { readonly kind: "params"; readonly params: Record<string, string> }
   /** The next page lives in a response header; only HTTP can answer this. */
-  | { readonly kind: "link-header" };
+  | { readonly kind: "link-header" }
+  /** The answer gave the next page's address; only HTTP can follow one. */
+  | { readonly kind: "url"; readonly url: string };
 
 /** The declared page size must also be requested on page one. */
 export const firstPageParams = (pagination: PaginationSpec): Record<string, string> => {
@@ -100,30 +106,48 @@ export const nextPageParams = (input: {
   readonly body: unknown;
   readonly rowsPath: string | undefined;
   readonly pageIndex: number;
+  /** How many records the first page held: the page size, where none is declared. */
+  readonly firstPageRows?: number | undefined;
+  /** Records read so far, this page included, and how many the API said it holds. */
+  readonly collected?: number | undefined;
+  readonly reportedTotal?: number | undefined;
 }): NextPage => {
   const { pagination, body, rowsPath, pageIndex } = input;
   const rows = rowsAt(body, rowsPath);
 
   switch (pagination.kind) {
     case "none":
-      return { kind: "none" };
+      return { kind: "none", why: "single-response" };
 
     case "link-header":
       return { kind: "link-header" };
 
+    case "next-url": {
+      /* An empty page is the end, whatever address it still offers. */
+      if (rows !== null && rows.length === 0) return { kind: "none", why: "empty-page" };
+      const found = readPath(body, pagination.path);
+      /* HAL writes it as an object: `{ "href": "…" }`. */
+      const address =
+        found !== null && typeof found === "object" ? (found as { href?: unknown }).href : found;
+      return typeof address === "string" && address.trim() !== ""
+        ? { kind: "url", url: address.trim() }
+        : { kind: "none", why: "no-next" };
+    }
+
     case "cursor": {
       if (pagination.hasMorePath && !truthy(readPath(body, pagination.hasMorePath))) {
-        return { kind: "none" };
+        return { kind: "none", why: "has-more-false" };
       }
       const cursor = readPath(body, pagination.cursorPath);
-      if (!truthy(cursor)) return { kind: "none" };
+      if (!truthy(cursor)) return { kind: "none", why: "no-cursor" };
       return { kind: "params", params: { [pagination.param]: String(cursor) } };
     }
 
     case "offset": {
       // Without a row count there is no honest termination condition, so stop
       // rather than loop forever or guess.
-      if (rows === null || rows.length < pagination.pageSize) return { kind: "none" };
+      if (rows === null) return { kind: "none", why: "empty-page" };
+      if (rows.length < pagination.pageSize) return { kind: "none", why: rows.length === 0 ? "empty-page" : "short-page" };
       return {
         kind: "params",
         params: {
@@ -134,9 +158,23 @@ export const nextPageParams = (input: {
     }
 
     case "page": {
-      if (rows === null || rows.length === 0) return { kind: "none" };
+      if (rows === null || rows.length === 0) return { kind: "none", why: "empty-page" };
       if (pagination.limitParam && pagination.pageSize && rows.length < pagination.pageSize)
-        return { kind: "none" };
+        return { kind: "none", why: "short-page" };
+      /*
+       * No page size declared: the first page shows it. A page shorter than
+       * the first is the last, unless the API's own count says there is more.
+       * Asking past it met a 404 on an API that answers that way, which failed
+       * the whole read (seen with Rick and Morty's API).
+       */
+      if (
+        !pagination.pageSize &&
+        input.firstPageRows !== undefined &&
+        pageIndex > 1 &&
+        rows.length < input.firstPageRows &&
+        (input.reportedTotal === undefined || (input.collected ?? 0) >= input.reportedTotal)
+      )
+        return { kind: "none", why: "short-page" };
       const params: Record<string, string> = {
         [pagination.param]: String(pagination.startsAt + pageIndex),
       };
@@ -157,9 +195,7 @@ export const mergePages = (
   for (const page of pages) {
     const rows = rowsAt(page, rowsPath);
     if (rows === null) {
-      warnings.push(
-        "could not find the row list in a page, so only the first page was used — set rowsPath on this operation",
-      );
+      warnings.push(INCOMPLETE.unmerged);
       return pages[0];
     }
     collected.push(...rows);

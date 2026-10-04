@@ -27,3 +27,7 @@ docs/.docusaurus/
 dash/**/connections/
 dash/**/dashboards/
 dash/**/reports/
+
+# Dash benchmark run reports — working output, kept locally. The latest
+# figures are summarised in dash/bench/RESULTS.md.
+dash/bench/results/

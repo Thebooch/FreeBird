@@ -201,6 +201,27 @@ export const fingerprintConnection = (connection: ConnectionSpec): string =>
       dialect: connection.dialect,
       ops: fingerprintOps(connection.ops),
       credentialsRevision: connection.credentialsRevision,
+      /* The code by its pin, and what it may do: either changing is a different configuration. */
+      connector: connection.connector
+        ? {
+            hash: connection.connector.hash,
+            authority: connection.connector.authority,
+            serves: connection.connector.serves,
+            /*
+             * Each endpoint's module by its pin: a new one is a different
+             * configuration for that endpoint's reads. Left out where there is
+             * none, so a connector from before modules keeps its fingerprint.
+             */
+            ...(Object.keys(connection.connector.operations).length > 0
+              ? {
+                  operations: Object.fromEntries(
+                    Object.entries(connection.connector.operations).map(([op, module]) => [op, module.hash]),
+                  ),
+                }
+              : {}),
+            ...(connection.connector.version !== 1 ? { version: connection.connector.version } : {}),
+          }
+        : undefined,
     }),
   );
 

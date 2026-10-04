@@ -1,0 +1,210 @@
+{
+ "source": "https://rickandmortyapi.com/api/episode",
+ "at": "2026-09-29T01:20:21.273Z",
+ "records": [
+  {
+   "id": 1,
+   "air_date": "December 2, 2013"
+  },
+  {
+   "id": 2,
+   "air_date": "December 9, 2013"
+  },
+  {
+   "id": 3,
+   "air_date": "December 16, 2013"
+  },
+  {
+   "id": 4,
+   "air_date": "January 13, 2014"
+  },
+  {
+   "id": 5,
+   "air_date": "January 20, 2014"
+  },
+  {
+   "id": 6,
+   "air_date": "January 27, 2014"
+  },
+  {
+   "id": 7,
+   "air_date": "March 10, 2014"
+  },
+  {
+   "id": 8,
+   "air_date": "March 17, 2014"
+  },
+  {
+   "id": 9,
+   "air_date": "March 24, 2014"
+  },
+  {
+   "id": 10,
+   "air_date": "April 7, 2014"
+  },
+  {
+   "id": 11,
+   "air_date": "April 14, 2014"
+  },
+  {
+   "id": 12,
+   "air_date": "July 26, 2015"
+  },
+  {
+   "id": 13,
+   "air_date": "August 2, 2015"
+  },
+  {
+   "id": 14,
+   "air_date": "August 9, 2015"
+  },
+  {
+   "id": 15,
+   "air_date": "August 16, 2015"
+  },
+  {
+   "id": 16,
+   "air_date": "August 23, 2015"
+  },
+  {
+   "id": 17,
+   "air_date": "August 30, 2015"
+  },
+  {
+   "id": 18,
+   "air_date": "September 13, 2015"
+  },
+  {
+   "id": 19,
+   "air_date": "September 20, 2015"
+  },
+  {
+   "id": 20,
+   "air_date": "September 27, 2015"
+  },
+  {
+   "id": 21,
+   "air_date": "October 4, 2015"
+  },
+  {
+   "id": 22,
+   "air_date": "April 1, 2017"
+  },
+  {
+   "id": 23,
+   "air_date": "July 30, 2017"
+  },
+  {
+   "id": 24,
+   "air_date": "August 6, 2017"
+  },
+  {
+   "id": 25,
+   "air_date": "August 13, 2017"
+  },
+  {
+   "id": 26,
+   "air_date": "August 20, 2017"
+  },
+  {
+   "id": 27,
+   "air_date": "August 27, 2017"
+  },
+  {
+   "id": 28,
+   "air_date": "September 10, 2017"
+  },
+  {
+   "id": 29,
+   "air_date": "September 17, 2017"
+  },
+  {
+   "id": 30,
+   "air_date": "September 24, 2017"
+  },
+  {
+   "id": 31,
+   "air_date": "October 1, 2017"
+  },
+  {
+   "id": 32,
+   "air_date": "November 10, 2019"
+  },
+  {
+   "id": 33,
+   "air_date": "November 17, 2019"
+  },
+  {
+   "id": 34,
+   "air_date": "November 24, 2019"
+  },
+  {
+   "id": 35,
+   "air_date": "December 8, 2019"
+  },
+  {
+   "id": 36,
+   "air_date": "December 15, 2019"
+  },
+  {
+   "id": 37,
+   "air_date": "May 3, 2020"
+  },
+  {
+   "id": 38,
+   "air_date": "May 10, 2020"
+  },
+  {
+   "id": 39,
+   "air_date": "May 17, 2020"
+  },
+  {
+   "id": 40,
+   "air_date": "May 24, 2020"
+  },
+  {
+   "id": 41,
+   "air_date": "May 31, 2020"
+  },
+  {
+   "id": 42,
+   "air_date": "June 20, 2021"
+  },
+  {
+   "id": 43,
+   "air_date": "June 27, 2021"
+  },
+  {
+   "id": 44,
+   "air_date": "July 4, 2021"
+  },
+  {
+   "id": 45,
+   "air_date": "July 11, 2021"
+  },
+  {
+   "id": 46,
+   "air_date": "July 18, 2021"
+  },
+  {
+   "id": 47,
+   "air_date": "July 25, 2021"
+  },
+  {
+   "id": 48,
+   "air_date": "August 1, 2021"
+  },
+  {
+   "id": 49,
+   "air_date": "August 8, 2021"
+  },
+  {
+   "id": 50,
+   "air_date": "September 5, 2021"
+  },
+  {
+   "id": 51,
+   "air_date": "September 5, 2021"
+  }
+ ]
+}

@@ -69,7 +69,7 @@ describe("pickNarrowingField", () => {
      * asked for "maintenance tasks" picks `TaskType` because it has the fewest
      * values — and `TaskType` holds "Todo" and "Request". Shown the values,
      * the field carrying "Maintenance Request" is the obvious one. Verified
-     * against real Buildium rows: the choice flipped once samples appeared.
+     * against real rows: the choice flipped once samples appeared.
      */
     const withValues = [
       { ...field("TaskType", ["string"], 2), samples: ["Todo", "Request"] },

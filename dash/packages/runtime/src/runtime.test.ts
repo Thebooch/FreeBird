@@ -187,6 +187,26 @@ describe("group", () => {
       rows,
     ).rows;
 
+  it("says how many values a total could not read, instead of dropping them quietly", () => {
+    const result = run(
+      widget({
+        pipeline: [
+          { op: "extract", path: "$[*]" },
+          { op: "group", by: [{ field: "region" }], agg: { v: "sum(amount)" } },
+        ],
+      }),
+      [
+        { region: "emea", amount: 10 },
+        { region: "emea", amount: "$1,200" },
+        { region: "emea", amount: null },
+        { region: "emea", amount: true },
+      ],
+    );
+    // A flag still counts as 1: summing flags is how matching records are counted.
+    expect(result.rows).toEqual([{ region: "emea", v: 11 }]);
+    expect(result.meta.warnings.join()).toMatch(/1 value\(s\) in "amount" were not numbers/);
+  });
+
   it("computes every aggregation", () => {
     expect(grouped({ v: "sum(amount)" })).toEqual([
       { region: "amer", v: 5 },
@@ -552,5 +572,77 @@ describe("highlights", () => {
     );
     // Nothing matches, and it says so, rather than throwing.
     expect(result.meta.highlightCounts).toEqual({ late: 0 });
+  });
+});
+
+/* A total of dollars and euros is valid arithmetic and the wrong answer. */
+describe("a caveat the rows show", () => {
+  const total = widget({
+    component: "stat",
+    pipeline: [
+      { op: "extract", path: "$" },
+      { op: "derive", fields: { _all: "1" } },
+      { op: "group", by: [{ field: "_all" }], agg: { value: "sum(amount)", _currencies: "countDistinct(currency)" } },
+      { op: "caveat", when: "_currencies > 1", say: "This adds up amounts in more than one currency." },
+    ],
+  });
+
+  it("is said when a row meets it, once, and the rows are untouched", () => {
+    const result = run(total, [
+      { amount: 10, currency: "USD" },
+      { amount: 5, currency: "EUR" },
+    ]);
+    expect(result.meta.warnings).toEqual(["This adds up amounts in more than one currency."]);
+    expect(result.rows[0]).toMatchObject({ value: 15, _currencies: 2 });
+  });
+
+  it("says nothing when no row meets it", () => {
+    const result = run(total, [
+      { amount: 10, currency: "USD" },
+      { amount: 5, currency: "USD" },
+    ]);
+    expect(result.meta.warnings).toEqual([]);
+  });
+
+  it("says how many rows showed it, of how many", () => {
+    /* Parts that do not add up to a total: a question about three of four invoices, not an error. */
+    const parts = widget({
+      component: "stat",
+      pipeline: [
+        { op: "extract", path: "$" },
+        {
+          op: "caveat",
+          when: "abs((coalesce(sub, 0) + coalesce(tax, 0)) - total) > 0.01",
+          say: "On {count} of the {of} invoices read, Subtotal + Tax is not Total.",
+        },
+        { op: "derive", fields: { _all: "1" } },
+        { op: "group", by: [{ field: "_all" }], agg: { value: "sum(total)" } },
+      ],
+    });
+    const result = run(parts, [
+      { sub: 10, tax: 1, total: 11 },
+      { sub: 10, tax: 1, total: 12 },
+      { sub: 10, total: 10.5 },
+      /* No total: nothing to check. */
+      { sub: 10, tax: 1 },
+    ]);
+    expect(result.meta.warnings).toEqual(["On 2 of the 4 invoices read, Subtotal + Tax is not Total."]);
+    expect(result.rows[0]).toMatchObject({ value: 33.5 });
+  });
+});
+
+/* Regression (trackwell mock API): a narrowing no record matched counted 0, and the tile said nothing. */
+describe("a narrowing by a value no record holds", () => {
+  const issues = [{ project: "PLAT" }, { project: "SHOP" }, { project: "PLAT" }];
+
+  it("says so, rather than counting none as if none were the answer", () => {
+    const result = run(widget({ pipeline: [{ op: "filter", where: 'project == "Platform"' }] }), issues);
+    expect(result.rows).toEqual([]);
+    expect(result.meta.warnings).toEqual(['None of the 3 records read match project == "Platform".']);
+  });
+
+  it("says nothing when the narrowing matched, or when a comparison of dates or numbers simply left nothing", () => {
+    expect(run(widget({ pipeline: [{ op: "filter", where: 'project == "PLAT"' }] }), issues).meta.warnings).toEqual([]);
+    expect(run(widget({ pipeline: [{ op: "filter", where: "size > 5" }] }), [{ size: 1 }]).meta.warnings).toEqual([]);
   });
 });

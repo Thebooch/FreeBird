@@ -135,7 +135,7 @@ describe("buildReferencePrompt", () => {
 
 describe("the prompt keeps to shapes, not vendors", () => {
   it("names no vendor", () => {
-    for (const word of ["buildium", "stripe", "github"]) {
+    for (const word of ["fabrikam", "stripe", "github"]) {
       expect(REFERENCE_SYSTEM_PROMPT.toLowerCase(), word).not.toContain(word);
     }
   });

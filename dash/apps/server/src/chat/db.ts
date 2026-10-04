@@ -27,6 +27,26 @@ import { PGliteDialect } from "@freebirdai/adapters-db-postgres/pglite";
  */
 
 /**
+ * Dash's own, run after the adapter's schema: chat is kept per workspace,
+ * with the workspace as the chat store's tenant.
+ * Everything saved before there was one is the `local` workspace's. A no-op
+ * once nothing is left without one. One statement each, for a caller that
+ * runs them one at a time.
+ */
+export const CHAT_WORKSPACE_MIGRATION: readonly string[] = [
+  "UPDATE freebird_chat_session SET tenant_id = 'local' WHERE tenant_id IS NULL;",
+  "UPDATE freebird_chat_message SET tenant_id = 'local' WHERE tenant_id IS NULL;",
+  "UPDATE freebird_custom_tab SET tenant_id = 'local' WHERE tenant_id IS NULL;",
+  `UPDATE freebird_scratch SET tenant_id = 'local'
+  WHERE tenant_id = ''
+    AND NOT EXISTS (
+      SELECT 1 FROM freebird_scratch held
+      WHERE held.tenant_id = 'local' AND held.user_id = freebird_scratch.user_id
+        AND held.scope = freebird_scratch.scope AND held.namespace = freebird_scratch.namespace
+    );`,
+];
+
+/**
  * The chat schema, from `@freebirdai/adapters-db-postgres/migrations`
  * (001_init + 002_tenant_id + 003_scratch), inlined.
  *
@@ -115,6 +135,8 @@ CREATE TABLE IF NOT EXISTS freebird_scratch (
 CREATE INDEX IF NOT EXISTS freebird_scratch_expiry_idx
   ON freebird_scratch (expires_at)
   WHERE expires_at IS NOT NULL;
+
+${CHAT_WORKSPACE_MIGRATION.join("\n")}
 `;
 
 export interface ChatDb {

@@ -54,6 +54,20 @@ describe("joinRows", () => {
     expect(warnings.join(" ")).toMatch(/matched more than one orders record/);
   });
 
+  it("names the columns it repeated, from whichever side repeated", () => {
+    // Lease 1 matched two orders, so every lease column repeats; each order matched once.
+    expect(join("inner").repeated).toEqual(["Id", "Tenant"]);
+    // Many orders to one lease: now the lease's own columns repeat, per order.
+    const byOrder = joinRows(orders, leases, {
+      leftField: "LeaseId",
+      rightField: "Id",
+      rightAs: "lease",
+      kind: "left",
+      maxRows: 1000,
+    });
+    expect(byOrder.repeated).toEqual(["lease_Id", "lease_Tenant"]);
+  });
+
   it("keeps unmatched left rows on a left join, with empty right columns", () => {
     const { rows, warnings } = join("left");
     const orphan = rows.find((row) => row.Id === 3)!;
@@ -148,6 +162,52 @@ describe("a widget that reads two endpoints", () => {
       { Tenant: "ana", orders: 2 },
       { Tenant: "bo", orders: 1 },
     ]);
+  });
+
+  it("says so when a total reads a column the join repeated", () => {
+    const rentPerTenant = parseWidget({
+      ...spec.value!,
+      pipeline: [{ op: "group", by: [{ field: "Tenant" }], agg: { rent: "sum(Rent)" } }],
+      roles: { category: "Tenant", value: "rent" },
+    });
+    const result = executeWidget(
+      rentPerTenant.value!,
+      {
+        leases: [{ Id: 1, Tenant: "ana", Rent: 1000 }],
+        orders: [
+          { LeaseId: 1, Cost: 50 },
+          { LeaseId: 1, Cost: 70 },
+        ],
+      },
+      ctx(),
+    );
+    // The rent is counted once per work order: exactly what the warning is for.
+    expect(result.rows).toEqual([{ Tenant: "ana", rent: 2000 }]);
+    expect(result.meta?.warnings.join(" ")).toMatch(/"Rent" repeats across the joined rows/);
+  });
+
+  it("marks repeated columns on a table, so they are not totalled", () => {
+    const table = parseWidget({
+      ...spec.value!,
+      component: "table",
+      pipeline: [{ op: "rename", fields: { Rent: "MonthlyRent" } }],
+      roles: {},
+    });
+    const result = executeWidget(
+      table.value!,
+      {
+        leases: [{ Id: 1, Tenant: "ana", Rent: 1000 }],
+        orders: [
+          { LeaseId: 1, Cost: 50 },
+          { LeaseId: 1, Cost: 70 },
+        ],
+      },
+      ctx(),
+    );
+    const byName = new Map(result.columns.map((column) => [column.name, column]));
+    expect(table.errors).toEqual([]);
+    expect(byName.get("MonthlyRent")?.repeated).toBe(true);
+    expect(byName.get("orders_Cost")?.repeated).toBeUndefined();
   });
 
   it("traces every source and the join, so the total can be audited", () => {

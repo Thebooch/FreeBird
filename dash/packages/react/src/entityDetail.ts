@@ -161,7 +161,7 @@ const MAX_WIDGET_ID = 64;
  * A pane's widget id, from parts that need not be ids themselves.
  *
  * A related collection is keyed `<record type>-by-<field path>`, and the field
- * path nests on plenty of APIs — Rentvine's `invoice.workOrderID` — while a
+ * path nests on plenty of APIs — `invoice.workOrderID` — while a
  * widget id is `[a-zA-Z0-9_-]`, 64 at most. Joined as they were, every section
  * over a nested field, and every section whose names were simply long, failed
  * `paneSpec` and was dropped without a word: "Showing 0 of 3 related

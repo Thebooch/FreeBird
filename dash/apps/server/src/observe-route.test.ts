@@ -18,7 +18,7 @@ import { KeyStore, LocalAesVault } from "./vault.js";
 /**
  * Reading the account teaches the record types what their fields hold.
  *
- * Rentvine as it really answers: flags its docs declare boolean arrive as 0
+ * A real API as it really answers: flags its docs declare boolean arrive as 0
  * and 1, and a work order number its docs call text arrives as a number. Once
  * the account has been read, the record type says so — and a board built
  * before anybody knew is rebuilt to read the flag as a flag.
@@ -51,7 +51,7 @@ const RESOURCE = resourceSchema.parse({
   detailParam: "workOrderID",
 });
 
-/* Declared flat by the docs; sent wrapped, as Rentvine sends a unit. */
+/* Declared flat by the docs; sent wrapped, as Contoso sends a unit. */
 const VENDOR = entitySchema.parse({
   id: "vendor",
   resource: "vendor",
@@ -75,9 +75,9 @@ const VENDOR_RESOURCE = resourceSchema.parse({
 });
 
 const ENTRY = catalogEntrySchema.parse({
-  id: "rentvine",
-  title: "Rentvine",
-  baseUrl: "https://acme.rentvine.com/api/manager",
+  id: "contoso",
+  title: "Contoso",
+  baseUrl: "https://acme.contoso.example/api/manager",
   dialect: { auth: { type: "none" } },
   ops: [
     { id: "work_orders", title: "Work orders", path: "/maintenance/work-orders", rowsPath: "$" },
@@ -127,7 +127,7 @@ describe("reading the account", () => {
     await app.inject({
       method: "POST",
       url: "/api/connections/from-catalog",
-      payload: { catalogId: "rentvine", id: "rv" },
+      payload: { catalogId: "contoso", id: "rv" },
     });
     const built = compileBrief({
       brief: { entity: "vendor", intent: "records", columns: ["name", "isActive"] },
@@ -145,7 +145,7 @@ describe("reading the account", () => {
       payload: { refresh: true },
     });
 
-    const vendor = catalog.get("rentvine")?.entities?.find((one) => one.id === "vendor");
+    const vendor = catalog.get("contoso")?.entities?.find((one) => one.id === "vendor");
     expect(vendor?.identity?.field).toBe("vendor.vendorID");
     expect(vendor?.display?.title).toEqual(["vendor.name"]);
     expect(vendor?.fields.find((field) => field.path === "vendor.isActive")?.observed?.coercion).toBe(
@@ -165,7 +165,7 @@ describe("reading the account", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/connections/from-catalog",
-      payload: { catalogId: "rentvine", id: "rv" },
+      payload: { catalogId: "contoso", id: "rv" },
     });
     expect(created.statusCode).toBeLessThan(300);
 
@@ -193,7 +193,7 @@ describe("reading the account", () => {
     });
     expect(read.statusCode).toBe(200);
 
-    const fields = catalog.get("rentvine")?.entities?.[0]?.fields ?? [];
+    const fields = catalog.get("contoso")?.entities?.[0]?.fields ?? [];
     const byPath = new Map(fields.map((field) => [field.path, field]));
     expect(byPath.get("workOrder.isVacant")?.observed).toEqual({
       kinds: ["number"],
@@ -205,7 +205,7 @@ describe("reading the account", () => {
     });
     // The declaration is left as the docs gave it: evidence sits beside it.
     expect(byPath.get("workOrder.isVacant")?.kinds).toEqual(["boolean"]);
-    expect(catalog.get("rentvine")?.entities?.[0]?.readAt).toBeDefined();
+    expect(catalog.get("contoso")?.entities?.[0]?.readAt).toBeDefined();
 
     const rebuilt = store.getDashboard("ops")?.widgets[0];
     expect(rebuilt?.id).toBe("work_orders");

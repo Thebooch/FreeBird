@@ -6,8 +6,8 @@ import { idSchema, pathParamNames } from "./primitives.js";
  * rather than a flat list of URLs.
  *
  * Nearly every REST API is the same handful of shapes wearing different words:
- * a collection, a by-id detail, and foreign keys between them. Buildium has
- * leases and work orders; Stripe has charges and customers; GitHub has issues
+ * a collection, a by-id detail, and foreign keys between them. A
+ * property-management API has leases and work orders; Stripe has charges and customers; GitHub has issues
  * and repositories. Recording that structure once is what lets a row be
  * clicked, a record be opened, and two endpoints be joined — without any of
  * that logic knowing which vendor it is talking to.
@@ -129,6 +129,28 @@ export const resourceSchema = z.object({
   detailOp: idSchema.optional(),
   /** The path parameter `detailOp` expects, e.g. `leaseId`. */
   detailParam: z.string().max(120).optional(),
+  /**
+   * An endpoint that says how many there are (`/breweries/meta`,
+   * `/orders/count`), where a read confirmed it: its number matched a
+   * complete read of the list, or the count the list itself stated. "How
+   * many" is then one request, however many records there are — a list read
+   * page by page stops at its ceiling.
+   *
+   * Never installed from a name alone: an endpoint called `count` that counts
+   * something else would be a wrong number that looks right.
+   */
+  count: z
+    .object({
+      op: idSchema,
+      /** Where the number is in its answer: `total`, `count.value`. */
+      field: z.string().min(1).max(120),
+      /**
+       * Filter parameters the count honours, each confirmed the same way: the
+       * count narrowed by it matched a complete read of the list narrowed by it.
+       */
+      filters: z.array(z.string().min(1).max(120)).max(20).default([]),
+    })
+    .optional(),
   relations: z.array(relationSchema).max(40).default([]),
   verified: z.boolean().default(false),
 });
@@ -253,7 +275,7 @@ export const commonPathPrefix = (paths: readonly string[]): number => {
 /**
  * Which of several same-named resources a reference means, or none of them.
  *
- * APIs reuse nouns across sections. Buildium has two endpoints called
+ * APIs reuse nouns across sections. One API has two endpoints called
  * "Retrieve all units" — `/v1/rentals/units` and `/v1/associations/units` —
  * and they are different kinds of unit. A `UnitId` on a lease row means the
  * rentals one; on an ownership account it means the associations one. Neither
@@ -512,8 +534,38 @@ export const deriveResourceGraph = (ops: readonly ShapeOp[]): ResourceModel => {
     });
   }
 
+  /*
+   * Collections with no by-id endpoint: a search, an export, a report, or an
+   * API that only ever offers its records as a list. Each row is still a
+   * record, so each is still a resource — one with no record page to open
+   * until something supplies one (`canDrillDown` says so). Dropping them left
+   * such records unreachable from any request that names them.
+   *
+   * Added last, so that every id the passes above derive stays exactly what
+   * it was: existing catalogs, and the importer's tests, depend on that.
+   */
+  for (const op of ops) {
+    if (!isList(op) || pathParamNames(op.path).length > 0) continue;
+    if (byListPath.has(collectionKey(op.path)) || resources.some((one) => one.listOp === op.id)) continue;
+    const segments = pathSegments(op.path);
+    /* `/orders/search` holds orders: a trailing verb names the request, not the records. */
+    while (segments.length > 1 && LIST_VERBS.test(segments[segments.length - 1]!)) segments.pop();
+    const resource: ResourceSpec = {
+      id: claim(singularNoun(segments.pop() ?? "record")),
+      title: op.title,
+      listOp: op.id,
+      relations: [],
+      verified: false,
+    };
+    resources.push(resource);
+    byListPath.set(collectionKey(op.path), resource);
+  }
+
   return { resources, notes };
 };
+
+/** Last path segments that name how a list is asked for rather than what is in it. */
+const LIST_VERBS = /^(search|query|list|all|find|filter|lookup|browse)$/i;
 
 /**
  * Whether this endpoint reads a record that exists at most once under its

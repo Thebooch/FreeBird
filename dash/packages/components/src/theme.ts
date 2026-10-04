@@ -395,6 +395,15 @@ ${seriesVars(SERIES_LIGHT)}
 }
 .dash-widget__count { flex: 1 1 auto; min-width: 0; }
 .dash-widget__more { color: var(--dash-serious); }
+/* How far the read got: a fact about the numbers, not a warning, so in the count's own colour. */
+.dash-widget__coverage { cursor: help; }
+/* A number's history under it: quiet, in the muted colour, never competing with the number. */
+.dash-widget__history {
+  display: flex; align-items: center; gap: var(--dash-space-2, 8px);
+  padding: 0 var(--dash-space-3, 12px) var(--dash-space-2, 8px);
+  color: var(--dash-muted); font-size: var(--dash-text-xs);
+}
+.dash-widget__history svg { flex: none; }
 .dash-widget__updated { flex: none; }
 .dash-widget__note {
   font-size: var(--dash-text-xs); color: var(--dash-muted);

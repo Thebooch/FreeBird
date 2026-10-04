@@ -124,7 +124,7 @@ const useLiveDashboard = (
         if (!parsed.ok) throw new Error(parsed.errors.join("; "));
 
         const raw = (await connectionsResponse.json()) as unknown[];
-        const registry = new AdapterRegistry().register(new ProxyAdapter("rest"));
+        const registry = new AdapterRegistry().register(new ProxyAdapter("rest")).register(new ProxyAdapter("mcp"));
         const connections: ConnectionSpec[] = [];
         /*
          * Read off the response rather than out of the parsed connection.
@@ -1386,6 +1386,8 @@ const App = (): JSX.Element => {
           entityLinks={live.entityLinks}
           rangeOps={live.rangeOps}
           credentialRevisions={credentialRevisions}
+          history={api.widgetHistory}
+          readEach={api.readEach}
           changes={changed}
           onCreateRecord={createOffer}
           onRowActions={rowActions}

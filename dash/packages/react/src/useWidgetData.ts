@@ -1,4 +1,5 @@
-import type { FetchMeta } from "@freebirdai/dash-adapters";
+import { isChangedNote, type FetchMeta } from "@freebirdai/dash-adapters";
+import { incompleteNotes } from "./incomplete.js";
 import type {
   BindingValidation,
   ColumnMeta,
@@ -7,8 +8,10 @@ import type {
   WidgetSpec,
 } from "@freebirdai/dash-spec";
 import {
+  FAN_OUT_WHOLE_MAX,
   drawnColumns,
   interpolateValue,
+  paramsForWidget,
   parentsFrom,
   parseDuration,
   readField,
@@ -17,7 +20,7 @@ import {
 import type { Row, RowHighlight, RunMeta } from "@freebirdai/dash-runtime";
 import { compilePlan, executeWidget, runPipeline } from "@freebirdai/dash-runtime";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { useDashboard } from "./context.jsx";
+import { useDashboard, type EachAnswer } from "./context.jsx";
 import { derivedSources, entityFor, referenceColumns } from "./references.js";
 import {
   fetchLookupsInOrder,
@@ -102,7 +105,7 @@ export const labelColumns = (
 /**
  * The columns drawn from a flag, marked as flags.
  *
- * Rentvine sends its flags as 1 and 0, so the values alone look like numbers
+ * Some APIs send their flags as 1 and 0, so the values alone look like numbers
  * and print as numbers. The record type knows better — see `isFlagField` —
  * so a column derived from one of its flags reads Active or Inactive. A
  * format the widget states for the column still wins: `formatFor` reads the
@@ -287,6 +290,22 @@ export interface WidgetData {
   /** The untransformed response. The inspector shows it so "is it us or them?" is answerable. */
   readonly raw: unknown;
   readonly binding: BindingValidation | null;
+  /**
+   * What the tile shows is not all of it, and why — one plain sentence each.
+   *
+   * Read from every request this widget made, not only the first: a joined
+   * or fanned-out widget whose second source stopped at its page cap is as
+   * incomplete as one whose first did, and used to say nothing. Kept apart
+   * from `errors`, because nothing here stops the tile drawing — it changes
+   * what the numbers mean.
+   */
+  readonly incomplete: readonly string[];
+  /**
+   * What the host says has changed about an endpoint this widget reads since
+   * it was checked: a field gone or holding something else. The records may
+   * all be there; what is drawn from them may still be wrong.
+   */
+  readonly changed: readonly string[];
   readonly errors: readonly string[];
   readonly userMessage: string | null;
   /** HTTP status of the failure, where there was one. See `QueryEntry`. */
@@ -318,6 +337,38 @@ export interface WidgetData {
   refetch(): void;
 }
 
+/** A per-record source's every record, for the host to read past the tile's own. */
+interface EachPlan {
+  readonly as: string;
+  readonly connection: string;
+  readonly op: string;
+  readonly params: Readonly<Record<string, string | number | boolean>>;
+  readonly input: string;
+  /** At most `FAN_OUT_WHOLE_MAX`. */
+  readonly values: readonly (string | number | boolean)[];
+  /** How many records there are, past the ceiling too. */
+  readonly of: number;
+  readonly scope: string;
+}
+
+/** How often a tile asks how far the host has got. */
+const EACH_ASK_MS = 3_000;
+/** How often a tile whose read is carried on in the background looks again. */
+const READING_ON_ASK_MS = 5_000;
+const NO_ANSWERS: Readonly<Record<string, EachAnswer>> = {};
+
+/**
+ * One source's answers laid end to end, the way a fan-out's are: the first as
+ * it is, the rest concatenated onto it.
+ */
+const laidEndToEnd = (existing: unknown, next: unknown): unknown =>
+  existing === undefined
+    ? next
+    : [
+        ...(Array.isArray(existing) ? existing : [existing]),
+        ...(Array.isArray(next) ? next : [next]),
+      ];
+
 export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
   /**
    * How stale this widget will tolerate, from its own spec.
@@ -338,6 +389,7 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
     usesRange,
     approvals,
     records,
+    readEach,
   } = useDashboard();
 
   /**
@@ -357,7 +409,15 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
    * into `requestParams` below *before* the cache key is built, so two rows
    * naturally get two entries and neither can serve the other's record.
    */
-  const params = useMemo(() => (row ? { ...baseParams, row } : baseParams), [baseParams, row]);
+  /*
+   * A widget with a time of its own — "since 1 June" — reads that, not the
+   * board's window (`paramsForWidget`).
+   */
+  const timeWindow = widget.timeWindow;
+  const params = useMemo(() => {
+    const own = paramsForWidget({ timeWindow }, baseParams, now);
+    return row ? { ...own, row } : own;
+  }, [baseParams, row, timeWindow, now]);
 
   const sources = useMemo(() => widgetSources(widget), [widget]);
 
@@ -453,6 +513,8 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
     }> = [];
     let truncated = false;
     let driverRows = 0;
+    /* Every record's value, for the host to read the rest of: see `readEach`. */
+    const whole: EachPlan[] = [];
 
     for (const source of sources) {
       const fanOut = source.fanOut;
@@ -471,6 +533,33 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
       if (rows.length > capped.length) truncated = true;
 
       const inputName = fanOut.as ?? fanOut.field;
+      const shared: Record<string, string | number | boolean> = {};
+      for (const [name, raw] of Object.entries(source.params)) {
+        shared[name] = interpolateValue(raw, params);
+      }
+      if (rows.length > capped.length) {
+        const values: (string | number | boolean)[] = [];
+        const named = new Set<string>();
+        for (const driverRow of rows) {
+          const value = driverRow[fanOut.field];
+          if (value === undefined || value === null || value === "") continue;
+          const spelled = `${typeof value}:${String(value)}`;
+          if (named.has(spelled)) continue;
+          named.add(spelled);
+          values.push(value as string | number | boolean);
+        }
+        whole.push({
+          as: source.as,
+          connection: source.connection,
+          op: source.op,
+          params: shared,
+          input: inputName,
+          values: values.slice(0, FAN_OUT_WHOLE_MAX),
+          of: values.length,
+          /* The window's identity, as every read's key spells it. */
+          scope: queryKey(source.connection, source.op, shared, params, usesRange(source.connection, source.op)),
+        });
+      }
       const seen = new Set<string>();
       for (const driverRow of capped) {
         const value = driverRow[fanOut.field];
@@ -500,8 +589,13 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
         });
       }
     }
-    return { requests, truncated, driverRows };
-  }, [sources, direct, plan, client, now, params, timeZone]);
+    return { requests, truncated, driverRows, whole };
+    /*
+     * `directStamp`: the driver landing is what makes these knowable. Without
+     * it the second wave waited for the board's clock to tick, up to thirty
+     * seconds after its driver's rows were already there.
+     */
+  }, [sources, direct, directStamp, plan, client, now, params, timeZone, usesRange]);
 
   const fannedKeys = useMemo(() => fanned.requests.map((request) => request.key), [fanned]);
   const fannedStamp = useSyncExternalStore(
@@ -616,6 +710,96 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
     return () => clearInterval(timer);
   }, [everyMs, reread]);
 
+  /*
+   * A read the host is carrying on in the background (`readingOn`): looked at
+   * again until the whole answer has replaced the first pages. In view mode,
+   * so it costs the API nothing — the host answers from what it holds.
+   */
+  const readingOn = entries.some(({ entry }) => entry?.meta?.readingOn !== undefined);
+  const [readingTick, setReadingTick] = useState(0);
+  useEffect(() => {
+    if (!readingOn) return;
+    const timer = setTimeout(() => {
+      if (typeof document === "undefined" || !document.hidden) reread();
+      setReadingTick((tick) => tick + 1);
+    }, READING_ON_ASK_MS);
+    return () => clearTimeout(timer);
+  }, [readingOn, readingTick, reread]);
+
+  /*
+   * The rest of a per-record source, read by the host.
+   *
+   * A tile reads its first twenty-five records' related records itself, so it
+   * can draw; the host reads every one (up to `FAN_OUT_WHOLE_MAX`) behind
+   * every board's own reads, and its answer replaces the twenty-five when it
+   * is whole. Asked once the first wave has settled, so the host serves those
+   * twenty-five from what the tile already read instead of asking again.
+   * Until then the tile says what it excludes, and how far the rest has got.
+   */
+  const wholeSignature = useMemo(
+    () =>
+      JSON.stringify(
+        fanned.whole.map((plan) => [plan.as, plan.scope, plan.input, plan.values]),
+      ),
+    [fanned.whole],
+  );
+  const firstWaveSettled = entries
+    .slice(direct.length)
+    .every(({ entry }) => entry !== undefined && (entry.status === "ok" || entry.status === "error"));
+  const [each, setEach] = useState<{
+    readonly signature: string;
+    readonly answers: Readonly<Record<string, EachAnswer>>;
+  }>({ signature: "", answers: {} });
+  const eachInput = useRef({ plans: fanned.whole, params });
+  eachInput.current = { plans: fanned.whole, params };
+  useEffect(() => {
+    if (!readEach || !approved || !firstWaveSettled) return;
+    const { plans, params: resolved } = eachInput.current;
+    if (plans.length === 0) return;
+    let live = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const ask = async (): Promise<void> => {
+      const answers: Record<string, EachAnswer> = {};
+      let reading = false;
+      for (const plan of plans) {
+        try {
+          const answer = await readEach({
+            connection: plan.connection,
+            op: plan.op,
+            params: plan.params,
+            input: plan.input,
+            values: plan.values,
+            resolved,
+          });
+          answers[plan.as] = answer;
+          if (answer.status === "reading") reading = true;
+        } catch {
+          /* The first twenty-five stand, and the tile says the rest are missing. */
+        }
+      }
+      if (!live) return;
+      setEach({ signature: wholeSignature, answers });
+      if (reading) timer = setTimeout(() => void ask(), EACH_ASK_MS);
+    };
+    void ask();
+    return () => {
+      live = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [readEach, approved, firstWaveSettled, wholeSignature]);
+  /* How far the host has got with each source, for this exact set of records. */
+  const eachAnswers = useMemo(
+    () => (each.signature === wholeSignature ? each.answers : NO_ANSWERS),
+    [each, wholeSignature],
+  );
+  const wholeRead = useMemo(() => {
+    const done: Record<string, EachAnswer> = {};
+    for (const [as, answer] of Object.entries(eachAnswers)) {
+      if (answer.status === "done" && answer.bodies) done[as] = answer;
+    }
+    return done;
+  }, [eachAnswers]);
+
   /**
    * One body per source; fan-out responses are concatenated into theirs.
    *
@@ -628,18 +812,17 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
     for (const item of entries) {
       const entry = item.entry;
       if (!entry || entry.body === undefined) continue;
-      const existing = out[item.request.as];
-      if (existing === undefined) {
-        out[item.request.as] = entry.body;
-        continue;
-      }
-      out[item.request.as] = [
-        ...(Array.isArray(existing) ? existing : [existing]),
-        ...(Array.isArray(entry.body) ? entry.body : [entry.body]),
-      ];
+      /* Read whole by the host: its answer stands in for the first twenty-five. */
+      if (wholeRead[item.request.as]) continue;
+      out[item.request.as] = laidEndToEnd(out[item.request.as], entry.body);
+    }
+    for (const [as, answer] of Object.entries(wholeRead)) {
+      let body: unknown;
+      for (const next of answer.bodies ?? []) body = laidEndToEnd(body, next);
+      if (body !== undefined) out[as] = body;
     }
     return out;
-  }, [entries]);
+  }, [entries, wholeRead]);
 
   /**
    * Has this widget already drawn rows for this exact set of sources?
@@ -805,6 +988,51 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
     }
     return { ...primary.meta, staleReason: derived.failure.userMessage };
   }, [heldRecord, primary?.meta, lastFetchedAt, derived.servingLastKnownGood, derived.failure]);
+
+  /*
+   * Every reason what is drawn is not all of it, from every request made.
+   */
+  const incomplete = useMemo(() => {
+    /* The host's read of every record, summed over this widget's per-record sources. */
+    const answers = fanned.whole.map((plan) => ({ plan, answer: eachAnswers[plan.as] }));
+    const asked = answers.filter(
+      (item): item is { plan: EachPlan; answer: EachAnswer } => item.answer !== undefined,
+    );
+    const done = asked.length === answers.length && asked.every(({ answer }) => answer.status === "done");
+    const stopped = asked.find(({ answer }) => answer.stopped !== undefined)?.answer.stopped;
+    const whole =
+      asked.length === 0
+        ? undefined
+        : {
+            status: done ? ("done" as const) : ("reading" as const),
+            read: asked.reduce((sum, { answer }) => sum + answer.read, 0),
+            asked: asked.reduce((sum, { answer }) => sum + answer.of, 0),
+            beyond: asked.reduce((sum, { plan }) => sum + (plan.of - plan.values.length), 0),
+            /* A record the API would not let this key read is not read either. */
+            failed: asked.reduce((sum, { answer }) => sum + answer.failed + (answer.denied ?? 0), 0),
+            notes: asked.flatMap(({ answer }) => answer.notes ?? []),
+            ...(stopped !== undefined ? { stopped } : {}),
+          };
+    return incompleteNotes({
+      /* A source read whole by the host speaks for itself; its first twenty-five do not. */
+      metas: entries
+        .filter(({ request }) => !(done && wholeRead[request.as]))
+        .map(({ entry }) => entry?.meta),
+      fanOut: {
+        truncated: fanned.truncated,
+        read: fanned.requests.length,
+        of: fanned.driverRows,
+        missing: derived.missingOptional,
+        ...(whole ? { whole } : {}),
+      },
+    });
+  }, [entries, fanned, derived.missingOptional, eachAnswers, wholeRead]);
+
+  /* What each read's endpoint is said to have changed, once each. */
+  const changed = useMemo(
+    () => [...new Set(entries.flatMap(({ entry }) => (entry?.meta?.warnings ?? []).filter(isChangedNote)))],
+    [entries],
+  );
 
   /*
    * The columns, wearing this API's names and carrying its links.
@@ -1152,23 +1380,9 @@ export const useWidgetData = (widget: WidgetSpec, row?: Row): WidgetData => {
     fetchMeta: fetchMeta,
     raw: widget.sources.length > 0 ? bodies : primary?.body,
     binding: executed?.binding ?? null,
+    incomplete,
+    changed,
     errors: [
-      ...(fanned.truncated
-        ? [
-            `Only the first ${fanned.requests.length} of ${fanned.driverRows} record(s) were expanded, so this total is incomplete.`,
-          ]
-        : []),
-      /*
-       * A fan-out child that could not be read is stated rather than absorbed.
-       * The tile still draws — that is the whole point of treating these as
-       * optional — but a total quietly missing three of its twenty-five parts
-       * is a number somebody would act on, so it says which it is.
-       */
-      ...(derived.missingOptional > 0
-        ? [
-            `${derived.missingOptional} of ${fanned.requests.length} related record(s) could not be read, so this total is incomplete.`,
-          ]
-        : []),
       ...(executed?.errors ?? []),
       ...(executed?.binding?.errors ?? []).map((issue) => issue.message),
     ],

@@ -4,7 +4,7 @@ import type { EntityField, EntitySpec } from "./entity.js";
  * Other records an API sends inside this record's rows.
  *
  * Some APIs answer with each record wrapped in an object named after its type,
- * and put the records it relates to beside it: a Rentvine invoice row is
+ * and put the records it relates to beside it: an invoice row is
  * `{ invoice: {…}, workOrder: {…}, contact: {…}, property: {…} }`. Described
  * field by field, all of that became the invoice's own — fourteen objects'
  * worth — so an invoice page listed its work order's fields as if they were
@@ -15,7 +15,7 @@ import type { EntityField, EntitySpec } from "./entity.js";
  * that wraps this one: it is named exactly as another record type's identity
  * is wrapped. Derived rather than stored, so it is always consistent with the
  * record types as they now are and nothing written before needs migrating.
- * An API whose records are not wrapped — Buildium's identities are a plain
+ * An API whose records are not wrapped — whose identities are a plain
  * `Id` — has no bundles, and nothing about it changes.
  */
 export interface Bundle {
@@ -23,7 +23,7 @@ export interface Bundle {
   readonly path: string;
   /**
    * The record type it is. Absent where several share the wrapper — a
-   * Rentvine `contact` may be a tenant, a vendor or an owner — and nothing on
+   * `contact` may be a tenant, a vendor or an owner — and nothing on
    * the row says which.
    */
   readonly entity?: string | undefined;

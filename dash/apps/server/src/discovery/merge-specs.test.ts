@@ -67,7 +67,8 @@ describe("mergeSpecDocuments", () => {
       parseOpenApi(fragment("/widgets"), "https://docs.widgets.test/a"),
       parseOpenApi(fragment("/widgets/{widgetId}"), "https://docs.widgets.test/b"),
     ];
-    expect(separately.flatMap((r) => r?.entry.resources ?? [])).toEqual([]);
+    /* Alone, the list is a collection with no record page to open. */
+    expect(separately.flatMap((r) => r?.entry.resources ?? []).map((one) => one.detailOp)).toEqual([undefined]);
 
     const { merged } = mergeSpecDocuments([
       at(fragment("/widgets"), "list-widgets"),
@@ -209,6 +210,81 @@ describe("mergeSpecDocuments", () => {
     expect(parseOpenApi(merged, "https://docs.old.test/a")?.entry.baseUrl).toBe(
       "https://api.old.test/v1",
     );
+  });
+
+  /*
+   * The bug these guard: Swagger 2 security and definitions were folded under
+   * `components`, where no Swagger 2 reader looks — so the merged reference
+   * imported as needing no key, and every `#/definitions/…` response resolved
+   * to nothing.
+   */
+  const swaggerPage = (path: string, name: string) => ({
+    swagger: "2.0",
+    info: { title: "Old API" },
+    host: "api.old.test",
+    basePath: "/v1",
+    securityDefinitions: { login: { type: "basic" } },
+    security: [{ login: [] }],
+    definitions: {
+      [name]: { type: "object", properties: { Id: { type: "integer" }, Name: { type: "string" } } },
+    },
+    paths: {
+      [path]: {
+        get: {
+          responses: {
+            "200": { schema: { type: "array", items: { $ref: `#/definitions/${name}` } } },
+          },
+        },
+      },
+    },
+  });
+
+  it("keeps Swagger 2 security and definitions where Swagger 2 readers look", () => {
+    const { merged } = mergeSpecDocuments([
+      at(swaggerPage("/things", "Thing"), "a"),
+      at(swaggerPage("/others", "Other"), "b"),
+    ]);
+    expect(merged).toMatchObject({
+      securityDefinitions: { login: { type: "basic" } },
+      definitions: { Thing: {}, Other: {} },
+    });
+    expect(merged).not.toHaveProperty("components");
+
+    const entry = parseOpenApi(merged, "https://docs.old.test/a")?.entry;
+    expect(entry?.dialect.auth).toMatchObject({ type: "basic" });
+    const things = entry?.ops.find((op) => op.path === "/things");
+    expect(things?.fields?.map((field) => field.name)).toEqual(
+      expect.arrayContaining(["Id", "Name"]),
+    );
+  });
+
+  it("repoints a Swagger 2 page's references into an OpenAPI 3 document", () => {
+    const { merged } = mergeSpecDocuments([
+      at(fragment("/widgets"), "a"),
+      at(swaggerPage("/things", "Thing"), "b"),
+    ]);
+    const components = (merged as { components: Record<string, Record<string, unknown>> })
+      .components;
+    expect(components.schemas).toHaveProperty("Thing");
+    expect(components.securitySchemes).toHaveProperty("login");
+    const things = (merged as { paths: Record<string, { get: unknown }> }).paths["/things"]!;
+    expect(JSON.stringify(things.get)).toContain("#/components/schemas/Thing");
+  });
+
+  it("merges shared parameters and responses, not only schemas", () => {
+    const shared = {
+      components: {
+        parameters: { Limit: { name: "limit", in: "query", schema: { type: "integer" } } },
+        responses: { NotFound: { description: "Missing" } },
+      },
+    };
+    const { merged } = mergeSpecDocuments([
+      at(fragment("/widgets", shared), "a"),
+      at(fragment("/gadgets", shared), "b"),
+    ]);
+    expect(merged).toMatchObject({
+      components: { parameters: { Limit: {} }, responses: { NotFound: {} } },
+    });
   });
 });
 

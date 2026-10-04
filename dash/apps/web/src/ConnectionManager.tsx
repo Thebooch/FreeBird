@@ -3,6 +3,7 @@ import type { CatalogEntry, WidgetSpec } from "@freebirdai/dash-spec";
 import {
   VERIFY_BUDGET_DEFAULT,
   authCredentials,
+  connectionCredentials,
   parseWidget,
   connectionAuths,
   connectionNeedsAddress,
@@ -17,6 +18,7 @@ import {
   type ConnectionSummary,
   type DiscoveryResult,
   type DrillDownOffer,
+  type RendererStatus,
   type EnumerationPlan,
   type MapRunResult,
   type MapState,
@@ -407,7 +409,49 @@ export const ConnectionManager = ({
   const runDiscovery = (): Promise<void> =>
     run(async () => {
       setDiscovery(null);
+      setRenderer(null);
+      /* "Not now" was about that page: the next one drawn by scripts asks again. */
+      setDeclined(false);
       setDiscovery(await api.discover(discoverUrl.trim()));
+    });
+
+  /*
+   * Documentation drawn by its own scripts needs Chromium, downloaded once
+   * when the person agrees. Once it is here — or once
+   * an earlier yes fetched it again — discovery runs again by itself.
+   */
+  const [renderer, setRenderer] = useState<RendererStatus | null>(null);
+  const [declined, setDeclined] = useState(false);
+  /* Raised when a download starts, so the progress is followed from then. */
+  const [following, setFollowing] = useState(0);
+  useEffect(() => {
+    if (!discovery?.needsRenderer) return;
+    let live = true;
+    let timer: number | undefined;
+    const look = async (): Promise<void> => {
+      const status = await api.rendererStatus().catch(() => null);
+      if (!live || !status) return;
+      setRenderer(status);
+      if (status.state === "ready") {
+        void runDiscovery();
+        return;
+      }
+      if (status.state === "installing") timer = window.setTimeout(() => void look(), 1_000);
+    };
+    void look();
+    return () => {
+      live = false;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [discovery, following]);
+
+  const installRenderer = (): Promise<void> =>
+    run(async () => {
+      setDeclined(false);
+      const status = await api.installRenderer();
+      setRenderer(status);
+      setFollowing((count) => count + 1);
     });
 
   /**
@@ -548,14 +592,13 @@ export const ConnectionManager = ({
      * found them — "Access key", "Secret" — so nobody is asked for one "API
      * key" when they hold two values.
      */
-    const rows = connectionAuths(draft).flatMap((auth) =>
-      authCredentials(auth).map((credential) => ({
-        keyRef: credential.keyRef,
-        nameValue: null,
-        valueLabel: credential.label,
-        hint: credential.hint,
-      })),
-    );
+    /* The sign-in's values, endpoint by endpoint, and a client certificate's where the API asks for one. */
+    const rows = connectionCredentials(draft).map((credential) => ({
+      keyRef: credential.keyRef,
+      nameValue: null,
+      valueLabel: credential.label,
+      hint: credential.hint,
+    }));
     return [...new Map(rows.map((row) => [row.keyRef, row])).values()];
   })();
 
@@ -761,7 +804,7 @@ export const ConnectionManager = ({
    * Reading the account is part of connecting, not an extra.
    *
    * Record types are built from the documentation, and documentation can be
-   * wrong in ways that render confidently — Rentvine declares its flags
+   * wrong in ways that render confidently — one API declares its flags
    * boolean and sends 0 and 1. Reading real rows is what catches that, and an
    * optional button meant nobody ever pressed it. So it starts as soon as this
    * step opens, once per connection, within the budget the step states; "Skip
@@ -1178,7 +1221,8 @@ export const ConnectionManager = ({
                     <div className="dash-conn-list__text">
                       <div className="dash-conn-list__title">{connection.title}</div>
                       <div className="dash-conn-list__meta">
-                        {connection.baseUrl} · {connection.ops.length} endpoint(s) ·{" "}
+                        {connection.baseUrl}
+                        {connection.privateNetwork ? " · private network" : ""} · {connection.ops.length} endpoint(s) ·{" "}
                         {connection.auth.type === "none"
                           ? "no key needed"
                           : connection.hasKey
@@ -2005,10 +2049,60 @@ export const ConnectionManager = ({
 
             {discovery && (
               <div
-                className={`dash-callout dash-callout--${discovery.entry ? "info" : "bad"}`}
+                className={`dash-callout dash-callout--${discovery.entry || discovery.needsRenderer ? "info" : "bad"}`}
                 data-testid="discovery-result"
               >
-                <strong>{SOURCE_LABELS[discovery.source]}.</strong> {discovery.note}
+                {/* A question waiting on the person is not "nothing found": the page can be read once they say yes. */}
+                {discovery.needsRenderer ? (
+                  <strong>This documentation is drawn in the browser, by its own scripts.</strong>
+                ) : (
+                  <>
+                    <strong>{SOURCE_LABELS[discovery.source]}.</strong> {discovery.note}
+                  </>
+                )}
+                {discovery.needsRenderer && (
+                  <div style={{ marginTop: 10 }} data-testid="discovery-renderer">
+                    {renderer?.state === "installing" ? (
+                      <p className="dash-hint">
+                        Downloading about {renderer.downloadMb} MB…{" "}
+                        {(renderer.part ?? 1) > 1 ? `part ${renderer.part}, ` : ""}
+                        {Math.round(renderer.progress ?? 0)}%. Discovery carries on by itself once it is ready.
+                      </p>
+                    ) : renderer?.state === "failed" ? (
+                      <p className="dash-hint">{renderer.error}</p>
+                    ) : declined ? (
+                      <p className="dash-hint">
+                        This documentation can&apos;t be read without that download. Link an OpenAPI spec instead, or
+                        describe the API by hand. You&apos;ll be asked again the next time a page like this comes up.
+                      </p>
+                    ) : (
+                      <>
+                        <p className="dash-hint">
+                          Reading it needs a one-time download of about {renderer?.downloadMb ?? 150} MB. Download
+                          now?
+                        </p>
+                        <div className="dash-row">
+                          <button
+                            className="dash-control"
+                            data-testid="renderer-install"
+                            onClick={() => void installRenderer()}
+                            disabled={busy}
+                          >
+                            Download
+                          </button>
+                          <button
+                            className="dash-control"
+                            data-testid="renderer-decline"
+                            onClick={() => setDeclined(true)}
+                            disabled={busy}
+                          >
+                            Not now
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
                 {discovery.entry && (
                   <>
                     <div style={{ marginTop: 8 }}>

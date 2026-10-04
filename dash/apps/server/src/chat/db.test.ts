@@ -206,7 +206,9 @@ describe("chat storage durability", () => {
       const dir = `.dash/test-chat-db-${Date.now()}`;
       const first = await openChatDb({ databaseUrl: undefined, dataDir: dir });
       const session = await first.adapter.createSession({ title: "Durable" }, alice);
-      await new ScratchDraftStore(first.adapter, alice).put("board-1", {
+      /* As the server keeps drafts: under the workspace, so the move of older rows to `local` leaves it where it is. */
+      const aliceHere: AuthContext = { ...alice, orgId: "local" };
+      await new ScratchDraftStore(first.adapter, aliceHere).put("board-1", {
         ...newDraft("mid-setup", "leases"),
         connection: "api",
         op: "list",
@@ -226,7 +228,7 @@ describe("chat storage durability", () => {
 
         // The point of putting drafts here rather than in memory: eight
         // answers into a setup, a restart is not a reason to start again.
-        const reopened = await new ScratchDraftStore(second.adapter, alice).get("board-1");
+        const reopened = await new ScratchDraftStore(second.adapter, aliceHere).get("board-1");
         expect(reopened?.id).toBe("mid-setup");
         expect(reopened?.roles).toEqual({ columns: ["Name"] });
       } finally {

@@ -70,6 +70,74 @@ describe("briefCandidates", () => {
     );
   });
 
+  /* Unscripted benchmark, 2026-09-28: a VIP flag and an untagged total were never offered, so neither could be asked for. */
+  it("offers flags to narrow by, and untagged numbers to add up, but never an identity", () => {
+    const [candidate] = briefCandidates([
+      {
+        connection: "api",
+        title: "The API",
+        entities: [
+          entity({
+            fields: [
+              { path: "Id", visibility: "hidden" },
+              { path: "Status", label: "Status", visibility: "primary" },
+              { path: "vip", label: "VIP", kinds: ["boolean"], visibility: "detail" },
+              { path: "total", label: "Order total", kinds: ["number"], visibility: "detail" },
+              { path: "customer_id", label: "Customer", kinds: ["number"], visibility: "detail" },
+            ],
+          }),
+        ],
+      },
+    ]);
+    expect(candidate?.fields.find((field) => field.path === "vip")?.role).toBe("narrow");
+    expect(candidate?.fields.find((field) => field.path === "total")?.role).toBe("total");
+    expect(candidate?.fields.some((field) => field.path === "customer_id")).toBe(false);
+  });
+
+  it("offers what dates the records, so a request can say when", () => {
+    const [candidate] = briefCandidates([
+      {
+        connection: "api",
+        title: "The API",
+        entities: [
+          entity({
+            fields: [
+              { path: "Id", visibility: "hidden" },
+              { path: "Status", label: "Status", visibility: "primary" },
+              { path: "booked", label: "Booked", kinds: ["string"], visibility: "detail" },
+              { path: "DueDate", label: "Due", semantic: "timestamp", visibility: "detail" },
+            ],
+          }),
+        ],
+      },
+    ]);
+    expect(candidate?.fields.filter((field) => field.role === "when").map((field) => field.path).sort()).toEqual([
+      "DueDate",
+      "booked",
+    ]);
+    const prompt = buildBriefPrompt({ intent: "debits in July", candidates: [candidate!], today: "2026-09-01" });
+    expect(prompt).toContain("dated by:");
+    expect(prompt).toContain("TODAY: 2026-09-01");
+  });
+
+  it("carries a range the request named through to the brief", async () => {
+    const llm = fakeLlm([
+      {
+        args: {
+          entity: "task",
+          intent: "measure",
+          filters: [{ field: "Cost", above: 100 }],
+          reason: "Costly tasks.",
+        },
+      },
+    ]);
+    const result = await writeBrief(llm, {
+      intent: "how many tasks cost more than 100",
+      candidates: briefCandidates([{ connection: "api", title: "The API", entities: [entity({})] }]),
+    });
+    expect(result.brief?.filters).toEqual([{ field: "Cost", above: 100 }]);
+  });
+
   it("marks a reference list as not something to start from", () => {
     expect(briefCandidates([{ connection: "api", title: "The API", entities: [glossary] }])[0]?.starting).toBe(false);
     expect(briefCandidates([{ connection: "api", title: "The API", entities: [entity({})] }])[0]?.starting).toBe(true);
@@ -151,6 +219,201 @@ describe("writeBrief", () => {
     });
   });
 
+  /* Unscripted benchmark, 2026-09-28: a sum with nothing to add up compiled into no widget at all. */
+  it("sends back a sum that does not say what to add up, once", async () => {
+    const llm = fakeLlm([
+      { args: { entity: "task", intent: "measure", measureAgg: "sum", reason: "Total cost." } },
+      { args: { entity: "task", intent: "measure", measureAgg: "sum", measureField: "Cost", reason: "Total cost." } },
+    ]);
+    const result = await writeBrief(llm, { intent: "what does the work cost", candidates });
+    expect(result.brief).toMatchObject({ intent: "measure", measure: { agg: "sum", field: "Cost" } });
+    expect(llm.calls).toHaveLength(2);
+    expect(String(llm.calls[1]!.messages.at(-1)!.content)).toMatch(/measureField is missing/);
+  });
+
+  it("takes a field named by its label as that field, and sends back one named by a description", async () => {
+    const byLabel = fakeLlm([{ args: { entity: "task", intent: "compare", groupBy: "category", reason: "By category." } }]);
+    expect((await writeBrief(byLabel, { intent: "tasks per category", candidates })).brief?.groupBy).toBe("Category.Name");
+    const described = fakeLlm([
+      { args: { entity: "task", intent: "measure", measureAgg: "sum", measureField: "total cost", reason: "Cost." } },
+      { args: { entity: "task", intent: "measure", measureAgg: "sum", measureField: "Cost", reason: "Cost." } },
+    ]);
+    const result = await writeBrief(described, { intent: "what does it all cost", candidates });
+    expect(result.brief?.measure).toEqual({ agg: "sum", field: "Cost" });
+    expect(String(described.calls[1]!.messages.at(-1)!.content)).toMatch(/"total cost" is not a field/);
+  });
+
+  /* Regression: "delivered kilograms" named the field `kilograms`, which no record has. */
+  describe("a unit written where a field was meant", () => {
+    const deliveries = briefCandidates([
+      {
+        connection: "api",
+        title: "The API",
+        entities: [
+          entity({
+            id: "delivery",
+            resource: "delivery",
+            name: { one: "Delivery", many: "Deliveries" },
+            kind: "event",
+            fields: [
+              { path: "id", visibility: "hidden" },
+              { path: "status", label: "Status", visibility: "primary", values: ["delivered", "returned"] },
+              { path: "weight_kg", label: "Weight", semantic: "number", visibility: "primary" },
+              { path: "distanceMiles", label: "Distance", semantic: "number", visibility: "detail" },
+              { path: "internal_ref", visibility: "hidden" },
+            ],
+          }),
+        ],
+      },
+    ]);
+    const sum = (measureField: string) => ({
+      args: { entity: "delivery", intent: "measure", measureAgg: "sum", measureField, reason: "Weight." },
+    });
+
+    it("is the one field that carries it, with nothing sent back", async () => {
+      const llm = fakeLlm([sum("kilograms")]);
+      const result = await writeBrief(llm, { intent: "kilograms carried", candidates: deliveries });
+      expect(result.brief?.measure).toEqual({ agg: "sum", field: "weight_kg" });
+      expect(llm.calls).toHaveLength(1);
+      const miles = fakeLlm([sum("miles")]);
+      expect((await writeBrief(miles, { intent: "miles driven", candidates: deliveries })).brief?.measure).toEqual({
+        agg: "sum",
+        field: "distanceMiles",
+      });
+    });
+
+    /* Seen with the trackwell mock API. */
+    it("sends back, once, a word of the request that a field holds and nothing narrows by", async () => {
+      const llm = fakeLlm([sum("weight_kg"), { args: { ...sum("weight_kg").args, filters: [{ field: "status", values: ["delivered"] }] } }]);
+      const result = await writeBrief(llm, { intent: "delivered kilograms", candidates: deliveries });
+      expect(String(llm.calls[1]!.messages.at(-1)!.content)).toMatch(/the request says "delivered", which status holds as delivered/);
+      expect(result.brief?.filters).toEqual([{ field: "status", values: ["delivered"] }]);
+    });
+
+    it("sends back, once, a name no record has, even one word long", async () => {
+      const llm = fakeLlm([sum("mass"), sum("weight_kg")]);
+      const result = await writeBrief(llm, { intent: "total mass delivered", candidates: deliveries });
+      expect(result.brief?.measure).toEqual({ agg: "sum", field: "weight_kg" });
+      expect(String(llm.calls[1]!.messages.at(-1)!.content)).toMatch(/"mass" is not a field/);
+    });
+
+    it("never sends back a field the record type has but the list left out", async () => {
+      const llm = fakeLlm([
+        { args: { entity: "delivery", intent: "records", columns: ["internal_ref"], reason: "Refs." } },
+      ]);
+      await writeBrief(llm, { intent: "delivery refs", candidates: deliveries });
+      expect(llm.calls).toHaveLength(1);
+    });
+
+    it("asks again, naming the fields, where two carry the unit equally", async () => {
+      const two = briefCandidates([
+        {
+          connection: "api",
+          title: "The API",
+          entities: [
+            entity({
+              id: "delivery",
+              resource: "delivery",
+              name: { one: "Delivery", many: "Deliveries" },
+              kind: "event",
+              fields: [
+                { path: "delivered_kg", label: "Delivered weight", semantic: "number", visibility: "primary" },
+                { path: "returned_kg", label: "Returned weight", semantic: "number", visibility: "primary" },
+              ],
+            }),
+          ],
+        },
+      ]);
+      /* The request's other words choose between them. */
+      const chosen = fakeLlm([sum("delivered kilograms")]);
+      expect((await writeBrief(chosen, { intent: "delivered kilograms", candidates: two })).brief?.measure).toEqual({
+        agg: "sum",
+        field: "delivered_kg",
+      });
+      const unsure = fakeLlm([sum("kilograms"), sum("delivered_kg")]);
+      await writeBrief(unsure, { intent: "kilograms", candidates: two });
+      expect(String(unsure.calls[1]!.messages.at(-1)!.content)).toMatch(
+        /"kilograms" is a unit, not a field \(delivered_kg or returned_kg hold it\)/,
+      );
+    });
+  });
+
+  /* "revenue" invoiced or collected is the same records added up differently. */
+  it("says which reading of a business word it built, and offers the other", async () => {
+    const llm = fakeLlm([
+      {
+        args: {
+          entity: "task",
+          intent: "measure",
+          measureAgg: "sum",
+          measureField: "Cost",
+          reading: { term: "spend", as: "the cost of every task" },
+          alternative: {
+            label: "cost of open tasks only",
+            intent: "measure",
+            measureAgg: "sum",
+            measureField: "Cost",
+            filters: [{ field: "Status", values: ["Open"] }],
+          },
+          reason: "Total cost.",
+        },
+      },
+    ]);
+    const result = await writeBrief(llm, { intent: "what is our spend", candidates });
+    expect(result.brief?.reading).toEqual({ term: "spend", as: "the cost of every task" });
+    /* Same records and intent, narrowed differently: still another reading. */
+    expect(result.alternative?.brief.filters).toEqual([{ field: "Status", values: ["Open"] }]);
+    /* A list's records speak for themselves: no reading on one. */
+    const list = fakeLlm([
+      { args: { entity: "task", intent: "records", reading: { term: "work", as: "tasks" }, reason: "Tasks." } },
+    ]);
+    expect((await writeBrief(list, { intent: "my work", candidates })).brief?.reading).toBeUndefined();
+  });
+
+  /* Regression: "leave out cancelled orders" was dropped while the reason said it was done. */
+  it("carries whether a field holds anything, and what it could not express", async () => {
+    const llm = fakeLlm([
+      {
+        args: {
+          entity: "task",
+          intent: "measure",
+          measureAgg: "sum",
+          measureField: "Cost",
+          filters: [{ field: "Status", empty: false }],
+          unmet: ["leave out archived tasks", "  "],
+          reason: "Cost of tasks with a status.",
+        },
+      },
+    ]);
+    const result = await writeBrief(llm, { intent: "cost of tasks with a status, not archived", candidates });
+    expect(result.brief?.filters).toEqual([{ field: "Status", empty: false }]);
+    expect(result.brief?.unmet).toEqual(["leave out archived tasks"]);
+  });
+
+  /* Regression: "more than $250" compared 250 cents. The roster now says which numbers are in cents. */
+  it("says which numbers the documentation puts in the smallest currency unit", () => {
+    const [candidate] = briefCandidates([
+      {
+        connection: "api",
+        title: "The API",
+        entities: [
+          entity({
+            fields: [
+              { path: "Id", visibility: "hidden" },
+              { path: "Status", label: "Status", visibility: "primary" },
+              { path: "amount", label: "Amount", semantic: "currency", format: "minor_units", visibility: "detail" },
+              { path: "Cost", label: "Cost", semantic: "currency", visibility: "detail" },
+            ],
+          }),
+        ],
+      },
+    ]);
+    const prompt = buildBriefPrompt({ intent: "x", candidates: [candidate!] });
+    expect(prompt).toContain("Amount (amount, in the smallest currency unit)");
+    expect(prompt).toContain("Cost (Cost)");
+    expect(BRIEF_SYSTEM_PROMPT).toMatch(/More than \$250 is above 25000/);
+  });
+
   it("carries a narrowing phrase as values on a filter", async () => {
     // Not as a hidden filtering step: a reader who cannot see what was
     // narrowed cannot widen it, and believes they see everything there is.
@@ -166,6 +429,139 @@ describe("writeBrief", () => {
     ]);
     const result = await writeBrief(llm, { intent: "open tasks", candidates });
     expect(result.brief?.filters).toEqual([{ field: "Status", values: ["Open"] }]);
+  });
+
+  /* Regression: with no such record type, "how many Pokémon" counted evolution chains, and "episodes" counted characters. */
+  it("says when no record type is what was asked about, and builds nothing", async () => {
+    const llm = fakeLlm([{ args: { entity: "none", intent: "measure", reason: "There are no invoices here, only tasks." } }]);
+    const result = await writeBrief(llm, { intent: "how many invoices", candidates });
+    expect(result.brief).toBeNull();
+    expect(result.error).toBeNull();
+    expect(result.unmatched).toBe("There are no invoices here, only tasks.");
+    expect(llm.calls).toHaveLength(1);
+    expect(BRIEF_SYSTEM_PROMPT).toMatch(/answer entity\s+"none"/);
+  });
+
+  /* Measurement 1: "in US dollars" on records holding USD, and "money out" on records holding debit, were never narrowed. */
+  describe("what the records were seen to hold", () => {
+    const payments = entity({
+      id: "payment",
+      resource: "payment",
+      name: { one: "Payment", many: "Payments" },
+      kind: "money",
+      fields: [
+        { path: "id", visibility: "hidden" },
+        { path: "currency", label: "Currency", kinds: ["string"], visibility: "detail" },
+        { path: "state", label: "State", kinds: ["string"], values: ["settled", "pending"], visibility: "detail" },
+        { path: "amount", label: "Amount", kinds: ["number"], visibility: "primary" },
+      ],
+    });
+    const seenRoster = briefCandidates([
+      {
+        connection: "api",
+        title: "The API",
+        entities: [payments],
+        seen: { payment: { fields: { currency: ["USD", "EUR"], state: ["settled"] }, everyRecord: true } },
+      },
+    ]);
+    /* The same, from a read that did not reach every record: a first page. */
+    const partRoster = briefCandidates([
+      {
+        connection: "api",
+        title: "The API",
+        entities: [payments],
+        seen: { payment: { fields: { currency: ["USD", "EUR"] }, everyRecord: false } },
+      },
+    ]);
+
+    it("offers a field the records hold a small set of, with those values, marked as seen", () => {
+      const currency = seenRoster[0]?.fields.find((field) => field.path === "currency");
+      expect(currency).toMatchObject({ role: "narrow", values: ["USD", "EUR"], seen: "all" });
+      const prompt = buildBriefPrompt({ intent: "payments in dollars", candidates: seenRoster });
+      expect(prompt).toContain("Currency (currency) in the records: USD / EUR");
+    });
+
+    it("keeps a declared set over what was seen, since the declared one is complete", () => {
+      const state = seenRoster[0]?.fields.find((field) => field.path === "state");
+      expect(state).toMatchObject({ values: ["settled", "pending"] });
+      expect(state?.seen).toBeUndefined();
+      expect(buildBriefPrompt({ intent: "x", candidates: seenRoster })).toContain("State (state) one of: settled / pending");
+    });
+
+    it("offers a field without a set to narrow by only by name, with no values", () => {
+      const [plain] = briefCandidates([{ connection: "api", title: "The API", entities: [payments] }]);
+      expect(plain?.fields.find((field) => field.path === "currency")).toEqual({ path: "currency", label: "Currency", role: "other" });
+    });
+
+    it("sends back a value the field lists none of, once, with the values", async () => {
+      const llm = fakeLlm([
+        { args: { entity: "payment", intent: "measure", measureAgg: "sum", measureField: "amount", filters: [{ field: "currency", values: ["US dollars"] }], reason: "Dollars." } },
+        { args: { entity: "payment", intent: "measure", measureAgg: "sum", measureField: "amount", filters: [{ field: "currency", values: ["USD"] }], reason: "Dollars." } },
+      ]);
+      const result = await writeBrief(llm, { intent: "how much in US dollars", candidates: seenRoster });
+      expect(result.brief?.filters).toEqual([{ field: "currency", values: ["USD"] }]);
+      expect(String(llm.calls[1]!.messages.at(-1)!.content)).toMatch(/"US dollars" for currency, which the records hold as USD \/ EUR/);
+    });
+
+    it("takes a second answer as meant for a declared set, which may be out of date", async () => {
+      const llm = fakeLlm([
+        { args: { entity: "payment", intent: "measure", filters: [{ field: "state", values: ["refunded"] }], reason: "Refunds." } },
+        { args: { entity: "payment", intent: "measure", filters: [{ field: "state", values: ["refunded"] }], reason: "Refunds." } },
+      ]);
+      const result = await writeBrief(llm, { intent: "how many were refunded", candidates: seenRoster });
+      expect(result.brief?.filters).toEqual([{ field: "state", values: ["refunded"] }]);
+      expect(llm.calls).toHaveLength(2);
+    });
+
+    /* Measurement 1, real split: a first page of a catalogue sorted by category listed four of twenty-four. */
+    it("says when the values came from only some records, and never sends a value back for missing from them", async () => {
+      expect(buildBriefPrompt({ intent: "x", candidates: partRoster })).toContain("Currency (currency) in some records: USD / EUR");
+      const llm = fakeLlm([
+        { args: { entity: "payment", intent: "measure", filters: [{ field: "currency", values: ["GBP"] }], reason: "Pounds." } },
+      ]);
+      const result = await writeBrief(llm, { intent: "how many in pounds", candidates: partRoster });
+      expect(result.brief?.filters).toEqual([{ field: "currency", values: ["GBP"] }]);
+      expect(llm.calls).toHaveLength(1);
+    });
+
+    /* Regression: "breeds from the United States" narrowed `origin`, which never holds that, and counted 0. */
+    it("says so when a value is still one no record holds, rather than counting nothing", async () => {
+      const llm = fakeLlm([
+        { args: { entity: "payment", intent: "measure", filters: [{ field: "currency", values: ["GBP"] }], reason: "Pounds." } },
+        { args: { entity: "payment", intent: "measure", filters: [{ field: "currency", values: ["GBP"] }], reason: "Pounds." } },
+      ]);
+      const result = await writeBrief(llm, { intent: "how many in pounds", candidates: seenRoster });
+      expect(result.brief).toBeNull();
+      expect(result.unmatched).toBe('No payments have Currency "GBP": every one holds USD, EUR.');
+    });
+
+    it("names the other plain fields, so a request about one can reach it", () => {
+      const withCountry = entity({
+        id: "payment",
+        resource: "payment",
+        name: { one: "Payment", many: "Payments" },
+        kind: "money",
+        fields: [
+          { path: "id", visibility: "hidden" },
+          { path: "currency", label: "Currency", kinds: ["string"], visibility: "detail" },
+          { path: "country", label: "Country", kinds: ["string"], visibility: "detail" },
+          { path: "payer_id", label: "Payer", kinds: ["number"], visibility: "detail" },
+          { path: "lines", label: "Lines", kinds: ["array"], visibility: "detail" },
+        ],
+      });
+      const [candidate] = briefCandidates([{ connection: "api", title: "The API", entities: [withCountry] }]);
+      expect(candidate?.fields.filter((field) => field.role === "other").map((field) => field.path)).toEqual(["currency", "country"]);
+      expect(buildBriefPrompt({ intent: "x", candidates: [candidate!] })).toContain("also: Currency (currency), Country (country)");
+    });
+
+    it("writes a listed value in its listed spelling, without asking again", async () => {
+      const llm = fakeLlm([
+        { args: { entity: "payment", intent: "measure", filters: [{ field: "currency", values: ["usd"] }], reason: "Dollars." } },
+      ]);
+      const result = await writeBrief(llm, { intent: "how many in dollars", candidates: seenRoster });
+      expect(result.brief?.filters).toEqual([{ field: "currency", values: ["USD"] }]);
+      expect(llm.calls).toHaveLength(1);
+    });
   });
 
   it("never turns a list of records into a number nobody asked for", async () => {
@@ -472,7 +868,7 @@ describe("a request, from words to a widget", () => {
  */
 describe("the brief prompt names no vendor and no domain", () => {
   const BANNED = [
-    "buildium",
+    "fabrikam",
     "stripe",
     "github",
     "lease",
@@ -583,5 +979,76 @@ describe("choosing across APIs", () => {
       candidates: briefCandidates([sources[0]!]),
     });
     expect(prompt).not.toContain("from Acme CRM:");
+  });
+});
+
+/* Regression (trackwell mock API): "Platform" written on a project's key, where only its name holds it. */
+describe("a value written on a field that does not hold it", () => {
+  const issues = briefCandidates([
+    {
+      connection: "api",
+      title: "The API",
+      entities: [
+        entity({
+          id: "issue",
+          resource: "issue",
+          name: { one: "Issue", many: "Issues" },
+          kind: "event",
+          fields: [
+            { path: "id", visibility: "hidden" },
+            { path: "fields.project.key", label: "Project key", visibility: "detail" },
+            { path: "fields.project.name", label: "Project name", visibility: "primary", values: ["Platform", "Storefront"] },
+            { path: "fields.issuetype.name", label: "Type name", visibility: "primary", values: ["Bug", "Task", "Story"] },
+          ],
+        }),
+      ],
+    },
+  ]);
+  const count = (filters: unknown[]) => ({ args: { entity: "issue", intent: "measure", measureAgg: "count", filters, reason: "Bugs." } });
+
+  it("is sent back once, naming the field that holds it", async () => {
+    const llm = fakeLlm([
+      count([{ field: "fields.project.key", values: ["Platform"] }, { field: "fields.issuetype.name", values: ["Bug"] }]),
+      count([{ field: "fields.project.name", values: ["Platform"] }, { field: "fields.issuetype.name", values: ["Bug"] }]),
+    ]);
+    const result = await writeBrief(llm, { intent: "How many bugs are in the Platform project?", candidates: issues });
+    expect(String(llm.calls[1]!.messages.at(-1)!.content)).toMatch(/"Platform" is not a value fields\.project\.key shows; fields\.project\.name holds it/);
+    expect(result.brief?.filters).toEqual([
+      { field: "fields.project.name", values: ["Platform"] },
+      { field: "fields.issuetype.name", values: ["Bug"] },
+    ]);
+  });
+});
+
+/* Cashloom, 2026-10-03: "refunded" is both a status and a flag; narrowed by the flag, it is not sent back over the status. */
+describe("a word the answer narrows by in a field's own name", () => {
+  const payments = briefCandidates([
+    {
+      connection: "api",
+      title: "The API",
+      entities: [
+        entity({
+          id: "payment",
+          resource: "payment",
+          name: { one: "Payment", many: "Payments" },
+          kind: "event",
+          fields: [
+            { path: "id", visibility: "hidden" },
+            { path: "amount", label: "Payment amount", semantic: "number", visibility: "primary" },
+            { path: "status", label: "Status", visibility: "primary", values: ["succeeded", "refunded", "failed"] },
+            { path: "refunded", label: "Refunded", visibility: "primary", kinds: ["boolean"] },
+          ],
+        }),
+      ],
+    },
+  ]);
+
+  it("is taken as said, whatever else holds it as a value", async () => {
+    const llm = fakeLlm([
+      { args: { entity: "payment", intent: "measure", measureAgg: "count", filters: [{ field: "refunded", values: ["true"] }], reason: "Refunded." } },
+    ]);
+    const result = await writeBrief(llm, { intent: "How many refunded payments were there?", candidates: payments });
+    expect(llm.calls).toHaveLength(1);
+    expect(result.brief?.filters).toEqual([{ field: "refunded", values: ["true"] }]);
   });
 });

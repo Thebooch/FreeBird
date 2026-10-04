@@ -1,0 +1,496 @@
+{
+ "source": "https://catfact.ninja/breeds?limit=1000",
+ "at": "2026-09-29T01:20:22.190Z",
+ "records": [
+  {
+   "id": 1,
+   "breed": "Abyssinian",
+   "country": "Ethiopia"
+  },
+  {
+   "id": 2,
+   "breed": "Aegean",
+   "country": "Greece"
+  },
+  {
+   "id": 3,
+   "breed": "American Curl",
+   "country": "United States"
+  },
+  {
+   "id": 4,
+   "breed": "American Bobtail",
+   "country": "United States"
+  },
+  {
+   "id": 5,
+   "breed": "American Shorthair",
+   "country": "United States"
+  },
+  {
+   "id": 6,
+   "breed": "American Wirehair",
+   "country": "United States"
+  },
+  {
+   "id": 7,
+   "breed": "Arabian Mau",
+   "country": "Arabian Peninsula"
+  },
+  {
+   "id": 8,
+   "breed": "Australian Mist",
+   "country": "Australia"
+  },
+  {
+   "id": 9,
+   "breed": "Asian",
+   "country": "developed in the United Kingdom (founding stock from Asia)"
+  },
+  {
+   "id": 10,
+   "breed": "Asian Semi-longhair",
+   "country": "United Kingdom"
+  },
+  {
+   "id": 11,
+   "breed": "Balinese",
+   "country": "developed in the United States (founding stock from Thailand)"
+  },
+  {
+   "id": 12,
+   "breed": "Bambino",
+   "country": "United States"
+  },
+  {
+   "id": 13,
+   "breed": "Bengal",
+   "country": "developed in the United States (founding stock from Asia)"
+  },
+  {
+   "id": 14,
+   "breed": "Birman",
+   "country": "developed in France (founding stock from Burma)"
+  },
+  {
+   "id": 15,
+   "breed": "Bombay",
+   "country": "developed in the United States (founding stock from Asia)"
+  },
+  {
+   "id": 16,
+   "breed": "Brazilian Shorthair",
+   "country": "Brazil"
+  },
+  {
+   "id": 17,
+   "breed": "British Semi-longhair",
+   "country": "United Kingdom"
+  },
+  {
+   "id": 18,
+   "breed": "British Shorthair",
+   "country": "United Kingdom"
+  },
+  {
+   "id": 19,
+   "breed": "British Longhair",
+   "country": "United Kingdom"
+  },
+  {
+   "id": 20,
+   "breed": "Burmese",
+   "country": "Burma and Thailand"
+  },
+  {
+   "id": 21,
+   "breed": "Burmilla",
+   "country": "United Kingdom"
+  },
+  {
+   "id": 22,
+   "breed": "California Spangled",
+   "country": "United States"
+  },
+  {
+   "id": 23,
+   "breed": "Chantilly-Tiffany",
+   "country": "United States"
+  },
+  {
+   "id": 24,
+   "breed": "Chartreux",
+   "country": "France"
+  },
+  {
+   "id": 25,
+   "breed": "Chausie",
+   "country": "France"
+  },
+  {
+   "id": 26,
+   "breed": "Cheetoh",
+   "country": "United States"
+  },
+  {
+   "id": 27,
+   "breed": "Colorpoint Shorthair",
+   "country": ""
+  },
+  {
+   "id": 28,
+   "breed": "Cornish Rex",
+   "country": "United Kingdom (England)"
+  },
+  {
+   "id": 29,
+   "breed": "Cymric or Manx Longhair",
+   "country": "United Kingdom (Isle of Man)"
+  },
+  {
+   "id": 30,
+   "breed": "Cyprus",
+   "country": "Cyprus"
+  },
+  {
+   "id": 31,
+   "breed": "Devon Rex",
+   "country": "United Kingdom (England)"
+  },
+  {
+   "id": 32,
+   "breed": "Donskoy, or Don Sphynx",
+   "country": "Russia"
+  },
+  {
+   "id": 33,
+   "breed": "Dragon Li",
+   "country": "China"
+  },
+  {
+   "id": 34,
+   "breed": "Dwarf cat, or Dwelf",
+   "country": ""
+  },
+  {
+   "id": 35,
+   "breed": "Egyptian Mau",
+   "country": "Egypt"
+  },
+  {
+   "id": 36,
+   "breed": "European Shorthair",
+   "country": "Finland and Sweden"
+  },
+  {
+   "id": 37,
+   "breed": "Exotic Shorthair",
+   "country": "United States"
+  },
+  {
+   "id": 38,
+   "breed": "Foldex[4]",
+   "country": "Canada"
+  },
+  {
+   "id": 39,
+   "breed": "German Rex",
+   "country": "East Germany"
+  },
+  {
+   "id": 40,
+   "breed": "Havana Brown",
+   "country": "United Kingdom"
+  },
+  {
+   "id": 41,
+   "breed": "Highlander",
+   "country": "United States"
+  },
+  {
+   "id": 42,
+   "breed": "Himalayan, or Colorpoint Persian",
+   "country": "United States/United Kingdom"
+  },
+  {
+   "id": 43,
+   "breed": "Japanese Bobtail",
+   "country": "Japan"
+  },
+  {
+   "id": 44,
+   "breed": "Javanese",
+   "country": "United States"
+  },
+  {
+   "id": 45,
+   "breed": "Karelian Bobtail",
+   "country": "Western Russia"
+  },
+  {
+   "id": 46,
+   "breed": "Khao Manee",
+   "country": "Thailand"
+  },
+  {
+   "id": 47,
+   "breed": "Korat",
+   "country": "Thailand"
+  },
+  {
+   "id": 48,
+   "breed": "Korean Bobtail",
+   "country": "Korea"
+  },
+  {
+   "id": 49,
+   "breed": "Korn Ja",
+   "country": "Thailand"
+  },
+  {
+   "id": 50,
+   "breed": "Kurilian Bobtail, or Kuril Islands Bobtail",
+   "country": "Eastern Russia,Japan"
+  },
+  {
+   "id": 51,
+   "breed": "LaPerm",
+   "country": "United States"
+  },
+  {
+   "id": 52,
+   "breed": "Lykoi",
+   "country": "United States"
+  },
+  {
+   "id": 53,
+   "breed": "Maine Coon",
+   "country": "United States"
+  },
+  {
+   "id": 54,
+   "breed": "Manx",
+   "country": "United Kingdom (Isle of Man)"
+  },
+  {
+   "id": 55,
+   "breed": "Mekong Bobtail",
+   "country": "Russia"
+  },
+  {
+   "id": 56,
+   "breed": "Minskin",
+   "country": "United States"
+  },
+  {
+   "id": 57,
+   "breed": "Munchkin",
+   "country": "United States"
+  },
+  {
+   "id": 58,
+   "breed": "Nebelung",
+   "country": "United States"
+  },
+  {
+   "id": 59,
+   "breed": "Napoleon",
+   "country": ""
+  },
+  {
+   "id": 60,
+   "breed": "Norwegian Forest cat",
+   "country": "Norway"
+  },
+  {
+   "id": 61,
+   "breed": "Ocicat",
+   "country": "United States"
+  },
+  {
+   "id": 62,
+   "breed": "Ojos Azules",
+   "country": "United States"
+  },
+  {
+   "id": 63,
+   "breed": "Oregon Rex",
+   "country": "United States"
+  },
+  {
+   "id": 64,
+   "breed": "Oriental Bicolor",
+   "country": ""
+  },
+  {
+   "id": 65,
+   "breed": "Oriental Shorthair",
+   "country": ""
+  },
+  {
+   "id": 66,
+   "breed": "Oriental Longhair",
+   "country": ""
+  },
+  {
+   "id": 67,
+   "breed": "PerFoldæ(Experimental Breed - WCF)",
+   "country": "Europe"
+  },
+  {
+   "id": 68,
+   "breed": "Persian (Modern Persian Cat)",
+   "country": "Iran (Persia)"
+  },
+  {
+   "id": 69,
+   "breed": "Persian (Traditional Persian Cat)",
+   "country": "Greater Iran"
+  },
+  {
+   "id": 70,
+   "breed": "Peterbald",
+   "country": "Russia"
+  },
+  {
+   "id": 71,
+   "breed": "Pixie-bob",
+   "country": "United States"
+  },
+  {
+   "id": 72,
+   "breed": "Raas",
+   "country": "Indonesia"
+  },
+  {
+   "id": 73,
+   "breed": "Ragamuffin",
+   "country": "United States"
+  },
+  {
+   "id": 74,
+   "breed": "Ragdoll",
+   "country": "United States"
+  },
+  {
+   "id": 75,
+   "breed": "Russian Blue",
+   "country": "Russia"
+  },
+  {
+   "id": 76,
+   "breed": "Russian White, Black and Tabby",
+   "country": "Australia"
+  },
+  {
+   "id": 77,
+   "breed": "Sam Sawet",
+   "country": "Thailand"
+  },
+  {
+   "id": 78,
+   "breed": "Savannah",
+   "country": "United States"
+  },
+  {
+   "id": 79,
+   "breed": "Scottish Fold",
+   "country": "United Kingdom (Scotland)"
+  },
+  {
+   "id": 80,
+   "breed": "Selkirk Rex",
+   "country": "United States"
+  },
+  {
+   "id": 81,
+   "breed": "Serengeti",
+   "country": "United States"
+  },
+  {
+   "id": 82,
+   "breed": "Serrade petit",
+   "country": "France"
+  },
+  {
+   "id": 83,
+   "breed": "Siamese",
+   "country": "Thailand"
+  },
+  {
+   "id": 84,
+   "breed": "Siberian",
+   "country": "Russia"
+  },
+  {
+   "id": 85,
+   "breed": "Singapura",
+   "country": "Singapore"
+  },
+  {
+   "id": 86,
+   "breed": "Snowshoe",
+   "country": "United States"
+  },
+  {
+   "id": 87,
+   "breed": "Sokoke",
+   "country": "Kenya"
+  },
+  {
+   "id": 88,
+   "breed": "Somali",
+   "country": "Somalia"
+  },
+  {
+   "id": 89,
+   "breed": "Sphynx",
+   "country": "Canada"
+  },
+  {
+   "id": 90,
+   "breed": "Suphalak",
+   "country": "Thailand"
+  },
+  {
+   "id": 91,
+   "breed": "Thai",
+   "country": "Thailand"
+  },
+  {
+   "id": 92,
+   "breed": "Thai Lilac",
+   "country": "Thailand"
+  },
+  {
+   "id": 93,
+   "breed": "Tonkinese",
+   "country": "Canada"
+  },
+  {
+   "id": 94,
+   "breed": "Toyger",
+   "country": "United States"
+  },
+  {
+   "id": 95,
+   "breed": "Turkish Angora",
+   "country": "Turkey"
+  },
+  {
+   "id": 96,
+   "breed": "Turkish Van",
+   "country": "developed in the United Kingdom (founding stock from Turkey)"
+  },
+  {
+   "id": 97,
+   "breed": "Ukrainian Levkoy",
+   "country": "Ukraine"
+  },
+  {
+   "id": 98,
+   "breed": "York Chocolate",
+   "country": "United States (New York)"
+  }
+ ]
+}

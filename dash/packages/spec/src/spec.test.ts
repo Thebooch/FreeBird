@@ -15,6 +15,7 @@ import {
   type ResolvedParams,
   defaultGrainFor,
   interpolate,
+  interpolatePath,
   parseTokens,
   resolveRange,
 } from "./params.js";
@@ -99,6 +100,12 @@ describe("params", () => {
     );
     expect(interpolate("{{range.start | date}}", params)).toBe("2026-07-05");
     expect(interpolate("{{range.end | iso}}", params)).toBe(new Date(NOW).toISOString());
+  });
+
+  it("encodes each value substituted into a path", () => {
+    const slashed: ResolvedParams = { ...params, filters: { id: "a/b c" } };
+    expect(interpolatePath("/things/{{param.id}}/notes", slashed)).toBe("/things/a%2Fb%20c/notes");
+    expect(interpolatePath("/days/{{range.start | date}}", params)).toBe("/days/2026-07-05");
   });
 
   it("resolves an unknown token to an empty string, never a dangling brace", () => {

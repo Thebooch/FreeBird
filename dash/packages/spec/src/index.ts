@@ -13,7 +13,20 @@ export {
   coercionSchema,
   fieldFormatSchema,
 } from "./coercion.js";
-export { connectionKeyRef } from "./primitives.js";
+export {
+  MAX_PAGES,
+  PARAM_LOCATIONS,
+  READ_SAFETY_BASES,
+  authTokenRefs,
+  connectionKeyRef,
+  graphqlOperations,
+  graphqlReadsOnly,
+  pagingParamNames,
+  readBodySchema,
+  readSafetySchema,
+  safeByProtocol,
+} from "./primitives.js";
+export type { OAuthSpec, ReadBody, ReadSafety } from "./primitives.js";
 export type { Coercion, FieldFormat } from "./coercion.js";
 
 export {
@@ -41,13 +54,17 @@ export type {
 export {
   authSchema,
   missingInputs,
+  boardInputs,
   pathParamNames,
   requiredInputs,
   allowedHost,
   connectionSchema,
   effectiveAuth,
+  filterParamsOf,
+  readsRangeOf,
   getOp,
   connectionAuths,
+  connectionCredentials,
   connectionKeyRefs,
   connectionNeedsAddress,
   connectionNeedsAuthSetup,
@@ -237,6 +254,7 @@ export type { RolePaths, WriteMode, WriteRole } from "./write-roles.js";
 export { mapWriteFields, unmappedFields } from "./write-map.js";
 export {
   PERMISSIONS,
+  ROLE_PERMISSIONS,
   ROLES,
   inviteSchema,
   memberSchema,
@@ -365,6 +383,7 @@ export {
   withoutWidget,
   widgetSourceSchema,
   widgetStatesSchema,
+  FAN_OUT_WHOLE_MAX,
 } from "./dashboard.js";
 export type {
   DashboardSpec,
@@ -421,9 +440,12 @@ export {
   grainSchema,
   hasTokens,
   interpolate,
+  interpolatePath,
   interpolateValue,
   parseTokens,
   quantiseEnd,
+  paramsForWidget,
+  rangeForWindow,
   opOfQueryKey,
   queryKey,
   queryKeyOpPrefix,
@@ -441,6 +463,7 @@ export type {
   ResolvedParams,
   ResolveRangeInput,
   TimeRange,
+  TimeWindow,
   TokenFilter,
 } from "./params.js";
 
@@ -538,3 +561,61 @@ export type { NamedSource } from "./dashboard.js";
 export type { BuiltinComponentId } from "./contracts.js";
 export { findNarrowing, narrowingFileSchema, narrowingSchema } from "./narrowing.js";
 export type { Narrowing, NarrowingFile } from "./narrowing.js";
+export {
+  CAPABILITIES,
+  capability,
+  capabilityNote,
+  compatibilityMarkdown,
+} from "./capabilities.js";
+export type {
+  Capability,
+  CapabilityArea,
+  CapabilityId,
+  CapabilityStatus,
+} from "./capabilities.js";
+export {
+  EVIDENCE_LEVELS,
+  EVIDENCE_WORDS,
+  countReconciled,
+  evidenceLevelSchema,
+  evidenceRank,
+  evidenceSchema,
+  readCoverage,
+  strongestEvidence,
+} from "./evidence.js";
+export type {
+  CompletionReason,
+  CompletionState,
+  Evidence,
+  EvidenceLevel,
+  ReadCompletion,
+  ReadCoverage,
+  ReadExtent,
+} from "./evidence.js";
+export {
+  CONNECTOR_CONTRACT,
+  CONNECTOR_HOOKS,
+  CONNECTOR_METHODS,
+  CONNECTOR_PURPOSES,
+  OPERATION_HOOKS,
+  connectorAuthoritySchema,
+  connectorDestinationSchema,
+  connectorExchangeSchema,
+  connectorOperationSchema,
+  connectorRequestSchema,
+  connectorSchema,
+  connectorServes,
+  requestMatches,
+} from "./connector.js";
+export type {
+  ConnectorAuthority,
+  ConnectorDestination,
+  ConnectorHook,
+  ConnectorOperation,
+  ConnectorPurpose,
+  ConnectorRequest,
+  ConnectorSpec,
+} from "./connector.js";
+export { credentialNameSchema } from "./primitives.js";
+export { describeMetric, metricSchema, reconcileRuleSchema } from "./metric.js";
+export type { MetricDefinition, ReconcileRule } from "./metric.js";

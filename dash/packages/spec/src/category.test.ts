@@ -63,9 +63,9 @@ describe("categorySchema", () => {
 
 describe("catalogEntrySchema", () => {
   const entry = {
-    id: "buildium",
-    title: "Buildium",
-    baseUrl: "https://api.buildium.com",
+    id: "fabrikam",
+    title: "Fabrikam",
+    baseUrl: "https://api.fabrikam.example",
     dialect: {},
   };
 
@@ -114,7 +114,7 @@ describe("catalogEntrySchema", () => {
 });
 
 describe("connectionSchema", () => {
-  const connection = { id: "buildium", title: "Buildium", kind: "rest" as const };
+  const connection = { id: "fabrikam", title: "Fabrikam", kind: "rest" as const };
 
   it("records where setup stands, what was chosen and the boards it made", () => {
     const parsed = connectionSchema.parse({
@@ -136,14 +136,14 @@ describe("connectionSchema", () => {
     const parsed = onboardingSchema.parse({
       chose: ["leasing", "maintenance"],
       layout: "single",
-      boards: [{ dashboard: "buildium" }],
+      boards: [{ dashboard: "fabrikam" }],
       at: "2026-09-21T00:00:00.000Z",
       notes: ["Leasing: one widget could not be built."],
     });
     expect(parsed).toMatchObject({
       status: "complete",
       choices: { categories: ["leasing", "maintenance"], layout: "single" },
-      dashboards: ["buildium"],
+      dashboards: ["fabrikam"],
       notes: ["Leasing: one widget could not be built."],
     });
   });

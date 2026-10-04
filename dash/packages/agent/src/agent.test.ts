@@ -627,7 +627,7 @@ describe("the proposal prompt names no vendor and no domain", () => {
     const { SYSTEM_PROMPT } = await import("./tool.js");
     const lowered = SYSTEM_PROMPT.toLowerCase();
     for (const word of [
-      "buildium",
+      "fabrikam",
       "stripe",
       "github",
       "listing",

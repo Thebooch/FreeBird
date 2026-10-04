@@ -219,7 +219,7 @@ describe("running it over a real API", () => {
 /* ── two collections with the same noun ────────────────────────────────── */
 
 /**
- * Buildium's real shape, reduced.
+ * A real API's shape, reduced.
  *
  * Two endpoints titled "Retrieve all units" in different modules — one under
  * /v1/rentals, one under /v1/associations. A lease's `UnitId` means the
@@ -323,7 +323,7 @@ describe("two collections sharing a noun", () => {
 
   it("does not count a collection you cannot list on its own", async () => {
     /*
-     * Buildium has three collections ending in /vendors, but two need an id
+     * Fabrikam has three collections ending in /vendors, but two need an id
      * you do not have — `/v1/rentals/{propertyId}/vendors`. A VendorId cannot
      * mean either, so the link is unambiguous and must survive. Counting them
      * as rivals refused a perfectly good link.
@@ -601,7 +601,7 @@ const vocab: MapInput = {
 
 describe("the API's own vocabulary", () => {
   /**
-   * The case that made this necessary. Buildium lists properties at
+   * The case that made this necessary. One real API lists properties at
    * `/v1/rentals` and titles it "Retrieve all properties", so a `PropertyId`
    * on a unit matches nothing about the path — and the nearest thing that
    * *does* look right is `propertygroup`, a different concept entirely. That
@@ -632,7 +632,7 @@ describe("linking across batches", () => {
   /**
    * Batching describes 25 resources per call, and until the full index existed
    * the model could only relate what it happened to be shown together. That
-   * silently biased every answer toward batch-mates: Buildium's `rental` sat
+   * silently biased every answer toward batch-mates: one real API's `rental` sat
    * in batch 0 and its units in batch 1, so the only property-shaped thing in
    * view was `propertygroup` — and that is the link the map recorded.
    */
@@ -679,7 +679,7 @@ describe("linking across batches", () => {
 /**
  * The shape of a linking field, which is checkable and therefore not asked.
  *
- * Every case here produced a link in the real Buildium map that read
+ * Every case here produced a link in one real API's map that read
  * perfectly and matched nothing. None of them needs a model to catch: the
  * kinds are already in the schemas the import wrote.
  */

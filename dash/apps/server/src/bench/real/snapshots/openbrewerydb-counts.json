@@ -1,0 +1,922 @@
+{
+ "source": "https://api.openbrewerydb.org/v1/breweries/meta",
+ "at": "2026-09-29T01:21:03.532Z",
+ "records": [
+  {
+   "id": "state:Açores",
+   "count": 1
+  },
+  {
+   "id": "state:ACT",
+   "count": 7
+  },
+  {
+   "id": "state:Alabama",
+   "count": 52
+  },
+  {
+   "id": "state:Åland",
+   "count": 1
+  },
+  {
+   "id": "state:Alaska",
+   "count": 60
+  },
+  {
+   "id": "state:Argyll",
+   "count": 4
+  },
+  {
+   "id": "state:Arizona",
+   "count": 125
+  },
+  {
+   "id": "state:Arkansas",
+   "count": 45
+  },
+  {
+   "id": "state:Auckland",
+   "count": 44
+  },
+  {
+   "id": "state:Aveiro",
+   "count": 9
+  },
+  {
+   "id": "state:Baden-Württemberg",
+   "count": 195
+  },
+  {
+   "id": "state:Bay of Plenty Region",
+   "count": 11
+  },
+  {
+   "id": "state:Bayern",
+   "count": 597
+  },
+  {
+   "id": "state:Beja",
+   "count": 1
+  },
+  {
+   "id": "state:Berlin",
+   "count": 41
+  },
+  {
+   "id": "state:Blekinge",
+   "count": 6
+  },
+  {
+   "id": "state:Bolzano",
+   "count": 4
+  },
+  {
+   "id": "state:Bouche du Rhône",
+   "count": 3
+  },
+  {
+   "id": "state:Braga",
+   "count": 3
+  },
+  {
+   "id": "state:Brandenburg",
+   "count": 36
+  },
+  {
+   "id": "state:Bremen",
+   "count": 4
+  },
+  {
+   "id": "state:British Columbia",
+   "count": 119
+  },
+  {
+   "id": "state:Brussels Capital Region",
+   "count": 43
+  },
+  {
+   "id": "state:Busan",
+   "count": 9
+  },
+  {
+   "id": "state:Bute",
+   "count": 1
+  },
+  {
+   "id": "state:California",
+   "count": 919
+  },
+  {
+   "id": "state:Canterbury Region",
+   "count": 39
+  },
+  {
+   "id": "state:Carlow",
+   "count": 1
+  },
+  {
+   "id": "state:Central Finland",
+   "count": 2
+  },
+  {
+   "id": "state:Central Ostrobothnia",
+   "count": 1
+  },
+  {
+   "id": "state:Chungcheongbukdo",
+   "count": 1
+  },
+  {
+   "id": "state:Chungcheongnamdo",
+   "count": 3
+  },
+  {
+   "id": "state:Clare",
+   "count": 1
+  },
+  {
+   "id": "state:Coimbra",
+   "count": 4
+  },
+  {
+   "id": "state:Colorado",
+   "count": 449
+  },
+  {
+   "id": "state:Connecticut",
+   "count": 112
+  },
+  {
+   "id": "state:Cork",
+   "count": 11
+  },
+  {
+   "id": "state:Daejeon",
+   "count": 1
+  },
+  {
+   "id": "state:Deagu",
+   "count": 1
+  },
+  {
+   "id": "state:Delaware",
+   "count": 28
+  },
+  {
+   "id": "state:District of Columbia",
+   "count": 22
+  },
+  {
+   "id": "state:Dnipropetrovsk Oblast",
+   "count": 1
+  },
+  {
+   "id": "state:dolnośląskie",
+   "count": 34
+  },
+  {
+   "id": "state:Donegal",
+   "count": 4
+  },
+  {
+   "id": "state:Drenthe",
+   "count": 1
+  },
+  {
+   "id": "state:Dublin",
+   "count": 16
+  },
+  {
+   "id": "state:East Dunbartonshire",
+   "count": 1
+  },
+  {
+   "id": "state:East Sussex",
+   "count": 31
+  },
+  {
+   "id": "state:Eastern Cape",
+   "count": 9
+  },
+  {
+   "id": "state:Faro",
+   "count": 6
+  },
+  {
+   "id": "state:Flanders",
+   "count": 2
+  },
+  {
+   "id": "state:Flevoland",
+   "count": 1
+  },
+  {
+   "id": "state:Florida",
+   "count": 312
+  },
+  {
+   "id": "state:Free State",
+   "count": 3
+  },
+  {
+   "id": "state:Friesland",
+   "count": 1
+  },
+  {
+   "id": "state:Galway",
+   "count": 3
+  },
+  {
+   "id": "state:Gangwondo",
+   "count": 7
+  },
+  {
+   "id": "state:Gauteng",
+   "count": 17
+  },
+  {
+   "id": "state:Gelderland",
+   "count": 6
+  },
+  {
+   "id": "state:Georgia",
+   "count": 100
+  },
+  {
+   "id": "state:Gisborne Region",
+   "count": 1
+  },
+  {
+   "id": "state:Groningen",
+   "count": 2
+  },
+  {
+   "id": "state:Gwangju",
+   "count": 1
+  },
+  {
+   "id": "state:Gyeonggido",
+   "count": 9
+  },
+  {
+   "id": "state:Gyeongsangbukdo",
+   "count": 3
+  },
+  {
+   "id": "state:Gyeongsangnamdo",
+   "count": 3
+  },
+  {
+   "id": "state:Halland",
+   "count": 4
+  },
+  {
+   "id": "state:Hamburg",
+   "count": 14
+  },
+  {
+   "id": "state:Hawaii",
+   "count": 34
+  },
+  {
+   "id": "state:Hawke's Bay Region",
+   "count": 12
+  },
+  {
+   "id": "state:Hessen",
+   "count": 78
+  },
+  {
+   "id": "state:Idaho",
+   "count": 67
+  },
+  {
+   "id": "state:Illinois",
+   "count": 257
+  },
+  {
+   "id": "state:Incheon",
+   "count": 2
+  },
+  {
+   "id": "state:Indiana",
+   "count": 162
+  },
+  {
+   "id": "state:Iowa",
+   "count": 91
+  },
+  {
+   "id": "state:Jejudo",
+   "count": 3
+  },
+  {
+   "id": "state:Jeollabukdo",
+   "count": 3
+  },
+  {
+   "id": "state:Jeollanamdo",
+   "count": 1
+  },
+  {
+   "id": "state:Kainuu",
+   "count": 1
+  },
+  {
+   "id": "state:Kansas",
+   "count": 47
+  },
+  {
+   "id": "state:Kanta-Häme",
+   "count": 4
+  },
+  {
+   "id": "state:Kärnten",
+   "count": 3
+  },
+  {
+   "id": "state:Kentucky",
+   "count": 58
+  },
+  {
+   "id": "state:Kerry",
+   "count": 3
+  },
+  {
+   "id": "state:Kildare",
+   "count": 3
+  },
+  {
+   "id": "state:Kilkenny",
+   "count": 3
+  },
+  {
+   "id": "state:KwaZulu-Natal",
+   "count": 17
+  },
+  {
+   "id": "state:Kymenlaakso",
+   "count": 2
+  },
+  {
+   "id": "state:Laois",
+   "count": 2
+  },
+  {
+   "id": "state:Lapland",
+   "count": 2
+  },
+  {
+   "id": "state:Leiria",
+   "count": 1
+  },
+  {
+   "id": "state:Limburg",
+   "count": 7
+  },
+  {
+   "id": "state:Limerick",
+   "count": 2
+  },
+  {
+   "id": "state:Limpopo",
+   "count": 1
+  },
+  {
+   "id": "state:Lisboa",
+   "count": 18
+  },
+  {
+   "id": "state:Longford",
+   "count": 1
+  },
+  {
+   "id": "state:Louisiana",
+   "count": 44
+  },
+  {
+   "id": "state:Louth",
+   "count": 1
+  },
+  {
+   "id": "state:Maine",
+   "count": 114
+  },
+  {
+   "id": "state:Manawatū-Whanganui Region",
+   "count": 4
+  },
+  {
+   "id": "state:Marlborough Region",
+   "count": 3
+  },
+  {
+   "id": "state:Maryland",
+   "count": 158
+  },
+  {
+   "id": "state:Massachusetts",
+   "count": 171
+  },
+  {
+   "id": "state:Mayo",
+   "count": 2
+  },
+  {
+   "id": "state:Meath",
+   "count": 1
+  },
+  {
+   "id": "state:Mecklenburg-Vorpommern",
+   "count": 27
+  },
+  {
+   "id": "state:Michigan",
+   "count": 375
+  },
+  {
+   "id": "state:Middle",
+   "count": 2
+  },
+  {
+   "id": "state:Minnesota",
+   "count": 183
+  },
+  {
+   "id": "state:Mississippi",
+   "count": 17
+  },
+  {
+   "id": "state:Missouri",
+   "count": 141
+  },
+  {
+   "id": "state:MIssouri",
+   "count": 1
+  },
+  {
+   "id": "state:Monaghan",
+   "count": 1
+  },
+  {
+   "id": "state:Montana",
+   "count": 92
+  },
+  {
+   "id": "state:Mpumalanga",
+   "count": 3
+  },
+  {
+   "id": "state:Nebraska",
+   "count": 62
+  },
+  {
+   "id": "state:Nelson Region",
+   "count": 7
+  },
+  {
+   "id": "state:Nevada",
+   "count": 51
+  },
+  {
+   "id": "state:New Hampshire",
+   "count": 113
+  },
+  {
+   "id": "state:New Jersey",
+   "count": 115
+  },
+  {
+   "id": "state:New Mexico",
+   "count": 83
+  },
+  {
+   "id": "state:New York",
+   "count": 419
+  },
+  {
+   "id": "state:Niederösterreich",
+   "count": 2
+  },
+  {
+   "id": "state:Niedersachsen",
+   "count": 79
+  },
+  {
+   "id": "state:Noord-Brabant",
+   "count": 20
+  },
+  {
+   "id": "state:Noord-Holland",
+   "count": 18
+  },
+  {
+   "id": "state:Nordrhein-Westfalen",
+   "count": 145
+  },
+  {
+   "id": "state:North Carolina",
+   "count": 311
+  },
+  {
+   "id": "state:North Dakota",
+   "count": 26
+  },
+  {
+   "id": "state:North Savo",
+   "count": 2
+  },
+  {
+   "id": "state:North West",
+   "count": 3
+  },
+  {
+   "id": "state:Northern Ostrobothnia",
+   "count": 3
+  },
+  {
+   "id": "state:Northland",
+   "count": 1
+  },
+  {
+   "id": "state:Northland Region",
+   "count": 4
+  },
+  {
+   "id": "state:NSW",
+   "count": 144
+  },
+  {
+   "id": "state:NT",
+   "count": 3
+  },
+  {
+   "id": "state:Oberösterreich",
+   "count": 2
+  },
+  {
+   "id": "state:Offaly",
+   "count": 2
+  },
+  {
+   "id": "state:Ohio",
+   "count": 303
+  },
+  {
+   "id": "state:Oklahoma",
+   "count": 44
+  },
+  {
+   "id": "state:Ontario",
+   "count": 164
+  },
+  {
+   "id": "state:Oregon",
+   "count": 295
+  },
+  {
+   "id": "state:Osaka",
+   "count": 10
+  },
+  {
+   "id": "state:Ostrobothnia",
+   "count": 2
+  },
+  {
+   "id": "state:Otago Region",
+   "count": 35
+  },
+  {
+   "id": "state:Overijssel",
+   "count": 4
+  },
+  {
+   "id": "state:Päijät-Häme",
+   "count": 5
+  },
+  {
+   "id": "state:Pennsylvania",
+   "count": 345
+  },
+  {
+   "id": "state:Pirkanmaa",
+   "count": 6
+  },
+  {
+   "id": "state:Portalegre",
+   "count": 3
+  },
+  {
+   "id": "state:Porto",
+   "count": 18
+  },
+  {
+   "id": "state:QLD",
+   "count": 81
+  },
+  {
+   "id": "state:Région flamande",
+   "count": 2
+  },
+  {
+   "id": "state:Région wallonne",
+   "count": 129
+  },
+  {
+   "id": "state:Rheinland-Pfalz",
+   "count": 58
+  },
+  {
+   "id": "state:Rhode Island",
+   "count": 31
+  },
+  {
+   "id": "state:Roscommon",
+   "count": 1
+  },
+  {
+   "id": "state:SA",
+   "count": 47
+  },
+  {
+   "id": "state:Saarland",
+   "count": 14
+  },
+  {
+   "id": "state:Sachsen",
+   "count": 67
+  },
+  {
+   "id": "state:Sachsen-Anhalt",
+   "count": 25
+  },
+  {
+   "id": "state:Salzburg",
+   "count": 1
+  },
+  {
+   "id": "state:Santarém",
+   "count": 3
+  },
+  {
+   "id": "state:Satakunta",
+   "count": 2
+  },
+  {
+   "id": "state:Schleswig-Holstein",
+   "count": 28
+  },
+  {
+   "id": "state:Seoul",
+   "count": 14
+  },
+  {
+   "id": "state:Setúbal",
+   "count": 2
+  },
+  {
+   "id": "state:Singapore",
+   "count": 33
+  },
+  {
+   "id": "state:Sligo",
+   "count": 2
+  },
+  {
+   "id": "state:South Carolina",
+   "count": 79
+  },
+  {
+   "id": "state:South Dakota",
+   "count": 45
+  },
+  {
+   "id": "state:South Karelia",
+   "count": 1
+  },
+  {
+   "id": "state:South Ostrobothnia",
+   "count": 4
+  },
+  {
+   "id": "state:South Savo",
+   "count": 3
+  },
+  {
+   "id": "state:Southland Region",
+   "count": 2
+  },
+  {
+   "id": "state:Steiermark",
+   "count": 7
+  },
+  {
+   "id": "state:Stockholm County",
+   "count": 26
+  },
+  {
+   "id": "state:Taranaki Region",
+   "count": 6
+  },
+  {
+   "id": "state:TAS",
+   "count": 26
+  },
+  {
+   "id": "state:Tasman Region",
+   "count": 9
+  },
+  {
+   "id": "state:Tennessee",
+   "count": 116
+  },
+  {
+   "id": "state:Texas",
+   "count": 352
+  },
+  {
+   "id": "state:Thüringen",
+   "count": 37
+  },
+  {
+   "id": "state:Tipperary",
+   "count": 2
+  },
+  {
+   "id": "state:Utah",
+   "count": 45
+  },
+  {
+   "id": "state:Utrecht",
+   "count": 5
+  },
+  {
+   "id": "state:Uusimaa",
+   "count": 19
+  },
+  {
+   "id": "state:Varsinais-Suomi",
+   "count": 8
+  },
+  {
+   "id": "state:Vermont",
+   "count": 52
+  },
+  {
+   "id": "state:VIC",
+   "count": 160
+  },
+  {
+   "id": "state:Vila Real",
+   "count": 1
+  },
+  {
+   "id": "state:Virginia",
+   "count": 255
+  },
+  {
+   "id": "state:Viseu",
+   "count": 2
+  },
+  {
+   "id": "state:Vlaanderen",
+   "count": 297
+  },
+  {
+   "id": "state:WA",
+   "count": 46
+  },
+  {
+   "id": "state:Waals Gewest",
+   "count": 2
+  },
+  {
+   "id": "state:Waikato Region",
+   "count": 20
+  },
+  {
+   "id": "state:Wallonia",
+   "count": 3
+  },
+  {
+   "id": "state:Washington",
+   "count": 529
+  },
+  {
+   "id": "state:Waterford",
+   "count": 2
+  },
+  {
+   "id": "state:Wellington Region",
+   "count": 43
+  },
+  {
+   "id": "state:West Coast Region",
+   "count": 2
+  },
+  {
+   "id": "state:West Dunbartonshire",
+   "count": 4
+  },
+  {
+   "id": "state:West Sussex",
+   "count": 31
+  },
+  {
+   "id": "state:West Virginia",
+   "count": 40
+  },
+  {
+   "id": "state:Western Cape",
+   "count": 51
+  },
+  {
+   "id": "state:Westmeath",
+   "count": 1
+  },
+  {
+   "id": "state:Wexford",
+   "count": 2
+  },
+  {
+   "id": "state:Wicklow",
+   "count": 3
+  },
+  {
+   "id": "state:Wisconsin",
+   "count": 225
+  },
+  {
+   "id": "state:Wyoming",
+   "count": 52
+  },
+  {
+   "id": "state:Zeeland",
+   "count": 2
+  },
+  {
+   "id": "state:Zuid-Holland",
+   "count": 9
+  },
+  {
+   "id": "total",
+   "count": 11848
+  },
+  {
+   "id": "type:bar",
+   "count": 41
+  },
+  {
+   "id": "type:beergarden",
+   "count": 3
+  },
+  {
+   "id": "type:brewpub",
+   "count": 3929
+  },
+  {
+   "id": "type:cidery",
+   "count": 7
+  },
+  {
+   "id": "type:closed",
+   "count": 642
+  },
+  {
+   "id": "type:contract",
+   "count": 210
+  },
+  {
+   "id": "type:large",
+   "count": 137
+  },
+  {
+   "id": "type:location",
+   "count": 1
+  },
+  {
+   "id": "type:micro",
+   "count": 5864
+  },
+  {
+   "id": "type:nano",
+   "count": 22
+  },
+  {
+   "id": "type:planning",
+   "count": 639
+  },
+  {
+   "id": "type:proprietor",
+   "count": 67
+  },
+  {
+   "id": "type:regional",
+   "count": 239
+  },
+  {
+   "id": "type:taproom",
+   "count": 47
+  }
+ ]
+}

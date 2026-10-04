@@ -1,7 +1,10 @@
 import type { ConnectionSpec, OpSpec, ResolvedParams } from "@freebirdai/dash-spec";
 import { connectionSchema, getOp, resolveRange } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
+import { digestAuthorization, parseDigestChallenge } from "./digest.js";
+import { INCOMPLETE } from "./incomplete.js";
 import { RestAdapter, type HttpFetch, type HttpResponse } from "./rest.js";
+import { signSigV4 } from "./sigv4.js";
 import { AdapterError, type FetchContext } from "./types.js";
 
 const NOW = Date.UTC(2026, 7, 4);
@@ -120,7 +123,7 @@ describe("RestAdapter", () => {
     const { http } = stub([{ body: { data: [{ id: 1 }], cursor: "same" } }]);
     const result = await new RestAdapter(http).fetch(conn, op(conn), {}, ctx());
     expect(result.meta.truncated).toBe(true);
-    expect(result.meta.warnings.join(" ")).toContain("repeated");
+    expect(result.meta.warnings.join(" ")).toContain("same page twice");
   });
   it("must run server-side", () => {
     expect(new RestAdapter(stub([{ body: {} }]).http).transport).toBe("proxy");
@@ -158,6 +161,38 @@ describe("RestAdapter", () => {
     );
   });
 
+  /* Regression: a read over every record sent `created[gte]=`, which the API refused. */
+  it("leaves out a date bound that resolves to nothing, over every record", async () => {
+    const { http, calls } = stub([{ body: { data: [] } }]);
+    const conn = connection({
+      ops: [
+        {
+          id: "items",
+          title: "Items",
+          path: "/items",
+          query: { since: "{{range.start | unix}}", status: "paid" },
+        },
+      ],
+    });
+    const range = { ...resolveRange({ preset: "7d", now: NOW }), all: true as const };
+    await new RestAdapter(http).fetch(conn, op(conn), {}, ctx({ params: { ...ctx().params, range } }));
+    expect(calls[0]?.url).toBe("https://api.example.com/v1/items?status=paid");
+  });
+
+  it("encodes a path value, so an id with a slash stays one segment", async () => {
+    const { http, calls } = stub([{ body: { data: [] } }]);
+    const conn = connection({
+      ops: [{ id: "items", title: "Items", path: "/orgs/{{param.region}}/items" }],
+    });
+    await new RestAdapter(http).fetch(
+      conn,
+      op(conn),
+      {},
+      ctx({ params: { ...ctx().params, filters: { region: "a/b?c" } } }),
+    );
+    expect(new URL(calls[0]!.url).pathname).toBe("/v1/orgs/a%2Fb%3Fc/items");
+  });
+
   it("treats an empty override as no filter rather than filtering by empty", async () => {
     const { http, calls } = stub([{ body: { data: [] } }]);
     const conn = connection({
@@ -178,6 +213,121 @@ describe("RestAdapter", () => {
     it("sends a bearer token", async () => {
       const { call } = await run({ type: "bearer", keyRef: "k" });
       expect(call.headers.authorization).toBe("Bearer sk_test_secret");
+    });
+
+    /* HTTP Digest, answering the server's challenge instead of sending the password. */
+    it("answers a Digest challenge, then reads on with the same one", async () => {
+      const challenge = { "www-authenticate": 'Digest realm="api", qop="auth", nonce="n0nce", algorithm=MD5, opaque="op"' };
+      const { http, calls } = stub([
+        { status: 401, body: { error: "unauthorized" }, headers: challenge },
+        { body: { data: [{ id: 1 }], next: 2 } },
+        { body: { data: [{ id: 2 }] } },
+      ]);
+      const conn = connection({
+        auth: { type: "basic", digest: true, username: "reader", keyRef: "k" },
+        ops: [{ id: "items", title: "Items", path: "/items", rowsPath: "$.data", pagination: { kind: "page", param: "page", startsAt: 1 } }],
+      });
+      await new RestAdapter(http).fetch(conn, op(conn), {}, ctx());
+      /* The password is never sent, not even as Basic. */
+      expect(calls[0]!.headers.authorization).toBeUndefined();
+      const answer = calls[1]!.headers.authorization!;
+      const cnonce = /cnonce="([^"]+)"/.exec(answer)![1]!;
+      const expected = await digestAuthorization({
+        challenge: parseDigestChallenge(challenge["www-authenticate"])!,
+        username: "reader",
+        password: "sk_test_secret",
+        method: "GET",
+        uri: new URL(calls[1]!.url).pathname + new URL(calls[1]!.url).search,
+        count: 1,
+        cnonce,
+      });
+      expect(answer).toBe(expected);
+      /* The next page signs with the same nonce, counted on: no second refusal first. */
+      expect(calls[2]!.headers.authorization).toMatch(/nc=00000002/);
+      /* One refusal in all: every page after it is signed first. */
+      expect(calls.filter((_, index) => index > 0).every((call) => /^Digest /.test(call.headers.authorization ?? ""))).toBe(true);
+    });
+
+    it("does not answer a Digest challenge again and again for a wrong password", async () => {
+      const challenge = { "www-authenticate": 'Digest realm="api", nonce="n", algorithm=MD5' };
+      const { http, calls } = stub([
+        { status: 401, body: {}, headers: challenge },
+        { status: 401, body: {}, headers: challenge },
+        { status: 401, body: {}, headers: challenge },
+        { status: 401, body: {}, headers: challenge },
+      ]);
+      const conn = connection({ auth: { type: "basic", digest: true, username: "reader", keyRef: "k" } });
+      await expect(new RestAdapter(http).fetch(conn, op(conn), {}, ctx())).rejects.toMatchObject({ status: 401 });
+      expect(calls).toHaveLength(3);
+    });
+
+    /* AWS Signature V4, signed here by the built-in signer — never by connector code. */
+    it("signs each request for AWS: its address, its time, and nothing of the secret key", async () => {
+      const { http, calls } = stub([{ body: { data: [{ id: 1 }] } }, { body: { data: [] } }]);
+      const secrets: Record<string, string> = { "aws-access": "AKIDEXAMPLE", aws: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY" };
+      const conn = connection({
+        baseUrl: "https://a1b2c3.execute-api.eu-west-1.amazonaws.com/prod",
+        /* No region stated: the address names it, so an account elsewhere is signed for its own. */
+        auth: { type: "sigv4", accessKeyRef: "aws-access", keyRef: "aws" },
+        ops: [{ id: "items", title: "Items", path: "/items", rowsPath: "$.data", pagination: { kind: "page", param: "page", startsAt: 1 } }],
+      });
+      await new RestAdapter(http).fetch(conn, op(conn), {}, ctx({ resolveSecret: async (ref) => secrets[ref] ?? null }));
+      expect(calls).toHaveLength(2);
+      for (const call of calls) {
+        const stamp = call.headers["x-amz-date"]!;
+        const at = Date.UTC(+stamp.slice(0, 4), +stamp.slice(4, 6) - 1, +stamp.slice(6, 8), +stamp.slice(9, 11), +stamp.slice(11, 13), +stamp.slice(13, 15));
+        const expected = await signSigV4({
+          method: "GET",
+          url: call.url,
+          headers: {},
+          credentials: { accessKeyId: secrets["aws-access"]!, secretAccessKey: secrets.aws!, region: "eu-west-1", service: "execute-api" },
+          now: at,
+        });
+        expect(call.headers.authorization).toBe(expected.authorization);
+        expect(JSON.stringify(call)).not.toContain(secrets.aws);
+      }
+      /* Each page is its own request, so each is signed for its own address. */
+      expect(calls[0]!.headers.authorization).not.toBe(calls[1]!.headers.authorization);
+    });
+
+    it("asks for both AWS keys before it sends anything", async () => {
+      const { http, calls } = stub([{ body: { data: [] } }]);
+      const conn = connection({
+        auth: { type: "sigv4", accessKeyRef: "aws-access", keyRef: "aws", region: "us-east-1", service: "execute-api" },
+      });
+      await expect(
+        new RestAdapter(http).fetch(conn, op(conn), {}, ctx({ resolveSecret: async (ref) => (ref === "aws" ? "secret" : null) })),
+      ).rejects.toMatchObject({ status: 401 });
+      expect(calls).toHaveLength(0);
+      /* An address that names no region, and none stated: said, rather than signed for a guess. */
+      const unplaced = connection({ auth: { type: "sigv4", accessKeyRef: "aws-access", keyRef: "aws" } });
+      await expect(new RestAdapter(http).fetch(unplaced, op(unplaced), {}, ctx())).rejects.toMatchObject({ status: 400 });
+      expect(calls).toHaveLength(0);
+    });
+
+    /* Keys an API wants in a cookie, or in several places at once. */
+    it("sends each key where the API wants it: a header, the address, a cookie", async () => {
+      const { call } = await run({
+        type: "headers",
+        parts: [
+          { header: "X-App-Id", keyRef: "k" },
+          { header: "token", keyRef: "k", in: "query" },
+          { header: "session", keyRef: "k", in: "cookie" },
+        ],
+      });
+      expect(call.headers["x-app-id"]).toBe("sk_test_secret");
+      expect(new URL(call.url).searchParams.get("token")).toBe("sk_test_secret");
+      expect(call.headers.cookie).toBe("session=sk_test_secret");
+    });
+
+    it("sends a key in a cookie beside the endpoint's own cookies", async () => {
+      const { http, calls } = stub([{ body: { data: [] } }]);
+      const conn = connection({
+        auth: { type: "headers", parts: [{ header: "session", keyRef: "k", in: "cookie" }] },
+        ops: [{ id: "items", title: "Items", path: "/items", params: [{ name: "locale", in: "cookie", default: "en" }] }],
+      });
+      await new RestAdapter(http).fetch(conn, op(conn), {}, ctx());
+      expect(calls[0]!.headers.cookie).toBe("locale=en; session=sk_test_secret");
     });
 
     it("sends a custom header, with a template when given", async () => {
@@ -201,7 +351,7 @@ describe("RestAdapter", () => {
       expect(call.headers.authorization).toBe(`Basic ${btoa("user:sk_test_secret")}`);
     });
 
-    /* Rentvine: "the access key as the username and secret as the password".
+    /* Contoso: "the access key as the username and secret as the password".
      * Both halves are the person's, and neither is "the first secret". */
     it("sends basic auth whose username is a stored credential too", async () => {
       const { http, calls } = stub([{ body: { data: [] } }]);
@@ -380,6 +530,133 @@ describe("RestAdapter", () => {
       expect(result.meta.pages).toBe(2);
     });
 
+    /* Regression: Rick and Morty declares no page size and answers 404 past its last page. */
+    describe("page numbers with no declared page size", () => {
+      const paged = (maxPages = 10) =>
+        connection({
+          ops: [
+            {
+              id: "items",
+              title: "Items",
+              path: "/items",
+              rowsPath: "$.data",
+              maxPages,
+              pagination: { kind: "page", param: "page", startsAt: 1 },
+            },
+          ],
+        });
+      const ids = (from: number, count: number) => Array.from({ length: count }, (_, index) => from + index);
+
+      it("takes a page shorter than the first as the last", async () => {
+        const { http, calls } = stub([page(ids(1, 3)), page(ids(4, 3)), page(ids(7, 1)), { status: 404, body: { error: "nothing here" } }]);
+        const conn = paged();
+        const result = await new RestAdapter(http).fetch(conn, op(conn), {}, ctx());
+        expect(calls).toHaveLength(3);
+        expect((result.body as { data: unknown[] }).data).toHaveLength(7);
+        expect(result.meta.truncated).toBe(false);
+      });
+
+      it("reads on past a short page when the API's own count says there is more", async () => {
+        const { http, calls } = stub([
+          page(ids(1, 3), { total: 8 }),
+          page(ids(4, 2), { total: 8 }),
+          page(ids(6, 3), { total: 8 }),
+          page([], { total: 8 }),
+        ]);
+        const conn = connection({
+          ops: [
+            {
+              id: "items",
+              title: "Items",
+              path: "/items",
+              rowsPath: "$.data",
+              totalPath: "$.total",
+              maxPages: 10,
+              pagination: { kind: "page", param: "page", startsAt: 1 },
+            },
+          ],
+        });
+        const result = await new RestAdapter(http).fetch(conn, op(conn), {}, ctx());
+        expect(calls.length).toBeGreaterThanOrEqual(3);
+        expect((result.body as { data: unknown[] }).data).toHaveLength(8);
+      });
+
+      it("takes a 404 past the pages read as the end, not a failed read", async () => {
+        const { http, calls } = stub([page(ids(1, 3)), page(ids(4, 3)), { status: 404, body: { error: "There is nothing here" } }]);
+        const conn = paged();
+        const result = await new RestAdapter(http).fetch(conn, op(conn), {}, ctx());
+        expect(calls).toHaveLength(3);
+        expect((result.body as { data: unknown[] }).data).toHaveLength(6);
+      });
+
+      it("waits out a short rate limit part-way through and reads that page again", async () => {
+        const { http, calls } = stub([
+          page(ids(1, 3)),
+          { status: 429, body: { error: "slow down" }, headers: { "retry-after": "2" } },
+          page(ids(4, 3)),
+          page(ids(7, 1)),
+        ]);
+        const conn = paged();
+        const waits: number[] = [];
+        const result = await new RestAdapter(http).fetch(conn, op(conn), {}, ctx({ sleep: async (ms) => void waits.push(ms) }));
+        expect(waits).toEqual([2000]);
+        expect(calls[2]?.url).toBe(calls[1]?.url);
+        expect((result.body as { data: unknown[] }).data).toHaveLength(7);
+      });
+
+      it("ends the read at a rate limit with no clock to wait on, or a wait too long", async () => {
+        const limited = () => stub([page(ids(1, 3)), { status: 429, body: {}, headers: { "retry-after": "3600" } }, page(ids(4, 1))]);
+        const conn = paged();
+        await expect(new RestAdapter(limited().http).fetch(conn, op(conn), {}, ctx())).rejects.toMatchObject({ status: 429 });
+        await expect(
+          new RestAdapter(limited().http).fetch(conn, op(conn), {}, ctx({ sleep: async () => {} })),
+        ).rejects.toMatchObject({ status: 429 });
+      });
+
+      /* 2026-09-30: "page × limit must be at most 1000" failed a read of the pages already in hand. */
+      it("stops at a later page the API refuses, keeps what it read, and says so", async () => {
+        const { http, calls } = stub([
+          page(ids(1, 3)),
+          page(ids(4, 3)),
+          { status: 400, body: { error: "Result window is too large." } },
+        ]);
+        const conn = paged();
+        const result = await new RestAdapter(http).fetch(conn, op(conn), {}, ctx());
+        expect(calls).toHaveLength(3);
+        expect((result.body as { data: unknown[] }).data).toHaveLength(6);
+        expect(result.meta.truncated).toBe(true);
+        expect(result.meta.warnings).toContain(INCOMPLETE.laterPageRefused);
+        /* A refusal of the first page is still a failed read. */
+        const first = stub([{ status: 400, body: { error: "bad request" } }]);
+        await expect(new RestAdapter(first.http).fetch(conn, op(conn), {}, ctx())).rejects.toBeInstanceOf(AdapterError);
+      });
+
+      it("still fails a 404 on the first page", async () => {
+        const { http } = stub([{ status: 404, body: { error: "no such endpoint" } }]);
+        const conn = paged();
+        await expect(new RestAdapter(http).fetch(conn, op(conn), {}, ctx())).rejects.toBeInstanceOf(AdapterError);
+      });
+    });
+
+    /* Regression: ten of 332 facts were read and shown as the whole. */
+    it("says a read fell short where the answer states more records than were read", async () => {
+      const { http } = stub([page([1, 2, 3], { total: 332 })]);
+      const conn = connection();
+      const result = await new RestAdapter(http).fetch(conn, op(conn), {}, ctx());
+      expect(result.meta.truncated).toBe(true);
+      expect(result.meta.warnings.join(" ")).toMatch(/reports 332 record/);
+      expect(result.meta.reportedTotal).toBeUndefined();
+    });
+
+    it("claims nothing from a stated count that matches, or from a bare answer", async () => {
+      const matched = stub([page([1, 2, 3], { count: 3 })]);
+      const conn = connection();
+      expect((await new RestAdapter(matched.http).fetch(conn, op(conn), {}, ctx())).meta.truncated).toBe(false);
+      const bare = stub([{ body: { count: 90, name: "summary" } }]);
+      const summary = connection({ ops: [{ id: "items", title: "Items", path: "/items" }] });
+      expect((await new RestAdapter(bare.http).fetch(summary, op(summary), {}, ctx())).meta.truncated).toBe(false);
+    });
+
     it("stops on a hasMore flag even when a cursor is still present", async () => {
       const { http, calls } = stub([page([1], { next: "abc", has_more: false })]);
       const conn = connection({
@@ -461,7 +738,7 @@ describe("RestAdapter", () => {
       const result = await new RestAdapter(http).fetch(conn, op(conn), {}, ctx());
 
       expect(result.meta.truncated).toBe(true);
-      expect(result.meta.warnings[0]).toMatch(/stopped after 2 page\(s\)/);
+      expect(result.meta.warnings[0]).toMatch(/first 2 page\(s\) were read/);
     });
 
     it("breaks a pagination loop instead of hammering the same URL", async () => {
@@ -480,22 +757,67 @@ describe("RestAdapter", () => {
       });
       const result = await new RestAdapter(http).fetch(conn, op(conn), {}, ctx());
       expect(calls.length).toBeLessThan(4);
-      expect(result.meta.warnings.join()).toMatch(/repeated a page/);
+      expect(result.meta.warnings.join()).toMatch(/same page twice/);
+    });
+
+    /* The next page's address, given in the answer: a token no parameter declares. */
+    it("follows the address an answer gives for its next page, on its own host and with its key", async () => {
+      const { http, calls } = stub([
+        { body: { data: [{ id: 1 }], links: { next: "http://inner.example.internal/v1/items?token=abc%3D" } } },
+        { body: { data: [{ id: 2 }], links: { next: { href: "/v1/items?token=def" } } } },
+        { body: { data: [{ id: 3 }], links: { next: null } } },
+      ]);
+      const conn = connection({
+        auth: { type: "query", param: "api_key", keyRef: "k" },
+        ops: [
+          {
+            id: "items",
+            title: "Items",
+            path: "/items",
+            rowsPath: "$.data",
+            maxPages: 10,
+            pagination: { kind: "next-url", path: "$.links.next" },
+          },
+        ],
+      });
+      const result = await new RestAdapter(http).fetch(conn, op(conn), {}, ctx());
+      expect((result.body as { data: unknown[] }).data).toHaveLength(3);
+      expect(result.meta).toMatchObject({ pages: 3, truncated: false });
+      /* The API's path and token; this connection's origin and key — never the host the answer named. */
+      expect(calls.map((call) => new URL(call.url).origin)).toEqual(Array(3).fill("https://api.example.com"));
+      expect(new URL(calls[1]!.url).searchParams.get("token")).toBe("abc=");
+      expect(new URL(calls[2]!.url).searchParams.get("token")).toBe("def");
+      expect(calls.every((call) => new URL(call.url).searchParams.get("api_key") === "sk_test_secret")).toBe(true);
+      /* The key is still masked wherever the address is reported. */
+      expect(result.meta.url).not.toContain("sk_test_secret");
+    });
+
+    it("ends at an empty page, whatever address it still offers", async () => {
+      const { http, calls } = stub([
+        { body: { data: [{ id: 1 }], next: "/v1/items?page=2" } },
+        { body: { data: [], next: "/v1/items?page=3" } },
+      ]);
+      const conn = connection({
+        ops: [{ id: "items", title: "Items", path: "/items", rowsPath: "$.data", maxPages: 10, pagination: { kind: "next-url", path: "$.next" } }],
+      });
+      const result = await new RestAdapter(http).fetch(conn, op(conn), {}, ctx());
+      expect(calls).toHaveLength(2);
+      expect(result.meta.truncated).toBe(false);
     });
   });
 });
 
 describe("multi-header auth", () => {
-  const buildium = (): ConnectionSpec =>
+  const fabrikam = (): ConnectionSpec =>
     connection({
-      id: "buildium",
-      title: "Buildium",
-      baseUrl: "https://api.buildium.com",
+      id: "fabrikam",
+      title: "Fabrikam",
+      baseUrl: "https://api.fabrikam.example",
       auth: {
         type: "headers",
         parts: [
-          { header: "x-buildium-client-id", keyRef: "buildium-id", label: "Client ID" },
-          { header: "x-buildium-client-secret", keyRef: "buildium-secret", label: "Client secret" },
+          { header: "x-fabrikam-client-id", keyRef: "fabrikam-id", label: "Client ID" },
+          { header: "x-fabrikam-client-secret", keyRef: "fabrikam-secret", label: "Client secret" },
         ],
       },
       ops: [{ id: "leases", title: "Leases", path: "/v1/leases", rowsPath: "$" }],
@@ -503,7 +825,7 @@ describe("multi-header auth", () => {
 
   it("sends every part as its own header", async () => {
     const { http, calls } = stub([{ body: [] }]);
-    const conn = buildium();
+    const conn = fabrikam();
 
     await new RestAdapter(http).fetch(
       conn,
@@ -513,17 +835,17 @@ describe("multi-header auth", () => {
         ...ctx(),
         // Each keyRef resolves to its own distinct secret.
         resolveSecret: async (ref: string) =>
-          ref === "buildium-id" ? "CLIENT-ID" : "CLIENT-SECRET",
+          ref === "fabrikam-id" ? "CLIENT-ID" : "CLIENT-SECRET",
       },
     );
 
-    expect(calls[0]?.headers["x-buildium-client-id"]).toBe("CLIENT-ID");
-    expect(calls[0]?.headers["x-buildium-client-secret"]).toBe("CLIENT-SECRET");
+    expect(calls[0]?.headers["x-fabrikam-client-id"]).toBe("CLIENT-ID");
+    expect(calls[0]?.headers["x-fabrikam-client-secret"]).toBe("CLIENT-SECRET");
   });
 
   it("refuses to fire when only one of the two secrets is stored", async () => {
     const { http } = stub([{ body: [] }]);
-    const conn = buildium();
+    const conn = fabrikam();
 
     // Half-configured auth would otherwise 401 with an opaque provider message.
     await expect(
@@ -533,10 +855,10 @@ describe("multi-header auth", () => {
         {},
         {
           ...ctx(),
-          resolveSecret: async (ref: string) => (ref === "buildium-id" ? "CLIENT-ID" : null),
+          resolveSecret: async (ref: string) => (ref === "fabrikam-id" ? "CLIENT-ID" : null),
         },
       ),
-    ).rejects.toThrow(/buildium-secret/);
+    ).rejects.toThrow(/fabrikam-secret/);
   });
 });
 

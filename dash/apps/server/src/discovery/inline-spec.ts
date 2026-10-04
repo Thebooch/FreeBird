@@ -8,7 +8,7 @@ import { parseSpecDocument } from "./openapi.js";
  * they do, the page *is* the spec: exact, complete, machine-readable, and worth
  * far more than any amount of reading the prose around it.
  *
- * Buildium is the case that motivated this. Its docs page is 11MB of HTML with
+ * A real property-management API motivated this. Its docs page is 11MB of HTML with
  * a 2MB OpenAPI 3.0.4 document inlined at `__redoc_state`, 298 endpoints, and
  * no standalone spec URL published anywhere. Without this, the only way to
  * connect it is to type every endpoint by hand.

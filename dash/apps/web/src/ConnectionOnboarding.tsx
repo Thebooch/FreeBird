@@ -6,6 +6,7 @@ import {
   api,
   type BoardLayout,
   type ConnectionSummary,
+  type IntegrationResult,
   type OnboardingState,
   type WidgetCheck,
 } from "./api.js";
@@ -34,7 +35,7 @@ import {
 const PRECHECKED = 2;
 
 const checkLine = (check: WidgetCheck): string =>
-  check.status === "unchecked"
+  check.status === "unchecked" || check.status === "partial"
     ? `${check.title}: ${check.message}`
     : `${check.title} is left off: ${check.message}`;
 
@@ -63,6 +64,8 @@ export const ConnectionOnboarding = ({
   const [error, setError] = useState<string | null>(null);
   const [stepNote, setStepNote] = useState<string | null>(null);
   const [activeBoard, setActiveBoard] = useState(0);
+  const [checked, setChecked] = useState<IntegrationResult | null>(null);
+  const [checking, setChecking] = useState(false);
   const mounted = useRef(true);
 
   /*
@@ -261,6 +264,61 @@ export const ConnectionOnboarding = ({
       onDone();
     });
 
+  /*
+   * Read the connection the way its boards will, repairing what the docs got
+   * wrong. The server starts this by itself when a key is saved; asking here
+   * joins the check already running rather than starting a second.
+   */
+  const check = async (quiet = false): Promise<void> => {
+    setChecking(true);
+    if (!quiet) setError(null);
+    try {
+      const result = await api.integrateConnection(connection.id);
+      if (!mounted.current) return;
+      setChecked(result);
+      onChanged();
+    } catch (caught) {
+      /* A check nobody asked for does not put an error in front of them. */
+      if (!quiet && mounted.current)
+        setError(caught instanceof Error ? caught.message : "The check could not finish. Try again.");
+    } finally {
+      if (mounted.current) setChecking(false);
+    }
+  };
+
+  /*
+   * The one step nothing can take for them: saying yes on the provider's own
+   * page. It opens in a new tab; the server checks the connection by itself
+   * as soon as the provider sends them back, and this screen picks that up.
+   */
+  const auth = connection.auth;
+  const signsIn = auth.type === "oauth2" && auth.flow === "authorization_code";
+  const returnAddress = `${window.location.origin}/api/oauth/callback`;
+  const signIn = (): Promise<void> =>
+    run(async () => {
+      const { authorizeUrl } = await api.startSignIn(connection.id);
+      const opened = window.open(authorizeUrl, "_blank", "noopener");
+      if (!opened) window.location.assign(authorizeUrl);
+    });
+  useEffect(() => {
+    if (!signsIn) return;
+    const back = (event: MessageEvent) => {
+      if ((event.data as { dashOAuth?: boolean } | null)?.dashOAuth) void check();
+    };
+    window.addEventListener("message", back);
+    return () => window.removeEventListener("message", back);
+    // The check is stable for this connection.
+  }, [signsIn, connection.id]);
+
+  /* Never checked: check now, by itself. Nobody should have to ask. */
+  useEffect(() => {
+    if (!connection.integration) void check(true);
+    // Once per connection; the result is read back from the server after.
+  }, [connection.id]);
+  const integration = checked
+    ? { outcome: checked.outcome, changes: checked.changes, notes: checked.ops.map((one) => `${one.title}: ${one.note}`) }
+    : connection.integration;
+
   const needsGate = state !== null && !state.describing && (!state.divided || state.stale);
   const settledStatus = setup?.status;
 
@@ -282,6 +340,75 @@ export const ConnectionOnboarding = ({
         <p className="dash-callout" data-testid="onboarding-reason">
           {status.reason}
         </p>
+      )}
+
+      {/*
+       * Before anything is built from it: can this connection actually be read,
+       * and read in full? Run by itself — the key is all anybody should have to
+       * give — and bounded, since some APIs ration requests.
+       */}
+      {!integration && checking && (
+        <p role="status" className="dash-hint" data-testid="onboarding-checking">
+          Checking how to read {status?.title ?? connection.title} &mdash; reading the endpoints its
+          dashboards will use, and fixing what its documentation got wrong. This only reads; it
+          changes nothing in your account.
+        </p>
+      )}
+      {integration && (
+        <div
+          className={`dash-callout${integration.outcome === "blocked" ? " dash-callout--bad" : integration.outcome === "ready" ? " dash-callout--good" : ""}`}
+          data-testid="onboarding-checked"
+        >
+          <p>
+            <strong>
+              {integration.outcome === "ready"
+                ? "It reads as expected."
+                : integration.outcome === "partial"
+                  ? "Some of it reads; some does not yet."
+                  : "It cannot be read yet."}
+            </strong>
+            {checked?.blocked ? ` ${checked.blocked}` : ""}
+          </p>
+          {integration.changes.length > 0 && (
+            <>
+              <p className="dash-hint">Changed, after trying it:</p>
+              <ul className="dash-hint" data-testid="onboarding-checked-changes">
+                {integration.changes.slice(0, 6).map((change) => (
+                  <li key={change}>{change}</li>
+                ))}
+              </ul>
+            </>
+          )}
+          {integration.notes.length > 0 && (
+            <ul className="dash-hint" data-testid="onboarding-checked-notes">
+              {integration.notes.slice(0, 8).map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          )}
+          {signsIn && integration.outcome !== "ready" && (
+            <p className="dash-hint" data-testid="onboarding-sign-in-help">
+              {status?.title ?? connection.title} asks you to sign in on its own page, once. If you
+              registered an app with it to get the client ID and secret, give it this return
+              address: <code>{returnAddress}</code>
+            </p>
+          )}
+          <div className="dash-row dash-row--end" style={{ marginTop: 8, gap: 8 }}>
+            {signsIn && integration.outcome !== "ready" && (
+              <button
+                className="dash-control dash-control--primary"
+                data-testid="onboarding-sign-in"
+                disabled={busy}
+                onClick={() => void signIn()}
+              >
+                Sign in with {status?.title ?? connection.title}
+              </button>
+            )}
+            <button className="dash-control" disabled={busy || checking} onClick={() => void check()}>
+              Check again
+            </button>
+          </div>
+        </div>
       )}
 
       {preparing && (

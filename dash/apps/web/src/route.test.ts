@@ -52,9 +52,9 @@ describe("parseRoute", () => {
 
 describe("parseRoute, for a record addressed by what it is", () => {
   it("reads a record type and an id", () => {
-    expect(parseRoute("#/r/buildium/vendor/350113")).toEqual({
+    expect(parseRoute("#/r/fabrikam/vendor/350113")).toEqual({
       kind: "entity",
-      connectionId: "buildium",
+      connectionId: "fabrikam",
       entityId: "vendor",
       recordId: "350113",
     });
@@ -68,25 +68,25 @@ describe("parseRoute, for a record addressed by what it is", () => {
   it("carries a nested record's parents, and reads them back", () => {
     const route = {
       kind: "entity" as const,
-      connectionId: "rentvine",
+      connectionId: "contoso",
       entityId: "unit",
       recordId: "222",
       parents: { propertyID: "210" },
       from: { dashboardId: "ops", widgetId: "units" },
     };
     const hash = routeToHash(route);
-    expect(hash).toBe("#/r/rentvine/unit/222/from/ops/units?propertyID=210");
+    expect(hash).toBe("#/r/contoso/unit/222/from/ops/units?propertyID=210");
     expect(parseRoute(hash)).toEqual(route);
     // Old links, with no parents, read exactly as they always did.
-    expect(parseRoute("#/r/rentvine/unit/222")).not.toHaveProperty("parents");
+    expect(parseRoute("#/r/contoso/unit/222")).not.toHaveProperty("parents");
   });
 
   it("reads which widget's row opened it, when one did", () => {
     // A widget may change its own copy of the layout; a reference link carries
     // no `from` and always opens the plain shared page.
-    expect(parseRoute("#/r/buildium/vendor/350113/from/ops/tasks")).toEqual({
+    expect(parseRoute("#/r/fabrikam/vendor/350113/from/ops/tasks")).toEqual({
       kind: "entity",
-      connectionId: "buildium",
+      connectionId: "fabrikam",
       entityId: "vendor",
       recordId: "350113",
       from: { dashboardId: "ops", widgetId: "tasks" },
@@ -94,9 +94,9 @@ describe("parseRoute, for a record addressed by what it is", () => {
   });
 
   it("ignores a half-written origin rather than inventing one", () => {
-    expect(parseRoute("#/r/buildium/vendor/350113/from/ops")).toEqual({
+    expect(parseRoute("#/r/fabrikam/vendor/350113/from/ops")).toEqual({
       kind: "entity",
-      connectionId: "buildium",
+      connectionId: "fabrikam",
       entityId: "vendor",
       recordId: "350113",
     });
@@ -104,8 +104,8 @@ describe("parseRoute, for a record addressed by what it is", () => {
 
   it("falls back to the board for a record URL with holes in it", () => {
     expect(parseRoute("#/r")).toEqual(BOARD_ROUTE);
-    expect(parseRoute("#/r/buildium")).toEqual(BOARD_ROUTE);
-    expect(parseRoute("#/r/buildium/vendor")).toEqual(BOARD_ROUTE);
+    expect(parseRoute("#/r/fabrikam")).toEqual(BOARD_ROUTE);
+    expect(parseRoute("#/r/fabrikam/vendor")).toEqual(BOARD_ROUTE);
   });
 });
 
@@ -113,7 +113,7 @@ describe("routeToHash, for a record addressed by what it is", () => {
   it("round-trips a record addressed by what it is", () => {
     const route = {
       kind: "entity",
-      connectionId: "buildium",
+      connectionId: "fabrikam",
       entityId: "association-tenant",
       recordId: "A&B/C",
     } as const;
@@ -123,7 +123,7 @@ describe("routeToHash, for a record addressed by what it is", () => {
   it("round-trips one opened from a widget's row", () => {
     const route = {
       kind: "entity",
-      connectionId: "buildium",
+      connectionId: "fabrikam",
       entityId: "vendor",
       recordId: "350113",
       from: { dashboardId: "my board", widgetId: "w/1" },

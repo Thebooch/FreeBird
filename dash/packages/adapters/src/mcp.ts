@@ -1,4 +1,5 @@
-import type { ConnectionSpec, OpSpec } from "@freebirdai/dash-spec";
+import { INCOMPLETE } from "./incomplete.js";
+import type { CompletionReason, ConnectionSpec, OpSpec } from "@freebirdai/dash-spec";
 import { interpolate } from "@freebirdai/dash-spec";
 import { firstPageParams, mergePages, nextPageParams, rowsAt } from "./paginate.js";
 import { AdapterError, type FetchContext, type FetchResult, type SourceAdapter } from "./types.js";
@@ -12,7 +13,17 @@ import { AdapterError, type FetchContext, type FetchResult, type SourceAdapter }
  */
 export interface McpToolInfo {
   readonly name: string;
+  /** What to call it where a person reads the name. */
+  readonly title?: string;
   readonly description?: string;
+  /**
+   * The server's own word on whether the tool only reads (`readOnlyHint`).
+   * A hint, not a guarantee — but without it nothing says a call is a read at
+   * all, and a tool that is not said to read is never called for a board.
+   */
+  readonly readOnly?: boolean;
+  /** The server's word that the tool may destroy something (`destructiveHint`). */
+  readonly destructive?: boolean;
   readonly inputSchema?: unknown;
   /**
    * The whole reason MCP is a first-class source: a declared output schema is
@@ -184,10 +195,8 @@ export class McpAdapter implements SourceAdapter {
      * meaning at all — there are no headers — so it is reported rather than
      * silently treated as a single page.
      */
-    if (op.pagination.kind === "link-header") {
-      warnings.push(
-        "this connection declares link-header pagination, which MCP has no equivalent for; only the first page was read",
-      );
+    if (op.pagination.kind === "link-header" || op.pagination.kind === "next-url") {
+      warnings.push(INCOMPLETE.linkHeader);
     }
 
     const pages: unknown[] = [];
@@ -196,12 +205,15 @@ export class McpAdapter implements SourceAdapter {
     let truncated = false;
     let more = true;
     const seen = new Set<string>();
+    /* Where the read ended, for `completion`: the last page's own word, or what stopped it. */
+    let ended: CompletionReason = "single-response";
 
     while (more && pageIndex < op.maxPages) {
       const request = JSON.stringify(args);
       if (seen.has(request)) {
         truncated = true;
-        warnings.push("pagination repeated the same tool arguments; the result may be incomplete");
+        ended = "repeated-page";
+        warnings.push(INCOMPLETE.repeatedArgs);
         break;
       }
       seen.add(request);
@@ -218,15 +230,14 @@ export class McpAdapter implements SourceAdapter {
       pageIndex++;
       if (op.pagination.kind !== "none" && rowsAt(pages[pages.length - 1], op.rowsPath) === null) {
         truncated = true;
-        warnings.push(
-          "the declared row list is missing; pagination stopped with an incomplete result",
-        );
+        ended = "rows-missing";
+        warnings.push(INCOMPLETE.rowsMissing);
         break;
       }
 
       const next =
-        op.pagination.kind === "link-header"
-          ? ({ kind: "none" } as const)
+        op.pagination.kind === "link-header" || op.pagination.kind === "next-url"
+          ? ({ kind: "none", why: "no-next" } as const)
           : nextPageParams({
               pagination: op.pagination,
               body: pages[pages.length - 1],
@@ -240,17 +251,27 @@ export class McpAdapter implements SourceAdapter {
           // Say so loudly, exactly as REST does: a silently truncated result
           // is a chart that is quietly incomplete.
           truncated = true;
-          warnings.push(
-            `stopped after ${op.maxPages} page(s); there is more data behind this tool`,
-          );
+          ended = "page-cap";
+          warnings.push(INCOMPLETE.pageCap(op.maxPages, "tool"));
         }
       } else {
         more = false;
+        ended = next.kind === "none" ? next.why : "no-next";
       }
     }
 
+    const beforeMerge = warnings.length;
+    const body = pages.length === 1 ? pages[0] : mergePages(pages, op.rowsPath, warnings);
+    // A merge that fell back to the first page left the rest out.
+    if (warnings.length > beforeMerge) {
+      truncated = true;
+      ended = "unmerged";
+    }
+    /* Paging a tool cannot follow: only the first page was read, and nothing says that was all. */
+    const unfollowable = op.pagination.kind === "link-header" || op.pagination.kind === "next-url";
+
     return {
-      body: pages.length === 1 ? pages[0] : mergePages(pages, op.rowsPath, warnings),
+      body,
       meta: {
         url: `mcp://${connection.id}/${toolName}`,
         status: 200,
@@ -259,6 +280,11 @@ export class McpAdapter implements SourceAdapter {
         pages: pageIndex,
         truncated,
         warnings,
+        completion: truncated
+          ? { state: "partial", reason: ended }
+          : unfollowable
+            ? { state: "unknown", reason: "unconfirmed-paging" }
+            : { state: "traversed", reason: ended },
       },
     };
   }

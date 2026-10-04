@@ -1,4 +1,6 @@
 import { lookup } from "node:dns/promises";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
 
 /**
@@ -112,6 +114,105 @@ export const assertPublicHttpUrl = async (raw: string): Promise<URL> => {
 };
 
 /**
+ * Where requests may go: a plug-in point, public addresses
+ * only unless the operator says otherwise.
+ *
+ * A self-hosted instance often needs an API on its own network — an ERP in
+ * the office, a service on a VPN. The operator names those addresses
+ * (`DASH_PRIVATE_EGRESS`: hostnames, `*.suffix`, CIDR ranges), and a
+ * connection that should reach one says so itself (`privateNetwork`), visibly.
+ * Both are needed. Link-local addresses — where cloud metadata lives — are
+ * never reachable, however they are listed. The address checked is the
+ * address connected to: a private one is pinned for the request, so a name
+ * that resolves differently a moment later cannot be used to slip past.
+ */
+export interface EgressPolicy {
+  /** Whether a private address may be reached, for a request that opted in. */
+  allowsPrivate(hostname: string, address: string): boolean;
+  /** How the operator's allowance reads, for a refusal to name. */
+  readonly described: string | null;
+}
+
+const V6_LINK_LOCAL = /^fe[89ab]/i;
+
+const cidrMatch = (address: string, cidr: string): boolean => {
+  const [base, bits] = cidr.split("/");
+  const mask = Number(bits);
+  const value = v4ToInt(address);
+  const start = base ? v4ToInt(base) : null;
+  if (value === null || start === null || !Number.isInteger(mask) || mask < 0 || mask > 32) return false;
+  return mask === 0 || inRange(value, start, mask);
+};
+
+/** The open-source default: nothing private, ever. */
+export const publicOnlyEgress: EgressPolicy = { allowsPrivate: () => false, described: null };
+
+/** An operator's list of private places a connection may reach, from `DASH_PRIVATE_EGRESS`. */
+export const allowlistEgress = (list: string): EgressPolicy => {
+  const entries = list
+    .split(/[\s,]+/)
+    .map((one) => one.trim().toLowerCase())
+    .filter((one) => one !== "");
+  return {
+    described: entries.join(", "),
+    allowsPrivate: (hostname, address) => {
+      const host = hostname.toLowerCase();
+      /* Link-local, and so cloud metadata, is never on anybody's list. */
+      if (/^169\.254\./.test(address) || V6_LINK_LOCAL.test(address)) return false;
+      return entries.some((entry) =>
+        entry.includes("/")
+          ? cidrMatch(address, entry)
+          : entry.startsWith("*.")
+            ? host.endsWith(entry.slice(1))
+            : host === entry || address === entry,
+      );
+    },
+  };
+};
+
+let egress: EgressPolicy = publicOnlyEgress;
+
+/** Set once, at start: see `createLocalPlatform`. */
+export const configureEgress = (policy: EgressPolicy): void => {
+  egress = policy;
+};
+
+/**
+ * An address a request may be sent to, and the address to connect to when it
+ * is a private one. Public addresses are checked as they always were.
+ */
+export const assertReachable = async (raw: string, privateNetwork: boolean): Promise<{ url: URL; pinned?: string }> => {
+  if (!privateNetwork) return { url: await assertPublicHttpUrl(raw) };
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new BlockedUrlError("that doesn't look like a valid URL");
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw new BlockedUrlError("only http(s) urls can be fetched");
+  const hostname = url.hostname.replace(/^\[|\]$/g, "");
+  let addresses: string[];
+  if (isIP(hostname)) addresses = [hostname];
+  else {
+    try {
+      addresses = (await lookup(hostname, { all: true })).map((entry) => entry.address);
+    } catch {
+      throw new BlockedUrlError(`couldn't resolve ${hostname}`);
+    }
+  }
+  if (addresses.length === 0) throw new BlockedUrlError(`couldn't resolve ${hostname}`);
+  if (addresses.every((address) => !isPrivateIp(address))) return { url };
+  const allowed = addresses.find((address) => !isPrivateIp(address) || egress.allowsPrivate(hostname, address));
+  if (!allowed)
+    throw new BlockedUrlError(
+      egress.described
+        ? `${hostname} is on a private network that is not in this server's allowance (${egress.described}).`
+        : `${hostname} is on a private network, and this server reaches none: its operator can name private addresses in DASH_PRIVATE_EGRESS.`,
+    );
+  return { url, pinned: allowed };
+};
+
+/**
  * The second gate: a connection may only ever reach the host its own baseUrl
  * declares. Even a hallucinated or tampered op cannot be pointed elsewhere.
  */
@@ -169,7 +270,104 @@ export interface GuardedInit {
   readonly signal?: AbortSignal;
   readonly method?: string;
   readonly body?: string;
+  /** See `HttpFetch`'s init: a read sent with POST says it reads. */
+  readonly purpose?: "read" | "write";
+  /** A client certificate to present (mutual TLS), PEM. See `sendWithCertificate`. */
+  readonly clientCertificate?: { readonly cert: string; readonly key: string; readonly ca?: string };
+  /** A stream read for a window: see `readWindow`. */
+  readonly stream?: { readonly events: number; readonly seconds: number };
+  /** The connection says it is on a private network: see `EgressPolicy`. */
+  readonly privateNetwork?: boolean;
 }
+
+/**
+ * One request presenting a client certificate (mutual TLS),
+ * answered as a standard `Response` so the guarded loop around it — public
+ * addresses only, the connection's own host on every redirect hop, the size
+ * cap — is the same one every other request goes through. Over https only:
+ * a certificate is never offered to a plain connection. No connection is
+ * pooled, so a certificate is never reused for a request that did not ask.
+ */
+export const sendWithCertificate = (
+  url: URL,
+  init: {
+    readonly method: string;
+    readonly headers: Record<string, string>;
+    readonly body?: string | undefined;
+    readonly signal: AbortSignal;
+    /** `ca`: the provider's own certificate authority, where its server is not signed by a public one. */
+    readonly certificate: { readonly cert: string; readonly key: string; readonly ca?: string };
+  },
+): Promise<Response> => sendDirect(url, init);
+
+/**
+ * One request through Node's own client rather than `fetch`: for a client
+ * certificate, and for an address checked once and connected to as checked
+ * (`pinned`) — the name is never looked up a second time.
+ */
+export const sendDirect = (
+  url: URL,
+  init: {
+    readonly method: string;
+    readonly headers: Record<string, string>;
+    readonly body?: string | undefined;
+    readonly signal: AbortSignal;
+    readonly certificate?: { readonly cert: string; readonly key: string; readonly ca?: string };
+    readonly pinned?: string;
+  },
+): Promise<Response> =>
+  new Promise((resolve, reject) => {
+    if (init.certificate && url.protocol !== "https:") {
+      reject(new BlockedUrlError("a client certificate is only sent over https"));
+      return;
+    }
+    const pinned = init.pinned;
+    const send = url.protocol === "https:" ? httpsRequest : httpRequest;
+    const outgoing = send(
+      url,
+      {
+        method: init.method,
+        headers: init.headers,
+        ...(init.certificate
+          ? { cert: init.certificate.cert, key: init.certificate.key, ...(init.certificate.ca ? { ca: init.certificate.ca } : {}) }
+          : {}),
+        ...(pinned
+          ? {
+              lookup: (_host: string, options: unknown, callback: (error: Error | null, address: string | { address: string; family: number }[], family?: number) => void) => {
+                const family = isIP(pinned);
+                if ((options as { all?: boolean } | undefined)?.all) callback(null, [{ address: pinned, family }]);
+                else callback(null, pinned, family);
+              },
+            }
+          : {}),
+        agent: false,
+        signal: init.signal,
+      },
+      (incoming) => {
+        const chunks: Buffer[] = [];
+        let size = 0;
+        incoming.on("data", (chunk: Buffer) => {
+          size += chunk.length;
+          if (size > MAX_BODY_BYTES) incoming.destroy(new BlockedUrlError(`response from ${url.toString()} is too large`));
+          else chunks.push(chunk);
+        });
+        incoming.on("end", () => {
+          const headers = new Headers();
+          for (const [name, value] of Object.entries(incoming.headers)) {
+            if (Array.isArray(value)) for (const one of value) headers.append(name, one);
+            else if (value !== undefined) headers.set(name, String(value));
+          }
+          const status = incoming.statusCode ?? 502;
+          const empty = status === 204 || status === 205 || status === 304;
+          resolve(new Response(empty ? null : Buffer.concat(chunks), { status, headers }));
+        });
+        incoming.on("error", reject);
+      },
+    );
+    outgoing.on("error", reject);
+    if (init.body !== undefined) outgoing.write(init.body);
+    outgoing.end();
+  });
 
 /**
  * Failures that happen before a request leaves this machine.
@@ -213,10 +411,20 @@ const fetchGuarded = async (
   maxBytes: number = MAX_BODY_BYTES,
 ): Promise<GuardedFetchResult> => {
   const method = (init.method ?? "GET").toUpperCase();
-  const reading = method === "GET";
+  /*
+   * A read sent with POST is still a read — a failure before it left is not a
+   * "change not sent" — but it is never redirected: following one would send
+   * its body to a second address.
+   */
+  const reading = init.purpose ? init.purpose === "read" : method === "GET";
+  const follows = method === "GET";
   let current: URL;
+  /* The private address a request connects to, once checked: never looked up again. */
+  let pinned: string | undefined;
   try {
-    current = await assertPublicHttpUrl(rawUrl);
+    const reached = await assertReachable(rawUrl, init.privateNetwork === true);
+    current = reached.url;
+    pinned = reached.pinned;
     checkHost(current);
   } catch (error) {
     throw reading || !(error instanceof Error) ? error : notSent(error);
@@ -230,17 +438,28 @@ const fetchGuarded = async (
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
       let response: Response;
       try {
-        response = await fetch(current.toString(), {
-          method,
-          redirect: "manual",
-          signal: controller.signal,
-          headers: {
-            accept: "application/json, text/plain;q=0.9, */*;q=0.8",
-            "user-agent": "FreeBirdDash/0.1 (+https://github.com/Thebooch/FreeBird)",
-            ...init.headers,
-          },
-          ...(reading || init.body === undefined ? {} : { body: init.body }),
-        });
+        const headers = {
+          accept: "application/json, text/plain;q=0.9, */*;q=0.8",
+          "user-agent": "FreeBirdDash/0.1 (+https://github.com/Thebooch/FreeBird)",
+          ...init.headers,
+        };
+        const body = method === "GET" || init.body === undefined ? undefined : init.body;
+        response = init.clientCertificate || pinned
+          ? await sendDirect(current, {
+              method,
+              headers,
+              body,
+              signal: controller.signal,
+              ...(init.clientCertificate ? { certificate: init.clientCertificate } : {}),
+              ...(pinned ? { pinned } : {}),
+            })
+          : await fetch(current.toString(), {
+              method,
+              redirect: "manual",
+              signal: controller.signal,
+              headers,
+              ...(body === undefined ? {} : { body }),
+            });
       } catch (error) {
         if (!reading && error instanceof Error && failedBeforeSending(error)) throw notSent(error);
         throw error;
@@ -252,7 +471,7 @@ const fetchGuarded = async (
        * second address, and a 303 after a POST can mean the API already did
        * what was asked. The caller says so rather than guessing which.
        */
-      if (!reading && response.status >= 300 && response.status < 400) {
+      if (!follows && response.status >= 300 && response.status < 400) {
         return { status: response.status, headers: response.headers, text: "", url: current.toString() };
       }
 
@@ -273,19 +492,61 @@ const fetchGuarded = async (
         if (!location) throw new BlockedUrlError(`redirect without a location (${response.status})`);
         if (hop === MAX_REDIRECTS) throw new BlockedUrlError("too many redirects");
         // A public host can redirect to a private one — re-validate every hop.
-        const next = await assertPublicHttpUrl(new URL(location, current).toString());
-        checkHost(next);
-        current = next;
+        const next = await assertReachable(new URL(location, current).toString(), init.privateNetwork === true);
+        checkHost(next.url);
+        current = next.url;
+        pinned = next.pinned;
         continue;
       }
 
-      const text = await readCapped(response, maxBytes, current.toString());
+      const streaming = init.stream && (response.headers.get("content-type") ?? "").toLowerCase().startsWith("text/event-stream");
+      const text = streaming
+        ? await readWindow(response, init.stream!, maxBytes, () => controller.abort())
+        : await readCapped(response, maxBytes, current.toString());
       return { status: response.status, headers: response.headers, text, url: current.toString() };
     }
     throw new BlockedUrlError("too many redirects");
   } finally {
     clearTimeout(timer);
   }
+};
+
+/**
+ * A stream of server-sent events, read for a window: until this many events
+ * have arrived or this many seconds have passed, then the connection is
+ * closed. Only whole events are kept — one cut off by the window is not half
+ * a record.
+ */
+export const readWindow = async (
+  response: Response,
+  window: { readonly events: number; readonly seconds: number },
+  maxBytes: number,
+  stop: () => void,
+): Promise<string> => {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const decoder = new TextDecoder();
+  let text = "";
+  const ends = () => (text.replace(/\r\n?/g, "\n").match(/\n\n/g) ?? []).length;
+  const deadline = Date.now() + window.seconds * 1000;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
+  });
+  try {
+    while (ends() < window.events && text.length < maxBytes) {
+      const chunk = await Promise.race([reader.read(), late]);
+      if (chunk === null || chunk.done) break;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+  } finally {
+    clearTimeout(timer);
+    stop();
+    void reader.cancel().catch(() => undefined);
+  }
+  const normal = text.replace(/\r\n?/g, "\n");
+  const last = normal.lastIndexOf("\n\n");
+  return last < 0 ? "" : normal.slice(0, last + 2);
 };
 
 const megabytes = (bytes: number): string => `${(bytes / 1_000_000).toFixed(1)}MB`;

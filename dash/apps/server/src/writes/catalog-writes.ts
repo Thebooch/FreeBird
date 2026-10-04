@@ -3,7 +3,7 @@ import type { CatalogEntry, WriteOpDef } from "@freebirdai/dash-spec";
 /**
  * Keeping a catalog entry's write endpoints where they belong: on the server.
  *
- * An API's writes are its largest part — Buildium's two hundred of them carry
+ * An API's writes are its largest part — one real API's two hundred carry
  * request bodies that together outweigh everything else in the entry — and
  * the browser needs none of it to draw a page; it asks the server what a
  * record type can do. So entries leave for the browser with their writes

@@ -200,3 +200,7 @@ export type { Proposal } from "./tool.js";
 export { draftPatchSchema } from "./concierge/patch.js";
 export { buildMatchPrompt, matchFieldsSchema, matchFieldsTool, matchWriteFields } from "./writes.js";
 export type { MatchFieldsInput, MatchFieldsProposal, MatchFieldsResult } from "./writes.js";
+export { buildRepairPrompt, proposeRepair, repairProposalSchema, repairTool } from "./repair.js";
+export type { RepairInput, RepairProposal } from "./repair.js";
+export { HOOKS, buildConnectorPrompt, connectorProposalSchema, connectorTool, proposeConnector } from "./connector.js";
+export type { ConnectorInput, ConnectorProposal } from "./connector.js";

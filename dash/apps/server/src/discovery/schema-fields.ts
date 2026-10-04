@@ -42,6 +42,9 @@ const MAX_DEPTH = 2;
 /** A ceiling on breadth, so a pathological spec cannot produce a huge entry. */
 const MAX_FIELDS = 300;
 
+/** A description saying a number is in the smallest currency unit. */
+const MINOR_UNITS = /\b(smallest|lowest) (currency )?unit\b|\bminor (currency )?units?\b|\bin cents\b|\bin pence\b/i;
+
 /**
  * A JSON Schema type plus format, mapped onto this product's vocabulary.
  *
@@ -72,6 +75,16 @@ const kindsAndFormat = (
   }
 
   const format = str(schema.format);
+  /*
+   * A number the documentation itself says is in the smallest currency unit
+   * ("12500 is $125.00"). The API's own claim, not a guess from integers, and
+   * recorded as one: `minor_units` never rescales a value by itself
+   * (`coercionForFormat`). It lets a request's "$250" be read as 25000 in that
+   * field, where a count compared 250 cents and counted the wrong payments.
+   */
+  const minor =
+    list.some((entry) => entry === "integer" || entry === "number") &&
+    MINOR_UNITS.test(str(schema.description) ?? "");
   const mapped: MappedField["format"] | undefined =
     format === "date-time" || format === "date"
       ? "iso8601"
@@ -79,7 +92,9 @@ const kindsAndFormat = (
         ? "email"
         : format === "uri" || format === "url"
           ? "url"
-          : undefined;
+          : minor
+            ? "minor_units"
+            : undefined;
 
   /*
    * A schema that never says what it is, read from what it has.

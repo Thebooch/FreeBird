@@ -23,6 +23,7 @@ import {
   formatValue,
   isSlotHidden,
   orderedSlots,
+  readCoverage,
   settingBool,
   settingString,
   slotLabel,
@@ -30,6 +31,7 @@ import {
 import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
 import { WidgetDetail } from "./WidgetDetail.jsx";
 import { WidgetErrorBoundary } from "./WidgetErrorBoundary.jsx";
+import { WidgetHistory } from "./WidgetHistory.jsx";
 import { WidgetInspector } from "./WidgetInspector.jsx";
 import { useDashboard } from "./context.jsx";
 import type { OpenReference } from "./entityDetail.js";
@@ -37,7 +39,7 @@ import { entityFor } from "./references.js";
 import { chromePresentationFor, presentationFor, presentationStyle } from "./presentation.js";
 import type { WidgetData } from "./useWidgetData.js";
 import { useWidgetData } from "./useWidgetData.js";
-import type { Presentation, WidgetSpec } from "@freebirdai/dash-spec";
+import type { Presentation, TimeWindow, WidgetSpec } from "@freebirdai/dash-spec";
 
 /** The header's regions, in the order they are drawn unless told otherwise. */
 const CHROME_SLOTS = ["title", "subtitle", "badges", "actions"] as const;
@@ -145,6 +147,8 @@ export const WidgetShell = ({
     presentation: sources,
     reportFacets,
     entityLinks,
+    dashboard,
+    history,
   } = useDashboard();
 
   /*
@@ -321,12 +325,19 @@ export const WidgetShell = ({
       // Promoted out of the title tooltip. A description nobody hovers is a
       // description nobody reads.
       <p className="dash-widget__subtitle">{widget.description}</p>
+    ) : widget.metric ? (
+      /*
+       * What the number means, where nobody wrote a description: what it
+       * counts or adds, over which records, narrowed how. A
+       * reader checks a number against this before acting on it.
+       */
+      <p className="dash-widget__subtitle dash-widget__meaning">{widget.metric.says}</p>
     ) : null,
     badges: (
       <>
         {data.stale && data.state === "ok" && (
           <Badge tone="stale" title="Older than this widget's freshness window">
-            stale · {formatValue(data.lastFetchedAt, { semantic: "relative_time" }, { now })}
+            stale · {formatValue(data.lastFetchedAt, { semantic: "relative_time" }, { now: Math.max(now, data.lastFetchedAt) })}
           </Badge>
         )}
         {data.state === "ok" && data.binding && data.binding.warnings.length > 0 && (
@@ -431,10 +442,42 @@ export const WidgetShell = ({
             <span aria-hidden="true">⚠</span>
             <span>
               {data.fetchMeta.staleReason} Showing data from{" "}
-              {formatValue(data.lastFetchedAt, { semantic: "relative_time" }, { now })}.
+              {formatValue(data.lastFetchedAt, { semantic: "relative_time" }, { now: Math.max(now, data.lastFetchedAt) })}.
             </span>
           </p>
         )}
+
+      {/*
+       * What is drawn is not all of it: a page cap, a record read only in
+       * part, a source that stopped early. On the tile, not behind a hover,
+       * because this is what changes whether a total can be acted on — and
+       * it is phrased as what was left out, never as a guess at how much.
+       */}
+      {(data.state === "ok" || data.state === "empty") && data.incomplete.length > 0 && (
+        <p
+          className="dash-widget__incomplete"
+          role="note"
+          data-testid={`incomplete-${widget.id}`}
+          title={data.incomplete.join("\n")}
+        >
+          <span aria-hidden="true">◐</span>
+          <span>
+            {data.incomplete[0]}
+            {data.incomplete.length > 1 ? ` (${data.incomplete.length - 1} more reason${data.incomplete.length === 2 ? "" : "s"})` : ""}
+          </span>
+        </p>
+      )}
+
+      {/* An endpoint that no longer answers as it did when this was built: said, never repaired into the widget. */}
+      {(data.state === "ok" || data.state === "empty") && data.changed.length > 0 && (
+        <p className="dash-widget__incomplete" role="note" data-testid={`changed-${widget.id}`} title={data.changed.join("\n")}>
+          <span aria-hidden="true">△</span>
+          <span>
+            {data.changed[0]}
+            {data.changed.length > 1 ? ` (${data.changed.length - 1} more)` : ""}
+          </span>
+        </p>
+      )}
 
       <div className="dash-widget__body">
         {/*
@@ -477,7 +520,18 @@ export const WidgetShell = ({
         )}
       </div>
 
-      {showFooter && <WidgetFooter data={data} rows={faceted.rows} now={now} />}
+      {widget.component === "stat" && data.state === "ok" && history && (
+        <WidgetHistory source={history} dashboard={dashboard.id} widget={widget.id} refreshedAt={data.lastFetchedAt ?? null} />
+      )}
+
+      {showFooter && (
+        <WidgetFooter
+          data={data}
+          rows={faceted.rows}
+          now={now}
+          {...(widget.timeWindow ? { timeWindow: widget.timeWindow } : {})}
+        />
+      )}
 
       {inspecting && <WidgetInspector data={data} onClose={() => setInspecting(false)} />}
     </div>
@@ -495,21 +549,62 @@ const WidgetFooter = ({
   data,
   rows,
   now,
+  timeWindow,
 }: {
   data: WidgetData;
   /** After the facets, so the count describes what is actually on screen. */
   rows: readonly Row[];
   now: number;
+  /** The widget's own time, where its request named one, or all time: said, so the board's range is not mistaken for it. */
+  timeWindow?: TimeWindow;
 }): JSX.Element => {
-  const truncated = data.fetchMeta?.truncated === true;
+  const truncated = data.fetchMeta?.truncated === true || data.incomplete.length > 0;
+  /*
+   * A read that cannot say where it ended is not known to be short either:
+   * "may be partial", where one that stopped early is "partial".
+   */
+  const unsure = data.fetchMeta?.truncated !== true && data.fetchMeta?.completion?.state === "unknown";
+  /*
+   * How far the read got, in the ladder's own terms: every record the API
+   * says it holds, every page, or one request. Said only of a read that was
+   * not cut short — that one says what it left out, above.
+   */
+  const read = data.runMeta?.steps.find((step) => step.op === "extract")?.rowsOut;
+  const coverage = !truncated && data.fetchMeta && read !== undefined ? readCoverage(data.fetchMeta, read) : null;
   return (
     <div className="dash-widget__foot">
       <span className="dash-widget__count">
         {rows.length.toLocaleString()} {rows.length === 1 ? "row" : "rows"}
         {truncated && (
-          <span className="dash-widget__more" title="More records exist upstream than were fetched">
+          <span className="dash-widget__more" title={data.incomplete.join("\n") || "Not every record was read"}>
             {" "}
-            · partial
+            · {unsure ? "may be partial" : "partial"}
+          </span>
+        )}
+        {timeWindow && (
+          <span
+            className="dash-widget__coverage"
+            data-testid="own-window"
+            title="This widget reads its own time, whatever window the board shows."
+          >
+            {" "}
+            ·{" "}
+            {"all" in timeWindow
+              ? "all time"
+              : timeWindow.to
+                ? `${timeWindow.from.slice(0, 10)} to ${timeWindow.to.slice(0, 10)}`
+                : `since ${timeWindow.from.slice(0, 10)}`}
+          </span>
+        )}
+        {coverage && (
+          <span
+            className="dash-widget__coverage"
+            data-testid="read-coverage"
+            data-level={coverage.level}
+            title={coverage.detail}
+          >
+            {" "}
+            · {coverage.said}
           </span>
         )}
         {/*
@@ -532,7 +627,12 @@ const WidgetFooter = ({
         )}
       </span>
       <span className="dash-widget__updated">
-        {formatValue(data.lastFetchedAt, { semantic: "relative_time" }, { now })}
+        {/*
+         * `now` is the board's anchored instant, which moves only when somebody
+         * acts; an answer that arrived after it — a read finished in the
+         * background — is "now", never "in 4 seconds".
+         */}
+        {formatValue(data.lastFetchedAt, { semantic: "relative_time" }, { now: Math.max(now, data.lastFetchedAt) })}
       </span>
     </div>
   );

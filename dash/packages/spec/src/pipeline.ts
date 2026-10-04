@@ -155,6 +155,18 @@ export const annotateStepSchema = z.object({
   fields: z.record(fieldNameSchema, semanticTypeSchema),
 });
 
+/**
+ * A caveat the widget states when its own rows show it: `when` is tested on
+ * every row, and if any meets it, `say` is shown on the tile. The rows pass
+ * through untouched. For what a total cannot know until it is taken — that it
+ * added amounts in two currencies together, say.
+ */
+export const caveatStepSchema = z.object({
+  op: z.literal("caveat"),
+  when: z.string().min(1),
+  say: z.string().min(1).max(300),
+});
+
 export const pipelineStepSchema = z.discriminatedUnion("op", [
   extractStepSchema,
   coerceStepSchema,
@@ -166,6 +178,7 @@ export const pipelineStepSchema = z.discriminatedUnion("op", [
   renameStepSchema,
   selectStepSchema,
   annotateStepSchema,
+  caveatStepSchema,
 ]);
 
 export type PipelineStep = z.infer<typeof pipelineStepSchema>;

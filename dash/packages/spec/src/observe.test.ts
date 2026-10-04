@@ -15,7 +15,7 @@ import {
 /**
  * What a record type's fields really hold, against what the docs declared.
  *
- * Every case here is Rentvine's: flags declared boolean and sent as 0/1, a
+ * Every case here is Contoso's: flags declared boolean and sent as 0/1, a
  * type id declared boolean and sent as 1–4, a work order number declared
  * text and sent as a number.
  */
@@ -55,7 +55,7 @@ describe("observeField", () => {
   });
 
   it("does not take a number the docs called a flag for a flag", () => {
-    // Rentvine's taxFormTypeID: declared boolean, sent 1 through 4.
+    // Contoso's taxFormTypeID: declared boolean, sent 1 through 4.
     const typeId = field("taxFormTypeID", ["boolean"]);
     expect(observeField(typeId, seen("taxFormTypeID", [1, 2, 3], { distinct: 4 }))).toEqual({
       kinds: ["number"],
@@ -135,7 +135,7 @@ describe("fieldReading", () => {
 });
 
 /*
- * Rentvine's docs describe a unit as `{ unitID, name, isActive }` and the API
+ * Contoso's docs describe a unit as `{ unitID, name, isActive }` and the API
  * sends `{ unit: { unitID, name, isActive } }`. Built from the docs, the unit's
  * page asked every response for `name` and found nothing.
  */
@@ -248,7 +248,7 @@ describe("isFlagField", () => {
 });
 
 /*
- * Rentvine declares 86 of its yes/no fields as text and sends "1"/"0". The
+ * Contoso declares 86 of its yes/no fields as text and sends "1"/"0". The
  * name asks the question and the values answer it, so they are flags too.
  */
 describe("flags the docs call text", () => {

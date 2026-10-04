@@ -50,6 +50,10 @@ export const compileWidget = (spec: WidgetSpec): CompileResult => {
           steps.push({ op: "filter", where: compileExpression(step.where) });
           break;
 
+        case "caveat":
+          steps.push({ op: "caveat", when: compileExpression(step.when), say: step.say });
+          break;
+
         case "derive": {
           const fields = Object.entries(step.fields).map(
             ([name, source]) => [name, compileExpression(source)] as const,

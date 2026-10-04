@@ -1,0 +1,838 @@
+{
+ "source": "https://dummyjson.com/carts?limit=0",
+ "at": "2026-09-28T22:03:31.574Z",
+ "records": [
+  {
+   "id": 1,
+   "discountedTotal": 11510.81
+  },
+  {
+   "id": 2,
+   "discountedTotal": 125.7
+  },
+  {
+   "id": 3,
+   "discountedTotal": 1625.77
+  },
+  {
+   "id": 4,
+   "discountedTotal": 636.81
+  },
+  {
+   "id": 5,
+   "discountedTotal": 1205.8
+  },
+  {
+   "id": 6,
+   "discountedTotal": 46641.06
+  },
+  {
+   "id": 7,
+   "discountedTotal": 1103.65
+  },
+  {
+   "id": 8,
+   "discountedTotal": 5771.32
+  },
+  {
+   "id": 9,
+   "discountedTotal": 27993.46
+  },
+  {
+   "id": 10,
+   "discountedTotal": 131.34
+  },
+  {
+   "id": 11,
+   "discountedTotal": 57397.84
+  },
+  {
+   "id": 12,
+   "discountedTotal": 35410.79
+  },
+  {
+   "id": 13,
+   "discountedTotal": 14.97
+  },
+  {
+   "id": 14,
+   "discountedTotal": 184.59
+  },
+  {
+   "id": 15,
+   "discountedTotal": 214.68
+  },
+  {
+   "id": 16,
+   "discountedTotal": 364.7
+  },
+  {
+   "id": 17,
+   "discountedTotal": 5014.94
+  },
+  {
+   "id": 18,
+   "discountedTotal": 124978.81
+  },
+  {
+   "id": 19,
+   "discountedTotal": 21308.13
+  },
+  {
+   "id": 20,
+   "discountedTotal": 4251.41
+  },
+  {
+   "id": 21,
+   "discountedTotal": 10966.03
+  },
+  {
+   "id": 22,
+   "discountedTotal": 296.47
+  },
+  {
+   "id": 23,
+   "discountedTotal": 2123.87
+  },
+  {
+   "id": 24,
+   "discountedTotal": 26780.04
+  },
+  {
+   "id": 25,
+   "discountedTotal": 1070.83
+  },
+  {
+   "id": 26,
+   "discountedTotal": 1021.64
+  },
+  {
+   "id": 27,
+   "discountedTotal": 100496.36
+  },
+  {
+   "id": 28,
+   "discountedTotal": 5531.37
+  },
+  {
+   "id": 29,
+   "discountedTotal": 2077.88
+  },
+  {
+   "id": 30,
+   "discountedTotal": 155507.16
+  },
+  {
+   "id": 31,
+   "discountedTotal": 1111
+  },
+  {
+   "id": 32,
+   "discountedTotal": 153.2
+  },
+  {
+   "id": 33,
+   "discountedTotal": 125461.58
+  },
+  {
+   "id": 34,
+   "discountedTotal": 1240.78
+  },
+  {
+   "id": 35,
+   "discountedTotal": 507.21
+  },
+  {
+   "id": 36,
+   "discountedTotal": 89.37
+  },
+  {
+   "id": 37,
+   "discountedTotal": 119.32
+  },
+  {
+   "id": 38,
+   "discountedTotal": 334.61
+  },
+  {
+   "id": 39,
+   "discountedTotal": 249.24
+  },
+  {
+   "id": 40,
+   "discountedTotal": 253.64
+  },
+  {
+   "id": 41,
+   "discountedTotal": 46340.09
+  },
+  {
+   "id": 42,
+   "discountedTotal": 531.17
+  },
+  {
+   "id": 43,
+   "discountedTotal": 1521.19
+  },
+  {
+   "id": 44,
+   "discountedTotal": 43550.16
+  },
+  {
+   "id": 45,
+   "discountedTotal": 121385.95
+  },
+  {
+   "id": 46,
+   "discountedTotal": 56101.67
+  },
+  {
+   "id": 47,
+   "discountedTotal": 49199.91
+  },
+  {
+   "id": 48,
+   "discountedTotal": 101.89
+  },
+  {
+   "id": 49,
+   "discountedTotal": 3843.75
+  },
+  {
+   "id": 50,
+   "discountedTotal": 10852.12
+  },
+  {
+   "id": 51,
+   "discountedTotal": 32961.03
+  },
+  {
+   "id": 52,
+   "discountedTotal": 130175.28
+  },
+  {
+   "id": 53,
+   "discountedTotal": 1028.19
+  },
+  {
+   "id": 54,
+   "discountedTotal": 9998.55
+  },
+  {
+   "id": 55,
+   "discountedTotal": 39.92
+  },
+  {
+   "id": 56,
+   "discountedTotal": 109.12
+  },
+  {
+   "id": 57,
+   "discountedTotal": 1158.21
+  },
+  {
+   "id": 58,
+   "discountedTotal": 1042.77
+  },
+  {
+   "id": 59,
+   "discountedTotal": 61859.29
+  },
+  {
+   "id": 60,
+   "discountedTotal": 6748.39
+  },
+  {
+   "id": 61,
+   "discountedTotal": 571.58
+  },
+  {
+   "id": 62,
+   "discountedTotal": 2691.23
+  },
+  {
+   "id": 63,
+   "discountedTotal": 460.04
+  },
+  {
+   "id": 64,
+   "discountedTotal": 5389.02
+  },
+  {
+   "id": 65,
+   "discountedTotal": 1517.78
+  },
+  {
+   "id": 66,
+   "discountedTotal": 1907.41
+  },
+  {
+   "id": 67,
+   "discountedTotal": 389.6
+  },
+  {
+   "id": 68,
+   "discountedTotal": 221.05
+  },
+  {
+   "id": 69,
+   "discountedTotal": 6560.55
+  },
+  {
+   "id": 70,
+   "discountedTotal": 3295.62
+  },
+  {
+   "id": 71,
+   "discountedTotal": 72541.01
+  },
+  {
+   "id": 72,
+   "discountedTotal": 291.77
+  },
+  {
+   "id": 73,
+   "discountedTotal": 20510.13
+  },
+  {
+   "id": 74,
+   "discountedTotal": 1379.22
+  },
+  {
+   "id": 75,
+   "discountedTotal": 286.02
+  },
+  {
+   "id": 76,
+   "discountedTotal": 36017.72
+  },
+  {
+   "id": 77,
+   "discountedTotal": 880.59
+  },
+  {
+   "id": 78,
+   "discountedTotal": 109890.08
+  },
+  {
+   "id": 79,
+   "discountedTotal": 1336.5
+  },
+  {
+   "id": 80,
+   "discountedTotal": 1217.93
+  },
+  {
+   "id": 81,
+   "discountedTotal": 217.41
+  },
+  {
+   "id": 82,
+   "discountedTotal": 1674.54
+  },
+  {
+   "id": 83,
+   "discountedTotal": 125679
+  },
+  {
+   "id": 84,
+   "discountedTotal": 542.55
+  },
+  {
+   "id": 85,
+   "discountedTotal": 163.88
+  },
+  {
+   "id": 86,
+   "discountedTotal": 40809.21
+  },
+  {
+   "id": 87,
+   "discountedTotal": 278.38
+  },
+  {
+   "id": 88,
+   "discountedTotal": 128.13
+  },
+  {
+   "id": 89,
+   "discountedTotal": 2111.01
+  },
+  {
+   "id": 90,
+   "discountedTotal": 5010.11
+  },
+  {
+   "id": 91,
+   "discountedTotal": 228.17
+  },
+  {
+   "id": 92,
+   "discountedTotal": 680.17
+  },
+  {
+   "id": 93,
+   "discountedTotal": 1468.77
+  },
+  {
+   "id": 94,
+   "discountedTotal": 312.15
+  },
+  {
+   "id": 95,
+   "discountedTotal": 129783.31
+  },
+  {
+   "id": 96,
+   "discountedTotal": 92.51
+  },
+  {
+   "id": 97,
+   "discountedTotal": 1623.42
+  },
+  {
+   "id": 98,
+   "discountedTotal": 896.98
+  },
+  {
+   "id": 99,
+   "discountedTotal": 117.96
+  },
+  {
+   "id": 100,
+   "discountedTotal": 31771.92
+  },
+  {
+   "id": 101,
+   "discountedTotal": 1464.78
+  },
+  {
+   "id": 102,
+   "discountedTotal": 155.13
+  },
+  {
+   "id": 103,
+   "discountedTotal": 31.79
+  },
+  {
+   "id": 104,
+   "discountedTotal": 990.53
+  },
+  {
+   "id": 105,
+   "discountedTotal": 134.21
+  },
+  {
+   "id": 106,
+   "discountedTotal": 94.38
+  },
+  {
+   "id": 107,
+   "discountedTotal": 120.92
+  },
+  {
+   "id": 108,
+   "discountedTotal": 935.63
+  },
+  {
+   "id": 109,
+   "discountedTotal": 9615.55
+  },
+  {
+   "id": 110,
+   "discountedTotal": 31595.18
+  },
+  {
+   "id": 111,
+   "discountedTotal": 11845.13
+  },
+  {
+   "id": 112,
+   "discountedTotal": 343.42
+  },
+  {
+   "id": 113,
+   "discountedTotal": 1480.45
+  },
+  {
+   "id": 114,
+   "discountedTotal": 33323.1
+  },
+  {
+   "id": 115,
+   "discountedTotal": 4223.96
+  },
+  {
+   "id": 116,
+   "discountedTotal": 8558.54
+  },
+  {
+   "id": 117,
+   "discountedTotal": 9985.79
+  },
+  {
+   "id": 118,
+   "discountedTotal": 141.14
+  },
+  {
+   "id": 119,
+   "discountedTotal": 252.16
+  },
+  {
+   "id": 120,
+   "discountedTotal": 814.89
+  },
+  {
+   "id": 121,
+   "discountedTotal": 79.41
+  },
+  {
+   "id": 122,
+   "discountedTotal": 24688.5
+  },
+  {
+   "id": 123,
+   "discountedTotal": 78514.37
+  },
+  {
+   "id": 124,
+   "discountedTotal": 433.96
+  },
+  {
+   "id": 125,
+   "discountedTotal": 3047.81
+  },
+  {
+   "id": 126,
+   "discountedTotal": 920.91
+  },
+  {
+   "id": 127,
+   "discountedTotal": 887.48
+  },
+  {
+   "id": 128,
+   "discountedTotal": 9755.4
+  },
+  {
+   "id": 129,
+   "discountedTotal": 1878.79
+  },
+  {
+   "id": 130,
+   "discountedTotal": 29328.26
+  },
+  {
+   "id": 131,
+   "discountedTotal": 3474.09
+  },
+  {
+   "id": 132,
+   "discountedTotal": 11523.23
+  },
+  {
+   "id": 133,
+   "discountedTotal": 8818.7
+  },
+  {
+   "id": 134,
+   "discountedTotal": 1740.76
+  },
+  {
+   "id": 135,
+   "discountedTotal": 751.73
+  },
+  {
+   "id": 136,
+   "discountedTotal": 360.45
+  },
+  {
+   "id": 137,
+   "discountedTotal": 10941.81
+  },
+  {
+   "id": 138,
+   "discountedTotal": 13292.05
+  },
+  {
+   "id": 139,
+   "discountedTotal": 36.17
+  },
+  {
+   "id": 140,
+   "discountedTotal": 614.71
+  },
+  {
+   "id": 141,
+   "discountedTotal": 2506.71
+  },
+  {
+   "id": 142,
+   "discountedTotal": 2499.07
+  },
+  {
+   "id": 143,
+   "discountedTotal": 15464.38
+  },
+  {
+   "id": 144,
+   "discountedTotal": 3608.57
+  },
+  {
+   "id": 145,
+   "discountedTotal": 1030.1
+  },
+  {
+   "id": 146,
+   "discountedTotal": 506.06
+  },
+  {
+   "id": 147,
+   "discountedTotal": 1898.14
+  },
+  {
+   "id": 148,
+   "discountedTotal": 58.55
+  },
+  {
+   "id": 149,
+   "discountedTotal": 34702.26
+  },
+  {
+   "id": 150,
+   "discountedTotal": 989.15
+  },
+  {
+   "id": 151,
+   "discountedTotal": 222.39
+  },
+  {
+   "id": 152,
+   "discountedTotal": 3369.71
+  },
+  {
+   "id": 153,
+   "discountedTotal": 3678.46
+  },
+  {
+   "id": 154,
+   "discountedTotal": 532.54
+  },
+  {
+   "id": 155,
+   "discountedTotal": 110543.89
+  },
+  {
+   "id": 156,
+   "discountedTotal": 2422.79
+  },
+  {
+   "id": 157,
+   "discountedTotal": 6.65
+  },
+  {
+   "id": 158,
+   "discountedTotal": 1079.68
+  },
+  {
+   "id": 159,
+   "discountedTotal": 396.92
+  },
+  {
+   "id": 160,
+   "discountedTotal": 142.66
+  },
+  {
+   "id": 161,
+   "discountedTotal": 2168.95
+  },
+  {
+   "id": 162,
+   "discountedTotal": 2982.32
+  },
+  {
+   "id": 163,
+   "discountedTotal": 1248.15
+  },
+  {
+   "id": 164,
+   "discountedTotal": 195.93
+  },
+  {
+   "id": 165,
+   "discountedTotal": 17751.61
+  },
+  {
+   "id": 166,
+   "discountedTotal": 108.97
+  },
+  {
+   "id": 167,
+   "discountedTotal": 46202.72
+  },
+  {
+   "id": 168,
+   "discountedTotal": 91.93
+  },
+  {
+   "id": 169,
+   "discountedTotal": 33456.43
+  },
+  {
+   "id": 170,
+   "discountedTotal": 1512.89
+  },
+  {
+   "id": 171,
+   "discountedTotal": 191.81
+  },
+  {
+   "id": 172,
+   "discountedTotal": 495.78
+  },
+  {
+   "id": 173,
+   "discountedTotal": 16911.51
+  },
+  {
+   "id": 174,
+   "discountedTotal": 701.39
+  },
+  {
+   "id": 175,
+   "discountedTotal": 302.88
+  },
+  {
+   "id": 176,
+   "discountedTotal": 218.17
+  },
+  {
+   "id": 177,
+   "discountedTotal": 2299.48
+  },
+  {
+   "id": 178,
+   "discountedTotal": 5846.4
+  },
+  {
+   "id": 179,
+   "discountedTotal": 25098.32
+  },
+  {
+   "id": 180,
+   "discountedTotal": 6.87
+  },
+  {
+   "id": 181,
+   "discountedTotal": 4138.32
+  },
+  {
+   "id": 182,
+   "discountedTotal": 3195.45
+  },
+  {
+   "id": 183,
+   "discountedTotal": 59760.67
+  },
+  {
+   "id": 184,
+   "discountedTotal": 13307.5
+  },
+  {
+   "id": 185,
+   "discountedTotal": 1243.17
+  },
+  {
+   "id": 186,
+   "discountedTotal": 359.72
+  },
+  {
+   "id": 187,
+   "discountedTotal": 9255.33
+  },
+  {
+   "id": 188,
+   "discountedTotal": 171.55
+  },
+  {
+   "id": 189,
+   "discountedTotal": 1172.57
+  },
+  {
+   "id": 190,
+   "discountedTotal": 53242.95
+  },
+  {
+   "id": 191,
+   "discountedTotal": 36399
+  },
+  {
+   "id": 192,
+   "discountedTotal": 67061.66
+  },
+  {
+   "id": 193,
+   "discountedTotal": 565.46
+  },
+  {
+   "id": 194,
+   "discountedTotal": 83615.86
+  },
+  {
+   "id": 195,
+   "discountedTotal": 37543.81
+  },
+  {
+   "id": 196,
+   "discountedTotal": 70006.8
+  },
+  {
+   "id": 197,
+   "discountedTotal": 55748.9
+  },
+  {
+   "id": 198,
+   "discountedTotal": 92308.32
+  },
+  {
+   "id": 199,
+   "discountedTotal": 26800.96
+  },
+  {
+   "id": 200,
+   "discountedTotal": 21783.54
+  },
+  {
+   "id": 201,
+   "discountedTotal": 109195.89
+  },
+  {
+   "id": 202,
+   "discountedTotal": 20545.55
+  },
+  {
+   "id": 203,
+   "discountedTotal": 46.54
+  },
+  {
+   "id": 204,
+   "discountedTotal": 23182.99
+  },
+  {
+   "id": 205,
+   "discountedTotal": 14075.86
+  },
+  {
+   "id": 206,
+   "discountedTotal": 213.26
+  },
+  {
+   "id": 207,
+   "discountedTotal": 20090.11
+  },
+  {
+   "id": 208,
+   "discountedTotal": 260.12
+  }
+ ]
+}

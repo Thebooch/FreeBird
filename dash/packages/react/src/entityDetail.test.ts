@@ -244,7 +244,7 @@ describe("entityPanes", () => {
   });
 
   /*
-   * A section is keyed `<record type>-by-<field path>`, and on Rentvine every
+   * A section is keyed `<record type>-by-<field path>`, and on Contoso every
    * field path nests. Used verbatim inside a widget id — `[a-zA-Z0-9_-]`, 64 at
    * most — every one failed to parse and was dropped silently: "Showing 0 of 3
    * related collections" on a work order that had all three.
@@ -497,7 +497,7 @@ describe("entityPanes, for records under a parent", () => {
 });
 
 /*
- * Rentvine sends its flags as 0/1 while its docs declare them boolean. The
+ * Contoso sends its flags as 0/1 while its docs declare them boolean. The
  * record page reads a field the way a compiled widget does, so the flag says
  * "Yes" on the record exactly as on the board it was opened from.
  */

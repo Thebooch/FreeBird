@@ -44,7 +44,7 @@ describe("readJsonValueAt", () => {
 
 describe("extractInlineSpec", () => {
   it("pulls the spec out of a Redoc page", () => {
-    // The exact shape Buildium ships: state object, spec nested under .spec.data
+    // The exact shape one real API ships: state object, spec nested under .spec.data
     const html = `<html><body><div id="redoc"></div><script>
       window.__redoc_state = ${JSON.stringify({ menu: { activeItemIdx: -1 }, spec: { data: SPEC } })};
     </script></body></html>`;

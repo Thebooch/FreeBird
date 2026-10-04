@@ -1,3 +1,4 @@
+import type { EachAnswer, EachRequest } from "@freebirdai/dash-react";
 import type {
   ApiProfile,
   CatalogEntry,
@@ -14,6 +15,22 @@ import type {
 /** The connection as the server reports it — secrets replaced by a boolean. */
 export interface ConnectionSummary extends ConnectionSpec {
   hasKey: boolean;
+}
+
+/** What checking a connection found. See `routes/integrate.ts` on the server. */
+export interface IntegrationResult {
+  readonly outcome: "ready" | "partial" | "blocked";
+  readonly blocked?: string;
+  readonly changes: readonly string[];
+  readonly ops: ReadonlyArray<{
+    readonly op: string;
+    readonly title: string;
+    readonly outcome: "ready" | "blocked" | "skipped";
+    readonly level?: string;
+    readonly note: string;
+  }>;
+  readonly requests: number;
+  readonly modelCalls: number;
 }
 
 export interface SampleField {
@@ -104,6 +121,22 @@ export interface DiscoveryResult {
   tried: string[];
   /** Present when the site publishes a page index the ladder found. */
   index?: DocsIndex;
+  /**
+   * The documentation is drawn by its own scripts, and reading it needs
+   * Chromium, which is not here yet: the person is asked once.
+   */
+  needsRenderer?: boolean;
+}
+
+/** Chromium for reading documentation drawn by scripts: whether it is here, and the download's progress. */
+export interface RendererStatus {
+  state: "ready" | "missing" | "installing" | "failed" | "off";
+  progress?: number;
+  /** Which file of the download is coming: Chromium comes in more than one. */
+  part?: number;
+  error?: string;
+  consented: boolean;
+  downloadMb: number;
 }
 
 export interface ModelOption {
@@ -530,7 +563,7 @@ export interface WidgetCheck {
   readonly category: string;
   readonly widget: string;
   readonly title: string;
-  readonly status: "ready" | "unchecked" | "denied" | "unavailable" | "missingInput" | "schema";
+  readonly status: "ready" | "partial" | "unchecked" | "denied" | "unavailable" | "missingInput" | "schema";
   readonly message: string;
 }
 
@@ -693,6 +726,38 @@ export interface MapRunResult extends MapState {
 }
 
 export const api = {
+  /** What a number tile was, day by day, since the server began keeping it. Free: nothing is asked of the API. */
+  widgetHistory: async (dashboardId: string, widgetId: string): Promise<readonly { day: string; value: number }[]> =>
+    (
+      await request<{ points: { day: string; value: number }[] }>(
+        `/api/dashboards/${encodeURIComponent(dashboardId)}/widgets/${encodeURIComponent(widgetId)}/history`,
+      )
+    ).points,
+  /**
+   * The rest of a tile's per-record reads, read by the server in the
+   * background; asked again until it answers "done". See `/api/query/each`.
+   */
+  readEach: (each: EachRequest): Promise<EachAnswer> => {
+    const range = each.resolved.range;
+    return request<EachAnswer>(
+      "/api/query/each",
+      json({
+        connection: each.connection,
+        op: each.op,
+        params: each.params,
+        input: each.input,
+        values: each.values,
+        range: {
+          preset: range.preset,
+          grain: range.grain,
+          start: range.start,
+          end: range.end,
+          ...(range.all ? { all: true } : {}),
+        },
+        filters: each.resolved.filters,
+      }),
+    );
+  },
   checkSetupPreview: (
     dashboardId: string,
     widget: WidgetSpec,
@@ -896,6 +961,17 @@ export const api = {
    * API: the answer describes the API rather than this account, so everybody
    * who connects it afterwards inherits it.
    */
+  /**
+   * Read the endpoints that matter, repair what the documentation got wrong,
+   * confirm how each pages, and keep the result. Spends API requests, bounded.
+   */
+  integrateConnection: (connectionId: string): Promise<IntegrationResult> =>
+    request(`/api/connections/${connectionId}/integrate`, json({})),
+
+  /** Where to send somebody to sign in with the provider, and the return address it uses. */
+  startSignIn: (connectionId: string): Promise<{ authorizeUrl: string; redirectUri: string }> =>
+    request(`/api/connections/${connectionId}/oauth/start`, json({})),
+
   prepareOnboarding: (
     connectionId: string,
   ): Promise<OnboardingState & { readonly step: PrepareStep }> =>
@@ -1009,6 +1085,12 @@ export const api = {
 
   discover: (url: string): Promise<DiscoveryResult> => request("/api/discover", json({ url })),
 
+  /** Whether documentation drawn by scripts can be read here, and how far a download has got. */
+  rendererStatus: (): Promise<RendererStatus> => request("/api/discover/renderer"),
+
+  /** The person agreed: the one-time download starts, and the answer is kept. */
+  installRenderer: (): Promise<RendererStatus> => request("/api/discover/renderer", json({})),
+
   saveCatalogEntry: (entry: CatalogEntry): Promise<CatalogEntry> =>
     request(`/api/catalog/${entry.id}`, {
       method: "PUT",
@@ -1036,7 +1118,7 @@ export const api = {
    */
   setAddress: (
     connectionId: string,
-    input: { values: Record<string, string> } | { baseUrl: string },
+    input: ({ values: Record<string, string> } | { baseUrl: string }) & { privateNetwork?: boolean },
   ): Promise<ConnectionSummary> =>
     request(`/api/connections/${connectionId}/address`, {
       method: "PUT",

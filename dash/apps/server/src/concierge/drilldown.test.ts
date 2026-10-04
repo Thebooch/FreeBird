@@ -7,7 +7,7 @@ import { buildConciergeContext } from "./context.js";
 import { planNarrowing } from "./drilldown.js";
 
 /**
- * The Buildium case that prompted this, reduced to its shape.
+ * The real API case that prompted this, reduced to its shape.
  *
  * Tasks whose kind lives on a nested `Category.Name` holding words somebody
  * chose when they set the account up, plus a categories collection the API
@@ -225,7 +225,7 @@ describe("nested fields the declared schema never mentioned", () => {
   /**
    * The case that made this necessary.
    *
-   * The map read Buildium's OpenAPI and recorded `Category` as an opaque
+   * The map read a real API's OpenAPI and recorded `Category` as an opaque
    * value, so the only fields on offer were flat ones — `TaskType`, `Priority`
    * — none of which say anything about maintenance. The kind of a task lives
    * on `Category.Name`, one level down, and no amount of asking a model to

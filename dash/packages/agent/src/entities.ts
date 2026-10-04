@@ -27,7 +27,7 @@ import type { LlmAdapter, LlmTool } from "./llm.js";
  *
  * **Whole field lists, not the first fourteen.** The relation pass showed the
  * model `FIELDS_SHOWN = 14` names per endpoint, and on a real API the
- * references sit past that — Buildium's work orders carry `VendorId` at field
+ * references sit past that — one API's work orders carry `VendorId` at field
  * 22, so the link from a work order to its vendor could not be found at all.
  * Fewer resources per call is the right trade: the fields are the evidence.
  *
@@ -37,7 +37,7 @@ import type { LlmAdapter, LlmTool } from "./llm.js";
  * some other endpoint earned. A field means what it means *on this record*.
  *
  * **Descriptions are the point, not a bonus.** The specification already
- * described 2,898 of Buildium's 2,927 field entries and not one of those
+ * described 2,898 of one real API's 2,927 field entries and not one of those
  * sentences ever reached a user. They are handed to the model as evidence and
  * rewritten for a reader, which is the cheapest quality in the product.
  */
@@ -350,7 +350,15 @@ export const entityFromProposal = (input: {
     return {
       path: field.name,
       ...(label ? { label } : {}),
-      ...(said?.description ? { description: said.description.slice(0, 300) } : {}),
+      /*
+       * What the field holds: the description pass's words, or else the
+       * specification's own. The specification's were dropped where the pass
+       * said nothing, and with them the one sentence saying a status of
+       * "refunded" means refunded in full (2026-09-30).
+       */
+      ...((said?.description ?? field.description)
+        ? { description: (said?.description ?? field.description)!.slice(0, 300) }
+        : {}),
       visibility,
       ...(said?.group ? { group: said.group.slice(0, 60) } : {}),
       /*
@@ -469,7 +477,7 @@ export const scopeOf = (
 
   /*
    * Otherwise the collection the path begins with — the *longest* one. Taking
-   * the first filed every unit's listing, image and note on Buildium under
+   * the first filed every unit's listing, image and note on one API under
    * the property, because `/rentals/` begins `/rentals/units/` too.
    */
   const prefix = listPath.slice(0, listPath.indexOf("{{"));

@@ -12,6 +12,9 @@ import {
   compileBrief,
   dashboardSchema,
   entityById,
+  filterParamsOf,
+  readsRangeOf,
+  getOp,
   parseDashboard,
   solveLayout,
 } from "@freebirdai/dash-spec";
@@ -115,8 +118,11 @@ export interface Built {
   readonly category: string;
 }
 
-const pathOf = (connection: ConnectionSpec, op: string | undefined): string | undefined =>
-  op ? connection.ops.find((one) => one.id === op)?.path : undefined;
+const pathOf = (connection: ConnectionSpec, op: string | undefined): string | undefined => {
+  const found = op ? connection.ops.find((one) => one.id === op) : undefined;
+  /* Connector code supplies whatever ids its own requests need. */
+  return found && found.servedBy !== "connector" ? found.path : undefined;
+};
 
 /**
  * The rest of the API, for a starter that names two record types.
@@ -184,6 +190,9 @@ export const buildCategory = (input: {
       connection: source.connection.id,
       id,
       listPath: pathOf(source.connection, resource.listOp),
+      rowsPathOf: (op: string) => getOp(source.connection, op)?.rowsPath,
+      filterParamOf: filterParamsOf(source.connection),
+      readsRange: readsRangeOf(source.connection),
       related: relatedFor(source),
     });
 

@@ -9,7 +9,7 @@ import { guessSemantic, looksLikeFlag } from "./semantics.js";
  * What a record type's fields really hold, learned from a response.
  *
  * Every record type starts as the specification describes it, and the
- * specification can be wrong in ways that render confidently: Rentvine
+ * specification can be wrong in ways that render confidently: one API
  * declares its flags boolean and sends `0` and `1`, so "Owner approved: 0";
  * it declares a work order number a string and sends `104868`. Nothing ever
  * compared the two, because the only reading of the account was optional and
@@ -57,7 +57,7 @@ const declaredOnly = (field: EntityField, kind: string): boolean =>
  * way*: a flag declared boolean and seen only as 0/1; a number declared and
  * seen as numeric text; a date declared and seen as epoch numbers. A field
  * declared boolean and seen as 0, 1, 2 and 3 is not a flag whatever the docs
- * say — Rentvine's `taxFormTypeID` — so it is read as the number it is.
+ * say — such as one API's `taxFormTypeID` — so it is read as the number it is.
  */
 export const observeField = (field: EntityField, seen: SeenField): EntityField["observed"] => {
   const kinds = KINDS.filter((kind) => seen.kinds.includes(kind));
@@ -77,7 +77,7 @@ export const observeField = (field: EntityField, seen: SeenField): EntityField["
       distinctPresent <= 2
     ) {
       /*
-       * Declared a flag, or named like one — Rentvine declares 86 of its
+       * Declared a flag, or named like one — one API declares 86 of its
        * `is…` fields as text and sends "1"/"0" — and only ever sent as one.
        */
       return { coercion: "->boolean" };
@@ -111,7 +111,7 @@ export const observeField = (field: EntityField, seen: SeenField): EntityField["
  * The object a record's fields really sit inside, where the docs put them one
  * level up.
  *
- * Rentvine's documentation describes a unit as \`{ unitID, name, isActive, … }\`
+ * One API's documentation describes a unit as \`{ unitID, name, isActive, … }\`
  * and the API sends \`{ unit: { unitID, name, isActive, … } }\` — the way it
  * sends every other record. A record type built from the docs then asks every
  * response for \`name\` and finds nothing, and its page reads "this view no
@@ -266,14 +266,14 @@ export const fieldCoercion = (field: EntityField): Coercion | null =>
  *
  * What an account read saw decides where there is one: seen as 0/1 or as
  * true/false, it is; seen as other numbers, it is not, whatever the docs say
- * (Rentvine's \`taxFormTypeID\` is declared boolean and sent as 1–4). Where
+ * (one API's \`taxFormTypeID\` is declared boolean and sent as 1–4). Where
  * nothing has been read, the declaration is taken at its word.
  */
 export const isFlagField = (field: EntityField): boolean => {
   if (field.observed?.coercion === "->boolean") return true;
   /*
    * A name that asks a yes/no question — `isSharedWithTenant`, `hasPets` —
-   * over plain values. Rentvine declares most of its flags as text and sends
+   * over plain values. One API declares most of its flags as text and sends
    * "1"/"0"; a value that is not a flag still prints as itself.
    */
   const named = looksLikeFlag(field.path);

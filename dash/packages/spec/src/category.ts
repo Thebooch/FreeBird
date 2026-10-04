@@ -156,6 +156,9 @@ export type OnboardingChoices = z.infer<typeof onboardingChoicesSchema>;
  * How one widget fared when it was tried against this account.
  *
  * - `ready` — it answered, and its fields were there.
+ * - `partial` — it answered and works, but the read stopped before the end
+ *   (a page cap, a page that repeated), so its totals may exclude records.
+ *   Kept on the board, and said.
  * - `unchecked` — it could not be tried right now: the API asked us to wait,
  *   did not answer, or the check ran out of budget. Kept on the board: a rate
  *   limit is not a reason to design a widget away.
@@ -164,6 +167,7 @@ export type OnboardingChoices = z.infer<typeof onboardingChoicesSchema>;
  */
 export const widgetCheckStatusSchema = z.enum([
   "ready",
+  "partial",
   "unchecked",
   "denied",
   "unavailable",

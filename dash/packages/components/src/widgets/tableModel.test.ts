@@ -197,6 +197,21 @@ describe("visibleColumns", () => {
   });
 });
 
+describe("columnTotals, for values that do not add up", () => {
+  it("leaves out percentages and columns a join repeated", () => {
+    const totals = columnTotals(
+      [{ share: 40, value: 100, cost: 5 }, { share: 60, value: 100, cost: 7 }],
+      ["share", "value", "cost"],
+      [
+        { name: "share", valueType: "numeric", semantic: "percent" },
+        { name: "value", valueType: "numeric", repeated: true },
+        { name: "cost", valueType: "numeric" },
+      ],
+    );
+    expect(totals.map((total) => total.column)).toEqual(["cost"]);
+  });
+});
+
 describe("columnTotals, for flags", () => {
   it("does not add up a flag sent as 1 and 0", () => {
     const totals = columnTotals(

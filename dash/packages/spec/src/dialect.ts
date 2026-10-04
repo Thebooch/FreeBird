@@ -5,13 +5,18 @@ import { entitySchema } from "./entity.js";
 import { CATEGORIES_MAX, categorySchema, profileSchema } from "./category.js";
 import { apiRhythmSchema } from "./rhythm.js";
 import {
+  MAX_PAGES,
   authSchema,
+  readBodySchema,
+  readSafetySchema,
   paginationSchema,
   paramDefSchema,
   queryValueSchema,
   serverTemplateSchema,
 } from "./primitives.js";
 import { resourceSchema } from "./resource.js";
+import { connectorSchema } from "./connector.js";
+import { evidenceLevelSchema } from "./evidence.js";
 
 /**
  * A dialect is "how this vendor does things", declared once per API.
@@ -55,7 +60,7 @@ export const dialectSchema = z.object({
   headers: z.record(z.string(), z.string()).default({}),
   /** Merged into every request's query, e.g. a fixed page size. */
   query: z.record(z.string(), queryValueSchema).default({}),
-  maxPages: z.number().int().min(1).max(50).optional(),
+  maxPages: z.number().int().min(1).max(MAX_PAGES).optional(),
 });
 
 export type DialectSpec = z.infer<typeof dialectSchema>;
@@ -197,6 +202,11 @@ export const catalogEntrySchema = z.object({
     .regex(/^[a-z0-9-]+$/, "catalog ids must be lowercase [a-z0-9-]"),
   title: z.string().min(1),
   /**
+   * What is at the address: an API read over HTTP, or an MCP server whose
+   * read-only tools are its endpoints. See `connectionSchema.kind`.
+   */
+  kind: z.enum(["rest", "mcp"]).default("rest"),
+  /**
    * Where requests go. A real address, always — for an API hosted per
    * account it is the template filled with its documented defaults, which
    * is a place to start and not an address anybody's account lives at. See
@@ -205,7 +215,7 @@ export const catalogEntrySchema = z.object({
   baseUrl: z.string().url(),
   /**
    * The address as the documentation writes it, when part of it differs per
-   * account: `https://{account}.rentvine.com/api/manager`. Each connection
+   * account: `https://{account}.example.com/api/manager`. Each connection
    * fills in its own values; nothing account-specific is ever written here,
    * because this entry is shared with everybody who connects the API.
    */
@@ -219,6 +229,22 @@ export const catalogEntrySchema = z.object({
   dialect: dialectSchema,
   /** Unconfirmed import hint. Never executed until explicitly declared. */
   paginationProposal: paginationSchema.optional(),
+  /**
+   * Connector code a connection made from this entry carries, pinned by its
+   * hash. Shared like the rest of the entry: it holds no credential, only the
+   * names of the ones it asks the server to use.
+   */
+  connector: connectorSchema.optional(),
+  /** A client certificate the API asks for (mutual TLS). See `connectionSchema.clientCertificate`. */
+  clientCertificate: z
+    .object({
+      certRef: z.string().min(1),
+      keyRef: z.string().min(1),
+      caRef: z.string().min(1).optional(),
+      certLabel: z.string().max(80).optional(),
+      keyLabel: z.string().max(80).optional(),
+    })
+    .optional(),
   /** Suggested endpoints, so a new connection starts useful rather than empty. */
   ops: z
     .array(
@@ -227,11 +253,34 @@ export const catalogEntrySchema = z.object({
         auth: authSchema.optional(),
         authRequired: z.boolean().optional(),
         title: z.string().min(1),
+        /** See `opDefSchema.method`: a POST here is a read, with its `readSafety`. */
+        method: z.enum(["GET", "POST"]).default("GET"),
         path: z.string().min(1),
+        body: readBodySchema.optional(),
+        readSafety: readSafetySchema.optional(),
+        totalPath: z.string().max(200).optional(),
+        /** See `opDefSchema.servedBy`. */
+        servedBy: z.literal("connector").optional(),
+        /** See `opDefSchema.stream`. */
+        stream: z
+          .object({ events: z.number().int().min(1).max(1000).default(100), seconds: z.number().int().min(1).max(30).default(5) })
+          .optional(),
         archetype: archetypeSchema.default("list"),
         rowsPath: z.string().optional(),
+        /** See `opDefSchema.timeFiltered`: false where the endpoint does not take the dialect's time range. */
+        timeFiltered: z.boolean().optional(),
         pagination: paginationSchema.optional(),
-        maxPages: z.number().int().min(1).max(100).optional(),
+        /**
+         * Entries written before the limit was shared allowed up to 100. They
+         * still parse, and are clamped so the connection copied from them does.
+         */
+        maxPages: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .transform((pages) => Math.min(pages, MAX_PAGES))
+          .optional(),
         headers: z.record(z.string()).optional(),
         /** Mirrors `opDefSchema.params` — see primitives.ts. */
         params: z.array(paramDefSchema).max(60).default([]),
@@ -255,6 +304,13 @@ export const catalogEntrySchema = z.object({
          * empty means it described one with no fields.
          */
         fields: z.array(mappedFieldSchema).max(300).optional(),
+        /**
+         * Where `fields` came from: the specification (`declared`, the default)
+         * or a real read, where the documentation declared none (`observed`).
+         * Observed fields are names and kinds only — which values one account
+         * holds belongs to that account, never to a shared entry.
+         */
+        fieldsFrom: z.enum(["declared", "observed"]).optional(),
       }),
     )
     .default([]),
@@ -344,8 +400,8 @@ export const catalogEntrySchema = z.object({
   /**
    * How often new records of each kind appear.
    *
-   * A fact about the API — new applications arrive all day on Buildium
-   * whoever is connected — so it sits here with the categories and the record
+   * A fact about the API — new applications arrive all day on a
+   * property-management API, whoever is connected — so it sits here with the categories and the record
    * types, read once by its own pass during onboarding. What one person did
    * with it afterwards is theirs and lives on their connection.
    */
@@ -412,7 +468,30 @@ export const catalogEntrySchema = z.object({
    */
   authRequired: z.boolean().default(false),
   /** How this entry came to exist — shown so a guess is never mistaken for fact. */
-  origin: z.enum(["repo", "openapi", "docs", "manual"]).default("manual"),
+  origin: z.enum(["repo", "openapi", "docs", "manual", "registry"]).default("manual"),
+  /**
+   * Counts what the entry says about the API: one more each time that changes.
+   * What a registry lists, so an entry already held is not fetched again, and
+   * what a check's evidence says it was gathered against.
+   */
+  version: z.number().int().min(1).optional(),
+  /** When a check last read this entry's endpoints from a real account and found them ready. */
+  verifiedAt: z.string().datetime().optional(),
+  /**
+   * What the last check established, endpoint by endpoint, as rungs of the
+   * evidence ladder. Shape only — no count and no value from the account it
+   * was run against — so it can be shared with the entry. It is whoever ran
+   * the check's word about the version named, not a claim about any other.
+   */
+  evidence: z
+    .object({
+      at: z.string().datetime(),
+      /** The entry's `version` the check ran against. */
+      version: z.number().int().min(1).optional(),
+      outcome: z.enum(["ready", "partial"]),
+      ops: z.record(z.string(), evidenceLevelSchema),
+    })
+    .optional(),
   /** Which importer wrote the address and auth. Absent means before `IMPORT_VERSION` existed. */
   importVersion: z.number().int().min(1).optional(),
   /** True once a real request against this dialect returned usable rows. */

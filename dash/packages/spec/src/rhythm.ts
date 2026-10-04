@@ -19,7 +19,7 @@ import { idSchema } from "./primitives.js";
  * Split across two homes, on the same line onboarding already draws:
  *
  * - **Shared, on the catalog entry.** "New applications arrive constantly" is
- *   a fact about Buildium, true for everybody who connects it, and it is what
+ *   a fact about the API, true for everybody who connects it, and it is what
  *   one model call per API buys. See `apiRhythmSchema`.
  * - **Personal, per connection.** The cadences, and anything this particular
  *   user moved. Somebody who does not care whether vendors are current is not

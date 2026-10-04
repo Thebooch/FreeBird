@@ -154,7 +154,13 @@ export const applyCoercion = (value: unknown, coercion: Coercion): unknown => {
         const ms = value.getTime();
         return Number.isFinite(ms) ? ms : null;
       }
-      if (typeof value === "number") return Number.isFinite(value) ? value : null;
+      /*
+       * A number is a moment in milliseconds — or, below 1e11, in seconds: as
+       * milliseconds those would all fall in 1970-73, and unix seconds are how
+       * a great many APIs send time (a range over them read every date as
+       * 1970, measurement 1).
+       */
+      if (typeof value === "number") return Number.isFinite(value) ? (Math.abs(value) < 1e11 ? value * 1000 : value) : null;
       const parsed = Date.parse(String(value));
       return Number.isNaN(parsed) ? null : parsed;
     }

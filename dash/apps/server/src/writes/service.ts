@@ -27,8 +27,8 @@ import type { CatalogStore } from "../catalog.js";
 import { scopeOpAuth } from "../catalog.js";
 import type { Policy } from "../identity/policy.js";
 import type { LastSeen } from "../keeper/keeper.js";
-import type { SpecStore } from "../store.js";
-import type { KeyStore } from "../vault.js";
+import type { SpecRepository } from "../store.js";
+import type { SecretRepository } from "../vault.js";
 import { buildBody, currentValue, labelOf, settable, type FieldError } from "./body.js";
 import type { WriteEvent, WriteJournal, WriteReversal } from "./journal.js";
 import { PENDING_TTL_MS, PendingWrites, type PendingWrite, type WriteIntent, type WriteReview } from "./pending.js";
@@ -83,9 +83,10 @@ export class WriteError extends Error {
 }
 
 export interface WriteServiceDeps {
-  readonly store: SpecStore;
+  readonly store: SpecRepository;
   readonly catalog: CatalogStore | undefined;
-  readonly keys: KeyStore;
+  /** Only read, and through the credential broker, so an OAuth token is always current. */
+  readonly keys: Pick<SecretRepository, "get"> | { get(keyRef: string): Promise<string | null> };
   readonly registry: AdapterRegistry;
   readonly rest: RestAdapter;
   readonly queries: QueryCache;
@@ -132,7 +133,7 @@ const permissionFor = (kind: WriteIntent["kind"]): Permission =>
 /**
  * A record type by its id, or — as the assistant says it — by its own name.
  *
- * "listing" is Buildium's `unit-2-listing`, whose name is Listing. Only a
+ * "listing" is one API's `unit-2-listing`, whose name is Listing. Only a
  * match that is unique counts: two record types that could both be meant is
  * a question for whoever asked, not a guess to make on their account.
  */
@@ -307,7 +308,7 @@ export class WriteService {
           this.deps.registry.fetch(connection.id, op.id, {}, {
             params: { range: resolveRange({ preset: "30d", now: this.now() }), filters },
             now: this.now(),
-            resolveSecret: async (keyRef) => this.deps.keys.get(keyRef),
+            resolveSecret: async (keyRef) => (await this.deps.keys.get(keyRef)) ?? null,
           }),
         Priority.Interactive,
       );
@@ -634,7 +635,7 @@ export class WriteService {
               ...(pending.body !== undefined ? { body: pending.body } : {}),
               ...(writeOp.body?.contentType ? { contentType: writeOp.body.contentType } : {}),
             },
-            { now: this.now(), resolveSecret: async (keyRef) => this.deps.keys.get(keyRef) },
+            { now: this.now(), resolveSecret: async (keyRef) => (await this.deps.keys.get(keyRef)) ?? null },
           );
         },
         Priority.Interactive,
@@ -864,7 +865,7 @@ export class WriteService {
 /**
  * The fields of a target, for describing what a record type accepts.
  *
- * A form gets every option — Buildium's country list is two hundred and fifty
+ * A form gets every option — one API's country list is two hundred and fifty
  * long, and a picker missing the one somebody needs is a form they cannot
  * fill in. The assistant gets the first few, where the whole list would only
  * be tokens: `maxOptions`.

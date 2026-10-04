@@ -110,6 +110,129 @@ describe("compileBrief", () => {
     });
   });
 
+  /* Unscripted benchmark, 2026-09-28: a wrapped list was read as one record, and 1,234 invoices counted as 1. */
+  it("reads records where the endpoint puts them, not at the top of the response", () => {
+    const wrapped = compileBrief({
+      brief: { entity: "task", intent: "measure" },
+      entity: entity({}),
+      resource: resource(),
+      connection: "api",
+      id: "w1",
+      rowsPathOf: (op) => (op === "tasks_list" ? "$.data" : undefined),
+    });
+    expect(wrapped.widget?.pipeline[0]).toEqual({ op: "extract", path: "$.data" });
+    /* A caller that does not say gets what every caller had. */
+    expect(compile({ intent: "measure" }).widget?.pipeline[0]).toEqual({ op: "extract", path: "$" });
+  });
+
+  /* Unscripted benchmark, 2026-09-28: "done tasks" counted every task, and nothing said so. */
+  it("narrows a number by the values the request named, and says so", () => {
+    const result = compile({ intent: "measure", filters: [{ field: "Status", values: ["Done"] }] });
+    expect(result.errors).toEqual([]);
+    const filter = result.widget?.pipeline.find((step) => step.op === "filter");
+    expect(filter).toEqual({ op: "filter", where: 'lower(string(Status)) in ["done"]' });
+    /* Before the number is taken, not after it. */
+    expect(stepOps(result).indexOf("filter")).toBeLessThan(stepOps(result).indexOf("group"));
+    expect(result.notes.join(" ")).toMatch(/Only Tasks whose Status is Done are counted/);
+    /* A list keeps its visible strip instead: nothing is baked into it. */
+    expect(stepOps(compile({ intent: "records", filters: [{ field: "Status", values: ["Done"] }] }))).not.toContain("filter");
+  });
+
+  /* Unscripted benchmark, 2026-09-28: "VIP contacts" compared a flag with the word "VIP", and counted 0. */
+  it("narrows a number by a flag as the flag being set, unless the words say not", () => {
+    const withFlag = {
+      fields: [
+        { path: "Id", visibility: "hidden" },
+        { path: "Title", label: "Summary", visibility: "primary" },
+        { path: "Status", label: "Status", visibility: "primary" },
+        { path: "urgent", label: "Urgent", kinds: ["boolean"], visibility: "detail" },
+      ],
+    };
+    const set = compile({ intent: "measure", filters: [{ field: "urgent", values: ["Urgent"] }] }, withFlag);
+    expect(set.widget?.pipeline.find((step) => step.op === "filter")).toEqual({ op: "filter", where: "urgent == true" });
+    expect(set.notes.join(" ")).toMatch(/Only Tasks with Urgent are counted/);
+    const unset = compile({ intent: "measure", filters: [{ field: "urgent", values: ["not urgent"] }] }, withFlag);
+    expect(unset.widget?.pipeline.find((step) => step.op === "filter")).toEqual({ op: "filter", where: "urgent == false" });
+  });
+
+  /* Measurement 1: "more than $100" and "in July" had no way to be said, so every record was counted. */
+  it("narrows by a number range and a time range, as a moment whatever the API sends", () => {
+    const result = compile({
+      intent: "measure",
+      measure: { agg: "sum", field: "Cost" },
+      filters: [
+        { field: "Cost", above: 100 },
+        { field: "DueDate", from: "2026-07-01", to: "2026-08-01" },
+      ],
+    });
+    expect(result.errors).toEqual([]);
+    const july = Date.parse("2026-07-01");
+    const august = Date.parse("2026-08-01");
+    expect(result.widget?.pipeline.find((step) => step.op === "filter")).toEqual({
+      op: "filter",
+      where: `Cost > 100 && DueDate >= ${july} && DueDate < ${august}`,
+    });
+    /* The date is read as a moment before it is compared. */
+    const coerce = result.widget?.pipeline.find((step) => step.op === "coerce") as { fields: Record<string, string> } | undefined;
+    expect(coerce?.fields.DueDate).toMatch(/->datetime$/);
+    expect(result.notes.join(" ")).toMatch(/Only Tasks whose Due date is from 2026-07-01 and before 2026-08-01 are counted/);
+    /* A list has no strip for a range: the range is part of what it reads, and said. */
+    const list = compile({ intent: "records", filters: [{ field: "Cost", below: 5 }] });
+    expect(list.widget?.pipeline.find((step) => step.op === "filter")).toEqual({ op: "filter", where: "Cost < 5" });
+    expect(list.notes.join(" ")).toMatch(/are shown/);
+  });
+
+  /* A total of dollars and euros is valid arithmetic and the wrong answer. */
+  it("says when a total adds amounts in more than one currency together", () => {
+    const withCurrency = {
+      fields: [
+        { path: "Id", visibility: "hidden" },
+        { path: "Title", label: "Summary", visibility: "primary" },
+        { path: "Status", label: "Status", visibility: "primary" },
+        { path: "Cost", label: "Cost", semantic: "currency", kinds: ["number"], visibility: "detail" },
+        { path: "currency", label: "Currency", kinds: ["string"], visibility: "detail" },
+      ],
+    };
+    const mixed = compile({ intent: "measure", measure: { agg: "sum", field: "Cost" } }, withCurrency);
+    expect(mixed.widget?.pipeline.at(-1)).toMatchObject({ op: "caveat", when: "_currencies > 1" });
+    expect(JSON.stringify(mixed.widget?.pipeline)).toContain('"_currencies":"countDistinct(currency)"');
+    /* Narrowed to one currency, there is nothing to say. */
+    const one = compile(
+      { intent: "measure", measure: { agg: "sum", field: "Cost" }, filters: [{ field: "currency", values: ["USD"] }] },
+      withCurrency,
+    );
+    expect(one.widget?.pipeline.some((step) => step.op === "caveat")).toBe(false);
+    /* A count adds no money up. */
+    expect(compile({ intent: "measure" }, withCurrency).widget?.pipeline.some((step) => step.op === "caveat")).toBe(false);
+  });
+
+  /* Regression: "since 1 June" was narrowed within the board's thirty days, and counted one month. */
+  it("reads the time the request named, not only the board's window", () => {
+    const since = compile({ intent: "measure", filters: [{ field: "DueDate", from: "2026-06-01" }] });
+    expect(since.widget?.timeWindow).toEqual({ from: "2026-06-01T00:00:00.000Z" });
+    expect(since.notes.join(" ")).toMatch(/Reads from 2026-06-01, whatever window the board shows/);
+    const july = compile({ intent: "records", filters: [{ field: "DueDate", from: "2026-07-01", to: "2026-08-01" }] });
+    expect(july.widget?.timeWindow).toEqual({ from: "2026-07-01T00:00:00.000Z", to: "2026-08-01T00:00:00.000Z" });
+    /* A number range is not a time, and the board's window stays. */
+    expect(compile({ intent: "measure", filters: [{ field: "Cost", above: 100 }] }).widget?.timeWindow).toBeUndefined();
+  });
+
+  it("refuses a time range on a field that cannot hold a time, and says so", () => {
+    const result = compile(
+      { intent: "measure", filters: [{ field: "urgent", values: ["true"], from: "2026-01-01", to: "2027-01-01" }] },
+      {
+        fields: [
+          { path: "Id", visibility: "hidden" },
+          { path: "Title", label: "Summary", visibility: "primary" },
+          { path: "Status", label: "Status", visibility: "primary" },
+          { path: "urgent", label: "Urgent", kinds: ["boolean"], visibility: "detail" },
+        ],
+      },
+    );
+    expect(result.widget?.pipeline.find((step) => step.op === "filter")).toEqual({ op: "filter", where: "urgent == true" });
+    expect(result.notes.join(" ")).toMatch(/Urgent does not hold a date/);
+  });
+
   it("offers no filter strip over buckets, which are not records", () => {
     // A strip on a chart would filter its own bars, which is not what anybody
     // means by a filter.
@@ -307,6 +430,22 @@ describe("compileBrief", () => {
     const result = compile({ intent: "measure", measure: { agg: "sum" } });
     expect(result.widget).toBeNull();
     expect(result.errors.join(" ")).toContain("needs a field to add up");
+  });
+
+  it("refuses to add percentages up", () => {
+    const result = compile(
+      { intent: "measure", measure: { agg: "sum", field: "Done" } },
+      {
+        fields: [
+          { path: "Id", visibility: "hidden" },
+          { path: "Title", label: "Summary", visibility: "primary" },
+          { path: "Status", label: "Status", visibility: "primary" },
+          { path: "Done", label: "Share done", semantic: "percent", visibility: "detail" },
+        ],
+      },
+    );
+    expect(result.widget).toBeNull();
+    expect(result.errors.join(" ")).toContain("is a percentage");
   });
 
   it("refuses a record type this API cannot list", () => {
@@ -647,6 +786,279 @@ describe("compileBrief keeps a way through to a related record", () => {
   });
 });
 
+/* Regression: 11,848 breweries were read five pages deep to count Oregon's 295, with a filter the API had confirmed. */
+describe("compileBrief, asking the API to narrow", () => {
+  const byStatus = (op: string, field: string) => (op === "tasks_list" && field === "Status" ? "by_status" : undefined);
+  const narrowed = (intent: WidgetBrief["intent"], values: string[]) =>
+    compileBrief({
+      brief: { entity: "task", intent, filters: [{ field: "Status", values }], ...(intent === "records" ? {} : { measure: { agg: "count" } }) } as WidgetBrief,
+      entity: entity({}),
+      resource: resource(),
+      connection: "api",
+      id: "w1",
+      filterParamOf: byStatus,
+    });
+
+  it("sends a number's one narrowing value to the filter a read confirmed, and still narrows locally", () => {
+    const result = narrowed("measure", ["Open"]);
+    expect(result.widget?.source).toMatchObject({ op: "tasks_list", params: { by_status: "Open" } });
+    expect(result.widget?.pipeline).toContainEqual({ op: "filter", where: 'lower(string(Status)) in ["open"]' });
+    expect(result.notes.join(" ")).toMatch(/asked for those Tasks alone \(by_status=Open\)/);
+  });
+
+  it("leaves a list's narrowing to its strip, which a reader can widen", () => {
+    expect(narrowed("records", ["Open"]).widget?.source?.params).toEqual({});
+  });
+
+  it("asks for nothing when there are two values, or no confirmed filter", () => {
+    expect(narrowed("measure", ["Open", "Blocked"]).widget?.source?.params).toEqual({});
+    const unconfirmed = compileBrief({
+      brief: { entity: "task", intent: "measure", filters: [{ field: "Status", values: ["Open"] }], measure: { agg: "count" } },
+      entity: entity({}),
+      resource: resource(),
+      connection: "api",
+      id: "w1",
+    });
+    expect(unconfirmed.widget?.source?.params).toEqual({});
+  });
+});
+
+/* "how many" answered by the API's own count, where a read confirmed it counts these records. */
+describe("compileBrief, the API's own count", () => {
+  const byStatus = (op: string, field: string) => (op === "tasks_list" && field === "Status" ? "by_status" : undefined);
+  const counted = resource({ count: { op: "tasks_count", field: "meta.total", filters: ["by_status"] } });
+  const measure = (brief: Partial<WidgetBrief>, withResource: ResourceSpec = counted) =>
+    compileBrief({
+      brief: { entity: "task", intent: "measure", measure: { agg: "count" }, ...brief } as WidgetBrief,
+      entity: entity({}),
+      resource: withResource,
+      connection: "api",
+      id: "w1",
+      filterParamOf: byStatus,
+    });
+
+  it("reads the count, in one request, and claims no records", () => {
+    const result = measure({});
+    expect(result.widget?.source).toEqual({ connection: "api", op: "tasks_count", params: {} });
+    expect(result.widget?.pipeline).toEqual([
+      { op: "extract", path: "$" },
+      { op: "derive", fields: { value: "meta.total" } },
+      { op: "coerce", fields: { value: "->number" } },
+    ]);
+    expect(result.widget?.entity).toBeUndefined();
+    expect(result.notes.join(" ")).toMatch(/Counted by the API itself, in one request/);
+  });
+
+  it("narrows the count by a filter it was confirmed to honour", () => {
+    expect(measure({ filters: [{ field: "Status", values: ["Open"] }] }).widget?.source).toEqual({
+      connection: "api",
+      op: "tasks_count",
+      params: { by_status: "Open" },
+    });
+  });
+
+  it("reads the records for anything the count cannot say", () => {
+    /* A filter the count was never checked under. */
+    const unchecked = resource({ count: { op: "tasks_count", field: "meta.total", filters: [] } });
+    expect(measure({ filters: [{ field: "Status", values: ["Open"] }] }, unchecked).widget?.source?.op).toBe("tasks_list");
+    /* Two values, a range, a total, a list. */
+    expect(measure({ filters: [{ field: "Status", values: ["Open", "Blocked"] }] }).widget?.source?.op).toBe("tasks_list");
+    expect(measure({ filters: [{ field: "DueDate", from: "2026-06-01" }] }).widget?.source?.op).toBe("tasks_list");
+    expect(measure({ measure: { agg: "sum", field: "Cost" } }).widget?.source?.op).toBe("tasks_list");
+    expect(measure({ intent: "records" }).widget?.source?.op).toBe("tasks_list");
+    /* And with no count confirmed, the list, as before. */
+    expect(measure({}, resource()).widget?.source?.op).toBe("tasks_list");
+  });
+});
+
+/* What a number means, stated on it. */
+describe("compileBrief, the metric", () => {
+  const invoice = entity({
+    id: "invoice",
+    resource: "invoice",
+    name: { one: "Invoice", many: "Invoices" },
+    kind: "money",
+    identity: { field: "id", observed: true },
+    display: { title: ["status"], status: "status" },
+    fields: [
+      { path: "id", visibility: "hidden" },
+      { path: "status", label: "Status", visibility: "primary", values: ["paid", "open"] },
+      { path: "currency", label: "Currency", visibility: "detail" },
+      { path: "issued_on", label: "Issue date", semantic: "timestamp", visibility: "detail" },
+      { path: "subTotal", label: "Subtotal", kinds: ["number"], visibility: "detail" },
+      { path: "tax", label: "Tax", kinds: ["number"], visibility: "detail" },
+      { path: "discount", label: "Discount", kinds: ["number"], visibility: "detail" },
+      { path: "total", label: "Total", semantic: "currency", kinds: ["number"], visibility: "primary" },
+    ],
+  });
+  const sum = (brief: Partial<WidgetBrief> = {}) =>
+    compileBrief({
+      brief: { entity: "invoice", intent: "measure", measure: { agg: "sum", field: "total" }, ...brief } as WidgetBrief,
+      entity: invoice,
+      resource: resourceSchema.parse({ id: "invoice", title: "Invoices", listOp: "invoices" }),
+      connection: "api",
+      id: "w1",
+    });
+
+  it("says what is added, over which records, narrowed how, dated by what, in which currency", () => {
+    const metric = sum({
+      filters: [
+        { field: "status", values: ["paid"] },
+        { field: "issued_on", from: "2026-08-01", to: "2026-09-01" },
+      ],
+      reading: { term: "revenue", as: "paid invoice totals" },
+    }).widget?.metric;
+    expect(metric).toMatchObject({
+      measure: { agg: "sum", field: "total", label: "Total" },
+      of: { entity: "invoice", many: "Invoices" },
+      dateBasis: { field: "issued_on", label: "Issue date" },
+      currency: { kind: "field", field: "currency" },
+      countedBy: "records",
+    });
+    expect(metric?.says).toMatch(/^"revenue" read as paid invoice totals: Sum of Total over Invoices whose /);
+    expect(metric?.says).toMatch(/Status is paid/);
+    expect(metric?.says).toMatch(/dated by Issue date, in each record's own currency\.$/);
+    /* Narrowed to one currency, the total is in it. */
+    expect(sum({ filters: [{ field: "currency", values: ["usd"] }] }).widget?.metric?.currency).toEqual({
+      kind: "code",
+      code: "USD",
+    });
+  });
+
+  it("asks, never corrects, when the parts a total is named after do not add up to it", () => {
+    const built = sum().widget;
+    expect(built?.metric?.checks).toEqual([
+      {
+        total: "total",
+        parts: [
+          { field: "subTotal", sign: 1 },
+          { field: "tax", sign: 1 },
+          { field: "discount", sign: -1 },
+        ],
+        tolerance: 0.01,
+        basis: "inferred",
+      },
+    ]);
+    const check = built?.pipeline.find((step) => step.op === "caveat" && step.when.includes("subTotal"));
+    expect(check).toEqual({
+      op: "caveat",
+      when: "abs((coalesce(subTotal, 0) + coalesce(tax, 0) - coalesce(discount, 0)) - total) > 0.01",
+      say: "On {count} of the {of} Invoices read, Subtotal + Tax − Discount is not Total. The total may include something the parts do not name.",
+    });
+    /* Only for a total named as one, and with a subtotal beside it. */
+    expect(sum({ measure: { agg: "sum", field: "tax" } }).widget?.metric?.checks).toEqual([]);
+  });
+
+  /* Regression: "leave out cancelled orders" had no way to be said, and the total kept them, silently. */
+  it("narrows by whether a field holds anything, for every kind of widget, and says it", () => {
+    const withCancelled = entity({
+      fields: [
+        { path: "Id", visibility: "hidden" },
+        { path: "Title", label: "Summary", visibility: "primary" },
+        { path: "Status", label: "Status", visibility: "primary" },
+        { path: "CancelledAt", label: "Cancelled date", semantic: "timestamp", visibility: "detail" },
+        { path: "Cost", label: "Cost", semantic: "currency", visibility: "detail" },
+      ],
+    });
+    const built = (intent: WidgetBrief["intent"]) =>
+      compileBrief({
+        brief: {
+          entity: "task",
+          intent,
+          filters: [{ field: "CancelledAt", empty: true }],
+          ...(intent === "records" ? {} : { measure: { agg: "sum", field: "Cost" } }),
+        } as WidgetBrief,
+        entity: withCancelled,
+        resource: resource(),
+        connection: "api",
+        id: "w1",
+      });
+    const sum = built("measure");
+    expect(sum.widget?.pipeline).toContainEqual({ op: "filter", where: 'trim(coalesce(string(CancelledAt), "")) == ""' });
+    expect(sum.widget?.metric?.where).toEqual(["Cancelled date is empty"]);
+    expect(sum.notes.join(" ")).toMatch(/Only Tasks whose Cancelled date is empty are counted/);
+    expect(built("records").widget?.pipeline).toContainEqual({
+      op: "filter",
+      where: 'trim(coalesce(string(CancelledAt), "")) == ""',
+    });
+  });
+
+  it("says, on every read, a narrowing the request asked for that nothing here expresses", () => {
+    const built = compile({ intent: "measure", unmet: ["leave out test orders"] });
+    expect(built.widget?.pipeline.at(-1)).toEqual({
+      op: "caveat",
+      when: "true",
+      say: "This does not leave out what was asked, because nothing here can express it: leave out test orders.",
+    });
+    expect(built.widget?.metric?.unmet).toEqual(["leave out test orders"]);
+    expect(built.widget?.metric?.says).toMatch(/It does not leave out: leave out test orders\.$/);
+  });
+
+  /* Regression: "how many" over an endpoint that reads the board's range counted 30 days of 1,840, and said nothing. */
+  it("counts every record where the request named no time, and says so; a chart over time keeps the board's", () => {
+    const over = (readsRange: boolean, brief: Partial<WidgetBrief> = {}) =>
+      compileBrief({
+        brief: { entity: "task", intent: "measure", measure: { agg: "count" }, ...brief } as WidgetBrief,
+        entity: entity({}),
+        resource: resource(),
+        connection: "api",
+        id: "w1",
+        readsRange: () => readsRange,
+      });
+    const number = over(true);
+    expect(number.widget?.timeWindow).toEqual({ all: true });
+    expect(number.widget?.metric).toMatchObject({ window: "all", says: "Number of Tasks, over all time." });
+    expect(number.notes.join(" ")).toMatch(/Counts every record, whatever range the board shows/);
+    /* A breakdown by category is a number per category: every record too. */
+    expect(over(true, { intent: "compare", groupBy: "Status" }).widget?.timeWindow).toEqual({ all: true });
+    /* An endpoint that reads no range needs nothing. */
+    expect(over(false).widget?.timeWindow).toBeUndefined();
+    /* A time the request named is its own window. */
+    expect(over(true, { filters: [{ field: "DueDate", from: "2026-06-01" }] }).widget?.metric?.window).toBe("own");
+    /* A chart over time is drawn across the board's range, and says so. */
+    const overTime = over(true, { intent: "compare", groupBy: "DueDate" }).widget;
+    expect(overTime?.timeWindow).toBeUndefined();
+    expect(overTime?.metric?.window).toBe("board");
+    /* A list follows the board. */
+    expect(over(true, { intent: "records", measure: undefined }).widget?.timeWindow).toBeUndefined();
+  });
+
+  /* 2026-09-30: "closed this year" put a date range on `year`, which holds 2026, and counted nothing. */
+  it("compares a field that holds years in years", () => {
+    const tickets = entity({
+      fields: [
+        { path: "Id", visibility: "hidden" },
+        { path: "Title", label: "Summary", visibility: "primary" },
+        { path: "Status", label: "Status", visibility: "primary" },
+        { path: "year", label: "Year", kinds: ["number"], visibility: "detail" },
+      ],
+    });
+    const built = compileBrief({
+      brief: { entity: "task", intent: "measure", measure: { agg: "count" }, filters: [{ field: "year", from: "2026-01-01", to: "2027-01-01" }] },
+      entity: tickets,
+      resource: resource(),
+      connection: "api",
+      id: "w1",
+    }).widget;
+    expect(built?.pipeline).toContainEqual({ op: "filter", where: "year >= 2026 && year < 2027" });
+    expect(built?.pipeline).toContainEqual({ op: "coerce", fields: { year: "->number" } });
+  });
+
+  it("is on numbers and charts, never on a list, and says a count the API made", () => {
+    expect(compile({ intent: "records" }).widget?.metric).toBeUndefined();
+    expect(compile({ intent: "measure" }).widget?.metric?.says).toBe("Number of Tasks.");
+    expect(compile({ intent: "compare", groupBy: "Status" }).widget?.metric?.measure.agg).toBe("count");
+    const counted = compileBrief({
+      brief: { entity: "task", intent: "measure", measure: { agg: "count" } },
+      entity: entity({}),
+      resource: resource({ count: { op: "tasks_count", field: "total", filters: [] } }),
+      connection: "api",
+      id: "w1",
+    });
+    expect(counted.widget?.metric).toMatchObject({ countedBy: "api", says: "Number of Tasks, as the API counts them." });
+  });
+});
+
 describe("compileBrief, alongside", () => {
   it("joins on the field this record already points at", () => {
     const result = compileBrief({
@@ -960,8 +1372,10 @@ describe("compileBrief, a collection listed one record at a time", () => {
   it("says what it costs and where it stops, before anybody spends it", () => {
     const said = built().notes.join(" ");
     expect(said).toContain("25");
-    expect(said).toContain("extra requests");
-    expect(said).toContain("shows none");
+    expect(said).toContain("one extra request each");
+    /* Where it stops: the rest are read in the background, to a ceiling, and said until then. */
+    expect(said).toContain("up to 500");
+    expect(said).toContain("excludes them");
   });
 
   it("refuses when the rows carry nothing saying which record they belong to", () => {

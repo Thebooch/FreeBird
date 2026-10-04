@@ -20,20 +20,20 @@ import {
  * vendor names it.
  */
 
-const RENTVINE = {
-  url: "https://{account}.rentvine.com/api/manager",
+const CONTOSO = {
+  url: "https://{account}.contoso.example/api/manager",
   variables: [{ name: "account", description: "Your account subdomain", default: "example" }],
 };
 
 describe("resolveServerUrl", () => {
   it("fills in the blanks", () => {
-    expect(resolveServerUrl(RENTVINE, { account: "123pm" }).url).toBe(
-      "https://123pm.rentvine.com/api/manager",
+    expect(resolveServerUrl(CONTOSO, { account: "northgate" }).url).toBe(
+      "https://northgate.contoso.example/api/manager",
     );
   });
 
   it("says which blank is empty rather than making a half address", () => {
-    const result = resolveServerUrl(RENTVINE, {});
+    const result = resolveServerUrl(CONTOSO, {});
     expect(result.url).toBeUndefined();
     expect(result.missing).toEqual(["account"]);
   });
@@ -41,7 +41,7 @@ describe("resolveServerUrl", () => {
   /* A value that moves the request to another host is not a subdomain. */
   it("refuses a value that could change the host", () => {
     for (const value of ["evil.com/x", "a@evil.com", "a:8080", "a b"]) {
-      const result = resolveServerUrl(RENTVINE, { account: value });
+      const result = resolveServerUrl(CONTOSO, { account: value });
       expect(result.url).toBeUndefined();
       expect(result.invalid).toEqual(["account"]);
     }
@@ -79,17 +79,17 @@ describe("looksLikePlaceholder", () => {
 });
 
 describe("connectionNeedsAddress", () => {
-  const base = { id: "rv", title: "Rentvine", kind: "rest", baseUrl: "https://example.rentvine.com" };
+  const base = { id: "rv", title: "Contoso", kind: "rest", baseUrl: "https://example.contoso.example" };
 
   it("needs one until every blank has a value", () => {
     expect(
       connectionNeedsAddress(
-        connectionSchema.parse({ ...base, server: { ...RENTVINE, values: {} } }),
+        connectionSchema.parse({ ...base, server: { ...CONTOSO, values: {} } }),
       ),
     ).toBe(true);
     expect(
       connectionNeedsAddress(
-        connectionSchema.parse({ ...base, server: { ...RENTVINE, values: { account: "123pm" } } }),
+        connectionSchema.parse({ ...base, server: { ...CONTOSO, values: { account: "northgate" } } }),
       ),
     ).toBe(false);
   });
@@ -136,11 +136,11 @@ describe("Basic auth with a stored username", () => {
 describe("catalogEntrySchema", () => {
   it("carries an address template and a guessed address", () => {
     const entry = catalogEntrySchema.parse({
-      id: "rentvine",
-      title: "Rentvine",
-      baseUrl: "https://example.rentvine.com/api/manager",
+      id: "contoso",
+      title: "Contoso",
+      baseUrl: "https://example.contoso.example/api/manager",
       dialect: {},
-      server: RENTVINE,
+      server: CONTOSO,
     });
     expect(entry.server?.variables[0]?.name).toBe("account");
 

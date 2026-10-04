@@ -16,7 +16,12 @@ import type { RecordCreateOffer, RecordRowActions } from "./WidgetShell.jsx";
 import { RecordPage } from "./RecordPage.jsx";
 import type { OpenReference } from "./entityDetail.js";
 import { ParamBar } from "./ParamBar.jsx";
-import { DashboardProvider, type RecordChangeSignal } from "./context.jsx";
+import {
+  DashboardProvider,
+  type EachSource,
+  type HistorySource,
+  type RecordChangeSignal,
+} from "./context.jsx";
 import type { PresentationSources } from "./presentation.js";
 import { DASH_REACT_STYLES } from "./styles.js";
 
@@ -128,6 +133,10 @@ export interface DashboardProps {
    * connection's cached rows instead of leaving the old account's on screen.
    */
   readonly credentialRevisions?: Readonly<Record<string, number>>;
+  /** A number tile's history, where the host keeps one. See the provider. */
+  readonly history?: HistorySource;
+  /** Reads every record's related records past a tile's own, where the host can. See the provider. */
+  readonly readEach?: EachSource;
   /** The last change to a record, so what it made stale is asked again. See the provider. */
   readonly changes?: RecordChangeSignal | undefined;
   /**
@@ -207,6 +216,8 @@ export const Dashboard = ({
   entityLinks,
   rangeOps,
   credentialRevisions,
+  history,
+  readEach,
   changes,
   editing,
   onEditingChange,
@@ -234,6 +245,8 @@ export const Dashboard = ({
       {...(entityLinks ? { entityLinks } : {})}
       {...(rangeOps ? { rangeOps } : {})}
       {...(credentialRevisions ? { credentialRevisions } : {})}
+      {...(history ? { history } : {})}
+      {...(readEach ? { readEach } : {})}
       {...(changes ? { changes } : {})}
     >
       <DashStyleSheet />

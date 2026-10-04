@@ -105,7 +105,8 @@ export type CompiledStep =
   | { readonly op: "limit"; readonly step: Extract<PipelineStep, { op: "limit" }> }
   | { readonly op: "rename"; readonly step: Extract<PipelineStep, { op: "rename" }> }
   | { readonly op: "select"; readonly step: Extract<PipelineStep, { op: "select" }> }
-  | { readonly op: "annotate"; readonly step: Extract<PipelineStep, { op: "annotate" }> };
+  | { readonly op: "annotate"; readonly step: Extract<PipelineStep, { op: "annotate" }> }
+  | { readonly op: "caveat"; readonly when: CompiledExpression; readonly say: string };
 
 export interface CompiledWidget {
   readonly id: string;

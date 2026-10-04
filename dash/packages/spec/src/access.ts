@@ -47,9 +47,21 @@ export const permissionSchema = z.enum(PERMISSIONS);
 export type Permission = z.infer<typeof permissionSchema>;
 
 /**
+ * What each role may do before any grant: the owner and an admin everything,
+ * an editor boards and records, a viewer only reading records. A member's
+ * grants add to this, each where its scope says.
+ */
+export const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
+  owner: PERMISSIONS,
+  admin: PERMISSIONS,
+  editor: ["records.read", "records.create", "records.update", "records.delete", "records.act", "boards.edit"],
+  viewer: ["records.read"],
+};
+
+/**
  * Where a permission applies. Empty is everywhere; a connection narrows it to
  * one account, and a record type within it narrows it further — "may edit
- * properties on the Buildium account" and nothing else.
+ * properties on this account" and nothing else.
  */
 export const scopeSchema = z.object({
   connection: idSchema.optional(),

@@ -180,6 +180,9 @@ describe("applyCoercion", () => {
 
   it("parses ISO strings and Date objects", () => {
     expect(applyCoercion("2026-08-04T00:00:00Z", "iso->datetime")).toBe(Date.UTC(2026, 7, 4));
+    /* Unix seconds, as most APIs send them, are a moment — not a date in January 1970. */
+    expect(applyCoercion(1_785_000_000, "auto->datetime")).toBe(1_785_000_000_000);
+    expect(applyCoercion(1_785_000_000_000, "auto->datetime")).toBe(1_785_000_000_000);
     expect(applyCoercion(new Date(Date.UTC(2026, 7, 4)), "auto->datetime")).toBe(
       Date.UTC(2026, 7, 4),
     );
@@ -208,7 +211,7 @@ describe("applyCoercion", () => {
 });
 
 /*
- * Rentvine sends its flags as 1 and 0. A field known to be a flag reads as a
+ * Contoso sends its flags as 1 and 0. A field known to be a flag reads as a
  * state however it arrives, and a real true/false does too.
  */
 describe("flags", () => {

@@ -50,7 +50,21 @@ export interface TimeRange {
   readonly end: number;
   readonly grain: Grain;
   readonly preset: RangePreset;
+  /**
+   * Every record, whatever its dates: `{{range.start}}` and `{{range.end}}`
+   * resolve to nothing, so an endpoint that filters by date is asked without
+   * bounds. A number whose request named no time reads this.
+   */
+  readonly all?: true;
 }
+
+/**
+ * The time a widget reads in place of the board's: a window its request
+ * named, or every record where its request named none and it counts.
+ */
+export type TimeWindow =
+  | { readonly from: string; readonly to?: string | undefined }
+  | { readonly all: true };
 
 export interface ResolvedParams {
   readonly range: TimeRange;
@@ -147,6 +161,33 @@ export const resolveRange = (input: ResolveRangeInput): TimeRange => {
 };
 
 /**
+ * The range a widget reads: its own window where it has one, else the
+ * board's. A window from a date to now ends where a relative preset would, so
+ * reading it again within minutes lands on the same cache key.
+ */
+export const rangeForWindow = (
+  window: TimeWindow | undefined,
+  board: TimeRange,
+  now: number,
+): TimeRange => {
+  if (!window) return board;
+  /* Ends where the board's does, so reading it again within minutes lands on the same key. */
+  if ("all" in window) return { start: 0, end: board.end, grain: defaultGrainFor(0, board.end), preset: "custom", all: true };
+  const start = Date.parse(window.from);
+  const end = window.to !== undefined ? Date.parse(window.to) : quantiseEnd(now, now - start);
+  if (Number.isNaN(start) || Number.isNaN(end) || end <= start) return board;
+  return { start, end, grain: defaultGrainFor(start, end), preset: "custom" };
+};
+
+/** The parameters a widget reads with: the board's, with its own time window in place of the board's. */
+export const paramsForWidget = (
+  widget: { readonly timeWindow?: TimeWindow | undefined },
+  params: ResolvedParams,
+  now: number,
+): ResolvedParams =>
+  widget.timeWindow ? { ...params, range: rangeForWindow(widget.timeWindow, params.range, now) } : params;
+
+/**
  * `{{range.start | unix}}` — a token, optionally piped through one formatter.
  * Deliberately not a template language: no expressions, no nesting, no logic.
  */
@@ -199,8 +240,9 @@ const applyFilter = (value: unknown, filter: TokenFilter | null): string => {
 };
 
 const lookup = (key: string, params: ResolvedParams): unknown => {
-  if (key === "range.start") return params.range.start;
-  if (key === "range.end") return params.range.end;
+  /* Every record: no bounds to send. */
+  if (key === "range.start") return params.range.all ? undefined : params.range.start;
+  if (key === "range.end") return params.range.all ? undefined : params.range.end;
   if (key === "range.grain") return params.range.grain;
   if (key === "range.preset") return params.range.preset;
   if (key.startsWith("param.")) return params.filters[key.slice("param.".length)];
@@ -223,6 +265,25 @@ export const interpolate = (source: string, params: ResolvedParams): string =>
       (TOKEN_FILTERS as readonly string[]).includes(filter ?? "")
         ? (filter as TokenFilter)
         : null,
+    ),
+  );
+
+/**
+ * Interpolate a URL path, encoding every substituted value.
+ *
+ * A path value is one segment: an id holding `/`, `?` or `#` must not become
+ * two segments or the start of a query string, which would read a different
+ * record — or a different endpoint — under this one's name.
+ */
+export const interpolatePath = (source: string, params: ResolvedParams): string =>
+  source.replace(TOKEN_RE, (_raw, key: string, filter: string | undefined) =>
+    encodeURIComponent(
+      applyFilter(
+        lookup(key, params),
+        (TOKEN_FILTERS as readonly string[]).includes(filter ?? "")
+          ? (filter as TokenFilter)
+          : null,
+      ),
     ),
   );
 

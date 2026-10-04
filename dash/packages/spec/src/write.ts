@@ -4,7 +4,7 @@ import { authSchema, idSchema, paramDefSchema, queryValueSchema } from "./primit
 /**
  * What an API accepts, as opposed to what it returns.
  *
- * Reads are GET by construction — `opDefSchema.method` is a literal — and
+ * Reads are GET — or POST only with a recorded `readSafety` — and
  * that guarantee stays exactly as it was: every widget, keeper target, brief
  * and query names an op from `ops`, and none of them can name one of these.
  * An endpoint that changes something lives here instead, in its own list on
@@ -34,7 +34,7 @@ export const WRITES_VERSION = 1;
  * Declared by the API, so it travels with the catalog entry. `readFrom` is
  * the one fact about it that is not in the specification: where the record's
  * *current* value lives on the read side. The two shapes are not the same —
- * Buildium sends `PropertyManagerId` and returns `RentalManager.Id` — and an
+ * one API takes `PropertyManagerId` and returns `RentalManager.Id` — and an
  * update that replaces the whole record has to send every value it means to
  * keep, so this mapping is what stops an edit to one field from clearing
  * another.

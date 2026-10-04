@@ -9,7 +9,7 @@ import { writeJsonAtomic } from "./json-file.js";
  *
  * Kept beside the narrowings rather than in the catalog, and the split is the
  * same one those draw. The catalog says "new applications arrive all day",
- * which is true of Buildium for everybody who connects it. This says "and I
+ * which is true of that API for everybody who connects it. This says "and I
  * want them every ten minutes, but I do not care when the vendor list was last
  * read" — which is true of one person, and would be wrong to hand to the next.
  *

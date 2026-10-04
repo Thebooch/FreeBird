@@ -110,10 +110,25 @@ export const hydrateFieldFormats = (entry: CatalogEntry): CatalogEntry => {
   return changed ? { ...entry, entities: hydrated } : entry;
 };
 
+/**
+ * What an entry says about its API, as one string: everything but when it
+ * was written, which version it is, and what a check found. Two entries that
+ * say the same are the same version.
+ */
+const saying = (entry: CatalogEntry): string => {
+  const { updatedAt: _at, version: _version, verified: _verified, verifiedAt: _checked, evidence: _evidence, entitiesVerifiedAt: _entities, mapProgress: _progress, origin: _origin, ...rest } = entry;
+  return JSON.stringify(rest);
+};
+
 export class CatalogStore implements IntegrationStore {
   constructor(
     private readonly seedDir: string,
     private readonly overlayDir: string,
+    /**
+     * Entries pulled from a registry (`registry/registry.ts`): above what ships
+     * with the code, below what this instance has worked out itself.
+     */
+    private readonly registryDir?: string,
   ) {
     mkdirSync(overlayDir, { recursive: true });
   }
@@ -164,6 +179,7 @@ export class CatalogStore implements IntegrationStore {
   private merged(): Map<string, CatalogEntry> {
     const merged = new Map<string, CatalogEntry>();
     for (const entry of this.readDir(this.seedDir, "repo")) merged.set(entry.id, entry);
+    if (this.registryDir) for (const entry of this.readDir(this.registryDir, "registry")) merged.set(entry.id, entry);
     // Overlay wins.
     for (const entry of this.readDir(this.overlayDir, "manual")) merged.set(entry.id, entry);
     return merged;
@@ -182,7 +198,11 @@ export class CatalogStore implements IntegrationStore {
 
   /** Only ever writes to the overlay — the repo seed is read-only at runtime. */
   put(entry: CatalogEntry): CatalogEntry {
-    const stored: CatalogEntry = { ...entry, updatedAt: new Date().toISOString() };
+    /* One more version each time what the entry says about the API changes; a check recorded on it is not such a change. */
+    const previous = this.merged().get(entry.id);
+    const version =
+      previous && saying(previous) === saying(entry) ? (previous.version ?? entry.version ?? 1) : (previous?.version ?? entry.version ?? 0) + 1;
+    const stored: CatalogEntry = { ...entry, version, updatedAt: new Date().toISOString() };
     writeJsonAtomic(join(this.overlayDir, `${entry.id}.json`), stored);
     return stored;
   }
@@ -262,7 +282,7 @@ export const connectionFromCatalog = (
   return connectionSchema.parse({
     id,
     title: entry.title,
-    kind: "rest",
+    kind: entry.kind,
     authRequired: entry.authRequired,
     paginationPending: entry.paginationProposal !== undefined,
     resources: entry.resources,
@@ -282,6 +302,19 @@ export const connectionFromCatalog = (
       ...(op.rowsPath ? { rowsPath: op.rowsPath } : {}),
       query: op.query,
     })),
+    ...(entry.connector ? { connector: entry.connector } : {}),
+    /* This account's own certificate: vault names of this connection's, never shared with another. */
+    ...(entry.clientCertificate
+      ? {
+          clientCertificate: {
+            certRef: `${connectionKeyRef(id).slice(0, 45)}-cert`,
+            keyRef: `${connectionKeyRef(id).slice(0, 45)}-cert-key`,
+            ...(entry.clientCertificate.caRef ? { caRef: `${connectionKeyRef(id).slice(0, 45)}-cert-ca` } : {}),
+            ...(entry.clientCertificate.certLabel ? { certLabel: entry.clientCertificate.certLabel } : {}),
+            ...(entry.clientCertificate.keyLabel ? { keyLabel: entry.clientCertificate.keyLabel } : {}),
+          },
+        }
+      : {}),
     ...(entry.validateOpId && chosen.some((op) => op.id === entry.validateOpId)
       ? { validateOpId: entry.validateOpId }
       : chosen[0]

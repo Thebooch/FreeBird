@@ -496,14 +496,14 @@ describe("drill-down cache separation", () => {
    * heading, and it looks entirely plausible.
    */
   it("gives two rows two different cache keys", () => {
-    const a = queryKey("buildium", "lease_detail", { leaseId: "4127" }, params);
-    const b = queryKey("buildium", "lease_detail", { leaseId: "5230" }, params);
+    const a = queryKey("fabrikam", "lease_detail", { leaseId: "4127" }, params);
+    const b = queryKey("fabrikam", "lease_detail", { leaseId: "5230" }, params);
     expect(a).not.toBe(b);
   });
 
   it("reuses one entry when two rows resolve to the same request", () => {
-    const a = queryKey("buildium", "lease_detail", { leaseId: "4127" }, params);
-    const b = queryKey("buildium", "lease_detail", { leaseId: "4127" }, params);
+    const a = queryKey("fabrikam", "lease_detail", { leaseId: "4127" }, params);
+    const b = queryKey("fabrikam", "lease_detail", { leaseId: "4127" }, params);
     expect(a).toBe(b);
   });
 });
@@ -677,7 +677,7 @@ describe("describeFailure", () => {
   });
 
   it("prefers the adapter's own words, which name the connection", () => {
-    expect(describeFailure(403, "Buildium says no").message).toBe("Buildium says no");
+    expect(describeFailure(403, "Fabrikam says no").message).toBe("Fabrikam says no");
     // And still says something useful when there are none.
     expect(describeFailure(403, null).message).toContain("not allowed to read this");
   });
@@ -968,7 +968,7 @@ describe("persistCells", () => {
 });
 
 /*
- * Rentvine's flags arrive as 1 and 0, which look like numbers. A column drawn
+ * Contoso's flags arrive as 1 and 0, which look like numbers. A column drawn
  * from a field the record type knows is a flag reads as one.
  */
 describe("flagColumns", () => {

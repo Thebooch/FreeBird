@@ -150,7 +150,7 @@ export const buildMapPrompt = (input: MapInput, resources: readonly ResourceSpec
    * Batching describes twenty-five resources in detail per call, and until
    * this existed the model could only relate the ones it happened to be shown
    * together. That is not a mild limitation — it silently biases every answer
-   * toward whatever shares a batch. Buildium's rental units carry a
+   * toward whatever shares a batch. One API's rental units carry a
    * `PropertyId`; `rental` sat in batch 0 and `unit-2` in batch 1, so the only
    * property-shaped thing in view was `propertygroup`, and that is the link
    * that got recorded. Clicking a property then showed no units, because
@@ -182,7 +182,7 @@ export const buildMapPrompt = (input: MapInput, resources: readonly ResourceSpec
     lines.push(`RESOURCE ${resource.id} — ${resource.title}`);
     /*
      * What one of its records is called, which is not always what the URL
-     * calls the collection. Buildium lists properties at `/v1/rentals` and
+     * calls the collection. One API lists properties at `/v1/rentals` and
      * titles it "Retrieve all properties", so a `PropertyId` on another
      * record matches nothing about the path — and the nearest thing that
      * *does* look right is `propertygroup`, which is a different concept
@@ -554,7 +554,7 @@ export const mapApi = async (
  * Discarding every inference instead is worse in a different way. The pass is
  * a model and a model is not deterministic, so a clean slate loses whatever
  * good links this run happens not to repeat — measured at 44 down to 24 on
- * Buildium, taking `lease → rental` with it, which was never in doubt.
+ * one real API, taking `lease → rental` with it, which was never in doubt.
  *
  * So this drops exactly what is now known to be unjustifiable and keeps
  * everything else. What the URL declared and what a request verified are never
@@ -636,7 +636,7 @@ const titleNoun = (title: string): string => {
 /**
  * Whether this collection can be listed without already having some other id.
  *
- * Only these compete for a bare foreign key. Buildium has three collections
+ * Only these compete for a bare foreign key. One API has three collections
  * ending in `/vendors`, but two of them are `/v1/rentals/{propertyId}/vendors`
  * and `/v1/associations/{associationId}/vendors` — you cannot resolve a
  * `VendorId` against either, because you do not have a property or an

@@ -236,7 +236,9 @@ export type LlmTask =
   | "suggest"
   | "context"
   | "respond"
-  | "writes";
+  | "writes"
+  | "repair"
+  | "connector";
 
 /**
  * Two tiers, not three.
@@ -313,6 +315,27 @@ export const TASKS: readonly TaskInfo[] = [
     label: "Matching fields for changes",
     tier: "capable",
     note: "Works out where an update's values are shown on the record, so an edit keeps what it does not change.",
+  },
+  {
+    /*
+     * The integration loop's last resort, reached only after every
+     * deterministic repair was tried: a few calls per connection, at most.
+     */
+    id: "repair",
+    label: "Fixing how an API is called",
+    tier: "capable",
+    note: "Reads a failed request and the documentation, and proposes one change. Runs only when the built-in repairs did not work.",
+  },
+  {
+    /*
+     * Code, for what a connection cannot describe in data. Written once per
+     * API and run in the sandbox under its authority, but a wrong one fails
+     * every read it serves — so it gets the model that writes code best.
+     */
+    id: "connector",
+    label: "Writing connector code",
+    tier: "capable",
+    note: "Writes the small program an API needs when a connection cannot describe it — a signed request, a login, a read in several steps. Runs only when repairs cannot express the fix.",
   },
   {
     id: "record",
