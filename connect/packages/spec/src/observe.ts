@@ -1,7 +1,6 @@
 import type { Coercion } from "./coercion.js";
 import { COERCION_SEMANTICS, coercionForFormat } from "./coercion.js";
 import type { EntityField, EntitySpec } from "./entity.js";
-import type { WidgetBrief } from "./brief-schema.js";
 import type { SemanticType } from "./semantics.js";
 import { guessSemantic, looksLikeFlag } from "./semantics.js";
 
@@ -203,12 +202,25 @@ export const rerootEntity = (entity: EntitySpec, wrapper: string): EntitySpec =>
   };
 };
 
+/** The parts of a widget's request that name fields on its record type. */
+export interface BriefPaths {
+  readonly columns?: readonly string[];
+  readonly filters?: readonly { readonly field: string }[];
+  readonly linked?: readonly { readonly through: string }[];
+  readonly sort?: { readonly field: string };
+  readonly groupBy?: string;
+  readonly measure?: { readonly field?: string };
+}
+
 /**
  * A widget's request, with its paths on one record type moved as that record
  * type was: see \`rerootEntity\`. Only this record type's own paths move — a
  * linked field is named on the far record, which did not.
+ *
+ * Typed by the paths it moves rather than by Dash's brief, so any request
+ * shaped like one keeps the rest of its fields as they were.
  */
-export const rerootBrief = (brief: WidgetBrief, wrapper: string): WidgetBrief => {
+export const rerootBrief = <B extends BriefPaths>(brief: B, wrapper: string): B => {
   const to = inside(wrapper);
   return {
     ...brief,
@@ -222,7 +234,7 @@ export const rerootBrief = (brief: WidgetBrief, wrapper: string): WidgetBrief =>
     ...(brief.sort ? { sort: { ...brief.sort, field: to(brief.sort.field) } } : {}),
     ...(brief.groupBy ? { groupBy: to(brief.groupBy) } : {}),
     ...(brief.measure?.field ? { measure: { ...brief.measure, field: to(brief.measure.field) } } : {}),
-  };
+  } as B;
 };
 
 /**

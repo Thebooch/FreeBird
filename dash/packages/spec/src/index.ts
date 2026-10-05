@@ -1,33 +1,17 @@
+// The connection side of the spec lives in @freebirdai/connect-spec and is
+// re-exported whole, so every existing import from dash-spec keeps working.
+// Names declared below (the category, catalog entry and connection schemas)
+// take precedence: they are the same records with Dash's own parts typed.
+export * from "@freebirdai/connect-spec";
+
 // Re-exported so consumers have a single import surface for spec vocabulary.
 export type { Grain } from "@freebirdai/dash-expr";
+
 export { GRAINS, parseGrain, truncateToBucket } from "@freebirdai/dash-expr";
 
 export { isAggregation, parseAggregation } from "./aggregation.js";
-export type { ParsedAggregation } from "./aggregation.js";
 
-export {
-  COERCION_DESCRIPTIONS,
-  COERCION_SEMANTICS,
-  applyCoercion,
-  coercionForFormat,
-  coercionSchema,
-  fieldFormatSchema,
-} from "./coercion.js";
-export {
-  MAX_PAGES,
-  PARAM_LOCATIONS,
-  READ_SAFETY_BASES,
-  authTokenRefs,
-  connectionKeyRef,
-  graphqlOperations,
-  graphqlReadsOnly,
-  pagingParamNames,
-  readBodySchema,
-  readSafetySchema,
-  safeByProtocol,
-} from "./primitives.js";
-export type { OAuthSpec, ReadBody, ReadSafety } from "./primitives.js";
-export type { Coercion, FieldFormat } from "./coercion.js";
+export type { ParsedAggregation } from "./aggregation.js";
 
 export {
   COMPONENT_CONTRACTS,
@@ -39,6 +23,7 @@ export {
   sizeVariantSchema,
   validateBinding,
 } from "./contracts.js";
+
 export type {
   BindingIssue,
   BindingValidation,
@@ -50,55 +35,6 @@ export type {
   RoleContract,
   SizeVariant,
 } from "./contracts.js";
-
-export {
-  authSchema,
-  missingInputs,
-  boardInputs,
-  pathParamNames,
-  requiredInputs,
-  allowedHost,
-  connectionSchema,
-  effectiveAuth,
-  filterParamsOf,
-  readsRangeOf,
-  getOp,
-  connectionAuths,
-  connectionCredentials,
-  connectionKeyRefs,
-  connectionNeedsAddress,
-  connectionNeedsAuthSetup,
-  getOpDef,
-  opDefSchema,
-  opUsesRange,
-  opSchema,
-  paginationSchema,
-  resolveOp,
-} from "./connection.js";
-export type { AuthSpec, ConnectionSpec, OpDef, OpSpec, PaginationSpec } from "./connection.js";
-
-export {
-  ARCHETYPES,
-  ARCHETYPE_IDS,
-  IMPORT_VERSION,
-  MAP_VERSION,
-  archetypeSchema,
-  catalogEntrySchema,
-  dialectSchema,
-  mappedFieldSchema,
-  formatRangeToken,
-  timeFilterSchema,
-  timeFormatSchema,
-} from "./dialect.js";
-export type {
-  Archetype,
-  ArchetypeDef,
-  CatalogEntry,
-  DialectSpec,
-  MappedField,
-  TimeFilterSpec,
-  TimeFormat,
-} from "./dialect.js";
 
 export {
   FACET_EMPTY_KEY,
@@ -113,64 +49,27 @@ export {
   facetsSchema,
   validateFacets,
 } from "./facet.js";
+
 export type { FacetOption, FacetSpec, FacetValue } from "./facet.js";
 
 export {
-  ENTITY_KINDS,
-  ENTITY_VERSION,
-  VERIFY_BUDGET_DEFAULT,
-  VERIFY_BUDGET_MAX,
-  displayFields,
-  displayName,
-  entityById,
-  entityDisplaySchema,
-  entityFieldSchema,
-  entityForResource,
-  entityKindSchema,
-  entitySchema,
-  entityStatSchema,
-  entityViewsSchema,
-  fieldGroupSchema,
-  fieldPathSchema,
-  inferTitleMode,
-  titleModeOf,
-  recordOverrideSchema,
-  referenceFields,
-  referenceSchema,
-} from "./entity.js";
-export type {
-  EntityDisplay,
-  EntityField,
-  EntityKind,
-  EntitySpec,
-  EntityStat,
-  EntityViews,
-  RecordOverride,
-  ReferenceSpec,
-} from "./entity.js";
-
-export {
-  CATEGORIES_MAX,
-  CATEGORY_VERSION,
-  STARTERS_PER_CATEGORY_MAX,
   boardLayoutSchema,
   categorySchema,
-  categoryStatusSchema,
   onboardingChoicesSchema,
   onboardingPreviewSchema,
   onboardingSchema,
   onboardingStatusSchema,
-  profileSchema,
   starterSchema,
   starterSizeSchema,
   widgetCheckSchema,
   widgetCheckStatusSchema,
+  catalogEntrySchema,
+  connectionSchema,
 } from "./category.js";
+
 export type {
-  ApiProfile,
   BoardLayout,
   CategorySpec,
-  CategoryStatus,
   OnboardingChoices,
   OnboardingPreview,
   OnboardingSpec,
@@ -178,33 +77,13 @@ export type {
   StarterSpec,
   WidgetCheck,
   WidgetCheckStatus,
+  ConnectionSpec,
+  CatalogEntry,
 } from "./category.js";
 
-export {
-  DEFAULT_TIERS,
-  DEFAULT_TIER_ID,
-  RHYTHM_VERSION,
-  VOLATILITIES,
-  apiRhythmSchema,
-  connectionRhythmSchema,
-  tierById,
-  tierFor,
-  tierSchema,
-  volatilitySchema,
-} from "./rhythm.js";
-export type {
-  ApiRhythm,
-  ConnectionRhythm,
-  TierDecision,
-  TierSpec,
-  Volatility,
-} from "./rhythm.js";
-
 export { clampCell, completeLayout, solveLayout } from "./layout.js";
-export type { PlacementRequest, SolveLayoutOptions, SolveLayoutResult } from "./layout.js";
 
-export { RECIPES, facetsFromRecipe, recipeFor } from "./recipes.js";
-export type { EntityRecipe } from "./recipes.js";
+export type { PlacementRequest, SolveLayoutOptions, SolveLayoutResult } from "./layout.js";
 
 export {
   ALONGSIDE_MODES,
@@ -213,6 +92,7 @@ export {
   compileBrief,
   widgetBriefSchema,
 } from "./brief.js";
+
 export type {
   AlongsideMode,
   CompileBriefInput,
@@ -222,36 +102,11 @@ export type {
 } from "./brief.js";
 
 export { answerBrief, briefOptions } from "./brief-options.js";
+
 export type { BriefControl, BriefOption, BriefOptionsInput } from "./brief-options.js";
 
 export { recompileWidget } from "./recompile.js";
 
-export { readField, setField } from "./field-path.js";
-export {
-  WRITES_VERSION,
-  WRITE_METHODS,
-  pathShape,
-  writeBodySchema,
-  writeFieldSchema,
-  writeMethodSchema,
-  writeOpDefSchema,
-  writesListSchema,
-} from "./write.js";
-export type {
-  WriteBody,
-  WriteCommitView,
-  WriteDiffRow,
-  WriteField,
-  WriteFieldError,
-  WriteFormField,
-  WriteFormView,
-  WriteMethod,
-  WriteOpDef,
-  WriteReviewView,
-} from "./write.js";
-export { actionCreates, MODE_PREFERENCE, pairedAction, writeRoleOf } from "./write-roles.js";
-export type { RolePaths, WriteMode, WriteRole } from "./write-roles.js";
-export { mapWriteFields, unmappedFields } from "./write-map.js";
 export {
   PERMISSIONS,
   ROLE_PERMISSIONS,
@@ -264,106 +119,12 @@ export {
   scopeCapability,
   workspaceSchema,
 } from "./access.js";
+
 export type { Invite, Member, Permission, Principal, Role, Scope, Workspace } from "./access.js";
-export { bundleOf, bundlesOf, ownFields } from "./bundles.js";
-export type { Bundle } from "./bundles.js";
-export { parentsFrom, recordKeyString, valueForParam } from "./record-key.js";
-export {
-  fieldCoercion,
-  fieldReading,
-  fieldSemantic,
-  isFlagField,
-  observeEntity,
-  observeField,
-  readingsDiffer,
-  rerootBrief,
-  rerootEntity,
-  wrapperOf,
-} from "./observe.js";
-export type { SeenField } from "./observe.js";
-export type { RecordKey } from "./record-key.js";
 
 export { referenceIds, targetOfRow } from "./reference.js";
+
 export type { ReferenceRow } from "./reference.js";
-
-export {
-  entityGraph,
-  writesEmpty,
-  writesView,
-  entityLinkViews,
-  fieldLexicon,
-  entityPageView,
-  linkColumn,
-  targetFor,
-  targetsOf,
-} from "./entity-graph.js";
-export type {
-  AddressPart,
-  EntityBackref,
-  EntityGraph,
-  EntityGraphInput,
-  EntityLinkView,
-  EntityPageField,
-  EntityPageSection,
-  EntityPageView,
-  EntityReference,
-  EntityReferenceView,
-  EntityWrites,
-  EntityWritesView,
-  WriteKindView,
-  WriteTarget,
-  LinkedPart,
-  OmittedSection,
-  ReachCost,
-  ReachPlan,
-  RecordAddress,
-  UnreachableLink,
-} from "./entity-graph.js";
-
-export {
-  SERVER_VALUE,
-  authCredentials,
-  authKeyRefs,
-  fnv1a,
-  idSchema,
-  looksLikePlaceholder,
-  paramDefSchema,
-  queryValueSchema,
-  rekeyAuth,
-  resolveServerUrl,
-  serverTemplateSchema,
-  serverVariableSchema,
-  templateVariableNames,
-} from "./primitives.js";
-export type { AuthCredential, ServerTemplate, ServerVariable } from "./primitives.js";
-export type { ParamDef } from "./primitives.js";
-
-export {
-  CAPABILITY_REPORT_VERSION,
-  capabilityReportSchema,
-  diffReports,
-  drillDownSchema,
-  enumerationOutcomeSchema,
-  fingerprintOps,
-  fingerprintConnection,
-  isStale,
-  joinSchema,
-  parseCapabilityReport,
-  persistedFieldSchema,
-  persistedShapeSchema,
-  toAllowlist,
-  unknownResourceSchema,
-} from "./report.js";
-export type {
-  AllowedOp,
-  CapabilityAllowlist,
-  CapabilityReport,
-  EnumerationOutcome,
-  PersistedField,
-  PersistedShape,
-  ReportDiff,
-  UnknownResourceRecord,
-} from "./report.js";
 
 export {
   anchorCell,
@@ -385,6 +146,7 @@ export {
   widgetStatesSchema,
   FAN_OUT_WHOLE_MAX,
 } from "./dashboard.js";
+
 export type {
   DashboardSpec,
   FieldGroup,
@@ -420,6 +182,7 @@ export {
   tokenNameSchema,
   tokenValueSchema,
 } from "./presentation.js";
+
 export type {
   Density,
   FieldLabels,
@@ -454,6 +217,7 @@ export {
   resolveGrain,
   resolveRange,
 } from "./params.js";
+
 export type {
   DashboardParams,
   FilterDecl,
@@ -486,6 +250,7 @@ export {
   validateExpressionSource,
   validatePathSource,
 } from "./pipeline.js";
+
 export type { ExtractStep, GroupStep, HighlightSpec, PipelineStep } from "./pipeline.js";
 
 export {
@@ -499,123 +264,31 @@ export {
   shapeSteps,
   widgetShapeSchema,
 } from "./shape.js";
+
 export type { GroupByShape, MeasureShape, WidgetShape } from "./shape.js";
 
-export {
-  SEMANTICS,
-  aggregationSchema,
-  statusTone,
-  formatSchema,
-  flagLabel,
-  flagValue,
-  formatValue,
-  guessSemantic,
-  looksLikeFlag,
-  isFieldNoise,
-  looksLikeApiLink,
-  looksLikeIdentifier,
-  normaliseName,
-  semanticTypeSchema,
-  valueTypeSchema,
-} from "./semantics.js";
-export type {
-  StatusTone,
-  Aggregation,
-  FormatOptions,
-  FormatSpec,
-  SemanticDef,
-  SemanticType,
-  ValueType,
-} from "./semantics.js";
-
-export {
-  canDrillDown,
-  collectionKey,
-  deriveResourceGraph,
-  deriveResourceModel,
-  nounFromPathParam,
-  commonPathPrefix,
-  pathSegments,
-  resolveSameNoun,
-  sharedPathPrefix,
-  relationSchema,
-  isSingletonOp,
-  resourceForOp,
-  resourceSchema,
-  singularNoun,
-} from "./resource.js";
-export type { RelationSpec, ResourceModel, ResourceSpec, ShapeOp } from "./resource.js";
-export { inferIdField, relationGraph } from "./relations.js";
-export type {
-  ChildLink,
-  GraphField,
-  GraphOp,
-  LinkFetch,
-  PeerLink,
-  RecordLink,
-  RelationGraph,
-  RelationGraphInput,
-  UnusableLink,
-} from "./relations.js";
 export type { NamedSource } from "./dashboard.js";
+
 export type { BuiltinComponentId } from "./contracts.js";
+
 export { findNarrowing, narrowingFileSchema, narrowingSchema } from "./narrowing.js";
+
 export type { Narrowing, NarrowingFile } from "./narrowing.js";
+
 export {
   CAPABILITIES,
   capability,
   capabilityNote,
   compatibilityMarkdown,
 } from "./capabilities.js";
+
 export type {
   Capability,
   CapabilityArea,
   CapabilityId,
   CapabilityStatus,
 } from "./capabilities.js";
-export {
-  EVIDENCE_LEVELS,
-  EVIDENCE_WORDS,
-  countReconciled,
-  evidenceLevelSchema,
-  evidenceRank,
-  evidenceSchema,
-  readCoverage,
-  strongestEvidence,
-} from "./evidence.js";
-export type {
-  CompletionReason,
-  CompletionState,
-  Evidence,
-  EvidenceLevel,
-  ReadCompletion,
-  ReadCoverage,
-  ReadExtent,
-} from "./evidence.js";
-export {
-  CONNECTOR_CONTRACT,
-  CONNECTOR_HOOKS,
-  CONNECTOR_METHODS,
-  CONNECTOR_PURPOSES,
-  OPERATION_HOOKS,
-  connectorAuthoritySchema,
-  connectorDestinationSchema,
-  connectorExchangeSchema,
-  connectorOperationSchema,
-  connectorRequestSchema,
-  connectorSchema,
-  connectorServes,
-  requestMatches,
-} from "./connector.js";
-export type {
-  ConnectorAuthority,
-  ConnectorDestination,
-  ConnectorHook,
-  ConnectorOperation,
-  ConnectorPurpose,
-  ConnectorRequest,
-  ConnectorSpec,
-} from "./connector.js";
-export { credentialNameSchema } from "./primitives.js";
+
 export { describeMetric, metricSchema, reconcileRuleSchema } from "./metric.js";
+
 export type { MetricDefinition, ReconcileRule } from "./metric.js";

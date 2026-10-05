@@ -4,10 +4,10 @@ import { dashboardParamsSchema } from "./params.js";
 import { facetsSchema } from "./facet.js";
 import { widgetBriefSchema } from "./brief-schema.js";
 import { metricSchema } from "./metric.js";
-import { recordOverrideSchema } from "./entity.js";
+import { recordOverrideSchema } from "@freebirdai/connect-spec";
 import { fieldNameSchema, highlightSchema, pipelineSchema } from "./pipeline.js";
 import { presentationSchema } from "./presentation.js";
-import { formatSchema } from "./semantics.js";
+import { formatSchema } from "@freebirdai/connect-spec";
 
 const idSchema = z
   .string()
@@ -933,11 +933,7 @@ export const dashboardSchema = z
 
 export type DashboardSpec = z.infer<typeof dashboardSchema>;
 
-/** A named set of fields, for a record view that sections its fields. */
-export interface FieldGroup {
-  readonly title: string;
-  readonly fields: readonly string[];
-}
+export type { FieldGroup } from "@freebirdai/connect-spec";
 
 export interface ParseResult<T> {
   readonly ok: boolean;

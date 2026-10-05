@@ -844,3 +844,24 @@ export const fnv1a = (input: string): string => {
   }
   return hash.toString(16).padStart(8, "0");
 };
+
+/**
+ * A component id is an open name, not a closed list.
+ *
+ * The engine never renders anything: a record type's `views.component` is a
+ * hint the host reads, so only its shape is checked here.
+ *
+ * It was an enum, which made the eight shipped components the only ones that
+ * could ever exist — a spec naming a custom renderer would not parse, so no
+ * amount of registry work downstream could have made one usable. Validation is
+ * now shape-only; whether a name resolves to something renderable is a
+ * question for the registry, and an unknown one produces a clear binding error
+ * rather than a parse failure a user cannot act on.
+ */
+export const componentIdSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-zA-Z][a-zA-Z0-9_-]*$/, "component ids must start with a letter and be [a-zA-Z0-9_-]");
+
+export type ComponentId = string;

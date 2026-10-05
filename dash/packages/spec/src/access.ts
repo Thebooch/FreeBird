@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { idSchema } from "./primitives.js";
+import { idSchema } from "@freebirdai/connect-spec";
 
 /**
  * Who is asking, and what they may do — the vocabulary, before the system.

@@ -1,8 +1,9 @@
 import { z } from "zod";
+import { FACET_MAX_PER_WIDGET } from "@freebirdai/connect-spec";
 import type { BindingIssue, ColumnMeta } from "./contracts.js";
 import { fieldNameSchema } from "./pipeline.js";
-import { statusTone } from "./semantics.js";
-import type { StatusTone } from "./semantics.js";
+import { statusTone } from "@freebirdai/connect-spec";
+import type { StatusTone } from "@freebirdai/connect-spec";
 
 /**
  * A category a reader can filter one widget down to, with a count.
@@ -32,7 +33,7 @@ import type { StatusTone } from "./semantics.js";
 export const FACET_MAX_VALUES = 24;
 
 /** Three strips is already a lot of chrome above one widget. */
-export const FACET_MAX_PER_WIDGET = 3;
+export { FACET_MAX_PER_WIDGET };
 
 /**
  * What a value is called when there is not one.

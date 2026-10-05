@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { fieldPathSchema } from "./entity.js";
-import { idSchema } from "./primitives.js";
+import { fieldPathSchema } from "@freebirdai/connect-spec";
+import { idSchema } from "@freebirdai/connect-spec";
 
 /*
  * A brief's own shape, with no dependency on what it compiles into.

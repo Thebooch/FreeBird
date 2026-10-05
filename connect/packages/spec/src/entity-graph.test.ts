@@ -7,7 +7,7 @@ import {
   targetFor,
   targetsOf,
 } from "./entity-graph.js";
-import { humanLabel } from "./presentation.js";
+import { humanLabel } from "./label.js";
 import { defaultFacets, defaultSort } from "./recipes.js";
 import { resourceSchema, type ResourceSpec } from "./resource.js";
 

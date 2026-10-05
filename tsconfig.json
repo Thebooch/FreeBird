@@ -3,6 +3,7 @@
   "include": [
     "guide/packages/*/src/**/*",
     "examples/*/src/**/*",
+    "connect/packages/*/src/**/*",
     "dash/packages/*/src/**/*",
     "dash/apps/*/src/**/*"
   ],

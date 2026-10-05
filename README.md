@@ -13,6 +13,7 @@ Dash builds on Guide's foundation — it uses `@freebirdai/core` for the compone
 
 ```
 guide/packages/   20 packages   @freebirdai/core, react, vue, angular, server, embed, …
+connect/packages/  1 package    @freebirdai/connect-spec (the integration engine, moving out of Dash)
 dash/packages/     8 packages   @freebirdai/dash-spec, dash-runtime, dash-react, …
 dash/apps/         2 apps       the Dash server and dashboard (private, not published)
 examples/                       reference apps for Guide
@@ -146,6 +147,7 @@ An LLM writes that spec once, at authoring time — then the runtime executes it
 
 | Package | Purpose |
 |---|---|
+| [`@freebirdai/connect-spec`](./connect/packages/spec) | The connection side of the spec: connections, connectors, catalog entries, record types, evidence, rhythm and writes. Re-exported by `dash-spec` |
 | [`@freebirdai/dash-spec`](./dash/packages/spec) | Versioned schemas, semantic type registry, and the component role contracts every other package agrees on |
 | [`@freebirdai/dash-runtime`](./dash/packages/runtime) | Pure isomorphic pipeline executor: API payload → renderable rows |
 | [`@freebirdai/dash-expr`](./dash/packages/expr) | Safe path + expression language, hand-rolled to an AST, no `eval` |

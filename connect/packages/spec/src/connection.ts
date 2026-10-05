@@ -27,7 +27,6 @@ import {
   serverTemplateSchema,
 } from "./primitives.js";
 import { resourceSchema } from "./resource.js";
-import { onboardingSchema } from "./category.js";
 import { connectorSchema } from "./connector.js";
 
 export { authSchema, paginationSchema } from "./primitives.js";
@@ -261,8 +260,11 @@ export const connectionSchema = z.object({
    * API and live in the catalog entry, shared with everybody who connects it;
    * what one person picked out of them, and whether they wanted it on one tab
    * or several, is theirs. Recorded so the question is asked once.
+   *
+   * Owned by the host: the engine keeps it with the connection without
+   * reading it, and Dash's `connectionSchema` types it as its setup record.
    */
-  onboarding: onboardingSchema.optional(),
+  onboarding: z.unknown().optional(),
   /**
    * The last time the integration loop checked this connection, and how it
    * went: what it changed, and what it could not get past.

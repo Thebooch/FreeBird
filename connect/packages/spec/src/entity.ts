@@ -1,10 +1,17 @@
 import { z } from "zod";
-import { componentIdSchema } from "./contracts.js";
-import { FACET_MAX_PER_WIDGET } from "./facet.js";
-import { idSchema } from "./primitives.js";
+import { componentIdSchema, idSchema } from "./primitives.js";
 import { readField } from "./field-path.js";
 import { coercionSchema, fieldFormatSchema } from "./coercion.js";
 import { aggregationSchema, semanticTypeSchema } from "./semantics.js";
+
+/**
+ * How many filter strips a record type's list offers by default.
+ *
+ * Three strips is already a lot of chrome above one widget. Dash's facet
+ * schema holds a widget to the same number, so a record type never suggests
+ * more filters than a widget built from it can carry.
+ */
+export const FACET_MAX_PER_WIDGET = 3;
 
 /**
  * A record type, as a person would describe it.

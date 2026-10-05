@@ -1,4 +1,3 @@
-import type { BuiltinComponentId } from "./contracts.js";
 import type { EntityKind, EntitySpec } from "./entity.js";
 import type { SemanticType } from "./semantics.js";
 
@@ -23,12 +22,19 @@ import type { SemanticType } from "./semantics.js";
  * conventions of the same kind `guessSemantic` and `statusTone` already read.
  */
 
+/**
+ * The shapes a plain list of records can take: rows, cards, a feed of events,
+ * or a short list. Named by the engine because they describe the records, and
+ * each is also the id of the Dash component that draws it.
+ */
+export type ListView = "table" | "cards" | "feed" | "list";
+
 export interface EntityRecipe {
   readonly kind: EntityKind;
   /** What this kind is, for a person choosing between two readings. */
   readonly description: string;
   /** The view a plain list of these reads best as. */
-  readonly component: BuiltinComponentId;
+  readonly component: ListView;
   /**
    * What to sort by, most wanted first, as semantics rather than field names.
    *

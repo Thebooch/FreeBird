@@ -1,12 +1,12 @@
 {
-  "name": "@freebirdai/dash-spec",
+  "name": "@freebirdai/connect-spec",
   "version": "0.1.0",
-  "description": "FreeBird Dash spec: the versioned schemas, semantic type registry, and component role contracts that every other package agrees on.",
+  "description": "FreeBird Connect spec: the versioned schemas for connections, connectors, catalog entries, record types, evidence, rhythm and writes.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Thebooch/FreeBird.git",
-    "directory": "dash/packages/spec"
+    "directory": "connect/packages/spec"
   },
   "type": "module",
   "main": "./dist/index.js",
@@ -28,10 +28,6 @@
     "build": "tsup src/index.ts --format esm --dts --sourcemap --clean",
     "dev": "tsup src/index.ts --format esm --dts --sourcemap --watch",
     "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "@freebirdai/connect-spec": "workspace:*",
-    "@freebirdai/dash-expr": "workspace:*"
   },
   "peerDependencies": {
     "zod": "^3.23.0"

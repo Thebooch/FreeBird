@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { connectionSchema, getOp } from "./connection.js";
+import { getOp } from "@freebirdai/connect-spec";
+import { connectionSchema } from "./category.js";
 import { interpolate, paramsForWidget, rangeForWindow, resolveRange } from "./params.js";
 
 /*

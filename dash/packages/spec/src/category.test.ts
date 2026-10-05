@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { CATEGORY_VERSION } from "@freebirdai/connect-spec";
 import {
-  CATEGORY_VERSION,
+  catalogEntrySchema,
   categorySchema,
+  connectionSchema,
   onboardingSchema,
   starterSchema,
 } from "./category.js";
-import { catalogEntrySchema } from "./dialect.js";
-import { connectionSchema } from "./connection.js";
 import { contractFor } from "./contracts.js";
 import { solveLayout } from "./layout.js";
 

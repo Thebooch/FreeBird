@@ -1,12 +1,12 @@
 import type { WidgetBrief } from "./brief-schema.js";
 import { columnForPath } from "./brief.js";
 import type { BuiltinComponentId } from "./contracts.js";
-import type { EntityField, EntitySpec } from "./entity.js";
-import { entityById } from "./entity.js";
-import type { EntityGraph } from "./entity-graph.js";
+import type { EntityField, EntitySpec } from "@freebirdai/connect-spec";
+import { entityById } from "@freebirdai/connect-spec";
+import type { EntityGraph } from "@freebirdai/connect-spec";
 import { FACET_MAX_PER_WIDGET, FACET_MAX_VALUES } from "./facet.js";
 import { humanLabel } from "./presentation.js";
-import { defaultFacets, defaultSort, recipeFor } from "./recipes.js";
+import { defaultFacets, defaultSort, recipeFor } from "@freebirdai/connect-spec";
 
 /**
  * What a widget's request may be changed to, derived from the record type.

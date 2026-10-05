@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseAggregation } from "./aggregation.js";
-import { connectionSchema, getOp } from "./connection.js";
+import { getOp } from "@freebirdai/connect-spec";
+import { connectionSchema } from "./category.js";
 import { COMPONENT_CONTRACTS, type ColumnMeta, validateBinding } from "./contracts.js";
 import {
   anchorCell,

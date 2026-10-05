@@ -2,7 +2,7 @@ import { z } from "zod";
 import { writesListSchema } from "./write.js";
 import { fieldFormatSchema } from "./coercion.js";
 import { entitySchema } from "./entity.js";
-import { CATEGORIES_MAX, categorySchema, profileSchema } from "./category.js";
+import { categoriesSchemaOf, profileSchema } from "./category.js";
 import { apiRhythmSchema } from "./rhythm.js";
 import {
   MAX_PAGES,
@@ -381,7 +381,7 @@ export const catalogEntrySchema = z.object({
    * as briefs rather than widgets. See `category.ts` for why that distinction
    * is load-bearing.
    */
-  categories: z.array(categorySchema).max(CATEGORIES_MAX).default([]),
+  categories: categoriesSchemaOf(z.unknown()),
   /** When the categorising pass last ran, and against which version of it. */
   categoriesAt: z.string().optional(),
   categoryVersion: z.number().int().min(1).optional(),

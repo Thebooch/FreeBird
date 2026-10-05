@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { aggregationSchema } from "./semantics.js";
+import { aggregationSchema } from "@freebirdai/connect-spec";
 import { grainSchema } from "./params.js";
 import { validateExpressionSource, type PipelineStep } from "./pipeline.js";
 

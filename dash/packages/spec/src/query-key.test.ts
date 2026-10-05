@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { connectionSchema, opUsesRange, resolveOp } from "./connection.js";
+import { opUsesRange, resolveOp } from "@freebirdai/connect-spec";
+import { connectionSchema } from "./category.js";
 import { queryKey, resolveRange } from "./params.js";
 import type { ResolvedParams } from "./params.js";
 

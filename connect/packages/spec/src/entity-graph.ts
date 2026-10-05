@@ -1,8 +1,7 @@
 import type { EntityField, EntityKind, EntitySpec, ReferenceSpec } from "./entity.js";
 import { entityById, entityForResource, titleModeOf } from "./entity.js";
 import { defaultFacets, defaultSort } from "./recipes.js";
-import type { FieldGroup } from "./dashboard.js";
-import { humanLabel } from "./presentation.js";
+import { humanLabel } from "./label.js";
 import type { SemanticType } from "./semantics.js";
 import { looksLikeIdentifier, normaliseName } from "./semantics.js";
 import type { GraphOp } from "./relations.js";
@@ -16,6 +15,12 @@ import { type Bundle, bundleOf, bundlesOf } from "./bundles.js";
 import { pathShape, type WriteField, type WriteMethod, type WriteOpDef } from "./write.js";
 import { MODE_PREFERENCE, pairedAction, writeRoleOf, type WriteMode, type WriteRole } from "./write-roles.js";
 import { mapWriteFields } from "./write-map.js";
+
+/** A named set of fields, for a record view that sections its fields. */
+export interface FieldGroup {
+  readonly title: string;
+  readonly fields: readonly string[];
+}
 
 /**
  * The relationships between record types, read in both directions, once.
