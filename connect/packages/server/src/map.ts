@@ -2,11 +2,21 @@ import { chooseViews, mapApi, pruneAmbiguousRelations } from "@freebirdai/connec
 import type { CatalogEntry } from "@freebirdai/connect-spec";
 import { MAP_VERSION, pathParamNames } from "@freebirdai/connect-spec";
 import type { FastifyInstance } from "fastify";
-import { looksLikeOpenApi, parseOpenApi, parseSpecDocument } from "@freebirdai/connect/discovery/openapi";
-import { extractInlineSpec } from "@freebirdai/connect/discovery/inline-spec";
-import { withConnectDetails } from "@freebirdai/connect/discovery/connect-details";
-import type { MapRouteDeps } from "@freebirdai/connect/map";
-import { mergeRefreshedOps, mapState, entityState, withDeclaredValues, schemaMoved, mergeRelations, describeCatalogRecords } from "@freebirdai/connect/map";
+import {
+  describeCatalogRecords,
+  entityState,
+  extractInlineSpec,
+  looksLikeOpenApi,
+  mapState,
+  mergeRefreshedOps,
+  mergeRelations,
+  parseOpenApi,
+  parseSpecDocument,
+  schemaMoved,
+  withConnectDetails,
+  withDeclaredValues,
+} from "@freebirdai/connect/host";
+import type { MapRouteDeps } from "@freebirdai/connect/host";
 
 /**
  * Mapping an API, once, for everyone who connects to it: the routes over

@@ -22,9 +22,12 @@ import {
   resolveRange,
 } from "@freebirdai/dash-spec";
 import { executeWidget } from "@freebirdai/dash-runtime";
-import { connectionFromCatalog, refreshCatalogConnection } from "@freebirdai/connect/catalog";
-import { parseOpenApi } from "@freebirdai/connect/discovery/openapi";
-import { MemoryCacheStore } from "@freebirdai/connect/cache/memory";
+import {
+  connectionFromCatalog,
+  MemoryCacheStore,
+  parseOpenApi,
+  refreshCatalogConnection,
+} from "@freebirdai/connect/host";
 import { buildConciergeContext } from "./context.js";
 import { SetupPreviews } from "./preview.js";
 

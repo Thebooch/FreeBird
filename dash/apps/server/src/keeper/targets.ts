@@ -13,8 +13,8 @@ import {
   safeByProtocol,
   widgetSources,
 } from "@freebirdai/dash-spec";
-import { buildQueryRequest } from "@freebirdai/connect/query";
-import type { WarmTarget } from "@freebirdai/connect/keeper/keeper";
+import { buildQueryRequest } from "@freebirdai/connect/host";
+import type { WarmTarget } from "@freebirdai/connect/host";
 import { paramShape, type ViewedRequest } from "./viewed.js";
 
 export type { WarmTarget };

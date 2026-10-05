@@ -2,10 +2,13 @@ import { catalogEntrySchema, type CatalogEntry } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import { taskpad } from "../bench/providers/taskpad.js";
 import { benchTransport } from "../bench/transport.js";
-import { connectionFromCatalog } from "@freebirdai/connect/catalog";
-import { discover } from "@freebirdai/connect/discovery/index";
-import { integrate } from "@freebirdai/connect/integrate/agent";
-import { observedShape, withObservedFields } from "@freebirdai/connect/integrate/observed";
+import {
+  connectionFromCatalog,
+  discover,
+  integrate,
+  observedShape,
+  withObservedFields,
+} from "@freebirdai/connect/host";
 
 /*
  * What a check's reads show of an endpoint's records, kept for describing it

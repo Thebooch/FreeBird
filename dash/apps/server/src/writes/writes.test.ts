@@ -4,16 +4,19 @@ import { join } from "node:path";
 import type { HttpFetch } from "@freebirdai/connect/adapters";
 import { connectionSchema } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CatalogStore } from "@freebirdai/connect/catalog";
+import {
+  CatalogStore,
+  KeyStore,
+  LastSeen,
+  LocalAesVault,
+  MemoryJournal,
+  QueryCache,
+  WriteService,
+} from "@freebirdai/connect/host";
 import type { Policy } from "../identity/policy.js";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
-import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
-import { MemoryJournal } from "@freebirdai/connect/writes/journal";
-import { WriteService } from "@freebirdai/connect/writes/service";
 import { AdapterRegistry, RestAdapter } from "@freebirdai/connect/adapters";
-import { QueryCache } from "@freebirdai/connect/cache/queryCache";
-import { LastSeen } from "@freebirdai/connect/keeper/keeper";
 import { ownerPolicy } from "../identity/policy.js";
 
 /**

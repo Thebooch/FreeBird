@@ -123,8 +123,9 @@ latest figures, with the engine driven end to end by FreeBird Dash, are in
 `createEngine` is the same machinery without the wrapper, for a host that
 serves it itself: it hands back the broker, adapter registry, cache, gate,
 job runners, write service and integration loop. FreeBird Dash builds one per
-workspace. Modules not exported from the package root are reached by path
-(`@freebirdai/connect/discovery/index`) while the surface settles.
+workspace. What such a host needs beyond it (the catalog and vault,
+discovery, the stores' interfaces, the query helpers) is exported from
+`@freebirdai/connect/host`.
 
 ## License
 

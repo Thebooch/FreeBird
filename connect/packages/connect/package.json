@@ -25,9 +25,9 @@
       "types": "./dist/agent/index.d.ts",
       "import": "./dist/agent/index.js"
     },
-    "./*": {
-      "types": "./dist/*.d.ts",
-      "import": "./dist/*.js"
+    "./host": {
+      "types": "./dist/host.d.ts",
+      "import": "./dist/host.js"
     }
   },
   "files": [

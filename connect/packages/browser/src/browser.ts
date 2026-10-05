@@ -1,6 +1,5 @@
-import type { DocsRenderer } from "@freebirdai/connect/discovery/index";
-import { looksLikeOpenApi, parseSpecDocument } from "@freebirdai/connect/discovery/openapi";
-import { sameSite } from "@freebirdai/connect/integrate/patch";
+import { looksLikeOpenApi, parseSpecDocument, sameSite } from "@freebirdai/connect/host";
+import type { DocsRenderer } from "@freebirdai/connect/host";
 import type { RendererReadiness, RendererTooling } from "./tooling.js";
 
 /**

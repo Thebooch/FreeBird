@@ -1,6 +1,6 @@
 import { sql } from "kysely";
 import type { ConnectDb } from "./db.js";
-import type { LeaseLock } from "@freebirdai/connect/platform/lease";
+import type { LeaseLock } from "@freebirdai/connect/host";
 
 /** Every server sharing Dash's database, through one row per lease. */
 export class DbLeaseLock implements LeaseLock {

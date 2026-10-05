@@ -5,12 +5,11 @@ import { connectionSchema, dashboardSchema, evidenceSchema, type Principal } fro
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CHAT_WORKSPACE_MIGRATION, openChatDb, type ChatDb } from "../chat/db.js";
-import { scopedEvidence } from "@freebirdai/connect/evidence/store";
+import { KeyStore, LocalAesVault, scopedEvidence } from "@freebirdai/connect/host";
 import type { Policy } from "../identity/policy.js";
 import type { IdentityResolver } from "../identity/resolver.js";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
-import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
 import { WorkspaceHost } from "./workspaces.js";
 import { DbEvidenceStore, DbJobStore } from "@freebirdai/connect-postgres";
 import { type DashDb, openDashDb } from "./db.js";

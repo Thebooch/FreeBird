@@ -1,8 +1,8 @@
 import type { ActionContext } from "@freebirdai/core";
 import { describe, expect, it } from "vitest";
 import { toJsonSchema } from "../llm.js";
-import type { WriteReview } from "@freebirdai/connect/writes/pending";
-import { WriteError } from "@freebirdai/connect/writes/service";
+import { WriteError } from "@freebirdai/connect/host";
+import type { WriteReview } from "@freebirdai/connect/host";
 import {
   changeRecordSchema,
   intentFromArgs,

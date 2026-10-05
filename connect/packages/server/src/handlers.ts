@@ -1,6 +1,5 @@
 import type { Connect, ReadRequest } from "@freebirdai/connect";
-import type { WriteActor } from "@freebirdai/connect/writes/policy";
-import type { WriteIntent } from "@freebirdai/connect/writes/pending";
+import type { WriteActor, WriteIntent } from "@freebirdai/connect/host";
 
 /**
  * The engine's HTTP surface, framework-free.

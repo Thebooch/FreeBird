@@ -9,7 +9,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fetchPublicDocument } from "@freebirdai/connect/safe-fetch";
+import { fetchPublicDocument } from "@freebirdai/connect/host";
 import { REAL_SOURCES, readSource } from "./sources.js";
 
 const here = dirname(fileURLToPath(import.meta.url));

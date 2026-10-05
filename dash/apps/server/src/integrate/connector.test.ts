@@ -1,4 +1,4 @@
-import { fakeLlm } from "@freebirdai/connect/agent/index";
+import { fakeLlm } from "@freebirdai/connect/agent";
 import { authCredentials, getOp } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import { benchConnectors } from "../bench/connectors.js";
@@ -6,9 +6,7 @@ import { sessionly } from "../bench/providers/sessionly.js";
 import { stampede } from "../bench/providers/stampede.js";
 import { benchTransport } from "../bench/transport.js";
 import type { MockProvider } from "../bench/types.js";
-import { connectionFromCatalog } from "@freebirdai/connect/catalog";
-import { discover } from "@freebirdai/connect/discovery/index";
-import { integrate } from "@freebirdai/connect/integrate/agent";
+import { connectionFromCatalog, discover, integrate } from "@freebirdai/connect/host";
 
 /**
  * The loop writing connector code, against the dev-set providers for step 4.

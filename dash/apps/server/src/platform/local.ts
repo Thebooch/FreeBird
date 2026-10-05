@@ -1,29 +1,35 @@
 import { join, resolve } from "node:path";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
-import { CatalogStore } from "@freebirdai/connect/catalog";
-import { httpRegistry, syncRegistry } from "@freebirdai/connect/registry/registry";
+import {
+  allowlistEgress,
+  CatalogStore,
+  configureEgress,
+  fetchPublicDocument,
+  httpRegistry,
+  KeyStore,
+  LocalAesVault,
+  RhythmStore,
+  scopedEvidence,
+  searchFromEnv,
+  syncRegistry,
+} from "@freebirdai/connect/host";
+import type { EvidenceStore, SearchProvider } from "@freebirdai/connect/host";
 import { bindAllowed } from "../identity/guard.js";
 import { DbMembershipStore, MemoryMembershipStore } from "../identity/members.js";
 import { oidcJwtResolver } from "../identity/oidc.js";
 import { rolePolicy } from "../identity/policy.js";
-import { allowlistEgress, configureEgress, fetchPublicDocument } from "@freebirdai/connect/safe-fetch";
 import { openChatDb } from "../chat/db.js";
-import { type EvidenceStore, scopedEvidence } from "@freebirdai/connect/evidence/store";
 import { LOCAL_WORKSPACE_ID, type IdentityResolver } from "../identity/resolver.js";
 import { isWorkspaceId } from "./workspaces.js";
 import { DbSnapshotStore } from "../history/store.js";
-import type { SearchProvider } from "@freebirdai/connect/discovery/search";
-import { searchFromEnv } from "@freebirdai/connect/discovery/search";
 import { defaultModelId, llmForModel, modelForTask } from "../llm.js";
 import { TIER_MODELS, isTask, providerFor } from "../models.js";
 import { buildPartRegistry } from "../parts.js";
 import type { BuildServerOptions } from "../server.js";
 import { NarrowingStore } from "../narrowings.js";
-import { RhythmStore } from "@freebirdai/connect/rhythm-store";
 import { SettingsStore } from "../settings.js";
 import { SpecStore } from "../store.js";
 import { GrantStore } from "../grants.js";
-import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
 import { createDbStores } from "@freebirdai/connect-postgres";
 import { openDashDb } from "./db.js";
 import { BrowserDocsRenderer, type RendererMode, RendererTooling } from "@freebirdai/connect-browser";

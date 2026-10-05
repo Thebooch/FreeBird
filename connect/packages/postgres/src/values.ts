@@ -1,7 +1,6 @@
 import { sql } from "kysely";
 import type { ConnectDb } from "./db.js";
-import type { SeenSet } from "@freebirdai/connect/integrate/values";
-import type { SeenValueStore } from "@freebirdai/connect/values/store";
+import type { SeenSet, SeenValueStore } from "@freebirdai/connect/host";
 
 export class DbSeenValueStore implements SeenValueStore {
   constructor(

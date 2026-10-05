@@ -39,8 +39,8 @@ import {
   startersOf,
   widgetSources,
 } from "@freebirdai/dash-spec";
-import type { CatalogStore } from "@freebirdai/connect/catalog";
-import { hasRhythm, mergeApiRhythm } from "@freebirdai/connect/keeper/rhythm";
+import { hasRhythm, mergeApiRhythm } from "@freebirdai/connect/host";
+import type { CatalogStore } from "@freebirdai/connect/host";
 import { boardParams } from "../keeper/targets.js";
 import { allocateDashboardId, buildCategory, packBoards, type Built } from "./materialise.js";
 

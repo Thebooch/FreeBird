@@ -2,7 +2,7 @@ import type { ConciergeContext } from "@freebirdai/dash-agent";
 import type { OpSpec, ResolvedParams } from "@freebirdai/dash-spec";
 import { interpolateValue, queryKey, widgetSources } from "@freebirdai/dash-spec";
 import type { WidgetHandle } from "../chat/handles.js";
-import { buildQueryRequest } from "@freebirdai/connect/query";
+import { buildQueryRequest } from "@freebirdai/connect/host";
 import { identityFor } from "./related.js";
 import type { Candidate } from "./types.js";
 

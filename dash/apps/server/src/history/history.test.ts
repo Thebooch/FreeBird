@@ -1,6 +1,6 @@
 import { connectionSchema, dashboardSchema, getOp, resolveRange, type DashboardSpec } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
-import { buildQueryRequest } from "@freebirdai/connect/query";
+import { buildQueryRequest } from "@freebirdai/connect/host";
 import { dayOf, numbersFrom } from "./record.js";
 import { DbSnapshotStore, MemorySnapshotStore } from "./store.js";
 import { openDashDb } from "../platform/db.js";

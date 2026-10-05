@@ -1,6 +1,6 @@
 import { sql } from "kysely";
 import type { ConnectDb } from "./db.js";
-import type { CredentialMeta, CredentialMetaStore } from "@freebirdai/connect/auth/credential-meta";
+import type { CredentialMeta, CredentialMetaStore } from "@freebirdai/connect/host";
 
 export class DbCredentialMetaStore implements CredentialMetaStore {
   constructor(

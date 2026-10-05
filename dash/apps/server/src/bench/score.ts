@@ -7,10 +7,13 @@ import {
   RestAdapter,
   type SourceAdapter,
 } from "@freebirdai/connect/adapters";
-import { OAuthRetryAdapter, RateLimitWaitAdapter } from "@freebirdai/connect/auth/retry-adapter";
-import { ConnectorAdapter } from "@freebirdai/connect/connector/adapter";
-import { LongReads } from "@freebirdai/connect/jobs/long-reads";
-import { MemoryJobStore } from "@freebirdai/connect/jobs/store";
+import {
+  ConnectorAdapter,
+  LongReads,
+  MemoryJobStore,
+  OAuthRetryAdapter,
+  RateLimitWaitAdapter,
+} from "@freebirdai/connect/host";
 import { benchConnectors } from "./connectors.js";
 import { executeWidget } from "@freebirdai/dash-runtime";
 import { getOp, paramsForWidget, resolveRange, type ConnectionSpec, type OpSpec, type ResolvedParams } from "@freebirdai/dash-spec";

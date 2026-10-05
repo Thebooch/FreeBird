@@ -2,12 +2,16 @@ import { catalogEntrySchema } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import { taskpad } from "../bench/providers/taskpad.js";
 import { benchTransport } from "../bench/transport.js";
-import { connectionFromCatalog } from "@freebirdai/connect/catalog";
-import { discover } from "@freebirdai/connect/discovery/index";
-import { MemorySeenValueStore } from "@freebirdai/connect/values/store";
-import { integrate } from "@freebirdai/connect/integrate/agent";
-import { observedShape, withObservedFields } from "@freebirdai/connect/integrate/observed";
-import { seenByRecordType, seenValues } from "@freebirdai/connect/integrate/values";
+import {
+  connectionFromCatalog,
+  discover,
+  integrate,
+  MemorySeenValueStore,
+  observedShape,
+  seenByRecordType,
+  seenValues,
+  withObservedFields,
+} from "@freebirdai/connect/host";
 import { openDashDb } from "../platform/db.js";
 import { DbSeenValueStore } from "@freebirdai/connect-postgres";
 

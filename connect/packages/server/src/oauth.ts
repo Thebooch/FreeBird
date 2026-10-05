@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { ConnectionSpec } from "@freebirdai/connect-spec";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { type CredentialBroker, pkcePair, signInAddressAllowed } from "@freebirdai/connect/auth/broker";
+import { type CredentialBroker, pkcePair, signInAddressAllowed } from "@freebirdai/connect/host";
 
 /**
  * Signing in with a provider, for the APIs that need a person to say yes.

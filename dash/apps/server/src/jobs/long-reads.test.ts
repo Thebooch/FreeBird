@@ -7,9 +7,8 @@ import { sql } from "kysely";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
-import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
-import { type LongReadDeps, longReadId, LongReads } from "@freebirdai/connect/jobs/long-reads";
-import { type JobStore, MemoryJobStore } from "@freebirdai/connect/jobs/store";
+import { KeyStore, LocalAesVault, longReadId, LongReads, MemoryJobStore } from "@freebirdai/connect/host";
+import type { JobStore, LongReadDeps } from "@freebirdai/connect/host";
 import { openDashDb } from "../platform/db.js";
 import { DbJobStore } from "@freebirdai/connect-postgres";
 

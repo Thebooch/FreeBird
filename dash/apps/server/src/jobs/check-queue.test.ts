@@ -4,11 +4,13 @@ import { ledgerly } from "../bench/providers/ledgerly.js";
 import { json } from "../bench/seed.js";
 import { benchTransport } from "../bench/transport.js";
 import type { MockProvider } from "../bench/types.js";
-import { MemoryEvidenceStore } from "@freebirdai/connect/evidence/store";
-import { createIntegrationRunner } from "@freebirdai/connect/integrate/runner";
-import { LocalAesVault } from "@freebirdai/connect/vault";
-import { CheckQueue } from "@freebirdai/connect/jobs/check-queue";
-import { MemoryJobStore } from "@freebirdai/connect/jobs/store";
+import {
+  CheckQueue,
+  createIntegrationRunner,
+  LocalAesVault,
+  MemoryEvidenceStore,
+  MemoryJobStore,
+} from "@freebirdai/connect/host";
 import { openDashDb } from "../platform/db.js";
 import { DbJobStore } from "@freebirdai/connect-postgres";
 

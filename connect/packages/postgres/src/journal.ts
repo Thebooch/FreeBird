@@ -1,6 +1,6 @@
 import { sql } from "kysely";
 import type { ConnectDb } from "./db.js";
-import type { ReadEvent, WriteEvent, WriteJournal } from "@freebirdai/connect/writes/journal";
+import type { ReadEvent, WriteEvent, WriteJournal } from "@freebirdai/connect/host";
 
 /**
  * The journal, kept: every change made to a connected account, and every

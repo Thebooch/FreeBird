@@ -1,15 +1,19 @@
-import { fakeLlm } from "@freebirdai/connect/agent/index";
+import { fakeLlm } from "@freebirdai/connect/agent";
 import { connectorServes, type ConnectionSpec } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import { benchConnectors } from "../bench/connectors.js";
 import { tfPayments, twofold } from "../bench/providers/twofold.js";
 import { benchTransport } from "../bench/transport.js";
-import { connectionFromCatalog } from "@freebirdai/connect/catalog";
-import { discover } from "@freebirdai/connect/discovery/index";
-import { authorConnector, connectorReader } from "@freebirdai/connect/integrate/connector";
-import { docsKnowledge } from "@freebirdai/connect/integrate/docs";
-import { budgetOf, tryRead } from "@freebirdai/connect/integrate/read";
-import { isProving } from "@freebirdai/connect/integrate/templates";
+import {
+  authorConnector,
+  budgetOf,
+  connectionFromCatalog,
+  connectorReader,
+  discover,
+  docsKnowledge,
+  isProving,
+  tryRead,
+} from "@freebirdai/connect/host";
 
 /*
  * Code for a second endpoint is written beside the first's, never over it;

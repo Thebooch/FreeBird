@@ -4,10 +4,9 @@ import { join } from "node:path";
 import type { HttpFetch } from "@freebirdai/connect/adapters";
 import { catalogEntrySchema } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CatalogStore } from "@freebirdai/connect/catalog";
+import { CatalogStore, KeyStore, LocalAesVault } from "@freebirdai/connect/host";
 import { buildServer } from "./server.js";
 import { SpecStore } from "./store.js";
-import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
 
 /**
  * Connecting an API that lives at a different address for every account and

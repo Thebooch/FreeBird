@@ -1,6 +1,5 @@
-import { scopedEvidence } from "@freebirdai/connect/evidence/store";
-import type { RowCipher } from "@freebirdai/connect/jobs/store";
-import type { EngineStores } from "@freebirdai/connect/platform/stores";
+import { scopedEvidence } from "@freebirdai/connect/host";
+import type { EngineStores, RowCipher } from "@freebirdai/connect/host";
 import { DbCredentialMetaStore } from "./credential-meta.js";
 import type { ConnectDb } from "./db.js";
 import { DbEvidenceStore } from "./evidence.js";

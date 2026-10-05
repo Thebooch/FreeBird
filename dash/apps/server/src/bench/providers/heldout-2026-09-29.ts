@@ -1,4 +1,4 @@
-import { connectorHash } from "@freebirdai/connect/connector/adapter";
+import { connectorHash } from "@freebirdai/connect/host";
 import { BENCH_NOW, cents, intParam, json, notFound, pick, random } from "../seed.js";
 import type { BenchRequest, BenchResponse, MockProvider } from "../types.js";
 

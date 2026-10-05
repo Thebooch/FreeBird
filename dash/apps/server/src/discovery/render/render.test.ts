@@ -7,8 +7,7 @@ import { benchTransport } from "../../bench/transport.js";
 import { benchTooling } from "../../bench/integrator.js";
 import { buildServer } from "../../server.js";
 import { SpecStore } from "../../store.js";
-import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
-import { discover } from "@freebirdai/connect/discovery/index";
+import { discover, KeyStore, LocalAesVault } from "@freebirdai/connect/host";
 import { BrowserDocsRenderer, type PlaywrightLike, RendererTooling } from "@freebirdai/connect-browser";
 
 /*

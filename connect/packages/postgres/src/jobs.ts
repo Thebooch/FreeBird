@@ -1,6 +1,6 @@
 import { sql } from "kysely";
 import type { ConnectDb } from "./db.js";
-import { matches, ordered, type Job, type JobFilter, type JobStore, type RowCipher } from "@freebirdai/connect/jobs/store";
+import { matches, ordered, type Job, type JobFilter, type JobStore, type RowCipher } from "@freebirdai/connect/host";
 
 const parsed = <T>(value: unknown): T => (typeof value === "string" ? JSON.parse(value) : value) as T;
 

@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import type { HttpFetch, HttpResponse } from "@freebirdai/connect/adapters";
-import { fetchPublicDocument, guardedFetch } from "@freebirdai/connect/safe-fetch";
+import { fetchPublicDocument, guardedFetch } from "@freebirdai/connect/host";
 import type { BenchResponse, IntegrationEnv, MockProvider } from "./types.js";
 
 /**

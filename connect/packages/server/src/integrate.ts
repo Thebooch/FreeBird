@@ -1,7 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { fingerprintConnection, getOp, strongestEvidence } from "@freebirdai/connect-spec";
-import type { EvidenceStore } from "@freebirdai/connect/evidence/store";
-import type { IntegrateRouteDeps, IntegrationRunner } from "@freebirdai/connect/integrate/runner";
+import type { EvidenceStore, IntegrateRouteDeps, IntegrationRunner } from "@freebirdai/connect/host";
 
 /**
  * The integration loop's routes. The loop itself is the engine's: see

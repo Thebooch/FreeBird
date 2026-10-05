@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import type { Connect } from "@freebirdai/connect";
-import type { WriteActor } from "@freebirdai/connect/writes/policy";
+import type { WriteActor } from "@freebirdai/connect/host";
 import type { Request, Router } from "express";
 import { CONNECT_ROUTES } from "./handlers.js";
 

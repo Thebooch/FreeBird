@@ -1,9 +1,8 @@
 import { createHmac } from "node:crypto";
-import { AdapterError, INCOMPLETE, RestAdapter, type Continuation, type HttpFetch, type HttpResponse } from "@freebirdai/connect/adapters/index";
+import { AdapterError, INCOMPLETE, RestAdapter, type Continuation, type HttpFetch, type HttpResponse } from "@freebirdai/connect/adapters";
 import { connectionSchema, getOp, resolveRange, type ConnectionSpec } from "@freebirdai/connect-spec";
 import { describe, expect, it } from "vitest";
-import { ConnectorAdapter, connectorHash } from "@freebirdai/connect/connector/adapter";
-import { MemoryConnectorTokens } from "@freebirdai/connect/connector/host";
+import { ConnectorAdapter, connectorHash, MemoryConnectorTokens } from "@freebirdai/connect/host";
 import { QuickJsSandbox } from "./index.js";
 
 /*

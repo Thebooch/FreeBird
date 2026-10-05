@@ -1,7 +1,7 @@
 import { sql } from "kysely";
 import type { ConnectDb } from "./db.js";
 import { evidenceSchema, type Evidence } from "@freebirdai/connect-spec";
-import { EVIDENCE_PER_OP, type EvidenceStore } from "@freebirdai/connect/evidence/store";
+import { EVIDENCE_PER_OP, type EvidenceStore } from "@freebirdai/connect/host";
 
 export class DbEvidenceStore implements EvidenceStore {
   constructor(private readonly db: ConnectDb) {}

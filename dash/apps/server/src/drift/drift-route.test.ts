@@ -6,7 +6,7 @@ import { connectionSchema, dashboardSchema } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
-import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
+import { KeyStore, LocalAesVault } from "@freebirdai/connect/host";
 
 /*
  * An API that renames a field after a board was built on it:

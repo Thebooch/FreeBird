@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { RENDERER_DOWNLOAD_MB } from "@freebirdai/connect/discovery/index";
+import { RENDERER_DOWNLOAD_MB } from "@freebirdai/connect/host";
 
 /**
  * Playwright's own Chromium, for reading documentation drawn by scripts:

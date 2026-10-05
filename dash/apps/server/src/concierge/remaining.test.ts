@@ -17,9 +17,7 @@ import {
 import { executeWidget } from "@freebirdai/dash-runtime";
 import { RestAdapter } from "@freebirdai/connect/adapters";
 import { buildConciergeContext } from "./context.js";
-import { parseOpenApi } from "@freebirdai/connect/discovery/openapi";
-import { connectionFromCatalog } from "@freebirdai/connect/catalog";
-import { CatalogStore } from "@freebirdai/connect/catalog";
+import { CatalogStore, connectionFromCatalog, parseOpenApi } from "@freebirdai/connect/host";
 import { mapRoutes } from "@freebirdai/connect-server/fastify";
 import Fastify from "fastify";
 import { mkdtempSync, rmSync } from "node:fs";

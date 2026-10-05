@@ -13,7 +13,7 @@ import {
   type EntitySpec,
   type WidgetSpec,
 } from "@freebirdai/dash-spec";
-import { seenByRecordType, type SeenSet } from "@freebirdai/connect/integrate/values";
+import { seenByRecordType, type SeenSet } from "@freebirdai/connect/host";
 
 /**
  * Choosing what answers an objective, the way the product does — unscripted.

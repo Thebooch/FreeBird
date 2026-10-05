@@ -4,14 +4,20 @@ import { join } from "node:path";
 import { type HttpFetch, McpAdapter } from "@freebirdai/connect/adapters";
 import { connectionSchema, getOp, resolveRange } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { connectionFromCatalog } from "@freebirdai/connect/catalog";
-import { discover } from "@freebirdai/connect/discovery/index";
-import { integrate } from "@freebirdai/connect/integrate/agent";
+import {
+  connectionFromCatalog,
+  discover,
+  discoverMcp,
+  integrate,
+  KeyStore,
+  LocalAesVault,
+  looksLikeMcpAddress,
+  openMcpClient,
+  readGround,
+  rpcAnswerIn,
+} from "@freebirdai/connect/host";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
-import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
-import { openMcpClient, rpcAnswerIn } from "@freebirdai/connect/mcp/client";
-import { discoverMcp, looksLikeMcpAddress, readGround } from "@freebirdai/connect/mcp/discover";
 
 /*
  * An MCP server as a connection: a small server that speaks

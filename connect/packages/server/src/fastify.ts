@@ -1,5 +1,5 @@
 import type { Connect } from "@freebirdai/connect";
-import type { WriteActor } from "@freebirdai/connect/writes/policy";
+import type { WriteActor } from "@freebirdai/connect/host";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { CONNECT_ROUTES } from "./handlers.js";
 

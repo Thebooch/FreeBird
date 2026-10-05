@@ -5,12 +5,16 @@
  */
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { connectionFromCatalog } from "@freebirdai/connect/catalog";
-import { AUTO_INDEX_PAGES, discover } from "@freebirdai/connect/discovery/index";
+import {
+  AUTO_INDEX_PAGES,
+  connectionFromCatalog,
+  discover,
+  fetchPublicDocument,
+  integrationTargets,
+  samplingTargets,
+} from "@freebirdai/connect/host";
 import { loadEnvFile } from "../env.js";
 import { defaultModelId, llmForModel } from "../llm.js";
-import { integrationTargets, samplingTargets } from "@freebirdai/connect/integrate/runner";
-import { fetchPublicDocument } from "@freebirdai/connect/safe-fetch";
 
 loadEnvFile({ startDir: dirname(fileURLToPath(import.meta.url)) });
 const id = defaultModelId(null);

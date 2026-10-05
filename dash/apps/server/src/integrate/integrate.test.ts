@@ -22,18 +22,27 @@ import { rentroll } from "../bench/providers/rentroll.js";
 import { taskpad } from "../bench/providers/taskpad.js";
 import { benchTransport } from "../bench/transport.js";
 import type { BenchRequest, MockProvider } from "../bench/types.js";
-import { CatalogStore, connectionFromCatalog } from "@freebirdai/connect/catalog";
-import { discover } from "@freebirdai/connect/discovery/index";
-import { probePagination } from "@freebirdai/connect/discovery/probe-pagination";
-import { EVIDENCE_PER_OP, MemoryEvidenceStore } from "@freebirdai/connect/evidence/store";
-import { integrationTargets, samplingTargets } from "@freebirdai/connect/integrate/runner";
-import { MemorySeenValueStore } from "@freebirdai/connect/values/store";
+import {
+  applyPatch,
+  budgetOf,
+  CatalogStore,
+  connectionFromCatalog,
+  discover,
+  EVIDENCE_PER_OP,
+  integrate,
+  integrationTargets,
+  KeyStore,
+  LocalAesVault,
+  MemoryEvidenceStore,
+  MemorySeenValueStore,
+  probePagination,
+  sameSite,
+  samplingTargets,
+  siteOf,
+  tryRead,
+} from "@freebirdai/connect/host";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
-import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
-import { integrate } from "@freebirdai/connect/integrate/agent";
-import { applyPatch, sameSite, siteOf } from "@freebirdai/connect/integrate/patch";
-import { budgetOf, tryRead } from "@freebirdai/connect/integrate/read";
 import { DbEvidenceStore } from "@freebirdai/connect-postgres";
 import { openDashDb } from "../platform/db.js";
 

@@ -13,21 +13,24 @@ import {
   type ConnectionSpec,
   type WidgetSpec,
 } from "@freebirdai/dash-spec";
-import { connectionFromCatalog } from "@freebirdai/connect/catalog";
-import { AUTO_INDEX_PAGES, discover } from "@freebirdai/connect/discovery/index";
-import { integrate } from "@freebirdai/connect/integrate/agent";
-import { DependentAdapter, RestAdapter } from "@freebirdai/connect/adapters";
-import { getOp, paramsForWidget, resolveRange } from "@freebirdai/dash-spec";
-import { OAuthRetryAdapter, RateLimitWaitAdapter } from "@freebirdai/connect/auth/retry-adapter";
-import { ConnectorAdapter } from "@freebirdai/connect/connector/adapter";
 import {
+  AUTO_INDEX_PAGES,
+  connectionFromCatalog,
+  ConnectorAdapter,
+  discover,
+  integrate,
+  integrationTargets,
+  OAuthRetryAdapter,
+  RateLimitWaitAdapter,
+  samplingTargets,
+  seekRecords,
   withAddedReads,
   withEntryResources,
   withObservedFields,
-} from "@freebirdai/connect/integrate/observed";
-import { seekRecords } from "@freebirdai/connect/integrate/seek";
-import type { SeenSet } from "@freebirdai/connect/integrate/values";
-import { integrationTargets, samplingTargets } from "@freebirdai/connect/integrate/runner";
+} from "@freebirdai/connect/host";
+import type { SeenSet } from "@freebirdai/connect/host";
+import { DependentAdapter, RestAdapter } from "@freebirdai/connect/adapters";
+import { getOp, paramsForWidget, resolveRange } from "@freebirdai/dash-spec";
 import { chooseByBrief, observeFirstRead } from "./brief-choice.js";
 import { benchConnectors } from "./connectors.js";
 import { benchCredentials, signInAsThePerson } from "./oauth.js";

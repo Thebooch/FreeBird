@@ -4,17 +4,18 @@ import { join } from "node:path";
 import type { HttpFetch } from "@freebirdai/connect/adapters";
 import { catalogEntrySchema, connectionSchema } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CatalogStore } from "@freebirdai/connect/catalog";
-import { buildServer } from "./server.js";
-import { SpecStore } from "./store.js";
-import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
 import {
   catalogEntryToVerify,
+  CatalogStore,
+  KeyStore,
+  LocalAesVault,
   MAX_VALIDATION_CANDIDATES,
   rowsFromBody,
   usableRows,
   validationCandidates,
-} from "@freebirdai/connect/verified";
+} from "@freebirdai/connect/host";
+import { buildServer } from "./server.js";
+import { SpecStore } from "./store.js";
 
 // ---------------------------------------------------------------------------
 // The rule, in isolation

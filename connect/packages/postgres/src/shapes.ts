@@ -1,7 +1,6 @@
 import { sql } from "kysely";
 import type { ConnectDb } from "./db.js";
-import type { AcceptedShape, Drift } from "@freebirdai/connect/drift/detect";
-import type { OpenDrift, ShapeStore } from "@freebirdai/connect/drift/store";
+import type { AcceptedShape, Drift, OpenDrift, ShapeStore } from "@freebirdai/connect/host";
 
 const parsed = <T>(value: unknown): T => (typeof value === "string" ? JSON.parse(value) : value) as T;
 

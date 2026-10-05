@@ -2,8 +2,8 @@ import { mkdirSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import type { CapabilityReport, ConnectionSpec, DashboardSpec } from "@freebirdai/dash-spec";
 import { capabilityReportSchema, connectionSchema, dashboardSchema } from "@freebirdai/dash-spec";
-import type { ConnectionRepository } from "@freebirdai/connect/connections";
-import { writeJsonAtomic } from "@freebirdai/connect/json-file";
+import { writeJsonAtomic } from "@freebirdai/connect/host";
+import type { ConnectionRepository } from "@freebirdai/connect/host";
 
 /**
  * Specs live as files on disk: git-friendly, diffable, reviewable in a pull

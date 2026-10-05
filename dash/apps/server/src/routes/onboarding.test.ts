@@ -13,11 +13,10 @@ import {
   onboardingOf,
 } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CatalogStore } from "@freebirdai/connect/catalog";
+import { CatalogStore, KeyStore, LocalAesVault } from "@freebirdai/connect/host";
 import { currentFingerprint } from "../onboarding/service.js";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
-import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
 import { categoryState, offersFor } from "./onboarding.js";
 
 /**

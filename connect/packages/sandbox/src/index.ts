@@ -9,7 +9,7 @@ import {
   type SandboxHost,
   type SandboxLimits,
   type SandboxSession,
-} from "@freebirdai/connect/connector/sandbox";
+} from "@freebirdai/connect/host";
 
 /**
  * `QuickJsSandbox`: generated connector code, run in QuickJS compiled to
