@@ -1,5 +1,11 @@
 import { widgetSources, type ConnectionSpec, type DashboardSpec, type OpSpec } from "@freebirdai/dash-spec";
-import { driftBetween, driftFields, driftNote, shapeOf, type AcceptedShape } from "@freebirdai/connect/drift/detect";
+import {
+  type AcceptedShape,
+  driftBetween,
+  driftFields,
+  driftNote,
+  shapeOf,
+} from "@freebirdai/connect/drift/detect";
 import type { ShapeStore } from "@freebirdai/connect/drift/store";
 
 /**

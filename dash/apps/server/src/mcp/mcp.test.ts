@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { McpAdapter, type HttpFetch } from "@freebirdai/connect/adapters";
+import { type HttpFetch, McpAdapter } from "@freebirdai/connect/adapters";
 import { connectionSchema, getOp, resolveRange } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connectionFromCatalog } from "@freebirdai/connect/catalog";

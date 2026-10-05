@@ -1,9 +1,9 @@
 import { connectionSchema, dashboardSchema, getOp, resolveRange, type DashboardSpec } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
-import { openDashDb } from "@freebirdai/connect/platform/db";
 import { buildQueryRequest } from "@freebirdai/connect/query";
 import { dayOf, numbersFrom } from "./record.js";
 import { DbSnapshotStore, MemorySnapshotStore } from "./store.js";
+import { openDashDb } from "../platform/db.js";
 
 /*
  * What a number on a board was, day by day: kept while the board is looked

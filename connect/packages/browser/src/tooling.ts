@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { RENDERER_DOWNLOAD_MB } from "@freebirdai/connect/discovery/index";
 
 /**
  * Playwright's own Chromium, for reading documentation drawn by scripts:
@@ -45,8 +46,7 @@ export interface RendererStatus {
   readonly downloadMb: number;
 }
 
-/** What is downloaded, roughly: Chromium for Playwright, once. */
-export const RENDERER_DOWNLOAD_MB = 150;
+export { RENDERER_DOWNLOAD_MB };
 
 const INSTALL_COMMAND = "npx playwright install chromium";
 const DEPS_COMMAND = "npx playwright install-deps chromium";

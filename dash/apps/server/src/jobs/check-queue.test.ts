@@ -5,11 +5,12 @@ import { json } from "../bench/seed.js";
 import { benchTransport } from "../bench/transport.js";
 import type { MockProvider } from "../bench/types.js";
 import { MemoryEvidenceStore } from "@freebirdai/connect/evidence/store";
-import { openDashDb } from "@freebirdai/connect/platform/db";
 import { createIntegrationRunner } from "../routes/integrate.js";
 import { LocalAesVault } from "@freebirdai/connect/vault";
 import { CheckQueue } from "@freebirdai/connect/jobs/check-queue";
-import { DbJobStore, MemoryJobStore } from "@freebirdai/connect/jobs/store";
+import { MemoryJobStore } from "@freebirdai/connect/jobs/store";
+import { openDashDb } from "../platform/db.js";
+import { DbJobStore } from "@freebirdai/connect-postgres";
 
 /*
  * Which endpoints a check reads next, kept in the job store: settled only

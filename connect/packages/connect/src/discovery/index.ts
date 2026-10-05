@@ -23,7 +23,6 @@ import { paceGapMs } from "../capabilities.js";
 import { type SpecFragment, mergeSpecDocuments } from "./merge-specs.js";
 import { proposeDialect } from "./propose-dialect.js";
 import { type SearchProvider, buildSearchQueries, rankSearchResults } from "./search.js";
-import { RENDERER_DOWNLOAD_MB } from "./render/tooling.js";
 
 export type DiscoverySource = "catalog" | "openapi" | "wsdl" | "docs" | "mcp" | "none";
 
@@ -61,6 +60,9 @@ export interface DocsIndex {
   readonly pages: number;
   readonly estimatedMs: number;
 }
+
+/** What is downloaded, roughly: Chromium for Playwright, once. */
+export const RENDERER_DOWNLOAD_MB = 150;
 
 export interface DiscoveryDeps {
   /** SSRF-guarded, no host allowlist — there is no connection yet. */

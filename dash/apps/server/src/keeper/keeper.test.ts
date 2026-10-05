@@ -4,7 +4,13 @@ import { AdapterError } from "@freebirdai/connect/adapters";
 import { describe, expect, it } from "vitest";
 import { QueryCache } from "@freebirdai/connect/cache/queryCache";
 import { buildQueryRequest } from "@freebirdai/connect/query";
-import { FAILURE_BACKOFF_MS, Keeper, LastSeen, retryAfterMs, type RefreshOutcome } from "@freebirdai/connect/keeper/keeper";
+import {
+  FAILURE_BACKOFF_MS,
+  Keeper,
+  LastSeen,
+  type RefreshOutcome,
+  retryAfterMs,
+} from "@freebirdai/connect/keeper/keeper";
 import { WIDGET_EVERY_FLOOR_MS, boardParams, warmTargets, type WarmTarget } from "./targets.js";
 import { ViewedRequests, paramShape, type ViewedRequest } from "./viewed.js";
 

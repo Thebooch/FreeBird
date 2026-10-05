@@ -1,10 +1,10 @@
 import {
   AdapterError,
   DependentAdapter,
-  RestAdapter,
-  isIncompleteNote,
   type FetchMeta,
   type FetchResult,
+  isIncompleteNote,
+  RestAdapter,
   type SourceAdapter,
 } from "@freebirdai/connect/adapters";
 import { OAuthRetryAdapter, RateLimitWaitAdapter } from "@freebirdai/connect/auth/retry-adapter";

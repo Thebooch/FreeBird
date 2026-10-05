@@ -4,8 +4,7 @@ import { join } from "node:path";
 import { webcrypto } from "node:crypto";
 import type { Principal } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { openDashDb } from "@freebirdai/connect/platform/db";
-import { DbLeaseLock, MemoryLeaseLock } from "@freebirdai/connect/platform/lease";
+import { MemoryLeaseLock } from "@freebirdai/connect/platform/lease";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
 import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
@@ -14,6 +13,8 @@ import { acceptInvite, createInvite } from "./invites.js";
 import { DbMembershipStore, MemoryMembershipStore } from "./members.js";
 import { oidcJwtResolver } from "./oidc.js";
 import { rolePolicy } from "./policy.js";
+import { openDashDb } from "../platform/db.js";
+import { DbLeaseLock } from "@freebirdai/connect-postgres";
 
 /* What a hosted build signs people in and decides with. */
 

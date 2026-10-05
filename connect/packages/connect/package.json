@@ -42,15 +42,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@electric-sql/pglite": "^0.5.4",
-    "@freebirdai/adapters-db-postgres": "workspace:*",
     "@freebirdai/connect-spec": "workspace:*",
     "@freebirdai/core": "workspace:*",
     "@freebirdai/dash-expr": "workspace:*",
-    "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
-    "kysely": "^0.27.4",
-    "playwright-core": "1.63.0",
-    "quickjs-emscripten-core": "0.32.0",
     "yaml": "^2.9.0"
   },
   "peerDependencies": {

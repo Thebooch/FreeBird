@@ -5,7 +5,12 @@ import { catalogEntrySchema } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CatalogStore } from "@freebirdai/connect/catalog";
 import { connectorHash } from "@freebirdai/connect/connector/adapter";
-import { fromRegistry, httpRegistry, registryIndex, syncRegistry } from "@freebirdai/connect/registry/registry";
+import {
+  fromRegistry,
+  httpRegistry,
+  registryIndex,
+  syncRegistry,
+} from "@freebirdai/connect/registry/registry";
 
 /* Catalog entries pulled from a read-only registry, and what is never taken from one. */
 

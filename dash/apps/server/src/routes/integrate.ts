@@ -18,7 +18,7 @@ import { integrate, type IntegrateDeps, type IntegrationReport } from "@freebird
 import { seekRecords } from "@freebirdai/connect/integrate/seek";
 import type { ConnectorKit } from "@freebirdai/connect/integrate/connector";
 import { inputSources } from "@freebirdai/connect/integrate/inputs";
-import { CheckQueue, type BlockedBecause } from "@freebirdai/connect/jobs/check-queue";
+import { type BlockedBecause, CheckQueue } from "@freebirdai/connect/jobs/check-queue";
 import { MemoryJobStore } from "@freebirdai/connect/jobs/store";
 
 /**

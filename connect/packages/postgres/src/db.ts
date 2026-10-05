@@ -4,25 +4,20 @@ import { PGliteDialect } from "@freebirdai/adapters-db-postgres/pglite";
 import { Kysely, sql } from "kysely";
 
 /**
- * Dash's own relational state: what is appended and queried rather than
- * edited as a document — evidence now, and the journal, snapshots and
- * memberships as they arrive.
+ * The engine's relational state: what is appended and queried rather than
+ * edited as a document. Evidence, the write journal, credential expiry, seen
+ * values, leases, accepted shapes and jobs.
  *
- * The same shape as chat storage (`chat/db.ts`), for the same reason:
+ *   DATABASE_URL set    → that Postgres.
+ *   DATABASE_URL unset  → PGlite, an embedded Postgres in a local directory.
  *
- *   DATABASE_URL set    → that Postgres. What a hosted deployment runs.
- *   DATABASE_URL unset  → PGlite, an embedded Postgres under `.dash/dash-db/`.
- *
- * A separate database from chat's, because PGlite allows one process per data
- * directory and the two open independently — losing one must not cost the
- * other. Every table carries a `workspace` column from the first row, so a
- * hosted build that keeps many workspaces in one database needs no migration.
- *
- * Every statement is `IF NOT EXISTS`, so applying the schema on every open is
- * a no-op after the first. **A new table goes here, never in a second file.**
+ * Every table carries a `workspace` column from the first row, so a hosted
+ * build that keeps many workspaces in one database needs no migration. Every
+ * statement is `IF NOT EXISTS`, so applying the schema on every open is a
+ * no-op after the first.
  */
-export const DASH_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS dash_evidence (
+export const CONNECT_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS connect_evidence (
   id             BIGSERIAL PRIMARY KEY,
   workspace      TEXT NOT NULL,
   connection     TEXT NOT NULL,
@@ -33,10 +28,10 @@ CREATE TABLE IF NOT EXISTS dash_evidence (
   record         JSONB NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS dash_evidence_connection_idx
-  ON dash_evidence (workspace, connection, op, at DESC);
+CREATE INDEX IF NOT EXISTS connect_evidence_connection_idx
+  ON connect_evidence (workspace, connection, op, at DESC);
 
-CREATE TABLE IF NOT EXISTS dash_journal (
+CREATE TABLE IF NOT EXISTS connect_journal (
   id         TEXT PRIMARY KEY,
   workspace  TEXT NOT NULL,
   connection TEXT NOT NULL,
@@ -46,10 +41,10 @@ CREATE TABLE IF NOT EXISTS dash_journal (
   event      JSONB NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS dash_journal_connection_idx
-  ON dash_journal (workspace, connection, at DESC);
+CREATE INDEX IF NOT EXISTS connect_journal_connection_idx
+  ON connect_journal (workspace, connection, at DESC);
 
-CREATE TABLE IF NOT EXISTS dash_credential_meta (
+CREATE TABLE IF NOT EXISTS connect_credential_meta (
   workspace  TEXT NOT NULL,
   key_ref    TEXT NOT NULL,
   connection TEXT NOT NULL,
@@ -57,17 +52,7 @@ CREATE TABLE IF NOT EXISTS dash_credential_meta (
   PRIMARY KEY (workspace, key_ref)
 );
 
-CREATE TABLE IF NOT EXISTS dash_snapshots (
-  workspace  TEXT NOT NULL,
-  dashboard  TEXT NOT NULL,
-  widget     TEXT NOT NULL,
-  day        TEXT NOT NULL,
-  value      DOUBLE PRECISION NOT NULL,
-  at         TIMESTAMPTZ NOT NULL,
-  PRIMARY KEY (workspace, dashboard, widget, day)
-);
-
-CREATE TABLE IF NOT EXISTS dash_seen_values (
+CREATE TABLE IF NOT EXISTS connect_seen_values (
   workspace  TEXT NOT NULL,
   connection TEXT NOT NULL,
   op         TEXT NOT NULL,
@@ -76,26 +61,7 @@ CREATE TABLE IF NOT EXISTS dash_seen_values (
   PRIMARY KEY (workspace, connection, op)
 );
 
-CREATE TABLE IF NOT EXISTS dash_workspaces (
-  id     TEXT PRIMARY KEY,
-  record JSONB NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS dash_members (
-  workspace TEXT NOT NULL,
-  user_id   TEXT NOT NULL,
-  record    JSONB NOT NULL,
-  PRIMARY KEY (workspace, user_id)
-);
-
-CREATE TABLE IF NOT EXISTS dash_invites (
-  id         TEXT PRIMARY KEY,
-  workspace  TEXT NOT NULL,
-  token_hash TEXT NOT NULL,
-  record     JSONB NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS dash_leases (
+CREATE TABLE IF NOT EXISTS connect_leases (
   workspace TEXT NOT NULL,
   key       TEXT NOT NULL,
   holder    TEXT NOT NULL,
@@ -103,7 +69,7 @@ CREATE TABLE IF NOT EXISTS dash_leases (
   PRIMARY KEY (workspace, key)
 );
 
-CREATE TABLE IF NOT EXISTS dash_shapes (
+CREATE TABLE IF NOT EXISTS connect_shapes (
   workspace  TEXT NOT NULL,
   connection TEXT NOT NULL,
   op         TEXT NOT NULL,
@@ -113,7 +79,7 @@ CREATE TABLE IF NOT EXISTS dash_shapes (
   PRIMARY KEY (workspace, connection, op)
 );
 
-CREATE TABLE IF NOT EXISTS dash_jobs (
+CREATE TABLE IF NOT EXISTS connect_jobs (
   workspace  TEXT NOT NULL,
   id         TEXT NOT NULL,
   kind       TEXT NOT NULL,
@@ -127,10 +93,10 @@ CREATE TABLE IF NOT EXISTS dash_jobs (
   PRIMARY KEY (workspace, id)
 );
 
-CREATE INDEX IF NOT EXISTS dash_jobs_connection_idx
-  ON dash_jobs (workspace, connection);
+CREATE INDEX IF NOT EXISTS connect_jobs_connection_idx
+  ON connect_jobs (workspace, connection);
 
-CREATE TABLE IF NOT EXISTS dash_job_rows (
+CREATE TABLE IF NOT EXISTS connect_job_rows (
   workspace TEXT NOT NULL,
   job       TEXT NOT NULL,
   seq       INTEGER NOT NULL,
@@ -139,26 +105,32 @@ CREATE TABLE IF NOT EXISTS dash_job_rows (
 );
 `;
 
-export interface DashDb {
+export interface ConnectDb {
   readonly kind: "postgres" | "pglite";
   readonly kysely: Kysely<never>;
   close(): Promise<void>;
 }
 
-export interface OpenDashDbOptions {
+export interface OpenConnectDbOptions {
   /** Overrides `process.env.DATABASE_URL`. */
   readonly databaseUrl?: string | undefined;
   /** Where the embedded database lives. Ignored when a URL is given. */
   readonly dataDir?: string;
   /** Run the embedded database in memory, for tests. */
   readonly inMemory?: boolean;
+  /**
+   * More schema to apply after the engine's, for a host keeping its own
+   * tables in the same database. Must be idempotent, like the engine's.
+   */
+  readonly schema?: readonly string[];
 }
 
-export const openDashDb = async (options: OpenDashDbOptions = {}): Promise<DashDb> => {
+export const openConnectDb = async (options: OpenConnectDbOptions = {}): Promise<ConnectDb> => {
   const url = options.databaseUrl ?? process.env.DATABASE_URL;
+  const schema = [CONNECT_SCHEMA_SQL, ...(options.schema ?? [])];
   if (url) {
     const adapter = new FreeBirdPostgresAdapter({ connectionString: url });
-    await sql.raw(DASH_SCHEMA_SQL).execute(adapter.db);
+    for (const part of schema) await sql.raw(part).execute(adapter.db);
     return {
       kind: "postgres",
       kysely: adapter.db as unknown as Kysely<never>,
@@ -169,11 +141,11 @@ export const openDashDb = async (options: OpenDashDbOptions = {}): Promise<DashD
   }
 
   const { PGlite } = await import("@electric-sql/pglite");
-  const dataDir = options.inMemory ? "memory://" : (options.dataDir ?? ".dash/dash-db");
+  const dataDir = options.inMemory ? "memory://" : (options.dataDir ?? ".connect/db");
   if (!options.inMemory) mkdirSync(dataDir, { recursive: true });
   const client = new PGlite(dataDir);
   await client.waitReady;
-  await client.exec(DASH_SCHEMA_SQL);
+  for (const part of schema) await client.exec(part);
   const db = new Kysely<never>({ dialect: new PGliteDialect(client) });
   return {
     kind: "pglite",

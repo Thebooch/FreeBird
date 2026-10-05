@@ -1,4 +1,10 @@
-import { DEPENDENT_MAX, DependentAdapter, INCOMPLETE, RestAdapter, isIncompleteNote } from "@freebirdai/connect/adapters/index";
+import {
+  DEPENDENT_MAX,
+  DependentAdapter,
+  INCOMPLETE,
+  isIncompleteNote,
+  RestAdapter,
+} from "@freebirdai/connect/adapters/index";
 import { connectionSchema, getOp, resolveRange } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import { ledgerly } from "../bench/providers/ledgerly.js";

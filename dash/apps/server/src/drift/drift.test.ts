@@ -4,10 +4,11 @@ import { join } from "node:path";
 import { isChangedNote, isIncompleteNote } from "@freebirdai/connect/adapters";
 import { connectionSchema, dashboardSchema, getOp, type DashboardSpec } from "@freebirdai/dash-spec";
 import { afterEach, describe, expect, it } from "vitest";
-import { openDashDb } from "@freebirdai/connect/platform/db";
 import { driftBetween, driftNote, likelyRenames, shapeOf } from "@freebirdai/connect/drift/detect";
-import { DbShapeStore, MemoryShapeStore } from "@freebirdai/connect/drift/store";
+import { MemoryShapeStore } from "@freebirdai/connect/drift/store";
 import { DriftWatch, savedReads } from "./watch.js";
+import { openDashDb } from "../platform/db.js";
+import { DbShapeStore } from "@freebirdai/connect-postgres";
 
 /* An endpoint whose answers change shape after it was accepted. */
 

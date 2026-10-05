@@ -1,6 +1,6 @@
 import { sql } from "kysely";
-import type { DashDb } from "../platform/db.js";
-import type { ReadEvent, WriteEvent, WriteJournal } from "./journal.js";
+import type { ConnectDb } from "./db.js";
+import type { ReadEvent, WriteEvent, WriteJournal } from "@freebirdai/connect/writes/journal";
 
 /**
  * The journal, kept: every change made to a connected account, and every
@@ -12,13 +12,13 @@ import type { ReadEvent, WriteEvent, WriteJournal } from "./journal.js";
  */
 export class DbWriteJournal implements WriteJournal {
   constructor(
-    private readonly db: DashDb,
+    private readonly db: ConnectDb,
     private readonly workspace = "local",
   ) {}
 
   async record(event: WriteEvent): Promise<void> {
     await sql`
-      INSERT INTO dash_journal (id, workspace, connection, at, kind, status, event)
+      INSERT INTO connect_journal (id, workspace, connection, at, kind, status, event)
       VALUES (${event.id}, ${event.actor.workspaceId || this.workspace}, ${event.connection}, ${event.at},
               ${event.kind}, ${event.status}, ${JSON.stringify(event)}::jsonb)
       ON CONFLICT (id) DO NOTHING
@@ -27,7 +27,7 @@ export class DbWriteJournal implements WriteJournal {
 
   async recordRead(event: ReadEvent): Promise<void> {
     await sql`
-      INSERT INTO dash_journal (id, workspace, connection, at, kind, status, event)
+      INSERT INTO connect_journal (id, workspace, connection, at, kind, status, event)
       VALUES (${event.id}, ${this.workspace}, ${event.connection}, ${event.at},
               'read', ${event.status}, ${JSON.stringify(event)}::jsonb)
       ON CONFLICT (id) DO NOTHING
@@ -39,11 +39,11 @@ export class DbWriteJournal implements WriteJournal {
     const limit = Math.min(Math.max(options.limit ?? 100, 1), 1000);
     const result = options.connection
       ? await sql<{ event: unknown }>`
-          SELECT event FROM dash_journal WHERE workspace = ${this.workspace} AND connection = ${options.connection}
+          SELECT event FROM connect_journal WHERE workspace = ${this.workspace} AND connection = ${options.connection}
           ORDER BY at DESC LIMIT ${limit}
         `.execute(this.db.kysely)
       : await sql<{ event: unknown }>`
-          SELECT event FROM dash_journal WHERE workspace = ${this.workspace}
+          SELECT event FROM connect_journal WHERE workspace = ${this.workspace}
           ORDER BY at DESC LIMIT ${limit}
         `.execute(this.db.kysely);
     return result.rows.map(

@@ -1,75 +1,18 @@
-import type { z } from "zod";
+import type { LlmAdapter, LlmMessage } from "@freebirdai/core";
 
 /**
- * Copied byte-for-byte from `@freebirdai/core`'s `adapters/llm.ts` so the
- * published `@freebirdai/adapters-llm-openai` and `-anthropic` drop straight in
- * once they ship. Do not let these drift.
+ * The LLM adapter shape is `@freebirdai/core`'s, so guide and the engine plug
+ * in a model the same way: `@freebirdai/adapters-llm-openai` and `-anthropic`
+ * drop straight in.
  */
-
-export interface LlmMessage {
-  role: "system" | "user" | "assistant" | "tool";
-  content: string;
-  toolCallId?: string;
-}
-
-export interface LlmTool<TArgs = unknown> {
-  name: string;
-  description: string;
-  schema: z.ZodType<TArgs>;
-}
-
-export interface LlmTokenUsage {
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
-  /**
-   * Prompt tokens served from the provider's cache, counted within
-   * `promptTokens` rather than in addition to it.
-   *
-   * Reported because it is priced at roughly a tenth of a fresh prompt token —
-   * a cost figure that ignores it can be an order of magnitude wrong on a
-   * conversation that reuses a long prefix, which is most of them.
-   */
-  cachedPromptTokens?: number;
-  /** Prompt tokens written to cache, billed at a premium on some providers. */
-  cacheWriteTokens?: number;
-}
-
-export interface LlmStreamChunk {
-  textDelta?: string;
-  toolCall?: {
-    id: string;
-    name: string;
-    args: unknown;
-  };
-  usage?: LlmTokenUsage;
-  model?: string;
-}
-
-export interface LlmGenerateOptions<TTools extends Record<string, LlmTool> = {}> {
-  model?: string;
-  temperature?: number;
-  maxOutputTokens?: number;
-  messages: LlmMessage[];
-  tools?: TTools;
-  toolChoice?: "auto" | { name: keyof TTools & string };
-  signal?: AbortSignal;
-}
-
-export interface LlmAdapter {
-  readonly defaultModel: string;
-  stream: <TTools extends Record<string, LlmTool> = {}>(
-    opts: LlmGenerateOptions<TTools>,
-  ) => AsyncIterable<LlmStreamChunk>;
-  generate: <TTools extends Record<string, LlmTool> = {}>(
-    opts: LlmGenerateOptions<TTools>,
-  ) => Promise<{
-    text: string;
-    toolCalls: Array<{ id: string; name: string; args: unknown }>;
-    usage?: LlmTokenUsage;
-    model?: string;
-  }>;
-}
+export type {
+  LlmAdapter,
+  LlmGenerateOptions,
+  LlmMessage,
+  LlmStreamChunk,
+  LlmTokenUsage,
+  LlmTool,
+} from "@freebirdai/core";
 
 /**
  * A scripted adapter for tests and for running the whole flow offline —

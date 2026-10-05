@@ -1,5 +1,3 @@
-import { sql } from "kysely";
-import type { DashDb } from "./db.js";
 
 /**
  * Who may do a piece of background work right now.
@@ -31,30 +29,5 @@ export class MemoryLeaseLock implements LeaseLock {
 
   async release(key: string, holder: string): Promise<void> {
     if (this.held.get(key)?.holder === holder) this.held.delete(key);
-  }
-}
-
-/** Every server sharing Dash's database, through one row per lease. */
-export class DbLeaseLock implements LeaseLock {
-  constructor(
-    private readonly db: DashDb,
-    private readonly workspace = "local",
-  ) {}
-
-  async acquire(key: string, holder: string, ttlMs: number): Promise<boolean> {
-    const until = new Date(Date.now() + ttlMs).toISOString();
-    const now = new Date().toISOString();
-    /* Taken if free, lapsed, or already this holder's: one statement, so two servers cannot both win. */
-    const result = await sql<{ holder: string }>`
-      INSERT INTO dash_leases (workspace, key, holder, until) VALUES (${this.workspace}, ${key}, ${holder}, ${until})
-      ON CONFLICT (workspace, key) DO UPDATE SET holder = EXCLUDED.holder, until = EXCLUDED.until
-        WHERE dash_leases.holder = EXCLUDED.holder OR dash_leases.until < ${now}
-      RETURNING holder
-    `.execute(this.db.kysely);
-    return result.rows.length > 0 && result.rows[0]!.holder === holder;
-  }
-
-  async release(key: string, holder: string): Promise<void> {
-    await sql`DELETE FROM dash_leases WHERE workspace = ${this.workspace} AND key = ${key} AND holder = ${holder}`.execute(this.db.kysely);
   }
 }

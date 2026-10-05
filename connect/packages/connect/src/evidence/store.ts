@@ -1,6 +1,4 @@
 import { evidenceSchema, type Evidence } from "@freebirdai/connect-spec";
-import { sql } from "kysely";
-import type { DashDb } from "../platform/db.js";
 
 /**
  * Where evidence about reading an endpoint is kept.
@@ -56,47 +54,5 @@ export class MemoryEvidenceStore implements EvidenceStore {
       const one = this.rows[index]!;
       if (one.connection === connection && one.workspace === workspace) this.rows.splice(index, 1);
     }
-  }
-}
-
-export class DbEvidenceStore implements EvidenceStore {
-  constructor(private readonly db: DashDb) {}
-
-  async record(evidence: Evidence): Promise<void> {
-    const parsed = evidenceSchema.parse(evidence);
-    await sql`
-      INSERT INTO dash_evidence (workspace, connection, op, level, config_version, at, record)
-      VALUES (${parsed.workspace}, ${parsed.connection}, ${parsed.op}, ${parsed.level},
-              ${parsed.configVersion}, ${parsed.at}, ${JSON.stringify(parsed)}::jsonb)
-    `.execute(this.db.kysely);
-    await sql`
-      DELETE FROM dash_evidence
-      WHERE workspace = ${parsed.workspace} AND connection = ${parsed.connection} AND op = ${parsed.op}
-        AND id NOT IN (
-          SELECT id FROM dash_evidence
-          WHERE workspace = ${parsed.workspace} AND connection = ${parsed.connection} AND op = ${parsed.op}
-          ORDER BY at DESC, id DESC
-          LIMIT ${EVIDENCE_PER_OP}
-        )
-    `.execute(this.db.kysely);
-  }
-
-  async forConnection(connection: string, workspace = "local"): Promise<Evidence[]> {
-    const result = await sql<{ record: unknown }>`
-      SELECT record FROM dash_evidence
-      WHERE workspace = ${workspace} AND connection = ${connection}
-      ORDER BY at DESC, id DESC
-    `.execute(this.db.kysely);
-    return result.rows.flatMap((row) => {
-      const record = typeof row.record === "string" ? JSON.parse(row.record) : row.record;
-      const parsed = evidenceSchema.safeParse(record);
-      return parsed.success ? [parsed.data] : [];
-    });
-  }
-
-  async forget(connection: string, workspace = "local"): Promise<void> {
-    await sql`
-      DELETE FROM dash_evidence WHERE workspace = ${workspace} AND connection = ${connection}
-    `.execute(this.db.kysely);
   }
 }

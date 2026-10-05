@@ -24,6 +24,17 @@ export interface LlmTokenUsage {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  /**
+   * Prompt tokens served from the provider's cache, counted within
+   * `promptTokens` rather than in addition to it.
+   *
+   * Reported because it is priced at roughly a tenth of a fresh prompt token —
+   * a cost figure that ignores it can be an order of magnitude wrong on a
+   * conversation that reuses a long prefix, which is most of them.
+   */
+  cachedPromptTokens?: number;
+  /** Prompt tokens written to cache, billed at a premium on some providers. */
+  cacheWriteTokens?: number;
 }
 
 export interface LlmStreamChunk {

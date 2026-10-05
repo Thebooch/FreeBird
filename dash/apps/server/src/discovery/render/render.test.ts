@@ -9,8 +9,7 @@ import { buildServer } from "../../server.js";
 import { SpecStore } from "../../store.js";
 import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
 import { discover } from "@freebirdai/connect/discovery/index";
-import { BrowserDocsRenderer } from "@freebirdai/connect/discovery/render/browser";
-import { RendererTooling, type PlaywrightLike } from "@freebirdai/connect/discovery/render/tooling";
+import { BrowserDocsRenderer, type PlaywrightLike, RendererTooling } from "@freebirdai/connect-browser";
 
 /*
  * Playwright's own Chromium, for documentation drawn by scripts: fetched

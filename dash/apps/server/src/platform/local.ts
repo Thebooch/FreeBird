@@ -6,20 +6,11 @@ import { bindAllowed } from "../identity/guard.js";
 import { DbMembershipStore, MemoryMembershipStore } from "../identity/members.js";
 import { oidcJwtResolver } from "../identity/oidc.js";
 import { rolePolicy } from "../identity/policy.js";
-import { DbLeaseLock } from "@freebirdai/connect/platform/lease";
 import { allowlistEgress, configureEgress, fetchPublicDocument } from "@freebirdai/connect/safe-fetch";
 import { openChatDb } from "../chat/db.js";
-import { DbEvidenceStore, scopedEvidence, type EvidenceStore } from "@freebirdai/connect/evidence/store";
-import { openDashDb } from "@freebirdai/connect/platform/db";
-import { DbWriteJournal } from "@freebirdai/connect/writes/journal-db";
-import { DbCredentialMetaStore } from "@freebirdai/connect/auth/credential-meta";
-import { DbSeenValueStore } from "@freebirdai/connect/values/store";
-import { DbShapeStore } from "@freebirdai/connect/drift/store";
-import { DbJobStore } from "@freebirdai/connect/jobs/store";
+import { type EvidenceStore, scopedEvidence } from "@freebirdai/connect/evidence/store";
 import { LOCAL_WORKSPACE_ID, type IdentityResolver } from "../identity/resolver.js";
 import { isWorkspaceId } from "./workspaces.js";
-import { BrowserDocsRenderer } from "@freebirdai/connect/discovery/render/browser";
-import { RendererTooling, type RendererMode } from "@freebirdai/connect/discovery/render/tooling";
 import { DbSnapshotStore } from "../history/store.js";
 import type { SearchProvider } from "@freebirdai/connect/discovery/search";
 import { searchFromEnv } from "@freebirdai/connect/discovery/search";
@@ -33,7 +24,9 @@ import { SettingsStore } from "../settings.js";
 import { SpecStore } from "../store.js";
 import { GrantStore } from "../grants.js";
 import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
-
+import { createDbStores } from "@freebirdai/connect-postgres";
+import { openDashDb } from "./db.js";
+import { BrowserDocsRenderer, type RendererMode, RendererTooling } from "@freebirdai/connect-browser";
 
 /**
  * Everything the server plugs in, built for one machine.
@@ -231,7 +224,7 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
   let dashDb: Awaited<ReturnType<typeof openDashDb>> | undefined;
   try {
     dashDb = await openDashDb({ dataDir: dashDir });
-    evidence = new DbEvidenceStore(dashDb);
+    evidence = createDbStores(dashDb, { cipher: vault }).evidence;
   } catch (cause) {
     const reason = cause instanceof Error ? cause.message : String(cause);
     console.error(
@@ -319,12 +312,24 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     },
   });
 
+  /*
+   * One workspace's engine stores over Dash's database. Leases only when the
+   * database is shared: several servers on it keep one keeper per connection
+   * among them, and one server needs no lease at all.
+   */
+  const dbStores = (workspace?: string) => {
+    if (!dashDb) return {};
+    const { evidence: _evidence, leases, ...stores } = createDbStores(dashDb, {
+      cipher: vault,
+      ...(workspace ? { workspace } : {}),
+    });
+    return { ...stores, ...(process.env.DATABASE_URL ? { leases } : {}) };
+  };
+
   const platform: DashPlatform = {
     ...(identity && memberships ? { identity, policy: rolePolicy(memberships) } : {}),
     /* Its rows under `local`, as they always were, whatever the workspace is called. */
     workspace: { id: defaultWorkspace, key: LOCAL_WORKSPACE_ID },
-    /* Several servers on one shared database: one keeper per connection among them. */
-    ...(dashDb && process.env.DATABASE_URL ? { leases: new DbLeaseLock(dashDb) } : {}),
     // The keeper: see `keeper/keeper.ts`. On here, off in tests.
     keeper: true,
     // Every connection can change records; one whose write endpoints were never
@@ -344,14 +349,13 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     search,
     chat,
     ...(evidence ? { evidence } : {}),
-    // Every change, and every read that might not be one, kept in Dash's database.
-    ...(dashDb ? { journal: new DbWriteJournal(dashDb) } : {}),
-    // When each OAuth token expires, so it is renewed before it does.
-    ...(dashDb ? { credentialMeta: new DbCredentialMetaStore(dashDb) } : {}),
-    ...(dashDb ? { seenValues: new DbSeenValueStore(dashDb) } : {}),
-    ...(dashDb ? { shapes: new DbShapeStore(dashDb) } : {}),
-    // Reads carried on past a tile's limits, their records sealed with the vault's key until they finish.
-    ...(dashDb ? { jobs: new DbJobStore(dashDb, vault) } : {}),
+    /*
+     * The engine's relational state in Dash's database: every change and every
+     * read that might not be one, when each OAuth token expires, seen values,
+     * accepted shapes, and reads carried on past a tile's limits (their records
+     * sealed with the vault's key until they finish).
+     */
+    ...dbStores(),
     ...(rendererMode !== "off" ? { renderDocs, rendererSetup: rendererTooling } : {}),
     ...(dashDb ? { snapshots: new DbSnapshotStore(dashDb) } : {}),
     logger: true,
@@ -376,17 +380,8 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
       rhythms: new RhythmStore(join(stateAt, "rhythm")),
       catalog: new CatalogStore(seedDir, join(stateAt, "catalog"), registryUrl ? registryDir : undefined),
       ...(evidence ? { evidence: scopedEvidence(evidence, workspace) } : {}),
-      ...(dashDb
-        ? {
-            journal: new DbWriteJournal(dashDb, workspace),
-            credentialMeta: new DbCredentialMetaStore(dashDb, workspace),
-            seenValues: new DbSeenValueStore(dashDb, workspace),
-            shapes: new DbShapeStore(dashDb, workspace),
-            jobs: new DbJobStore(dashDb, vault, workspace),
-            snapshots: new DbSnapshotStore(dashDb, workspace),
-          }
-        : {}),
-      ...(dashDb && process.env.DATABASE_URL ? { leases: new DbLeaseLock(dashDb, workspace) } : {}),
+      ...dbStores(workspace),
+      ...(dashDb ? { snapshots: new DbSnapshotStore(dashDb, workspace) } : {}),
     };
   };
 

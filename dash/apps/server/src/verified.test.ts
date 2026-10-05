@@ -9,8 +9,8 @@ import { buildServer } from "./server.js";
 import { SpecStore } from "./store.js";
 import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
 import {
-  MAX_VALIDATION_CANDIDATES,
   catalogEntryToVerify,
+  MAX_VALIDATION_CANDIDATES,
   rowsFromBody,
   usableRows,
   validationCandidates,

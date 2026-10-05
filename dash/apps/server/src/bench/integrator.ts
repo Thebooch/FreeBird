@@ -20,12 +20,14 @@ import { DependentAdapter, RestAdapter } from "@freebirdai/connect/adapters";
 import { getOp, paramsForWidget, resolveRange } from "@freebirdai/dash-spec";
 import { OAuthRetryAdapter, RateLimitWaitAdapter } from "@freebirdai/connect/auth/retry-adapter";
 import { ConnectorAdapter } from "@freebirdai/connect/connector/adapter";
-import { withAddedReads, withEntryResources, withObservedFields } from "@freebirdai/connect/integrate/observed";
+import {
+  withAddedReads,
+  withEntryResources,
+  withObservedFields,
+} from "@freebirdai/connect/integrate/observed";
 import { seekRecords } from "@freebirdai/connect/integrate/seek";
 import type { SeenSet } from "@freebirdai/connect/integrate/values";
 import { integrationTargets, samplingTargets } from "../routes/integrate.js";
-import { BrowserDocsRenderer } from "@freebirdai/connect/discovery/render/browser";
-import { RendererTooling } from "@freebirdai/connect/discovery/render/tooling";
 import { chooseByBrief, observeFirstRead } from "./brief-choice.js";
 import { benchConnectors } from "./connectors.js";
 import { benchCredentials, signInAsThePerson } from "./oauth.js";
@@ -38,6 +40,7 @@ import type {
   ScenarioInput,
   ScriptedChoice,
 } from "./types.js";
+import { BrowserDocsRenderer, RendererTooling } from "@freebirdai/connect-browser";
 
 /**
  * The widget a scripted choice describes: one number over one endpoint.

@@ -5,15 +5,15 @@ import { connectionSchema, dashboardSchema, evidenceSchema, type Principal } fro
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CHAT_WORKSPACE_MIGRATION, openChatDb, type ChatDb } from "../chat/db.js";
-import { DbEvidenceStore, scopedEvidence } from "@freebirdai/connect/evidence/store";
+import { scopedEvidence } from "@freebirdai/connect/evidence/store";
 import type { Policy } from "../identity/policy.js";
 import type { IdentityResolver } from "../identity/resolver.js";
-import { DbJobStore } from "@freebirdai/connect/jobs/store";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
 import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
-import { openDashDb, type DashDb } from "@freebirdai/connect/platform/db";
 import { WorkspaceHost } from "./workspaces.js";
+import { DbEvidenceStore, DbJobStore } from "@freebirdai/connect-postgres";
+import { type DashDb, openDashDb } from "./db.js";
 
 /*
  * Two workspaces on one server, sharing one database: neither sees the

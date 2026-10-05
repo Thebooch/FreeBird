@@ -1,6 +1,6 @@
 import type { ConnectorKit } from "@freebirdai/connect/integrate/connector";
 import { MemoryConnectorTokens } from "@freebirdai/connect/connector/host";
-import { QuickJsSandbox } from "@freebirdai/connect/connector/sandbox";
+import { QuickJsSandbox } from "@freebirdai/connect-sandbox";
 
 /** One sandbox for every scenario: each run inside it is a fresh interpreter anyway. */
 const sandbox = new QuickJsSandbox();

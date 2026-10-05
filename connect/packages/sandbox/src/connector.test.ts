@@ -1,10 +1,10 @@
 import { createHmac } from "node:crypto";
-import { AdapterError, INCOMPLETE, RestAdapter, type Continuation, type HttpFetch, type HttpResponse } from "../adapters/index.js";
+import { AdapterError, INCOMPLETE, RestAdapter, type Continuation, type HttpFetch, type HttpResponse } from "@freebirdai/connect/adapters/index";
 import { connectionSchema, getOp, resolveRange, type ConnectionSpec } from "@freebirdai/connect-spec";
 import { describe, expect, it } from "vitest";
-import { ConnectorAdapter, connectorHash } from "./adapter.js";
-import { MemoryConnectorTokens } from "./host.js";
-import { QuickJsSandbox } from "./sandbox.js";
+import { ConnectorAdapter, connectorHash } from "@freebirdai/connect/connector/adapter";
+import { MemoryConnectorTokens } from "@freebirdai/connect/connector/host";
+import { QuickJsSandbox } from "./index.js";
 
 /*
  * The sandbox and its authority, exercised. These show each control working
