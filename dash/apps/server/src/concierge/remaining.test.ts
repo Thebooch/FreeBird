@@ -20,7 +20,7 @@ import { buildConciergeContext } from "./context.js";
 import { parseOpenApi } from "@freebirdai/connect/discovery/openapi";
 import { connectionFromCatalog } from "@freebirdai/connect/catalog";
 import { CatalogStore } from "@freebirdai/connect/catalog";
-import { mapRoutes } from "../routes/map.js";
+import { mapRoutes } from "@freebirdai/connect-server/fastify";
 import Fastify from "fastify";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

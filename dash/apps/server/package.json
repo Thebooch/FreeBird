@@ -24,6 +24,7 @@
     "@freebirdai/connect-browser": "workspace:*",
     "@freebirdai/connect-postgres": "workspace:*",
     "@freebirdai/connect-sandbox": "workspace:*",
+    "@freebirdai/connect-server": "workspace:*",
     "@freebirdai/core": "workspace:*",
     "@freebirdai/dash-agent": "workspace:*",
     "@freebirdai/dash-expr": "workspace:*",

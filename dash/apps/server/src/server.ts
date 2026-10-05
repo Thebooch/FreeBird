@@ -160,7 +160,7 @@ import {
   recipeFor,
   widgetBriefSchema,
 } from "@freebirdai/dash-spec";
-import { describeMissingRecords, mapRoutes, mergeDescribedEntities } from "./routes/map.js";
+import { describeMissingRecords, mergeDescribedEntities } from "@freebirdai/connect/map";
 import {
   withAddedReads,
   withEntryResources,
@@ -174,7 +174,7 @@ import { decideAll, opsOfResource } from "@freebirdai/connect/keeper/rhythm";
 import { RhythmStore } from "@freebirdai/connect/rhythm-store";
 import { warmTargets } from "./keeper/targets.js";
 import { ViewedRequests, paramShape } from "./keeper/viewed.js";
-import { VERIFY_BUDGET_DEFAULT, VERIFY_BUDGET_MAX, verifyRecords } from "./routes/verify.js";
+import { VERIFY_BUDGET_DEFAULT, VERIFY_BUDGET_MAX, verifyRecords } from "@freebirdai/connect/verify-records";
 import type { Settings, SettingsStore } from "./settings.js";
 import { clampMaxAge } from "@freebirdai/connect/cache/queryCache";
 import { extractRows, parsePath } from "@freebirdai/dash-expr";
@@ -232,8 +232,7 @@ import { dayOf, numbersFrom } from "./history/record.js";
 import { seenByRecordType } from "@freebirdai/connect/integrate/values";
 import type { ConnectorTokenStore } from "@freebirdai/connect/connector/host";
 import { type ConnectorSandbox } from "@freebirdai/connect/connector/sandbox";
-import { oauthRoutes } from "./routes/oauth.js";
-import { integrateRoutes } from "./routes/integrate.js";
+import { integrateRoutes, mapRoutes, oauthRoutes } from "@freebirdai/connect-server/fastify";
 import { createEngine, nodeHttp } from "@freebirdai/connect/engine";
 import { type IntegrateRouteDeps } from "@freebirdai/connect/integrate/runner";
 import { RENDERER_DOWNLOAD_MB, type RendererStatus } from "@freebirdai/connect-browser";

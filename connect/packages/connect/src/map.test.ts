@@ -1,5 +1,5 @@
-import type { CatalogEntry, EntitySpec } from "@freebirdai/dash-spec";
-import { ENTITY_VERSION, catalogEntrySchema, entitySchema } from "@freebirdai/dash-spec";
+import type { CatalogEntry, EntitySpec } from "@freebirdai/connect-spec";
+import { ENTITY_VERSION, catalogEntrySchema, entitySchema } from "@freebirdai/connect-spec";
 import { describe, expect, it } from "vitest";
 import {
   entityState,

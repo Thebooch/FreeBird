@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { ConnectionSpec } from "@freebirdai/dash-spec";
+import type { ConnectionSpec } from "@freebirdai/connect-spec";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { type CredentialBroker, pkcePair, signInAddressAllowed } from "@freebirdai/connect/auth/broker";
 

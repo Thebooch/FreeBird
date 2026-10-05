@@ -143,6 +143,34 @@ importers:
         specifier: ^2.1.6
         version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
 
+  connect/packages/server:
+    dependencies:
+      '@freebirdai/connect':
+        specifier: workspace:*
+        version: link:../connect
+      '@freebirdai/connect-spec':
+        specifier: workspace:*
+        version: link:../spec
+    devDependencies:
+      '@types/express':
+        specifier: ^5.0.0
+        version: 5.0.6
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.19.17
+      express:
+        specifier: ^4.21.1
+        version: 4.22.1
+      fastify:
+        specifier: ^5.1.0
+        version: 5.8.5
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.6
+        version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
+
   connect/packages/spec:
     dependencies:
       '@freebirdai/dash-expr':
@@ -182,6 +210,9 @@ importers:
       '@freebirdai/connect-sandbox':
         specifier: workspace:*
         version: link:../../../connect/packages/sandbox
+      '@freebirdai/connect-server':
+        specifier: workspace:*
+        version: link:../../../connect/packages/server
       '@freebirdai/core':
         specifier: workspace:*
         version: link:../../../guide/packages/core

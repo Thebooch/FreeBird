@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { fingerprintConnection, getOp, strongestEvidence } from "@freebirdai/dash-spec";
+import { fingerprintConnection, getOp, strongestEvidence } from "@freebirdai/connect-spec";
 import type { EvidenceStore } from "@freebirdai/connect/evidence/store";
 import type { IntegrateRouteDeps, IntegrationRunner } from "@freebirdai/connect/integrate/runner";
 

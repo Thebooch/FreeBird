@@ -209,7 +209,7 @@ export const createConnect = (options: ConnectOptions = {}) => {
 
   const need = (id: string): ConnectionSpec => {
     const connection = store.getConnection(id);
-    if (!connection) throw new Error(`There is no connection "${id}".`);
+    if (!connection) throw Object.assign(new Error(`There is no connection "${id}".`), { status: 404 });
     return connection;
   };
   const entryOf = (connection: ConnectionSpec): CatalogEntry | undefined =>

@@ -1,10 +1,10 @@
 import { extractRows, parsePath } from "@freebirdai/dash-expr";
-import type { EntitySpec, GraphOp, ResourceSpec } from "@freebirdai/dash-spec";
-import { entityGraph, parentsFrom, readField } from "@freebirdai/dash-spec";
+import type { EntitySpec, GraphOp, ResourceSpec } from "@freebirdai/connect-spec";
+import { entityGraph, parentsFrom, readField } from "@freebirdai/connect-spec";
 // The budgets live in the spec package: the screen that offers this check
 // has to state its cost before it is agreed to, and must quote the same
 // number this spends.
-export { VERIFY_BUDGET_DEFAULT, VERIFY_BUDGET_MAX } from "@freebirdai/dash-spec";
+export { VERIFY_BUDGET_DEFAULT, VERIFY_BUDGET_MAX } from "@freebirdai/connect-spec";
 
 /**
  * Checking a description against a real account.

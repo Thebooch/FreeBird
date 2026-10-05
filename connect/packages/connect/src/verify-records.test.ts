@@ -1,6 +1,6 @@
-import { entitySchema, resourceSchema, type EntitySpec } from "@freebirdai/dash-spec";
+import { entitySchema, resourceSchema, type EntitySpec } from "@freebirdai/connect-spec";
 import { describe, expect, it } from "vitest";
-import { verifyRecords, type VerifyRead } from "./verify.js";
+import { verifyRecords, type VerifyRead } from "./verify-records.js";
 
 /**
  * Checking a description against a real account.
