@@ -26,7 +26,7 @@ import { CatalogStore, connectionFromCatalog } from "@freebirdai/connect/catalog
 import { discover } from "@freebirdai/connect/discovery/index";
 import { probePagination } from "@freebirdai/connect/discovery/probe-pagination";
 import { EVIDENCE_PER_OP, MemoryEvidenceStore } from "@freebirdai/connect/evidence/store";
-import { integrationTargets, samplingTargets } from "../routes/integrate.js";
+import { integrationTargets, samplingTargets } from "@freebirdai/connect/integrate/runner";
 import { MemorySeenValueStore } from "@freebirdai/connect/values/store";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";

@@ -27,7 +27,7 @@ import {
 } from "@freebirdai/connect/integrate/observed";
 import { seekRecords } from "@freebirdai/connect/integrate/seek";
 import type { SeenSet } from "@freebirdai/connect/integrate/values";
-import { integrationTargets, samplingTargets } from "../routes/integrate.js";
+import { integrationTargets, samplingTargets } from "@freebirdai/connect/integrate/runner";
 import { chooseByBrief, observeFirstRead } from "./brief-choice.js";
 import { benchConnectors } from "./connectors.js";
 import { benchCredentials, signInAsThePerson } from "./oauth.js";

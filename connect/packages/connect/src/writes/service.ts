@@ -135,7 +135,7 @@ const permissionFor = (kind: WriteIntent["kind"]): WritePermission =>
  * match that is unique counts: two record types that could both be meant is
  * a question for whoever asked, not a guess to make on their account.
  */
-const findEntity = (entities: readonly EntitySpec[], wanted: string): EntitySpec | undefined => {
+export const findEntity = (entities: readonly EntitySpec[], wanted: string): EntitySpec | undefined => {
   const exact = entityById(entities, wanted);
   if (exact) return exact;
   const squash = (text: string) => text.toLowerCase().replace(/[^a-z0-9]/g, "");

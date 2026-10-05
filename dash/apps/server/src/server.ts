@@ -1,17 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AdapterError,
-  AdapterRegistry,
-  DependentAdapter,
-  type FetchResult,
   type HttpFetch,
-  INCOMPLETE,
   isIncompleteNote,
-  McpAdapter,
-  RestAdapter,
 } from "@freebirdai/connect/adapters";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
 import type {
@@ -68,8 +61,6 @@ import {
   resolveServerUrl,
   resourceSchema,
   statusTone,
-  evidenceRank,
-  type EvidenceLevel,
 } from "@freebirdai/dash-spec";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -132,7 +123,7 @@ import {
   providerFor,
 } from "./models.js";
 import { RATES_AS_OF } from "./pricing.js";
-import { BlockedUrlError, fetchPublicDocument, guardedFetch } from "@freebirdai/connect/safe-fetch";
+import { BlockedUrlError, fetchPublicDocument } from "@freebirdai/connect/safe-fetch";
 import type { PartRegistry } from "@freebirdai/dash-parts";
 import { partsRoutes } from "./routes/parts.js";
 import { installIdentity } from "./identity/context.js";
@@ -141,10 +132,9 @@ import { installRouteGuard } from "./identity/guard.js";
 import type { LeaseLock } from "@freebirdai/connect/platform/lease";
 import { LOCAL_USER_ID, LOCAL_WORKSPACE_ID, localOwner, type IdentityResolver } from "./identity/resolver.js";
 import { nullJournal, type WriteJournal } from "@freebirdai/connect/writes/journal";
-import { JournalingAdapter, readEventFor } from "@freebirdai/connect/writes/read-journal";
 import { catalogForBrowser, Discovered, preservedWrites } from "@freebirdai/connect/writes/catalog-writes";
 import { type FetchDocument, WriteEndpointReader } from "@freebirdai/connect/writes/read-writes";
-import { describeFields, WriteService } from "@freebirdai/connect/writes/service";
+import { describeFields } from "@freebirdai/connect/writes/service";
 import { allowedWritesView, writeRoutes } from "./routes/writes.js";
 import { conciergeRoutes } from "./routes/concierge.js";
 import { SetupPreviews } from "./concierge/preview.js";
@@ -179,28 +169,23 @@ import {
 import { onboardingRoutes } from "./routes/onboarding.js";
 import { refreshOutdatedConnectDetails } from "@freebirdai/connect/discovery/connect-details";
 import { allocateDashboardId } from "./onboarding/materialise.js";
-import { DEFAULT_EVERY_MS, Keeper, LastSeen } from "@freebirdai/connect/keeper/keeper";
+import { Keeper } from "@freebirdai/connect/keeper/keeper";
 import { decideAll, opsOfResource } from "@freebirdai/connect/keeper/rhythm";
 import { RhythmStore } from "@freebirdai/connect/rhythm-store";
 import { warmTargets } from "./keeper/targets.js";
 import { ViewedRequests, paramShape } from "./keeper/viewed.js";
 import { VERIFY_BUDGET_DEFAULT, VERIFY_BUDGET_MAX, verifyRecords } from "./routes/verify.js";
 import type { Settings, SettingsStore } from "./settings.js";
-import { clampMaxAge, QueryCache } from "@freebirdai/connect/cache/queryCache";
+import { clampMaxAge } from "@freebirdai/connect/cache/queryCache";
 import { extractRows, parsePath } from "@freebirdai/dash-expr";
 import { catalogEntryToVerify, validationCandidates } from "@freebirdai/connect/verified";
 import { buildQueryRequest, resolveRequestedRange } from "@freebirdai/connect/query";
 import {
-  EACH_KEEP_MS,
   EACH_MAX,
   eachKey,
-  type EachReader,
-  EachReads,
   type EachRequest,
 } from "@freebirdai/connect/fanout/each";
-import { LongReads, type LongReadStatus } from "@freebirdai/connect/jobs/long-reads";
-import { CheckQueue } from "@freebirdai/connect/jobs/check-queue";
-import { type JobStore, MemoryJobStore } from "@freebirdai/connect/jobs/store";
+import { type JobStore } from "@freebirdai/connect/jobs/store";
 import { ANSWER_TOOL, answerFromData } from "./context/tool.js";
 import { bindingFor, bindingsFor } from "./tools/bindings.js";
 import { READ_TOOL, READ_TOOL_NAME, readRecords, readToolSchema } from "./tools/read.js";
@@ -228,32 +213,29 @@ import {
 } from "./context/onscreen.js";
 import { LOOK_UP_WIDGET_TOOL, lookUpWidget, lookUpWidgetSchema } from "./chat/lookUpWidget.js";
 import type { CacheStore } from "@freebirdai/connect/cache/store";
-import { coolingMessage, retryAfterSeconds, waitPhrase } from "@freebirdai/connect/cache/cooldown";
-import { ConnectionGate, Priority } from "@freebirdai/connect/cache/gate";
+import { waitPhrase } from "@freebirdai/connect/cache/cooldown";
+import { Priority } from "@freebirdai/connect/cache/gate";
 import { SpecStore, type SpecRepository } from "./store.js";
 import { GrantStore, approveWidget, dashboardApprovals, widgetGrantSubject } from "./grants.js";
 import { KeyStore, type SecretRepository } from "@freebirdai/connect/vault";
-import { type EvidenceStore, MemoryEvidenceStore } from "@freebirdai/connect/evidence/store";
-import { CredentialBroker, type OAuthAppRegistry, vaultApps } from "@freebirdai/connect/auth/broker";
+import { type EvidenceStore } from "@freebirdai/connect/evidence/store";
+import { type OAuthAppRegistry } from "@freebirdai/connect/auth/broker";
 import {
   type CredentialMetaStore,
-  MemoryCredentialMetaStore,
 } from "@freebirdai/connect/auth/credential-meta";
-import { MemorySeenValueStore, type SeenValueStore } from "@freebirdai/connect/values/store";
+import { type SeenValueStore } from "@freebirdai/connect/values/store";
 import { MemoryShapeStore, type ShapeStore } from "@freebirdai/connect/drift/store";
 import { DriftWatch } from "./drift/watch.js";
-import { openMcpClient } from "@freebirdai/connect/mcp/client";
 import { registryIndex } from "@freebirdai/connect/registry/registry";
 import { MemorySnapshotStore, type SnapshotStore } from "./history/store.js";
 import { dayOf, numbersFrom } from "./history/record.js";
 import { seenByRecordType } from "@freebirdai/connect/integrate/values";
-import { OAuthRetryAdapter, RateLimitWaitAdapter } from "@freebirdai/connect/auth/retry-adapter";
-import { ConnectorAdapter } from "@freebirdai/connect/connector/adapter";
 import type { ConnectorTokenStore } from "@freebirdai/connect/connector/host";
 import { type ConnectorSandbox } from "@freebirdai/connect/connector/sandbox";
-import { VaultConnectorTokens } from "@freebirdai/connect/connector/tokens";
 import { oauthRoutes } from "./routes/oauth.js";
-import { createIntegrationRunner, integrateRoutes, type IntegrateRouteDeps } from "./routes/integrate.js";
+import { integrateRoutes } from "./routes/integrate.js";
+import { createEngine, nodeHttp } from "@freebirdai/connect/engine";
+import { type IntegrateRouteDeps } from "@freebirdai/connect/integrate/runner";
 import { RENDERER_DOWNLOAD_MB, type RendererStatus } from "@freebirdai/connect-browser";
 import { QuickJsSandbox } from "@freebirdai/connect-sandbox";
 
@@ -591,22 +573,8 @@ export const CHAT_SYSTEM_PROMPT = [
   "Never invent an id. Keep answers short and concrete.",
 ].join("\n");
 
-/**
- * The real transport, wrapped in the SSRF guard and the host allowlist.
- *
- * Exported so a driver script reads through exactly the transport the server
- * does. A second, unguarded copy in a script is how an SSRF guard stops being
- * true of every path that reaches an API.
- */
-export const nodeHttp: HttpFetch = async (url, init, allowedHost) => {
-  const result = await guardedFetch(url, init, allowedHost);
-  return {
-    status: result.status,
-    text: result.text,
-    url: result.url,
-    header: (name) => result.headers.get(name),
-  };
-};
+/** The real transport, behind the SSRF guard: the engine's, re-exported for driver scripts. */
+export { nodeHttp };
 
 const rangeSchema = z.object({
   preset: z.enum(["1h", "24h", "7d", "30d", "90d", "12mo", "ytd", "custom"]).default("30d"),
@@ -659,19 +627,6 @@ const eachSchema = z.object({
   filters: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
 });
 
-/**
- * A pacing number from the environment, or the default.
- *
- * Non-numeric and negative values fall back rather than throwing: a typo in a
- * deployment's environment should not stop the server, and every value here
- * has a sane answer without it. Zero is legal and means "no limit".
- */
-const pacingEnv = (name: string, fallback: number): number => {
-  const raw = process.env[name];
-  if (raw === undefined) return fallback;
-  const value = Number(raw);
-  return Number.isFinite(value) && value >= 0 ? value : fallback;
-};
 
 export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   const { store, keys } = options;
@@ -747,114 +702,84 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   /** Write endpoints discovery read, held until their entry is adopted. */
   const discovered = new Discovered();
 
-  /* One transport for reads and writes, so both go through the same SSRF guard and host pin. */
   /*
-   * Every secret a request sends is asked of the broker: the vault's value
-   * for a static key, a live token for OAuth — fetched, renewed and retried
-   * without anybody's help. See `auth/broker.ts`.
+   * The integration engine: the credential broker, the adapter chain behind
+   * the SSRF guard and the journal, one gate and cooldown per connection, the
+   * response cache, long reads and per-record reads, the write service and
+   * the integration loop. Dash serves it; see `@freebirdai/connect/engine`.
    */
-  const broker = new CredentialBroker({
-    vault: keys,
-    meta: options.credentialMeta ?? new MemoryCredentialMetaStore(),
-    apps: options.oauthApps ?? vaultApps(keys),
-    http: options.http ?? nodeHttp,
-    getConnection: (id) => store.getConnection(id),
-    listConnections: () => store.listConnections(),
-    now: Date.now,
-    log: (message) => app.log.warn(message),
-  });
-  const secretFor = broker.resolve;
-  const rest = new RestAdapter(options.http ?? nodeHttp);
-  /*
-   * Connector code — for an API a connection cannot describe in data — runs
-   * in the sandbox, under its authority, with its session tokens in the vault.
-   * See `connector/`.
-   */
-  const connectors = {
+  const engine = createEngine({
+    store,
+    keys,
+    catalog: options.catalog,
+    http: options.http,
+    credentialMeta: options.credentialMeta,
+    oauthApps: options.oauthApps,
+    journal,
+    jobs: options.jobs,
+    cache: options.cache,
+    evidence: options.evidence,
+    seenValues: options.seenValues,
+    rhythms: options.rhythms,
     sandbox: options.connectorSandbox ?? new QuickJsSandbox(),
-    tokens:
-      options.connectorTokens ??
-      new VaultConnectorTokens(keys, options.credentialMeta ?? new MemoryCredentialMetaStore()),
-  };
-  const reader = new ConnectorAdapter(options.http ?? nodeHttp, {
-    ...connectors,
-    onLog: (connection, line) => app.log.debug(`connector ${connection.id}: ${line}`),
-    /* The API's endpoints that change things, as its catalog entry knows them: never sent by connector code. */
-    writes: (connection) =>
-      (connection.catalog ? (options.catalog?.get(connection.catalog)?.writes ?? []) : []).map((write) => ({
-        method: write.method,
-        path: write.path,
-      })),
-  });
-  /*
-   * Reads go through the journal first: a read sent with POST on the
-   * documentation's word is recorded each time it is sent. Reads go through
-   * the connector adapter, which is REST exactly for a connection with no
-   * connector. Writes use `rest` directly, through the write service, which
-   * journals them itself.
-   */
-  /*
-   * An MCP server's read-only tools, called over the same guarded transport
-   * and with the same broker as any other read, and journalled: a tool call
-   * is a read on the server's word, not the protocol's. See `mcp/`.
-   */
-  const mcp = new McpAdapter((connection) =>
-    openMcpClient(connection, { http: options.http ?? nodeHttp, resolveSecret: (keyRef) => secretFor(keyRef) }),
-  );
-  const registry = new AdapterRegistry()
-    .register(
-      /* Outermost: an input another endpoint's records supply is read through the same chain as everything else. */
-      new DependentAdapter(
-        new JournalingAdapter(
-          new OAuthRetryAdapter(new RateLimitWaitAdapter(reader), broker),
-          journal,
-          (message) => app.log.warn(message),
+    connectorTokens: options.connectorTokens,
+    policy,
+    llm: (task) => resolveLlm(task),
+    fetchDocument: options.fetchDocument,
+    autoIntegrate: options.autoIntegrate,
+    log: { info: (line) => app.log.info(line), warn: (line) => app.log.warn(line), debug: (line) => app.log.debug(line) },
+    integration: {
+      /* The endpoints Dash's boards read, so a check settles those first. */
+      usedOps: (connection) => [
+        ...new Set(
+          store
+            .listDashboards()
+            .flatMap((board) => board.widgets.flatMap((widget) => widgetSources(widget)))
+            .filter((source) => source.connection === connection && !source.fanOut)
+            .map((source) => source.op),
         ),
-      ),
-    )
-    .register(new JournalingAdapter(mcp, journal, (message) => app.log.warn(message)));
-
-  /**
-   * Everything a widget reads goes through here.
-   *
-   * Deliberately not inside `AdapterRegistry.fetch`: sampling must be fresh by
-   * definition, and enumeration already has its own three-tier cache. Wrapping
-   * the registry would have quietly cached both.
-   *
-   * Memory-only by default. A response cache holds a customer's own records,
-   * and keeping them in a process that forgets everything when it stops is
-   * what makes "we read your API, we do not keep it" true for a self-hoster.
-   * `options.cache` is how a hosted deployment supplies something shared.
-   */
-  /**
-   * How hard this server is willing to lean on somebody else's API.
-   *
-   * The defaults are deliberately modest. Nothing limited concurrency before,
-   * so opening a board fired every widget at once — each up to `maxPages`
-   * requests, plus a fan-out of up to a hundred more — and the rate limit that
-   * came back was one this server had provoked. Three at a time with a fifth
-   * of a second between starts is slower on an idle API and dramatically
-   * better on a metered one, because a refusal costs the whole board.
-   *
-   * Environment-overridable so a deployment with a generous quota is not stuck
-   * with a limit chosen for a strict one.
-   */
-  const gate = new ConnectionGate({
-    maxConcurrent: pacingEnv("DASH_MAX_CONCURRENCY", 3),
-    minGapMs: pacingEnv("DASH_MIN_GAP_MS", 200),
+      ],
+      /*
+       * What the check's reads showed, onto the shared catalog entry: fields for
+       * endpoints the documentation declared none for — names and kinds, never
+       * values. The record types that can now be described are described next,
+       * by themselves, like the check itself: nobody presses anything.
+       */
+      recordObserved: (connection, observed, added) => {
+        void keepObserved(connection, observed, added).catch((error: unknown) =>
+          app.log.warn(`describing ${connection.catalog ?? connection.id} after its check failed: ${error instanceof Error ? error.message : String(error)}`),
+        );
+      },
+      /* What a search for a request's records found, described before the brief that asked is written again. */
+      recordFound: (connection, observed, added) => keepObserved(connection, observed, added),
+    },
   });
-
-  const queries = new QueryCache({
-    gate,
-    ...(options.cache ? { store: options.cache } : {}),
-  });
-
-  /*
-   * Who is actually looking. Read by the keeper, which refuses to spend
-   * somebody's rate limit on a connection nobody has opened in a quarter of
-   * an hour. See `LastSeen`.
-   */
-  const seen = new LastSeen();
+  const {
+    broker,
+    secretFor,
+    registry,
+    queries,
+    seen,
+    jobs,
+    eachReads,
+    eachPlan,
+    rhythms,
+    rhythmFor,
+    forgetTiers,
+    everyMsForOp,
+    upstream,
+    longReads,
+    withReadingOn,
+    refreshQueryIdentity,
+    writes,
+    evidence,
+    seenValues: seenValueStore,
+    integrationDeps,
+    integration,
+  } = engine;
+  /* Once the server is up: whatever was being read when it last stopped is carried on. */
+  app.addHook("onReady", async () => engine.resume());
+  app.addHook("onClose", async () => engine.stop());
 
   /*
    * Catalog ids whose record types are being described right now. Written by
@@ -868,254 +793,6 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * than its own reconstruction of them — see `ViewedRequests`.
    */
   const viewed = new ViewedRequests();
-  /*
-   * Work that outlives a request — a read carried on, every record's related
-   * records — kept so a restart carries it on. See `jobs/`.
-   */
-  const jobs: JobStore = options.jobs ?? new MemoryJobStore();
-  /** Which endpoints are due a check, kept in the job store. See `CheckQueue`. */
-  const checkQueue = new CheckQueue({ store: jobs, now: () => Date.now() });
-  /** Tiles' reads of every record's related records, kept in the job store while they run. See `EachReads`. */
-  const eachReads = new EachReads({
-    store: jobs,
-    /* Defined below, with the reads it needs: only ever called after. */
-    reader: (request) => eachPlan(request)?.read ?? null,
-    log: (line) => app.log.info(line),
-  });
-
-  /**
-   * How often each endpoint is asked again, per connection.
-   *
-   * The personal half: the cadences and anything this account moved. The
-   * shared half — how often new records of each kind actually appear — is on
-   * the catalog entry, written by the onboarding pass that reads the API. See
-   * `keeper/rhythm.ts` for how the two meet.
-   *
-   * Absent means a directory of this server's own: shared across runs, a
-   * cadence one test ticked would leak into the next.
-   */
-  const rhythms =
-    options.rhythms ?? new RhythmStore(mkdtempSync(join(tmpdir(), "dash-rhythm-")));
-
-  /** Everything needed to place one of a connection's endpoints in a tier. */
-  const rhythmFor = (connection: ConnectionSpec) => {
-    const entry = connection.catalog ? options.catalog?.get(connection.catalog) : undefined;
-    return {
-      connection,
-      ...(entry?.rhythm ? { api: entry.rhythm } : {}),
-      entities: entry?.entities ?? [],
-      personal: rhythms.get(connection.id),
-    };
-  };
-
-  /*
-   * Tier decisions, remembered for a few seconds.
-   *
-   * Asked once per target on every tick and again for every row of the status
-   * panel, and each answer reads the rhythm file and the catalog entry from
-   * disk — on a synced folder, slow enough to notice. A cadence somebody just
-   * moved is at most this stale, and `forgetTiers` clears it outright.
-   */
-  const TIER_MEMO_MS = 5_000;
-  let tierMemo = { at: 0, byConnection: new Map<string, Map<string, number>>() };
-  const forgetTiers = (): void => {
-    tierMemo = { at: 0, byConnection: new Map() };
-  };
-
-  /**
-   * How often one endpoint is asked again.
-   *
-   * The tier its records were placed in, or the fast one where nothing has an
-   * opinion — a wrong "slow" shows day-old numbers with total confidence while
-   * a wrong "fast" costs a few paced requests. A widget that asked for a
-   * shorter `refresh.every` gets it: that is a stated wish, and the keeper is
-   * the only thing left that asks the API on a schedule.
-   */
-  const everyMsForOp = (connection: string, op: string, widgetEveryMs?: number): number => {
-    const now = Date.now();
-    if (now - tierMemo.at > TIER_MEMO_MS) tierMemo = { at: now, byConnection: new Map() };
-    let ops = tierMemo.byConnection.get(connection);
-    if (!ops) {
-      ops = new Map();
-      const spec = store.getConnection(connection);
-      if (spec) {
-        for (const decision of decideAll({ ...rhythmFor(spec), ops: spec.ops.map((one) => one.id) })) {
-          ops.set(decision.op, decision.everyMs);
-        }
-      }
-      tierMemo.byConnection.set(connection, ops);
-    }
-    const tier = ops.get(op) ?? DEFAULT_EVERY_MS;
-    return widgetEveryMs !== undefined ? Math.min(tier, widgetEveryMs) : tier;
-  };
-
-  /**
-   * Every upstream call that is not a widget query.
-   *
-   * Verify, validate, sample, enumerate and the narrowing pass all called
-   * `registry.fetch` directly, so none of them checked the cooldown, fed it,
-   * or waited their turn. A verify run could therefore provoke a 429 that went
-   * on to empty every tile on the board, and a connection that had just asked
-   * us to stop could still be enumerated at full speed.
-   *
-   * Not routed through `queries.read`: these must not be cached. Sampling is
-   * fresh by definition and enumeration keeps its own three-tier cache. What
-   * they share with a widget query is the *connection*, which is what a rate
-   * limit is a property of — so they share the gate and the breaker, and
-   * nothing else.
-   */
-  const upstream = async <T>(
-    connection: string,
-    run: () => Promise<T>,
-    priority: Priority = Priority.Background,
-  ): Promise<T> => {
-    const cooling = queries.cooldown.check(connection, Date.now());
-    if (cooling)
-      throw new AdapterError(`cooling down for ${connection}`, {
-        status: cooling.status,
-        userMessage: coolingMessage(cooling, Date.now()),
-        retryAfter: retryAfterSeconds(cooling.until, Date.now()),
-      });
-
-    return gate.run(connection, priority, async () => {
-      try {
-        const result = await run();
-        queries.cooldown.succeeded(connection);
-        return result;
-      } catch (error) {
-        if (error instanceof AdapterError && error.status === 429) {
-          queries.accounting.refused(connection);
-          queries.cooldown.refused({
-            connection,
-            status: 429,
-            retryAfter: error.retryAfter,
-            reason: error.userMessage,
-            now: Date.now(),
-          });
-        }
-        throw error;
-      }
-    });
-  };
-
-  /*
-   * Reads too long for a tile's own limits, carried on in the background from
-   * where they stopped, behind every board's own reads, and handed to the
-   * cache whole when they reach their end. See `LongReads`.
-   */
-  const longReads = new LongReads({
-    store: jobs,
-    getConnection: (id) => store.getConnection(id),
-    read: (connection, op, overrides, ctx) => {
-      registry.addConnection(connection);
-      const adapter = registry.adapterFor(connection.kind);
-      if (!adapter) throw new AdapterError(`no adapter registered for kind "${connection.kind}"`, { status: 501 });
-      return upstream(connection.id, () => adapter.fetch(connection, op, overrides, { ...ctx, resolveSecret: secretFor }), Priority.Background);
-    },
-    answer: async (key, _connection, result) => queries.put(key, result),
-    now: () => Date.now(),
-    log: (line) => app.log.info(line),
-  });
-
-  /*
-   * A per-record read's requests, spelled exactly as the tile spells them —
-   * so one already held is not asked again — and how to read one of them.
-   * Null when the connection is gone or its configuration changed since.
-   */
-  const eachPlan = (request: EachRequest): { readonly keys: string[]; readonly read: EachReader } | null => {
-    const spec = store.getConnection(request.connection);
-    const resolvedOp = spec ? getOp(spec, request.op) : undefined;
-    if (!spec || !resolvedOp || fingerprintConnection(spec) !== request.configVersion) return null;
-    registry.addConnection(spec);
-    refreshQueryIdentity(spec);
-    const reads = request.values.map((value) =>
-      buildQueryRequest({
-        connection: request.connection,
-        op: resolvedOp,
-        params: { ...request.params, [request.input]: value },
-        resolved: request.window,
-      }),
-    );
-    return {
-      keys: reads.map((read) => read.key),
-      read: async (index, signal) => {
-        const { key, overrides, resolved } = reads[index]!;
-        const fetcher = () =>
-          registry.fetch(request.connection, request.op, overrides, {
-            params: resolved,
-            now: Date.now(),
-            resolveSecret: secretFor,
-            signal,
-          });
-        /* Already held — the tile's own first twenty-five, say: served as held. */
-        const answer =
-          queries.storedAt(key) !== null
-            ? await queries.read({
-                key,
-                connection: request.connection,
-                mode: "view",
-                maxAgeMs: EACH_KEEP_MS,
-                fetcher,
-                priority: Priority.Background,
-              })
-            : await upstream(request.connection, fetcher, Priority.Background);
-        const said = answer.meta.warnings.filter(isIncompleteNote);
-        return {
-          body: answer.body,
-          notes:
-            answer.meta.truncated && said.length === 0
-              ? ["Not every page was read, so what is shown may exclude additional records."]
-              : said,
-        };
-      },
-    };
-  };
-  /* Once the server is up: whatever was being read when it last stopped is carried on. */
-  app.addHook("onReady", async () => {
-    void longReads.resume().catch((error: unknown) => app.log.warn(`long reads could not resume: ${String(error)}`));
-    void eachReads.resume().catch((error: unknown) => app.log.warn(`per-record reads could not resume: ${String(error)}`));
-    void checkQueue.resume().catch((error: unknown) => app.log.warn(`checks waiting their turn could not resume: ${String(error)}`));
-  });
-  app.addHook("onClose", async () => longReads.stop());
-
-  /*
-   * What a tile is told of its read: a continuation is the server's own, never
-   * the browser's, and a read being carried on says how far it has got in
-   * place of the note that it stopped.
-   */
-  const withReadingOn = <M extends FetchResult["meta"]>(meta: M, reading: LongReadStatus | null): Omit<M, "continuation"> => {
-    const { continuation: _continuation, ...rest } = meta;
-    if (!reading) return rest;
-    const stopped = (warning: string) => /^Only the first \d+ page\(s\) were read/.test(warning) || warning === INCOMPLETE.connectorStopped;
-    return {
-      ...rest,
-      warnings: [...meta.warnings.filter((warning) => !stopped(warning)), INCOMPLETE.readingOn(reading.read, reading.of)],
-      readingOn: { read: reading.read, ...(reading.of !== undefined ? { of: reading.of } : {}) },
-    };
-  };
-
-  /*
-   * The only thing that changes a connected account. Built here, beside
-   * `upstream`, because a change waits in the same gate as every read — just
-   * at the front of it — and answers to the same cooldown.
-   */
-  const writes = new WriteService({
-    store,
-    catalog: options.catalog,
-    // Read through the broker, so a change to an OAuth account sends a current token.
-    keys: { get: secretFor },
-    registry,
-    rest,
-    queries,
-    seen,
-    policy,
-    journal,
-    upstream,
-  });
-  /** What has been observed about reading each endpoint. See `BuildServerOptions.evidence`. */
-  const evidence: EvidenceStore = options.evidence ?? new MemoryEvidenceStore();
-  /** What each connection's records were seen to hold. See `BuildServerOptions.seenValues`. */
-  const seenValueStore: SeenValueStore = options.seenValues ?? new MemorySeenValueStore();
   /** Number tiles' values, day by day. See `BuildServerOptions.snapshots`. */
   const snapshots: SnapshotStore = options.snapshots ?? new MemorySnapshotStore();
   /*
@@ -1150,12 +827,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     }
   };
   /** A published document — an API's specification — for reading its write endpoints. */
-  const readDocument: FetchDocument =
-    options.fetchDocument ??
-    (async (url) => {
-      const response = await fetchPublicDocument(url);
-      return { status: response.status, text: response.text, url: response.url };
-    });
+  const readDocument: FetchDocument = engine.fetchDocument;
 
   /*
    * The integration loop: read what matters on a new connection, repair what
@@ -1205,98 +877,9 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       entry.id,
     );
   };
-  const integrationDeps: IntegrateRouteDeps = {
-    getConnection: (id) => store.getConnection(id),
-    saveConnection: (next, changed) => {
-      store.putConnection(next);
-      if (changed) queries.invalidate(next.id);
-      registry.addConnection(next);
-    },
-    catalogEntry: (id) => options.catalog?.get(id),
-    hasSecret: (keyRef) => keys.has(keyRef),
-    resolveSecret: secretFor,
-    refresh: (connection) => broker.refresh(connection),
-    http: options.http ?? nodeHttp,
-    fetchDocument: readDocument,
-    llm: () => resolveLlm("repair"),
-    connectorLlm: () => resolveLlm("connector"),
-    evidence,
-    around: (connection, background) => (run) =>
-      upstream(connection, run, background ? Priority.Background : Priority.Interactive),
-    /* A read the check sends on the documentation's word is journalled like a board's. */
-    onRead: (connection, op, outcome) => {
-      const event = readEventFor(connection, op, "check", outcome, Date.now());
-      if (event)
-        Promise.resolve(journal.recordRead?.(event)).catch((error: unknown) =>
-          app.log.warn(`a check's read could not be journalled: ${String(error)}`),
-        );
-    },
-    auto: options.autoIntegrate ?? false,
-    log: (message) => app.log.info(message),
-    connectors,
-    /*
-     * What the check's reads showed, onto the shared catalog entry: fields for
-     * endpoints the documentation declared none for — names and kinds, never
-     * values. The record types that can now be described are described next,
-     * by themselves, like the check itself: nobody presses anything.
-     */
-    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    usedOps: (connection) => [
-      ...new Set(
-        store
-          .listDashboards()
-          .flatMap((board) => board.widgets.flatMap((widget) => widgetSources(widget)))
-          .filter((source) => source.connection === connection && !source.fanOut)
-          .map((source) => source.op),
-      ),
-    ],
-    recordValues: async (connection, values) => {
-      for (const [op, seen] of Object.entries(values)) await seenValueStore.put(connection.id, op, seen);
-    },
-    /*
-     * What the check established, kept on the API's entry: when, against which
-     * version, and the rung each endpoint reached. Rungs only — a count is one
-     * account's, and an entry is every account's.
-     */
-    recordCheck: (connection, report) => {
-      const entries = options.catalog;
-      const entry = entries && connection.catalog ? entries.get(connection.catalog) : null;
-      if (!entries || !entry || report.evidence.length === 0) return;
-      const ops: Record<string, EvidenceLevel> = {};
-      for (const one of report.evidence) {
-        const held = ops[one.op];
-        if (!held || evidenceRank(one.level) > evidenceRank(held)) ops[one.op] = one.level;
-      }
-      const at = new Date().toISOString();
-      entries.put({
-        ...entry,
-        ...(report.outcome === "ready" ? { verifiedAt: at } : {}),
-        evidence: { at, ...(entry.version !== undefined ? { version: entry.version } : {}), outcome: report.outcome === "ready" ? "ready" : "partial", ops },
-      });
-    },
-    recordObserved: (connection, observed, added) => {
-      void keepObserved(connection, observed, added).catch((error: unknown) =>
-        app.log.warn(`describing ${connection.catalog ?? connection.id} after its check failed: ${error instanceof Error ? error.message : String(error)}`),
-      );
-    },
-    /* What a search for a request's records found, described before the brief that asked is written again. */
-    recordFound: (connection, observed, added) => keepObserved(connection, observed, added),
-  };
-  const integration = createIntegrationRunner({ ...integrationDeps, queue: checkQueue });
   /** Read a connection's write endpoints if its entry never has had them read. Set below, once the reader exists. */
   let readWritesFor: (connection: ConnectionSpec) => void = () => {};
   const previews = new SetupPreviews(queries.store, (id) => store.getConnection(id));
-  const queryVersions = new Map(
-    store.listConnections().map((connection) => [connection.id, fingerprintConnection(connection)]),
-  );
-  const refreshQueryIdentity = (connection: ConnectionSpec) => {
-    const current = fingerprintConnection(connection);
-    if (queryVersions.get(connection.id) !== current) {
-      queries.invalidate(connection.id);
-      queryVersions.set(connection.id, current);
-    }
-  };
-
   // Normalise the static and resolved forms to one shape at the edge, so no
   // route has to care which kind it was given.
   /*

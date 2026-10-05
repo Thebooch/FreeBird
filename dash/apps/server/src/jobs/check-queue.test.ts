@@ -5,7 +5,7 @@ import { json } from "../bench/seed.js";
 import { benchTransport } from "../bench/transport.js";
 import type { MockProvider } from "../bench/types.js";
 import { MemoryEvidenceStore } from "@freebirdai/connect/evidence/store";
-import { createIntegrationRunner } from "../routes/integrate.js";
+import { createIntegrationRunner } from "@freebirdai/connect/integrate/runner";
 import { LocalAesVault } from "@freebirdai/connect/vault";
 import { CheckQueue } from "@freebirdai/connect/jobs/check-queue";
 import { MemoryJobStore } from "@freebirdai/connect/jobs/store";
