@@ -1,0 +1,23 @@
+{
+  "name": "freebird-connect-express-example",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Serve @freebirdai/connect over HTTP from a small Express app.",
+  "scripts": {
+    "start": "tsx src/server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@freebirdai/adapters-llm-anthropic": "workspace:*",
+    "@freebirdai/connect": "workspace:*",
+    "@freebirdai/connect-server": "workspace:*",
+    "express": "^4.21.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.9.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

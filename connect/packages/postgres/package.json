@@ -43,5 +43,19 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "keywords": [
+    "freebird",
+    "api",
+    "integration",
+    "openapi",
+    "connector"
+  ],
+  "homepage": "https://github.com/Thebooch/FreeBird/tree/main/connect/packages/postgres#readme",
+  "bugs": {
+    "url": "https://github.com/Thebooch/FreeBird/issues"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

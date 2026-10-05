@@ -399,12 +399,15 @@ export const createConnect = (options: ConnectOptions = {}) => {
 
     /**
      * Read the endpoints that matter, repair what the documentation got
-     * wrong, confirm how each pages, and keep the result. Reads only; it
-     * never changes the account. Model calls only when the built-in repairs
-     * are not enough.
+     * wrong, confirm how each pages, and keep the result; then, with a model,
+     * describe the API's record types so reads can name them. Reads only; it
+     * never changes the account.
      */
     integrate: async (id: string): Promise<IntegrationRun> => {
       const run = await engine.integration.run(id);
+      /* With a model, what the records are is worked out next: what lets a read name a record type. */
+      const connection = store.getConnection(id);
+      if (connection?.catalog) await engine.describeRecords(connection.catalog);
       if (!("error" in run)) emit({ type: "checked", connection: id, outcome: run.outcome });
       return run;
     },

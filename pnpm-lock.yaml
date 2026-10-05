@@ -540,6 +540,53 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
+  examples/connect-express:
+    dependencies:
+      '@freebirdai/adapters-llm-anthropic':
+        specifier: workspace:*
+        version: link:../../guide/packages/adapters-llm-anthropic
+      '@freebirdai/connect':
+        specifier: workspace:*
+        version: link:../../connect/packages/connect
+      '@freebirdai/connect-server':
+        specifier: workspace:*
+        version: link:../../connect/packages/server
+      express:
+        specifier: ^4.21.1
+        version: 4.22.1
+    devDependencies:
+      '@types/express':
+        specifier: ^5.0.0
+        version: 5.0.6
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.19.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.21.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  examples/connect-node:
+    dependencies:
+      '@freebirdai/adapters-llm-anthropic':
+        specifier: workspace:*
+        version: link:../../guide/packages/adapters-llm-anthropic
+      '@freebirdai/connect':
+        specifier: workspace:*
+        version: link:../../connect/packages/connect
+    devDependencies:
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.19.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.21.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   examples/next-starter:
     dependencies:
       '@freebirdai/adapters-llm-openai':

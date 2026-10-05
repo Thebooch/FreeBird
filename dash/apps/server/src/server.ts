@@ -727,6 +727,10 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     fetchDocument: options.fetchDocument,
     autoIntegrate: options.autoIntegrate,
     log: { info: (line) => app.log.info(line), warn: (line) => app.log.warn(line), debug: (line) => app.log.debug(line) },
+    /* What an account read showed about the record types, applied once they exist. */
+    onDescribed: (catalogId) => {
+      for (const one of store.listConnections()) if (one.catalog === catalogId) observeConnection(one.id);
+    },
     integration: {
       /* The endpoints Dash's boards read, so a check settles those first. */
       usedOps: (connection) => [
@@ -738,19 +742,6 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             .map((source) => source.op),
         ),
       ],
-      /*
-       * What the check's reads showed, onto the shared catalog entry: fields for
-       * endpoints the documentation declared none for — names and kinds, never
-       * values. The record types that can now be described are described next,
-       * by themselves, like the check itself: nobody presses anything.
-       */
-      recordObserved: (connection, observed, added) => {
-        void keepObserved(connection, observed, added).catch((error: unknown) =>
-          app.log.warn(`describing ${connection.catalog ?? connection.id} after its check failed: ${error instanceof Error ? error.message : String(error)}`),
-        );
-      },
-      /* What a search for a request's records found, described before the brief that asked is written again. */
-      recordFound: (connection, observed, added) => keepObserved(connection, observed, added),
     },
   });
   const {
@@ -785,7 +776,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * the describing route, read by the map state and by onboarding — see
    * `MapRouteDeps.describing`.
    */
-  const describing = new Set<string>();
+  const describing = engine.describing;
 
   /*
    * What boards have actually asked for. The keeper refreshes these rather
@@ -836,46 +827,6 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * and cooldown as every other reader of the connection; a check that
    * started by itself waits behind boards. See `routes/integrate.ts`.
    */
-  /**
-   * What a check's reads showed, onto the shared catalog entry: fields for
-   * endpoints the documentation declared none for — names and kinds, never
-   * values — and reads it added. The record types that can now be described
-   * are described next, by themselves; the promise settles once they are.
-   */
-  const keepObserved = async (
-    connection: ConnectionSpec,
-    observed: Parameters<NonNullable<IntegrateRouteDeps["recordObserved"]>>[1],
-    added: Parameters<NonNullable<IntegrateRouteDeps["recordObserved"]>>[2],
-  ): Promise<void> => {
-    const entries = options.catalog;
-    const entry = connection.catalog ? entries?.get(connection.catalog) : undefined;
-    if (!entries || !entry) return;
-    /* Reads written from a GraphQL schema first, so their records are what is described. */
-    const read = withAddedReads(entry, added);
-    const next = withObservedFields(read ?? entry, observed) ?? read;
-    if (!next) return;
-    entries.put(next);
-    /* A collection a read showed, carried by every connection made from this entry. */
-    for (const one of store.listConnections()) {
-      if (one.catalog !== entry.id) continue;
-      const grown = withEntryResources(one, next);
-      if (grown !== one) {
-        store.putConnection(grown);
-        registry.addConnection(grown);
-      }
-    }
-    await describeMissingRecords(
-      {
-        catalog: entries,
-        llm: (task) => resolveLlm(task),
-        describing,
-        onDescribed: (catalogId) => {
-          for (const one of store.listConnections()) if (one.catalog === catalogId) observeConnection(one.id);
-        },
-      },
-      entry.id,
-    );
-  };
   /** Read a connection's write endpoints if its entry never has had them read. Set below, once the reader exists. */
   let readWritesFor: (connection: ConnectionSpec) => void = () => {};
   const previews = new SetupPreviews(queries.store, (id) => store.getConnection(id));

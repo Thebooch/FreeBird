@@ -43,6 +43,8 @@ import { DEFAULT_EVERY_MS, LastSeen } from "./keeper/keeper.js";
 import { decideAll } from "./keeper/rhythm.js";
 import { openMcpClient } from "./mcp/client.js";
 import { buildQueryRequest } from "./query.js";
+import { withAddedReads, withEntryResources, withObservedFields } from "./integrate/observed.js";
+import { describeMissingRecords } from "./map.js";
 import { RhythmStore } from "./rhythm-store.js";
 import { fetchPublicDocument, guardedFetch } from "./safe-fetch.js";
 import { MemorySeenValueStore, type SeenValueStore } from "./values/store.js";
@@ -141,6 +143,11 @@ export interface EngineOptions {
    * read, and what to do with what a check observed about an API.
    */
   readonly integration?: Pick<IntegrateRouteDeps, "usedOps" | "recordObserved" | "recordFound"> | undefined;
+  /**
+   * An API's record types were just described: what an account read showed
+   * about them can be applied now.
+   */
+  readonly onDescribed?: ((catalogId: string) => void) | undefined;
 }
 
 /**
@@ -478,6 +485,50 @@ export const createEngine = (options: EngineOptions) => {
   const seenValues: SeenValueStore = options.seenValues ?? new MemorySeenValueStore();
   const fetchDocument: FetchDocument = options.fetchDocument ?? fetchSpecification;
 
+  /* Catalog ids whose record types are being described right now: one pass per API at a time. */
+  const describing = new Set<string>();
+  /** Describe an API's record types where they have not been, when a model is configured. */
+  const describeRecords = (entryId: string): Promise<void> =>
+    describeMissingRecords(
+      {
+        catalog: options.catalog,
+        llm: (task) => llm(task),
+        describing,
+        ...(options.onDescribed ? { onDescribed: options.onDescribed } : {}),
+      },
+      entryId,
+    );
+  /**
+   * What a check's reads showed, onto the shared catalog entry: fields for
+   * endpoints the documentation declared none for — names and kinds, never
+   * values — and reads it added. The record types that can now be described
+   * are described next, by themselves; the promise settles once they are.
+   */
+  const keepObserved = async (
+    connection: ConnectionSpec,
+    observed: Parameters<NonNullable<IntegrateRouteDeps["recordObserved"]>>[1],
+    added: Parameters<NonNullable<IntegrateRouteDeps["recordObserved"]>>[2],
+  ): Promise<void> => {
+    const entries = options.catalog;
+    const entry = connection.catalog ? entries?.get(connection.catalog) : undefined;
+    if (!entries || !entry) return;
+    /* Reads written from a GraphQL schema first, so their records are what is described. */
+    const read = withAddedReads(entry, added);
+    const next = withObservedFields(read ?? entry, observed) ?? read;
+    if (!next) return;
+    entries.put(next);
+    /* A collection a read showed, carried by every connection made from this entry. */
+    for (const one of store.listConnections()) {
+      if (one.catalog !== entry.id) continue;
+      const grown = withEntryResources(one, next);
+      if (grown !== one) {
+        store.putConnection(grown);
+        registry.addConnection(grown);
+      }
+    }
+    await describeRecords(entry.id);
+  };
+
   /*
    * The integration loop: read what matters on a new connection, repair what
    * its documentation got wrong, confirm how it pages, and keep the result.
@@ -538,6 +589,14 @@ export const createEngine = (options: EngineOptions) => {
         evidence: { at, ...(entry.version !== undefined ? { version: entry.version } : {}), outcome: report.outcome === "ready" ? "ready" : "partial", ops },
       });
     },
+    /* What the check's reads showed, kept on the entry, and the record types it lets be described, described. */
+    recordObserved: (connection, observed, added) => {
+      void keepObserved(connection, observed, added).catch((error: unknown) =>
+        log.warn(`describing ${connection.catalog ?? connection.id} after its check failed: ${error instanceof Error ? error.message : String(error)}`),
+      );
+    },
+    /* What a search for a request's records found, described before whoever asked asks again. */
+    recordFound: (connection, observed, added) => keepObserved(connection, observed, added),
     ...options.integration,
   };
   const integration: IntegrationRunner = createIntegrationRunner({ ...integrationDeps, queue: checkQueue });
@@ -576,6 +635,9 @@ export const createEngine = (options: EngineOptions) => {
     fetchDocument,
     integrationDeps,
     integration,
+    describing,
+    describeRecords,
+    keepObserved,
     /** Carry on whatever was being read, read for every record, or waiting a check when the engine last stopped. */
     resume: (): void => {
       void longReads.resume().catch((error: unknown) => log.warn(`long reads could not resume: ${String(error)}`));
