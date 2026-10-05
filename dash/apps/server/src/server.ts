@@ -54,7 +54,6 @@ import {
   opDefSchema,
   onboardingSchema,
   opUsesRange,
-  isSingletonOp,
   pathParamNames,
   principalSchema,
   resolveRange,
@@ -68,22 +67,16 @@ import { createFreeBirdPlugin } from "@freebirdai/server/fastify";
 import {
   analyseConnection,
   analyseStructure,
-  AUTO_INDEX_PAGES,
   BlockedUrlError,
   buildQueryRequest,
   catalogEntryToVerify,
   catalogForBrowser,
   CatalogStore,
-  clampMaxAge,
   connectionFromCatalog,
   createEngine,
   decideAll,
   describeFields,
-  describeMissingRecords,
-  discover,
   Discovered,
-  EACH_MAX,
-  eachKey,
   estimateEnumeration,
   fetchPublicDocument,
   fromReport,
@@ -96,11 +89,9 @@ import {
   opsOfResource,
   preservedWrites,
   Priority,
-  readIndex,
   refreshCatalogConnection,
   refreshOutdatedConnectDetails,
   registryIndex,
-  resolveRequestedRange,
   RhythmStore,
   seenByRecordType,
   toReport,
@@ -109,9 +100,6 @@ import {
   VERIFY_BUDGET_MAX,
   verifyRecords,
   waitPhrase,
-  withAddedReads,
-  withEntryResources,
-  withObservedFields,
   withVerifiedParams,
   WriteEndpointReader,
 } from "@freebirdai/connect/host";
@@ -122,10 +110,8 @@ import type {
   ConnectorTokenStore,
   CredentialMetaStore,
   DocsRenderer,
-  EachRequest,
   EvidenceStore,
   FetchDocument,
-  IntegrateRouteDeps,
   JobStore,
   LeaseLock,
   OAuthAppRegistry,
@@ -203,14 +189,13 @@ import {
   fieldLexicon,
   fieldGroupSchema,
   fieldPathSchema,
-  fingerprintConnection,
   recipeFor,
   widgetBriefSchema,
 } from "@freebirdai/dash-spec";
 import { onboardingRoutes } from "./routes/onboarding.js";
 import { allocateDashboardId } from "./onboarding/materialise.js";
 import { warmTargets } from "./keeper/targets.js";
-import { ViewedRequests, paramShape } from "./keeper/viewed.js";
+import { ViewedRequests } from "./keeper/viewed.js";
 import type { Settings, SettingsStore } from "./settings.js";
 import { extractRows, parsePath } from "@freebirdai/dash-expr";
 import { ANSWER_TOOL, answerFromData } from "./context/tool.js";
@@ -245,7 +230,10 @@ import { DriftWatch } from "./drift/watch.js";
 import { MemorySnapshotStore, type SnapshotStore } from "./history/store.js";
 import { dayOf, numbersFrom } from "./history/record.js";
 import { integrateRoutes, mapRoutes, oauthRoutes } from "@freebirdai/connect-server/fastify";
-import { RENDERER_DOWNLOAD_MB, type RendererStatus } from "@freebirdai/connect-browser";
+import { discoverRoutes } from "./routes/discover.js";
+import { keyRoutes } from "./routes/keys.js";
+import { queryRoutes } from "./routes/query.js";
+import { type RendererStatus } from "@freebirdai/connect-browser";
 import { QuickJsSandbox } from "@freebirdai/connect-sandbox";
 
 /** Whether the browser for drawn documentation is here, and fetching it once agreed. See `RendererTooling`. */
@@ -585,56 +573,6 @@ export const CHAT_SYSTEM_PROMPT = [
 /** The real transport, behind the SSRF guard: the engine's, re-exported for driver scripts. */
 export { nodeHttp };
 
-const rangeSchema = z.object({
-  preset: z.enum(["1h", "24h", "7d", "30d", "90d", "12mo", "ytd", "custom"]).default("30d"),
-  grain: z.enum(["1h", "1d", "1w", "1mo", "1y"]).optional(),
-  start: z.number().optional(),
-  end: z.number().optional(),
-  /** Every record, whatever its dates: the API is asked without date bounds. */
-  all: z.boolean().optional(),
-});
-
-const querySchema = z.object({
-  connection: z.string().min(1),
-  op: z.string().min(1),
-  params: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
-  range: rangeSchema.default({ preset: "30d" }),
-  filters: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
-  /**
-   * How old an answer this caller will accept, in milliseconds.
-   *
-   * Stated per request rather than configured server-side, because one
-   * endpoint is read by several widgets that legitimately disagree about how
-   * current they need to be. Zero means revalidate, which is what an explicit
-   * Refresh sends. Clamped before use.
-   */
-  maxAgeMs: z.number().optional(),
-  /**
-   * Whether somebody is looking, or somebody asked.
-   *
-   * `view` is what a board sends while it is being read: serve what is held,
-   * at any age, and never call the API. `refresh` is what the Refresh buttons
-   * send. See `QueryCache.read`.
-   *
-   * Defaults to `refresh`, so an older browser, a script, or anything else
-   * that does not know about this keeps exactly the behaviour it had.
-   */
-  mode: z.enum(["view", "refresh"]).default("refresh"),
-});
-
-/** Every record's related records, past the ones a tile reads itself. See `EachReads`. */
-const eachSchema = z.object({
-  connection: z.string().min(1),
-  op: z.string().min(1),
-  /** What every read sends, whatever the record. */
-  params: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
-  /** The input each record's value goes into. */
-  input: z.string().min(1).max(120),
-  /** Each record's value, once each. */
-  values: z.array(z.union([z.string(), z.number(), z.boolean()])).min(1).max(EACH_MAX),
-  range: rangeSchema.default({ preset: "30d" }),
-  filters: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
-});
 
 
 export const buildServer = (options: BuildServerOptions): FastifyInstance => {
@@ -2462,69 +2400,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     },
   );
 
-  app.put<{ Params: { id: string }; Body: { key?: string; keys?: Record<string, unknown> } }>(
-    "/api/connections/:id/key",
-    async (request, reply) => {
-      const connection = store.getConnection(request.params.id);
-      if (!connection) return reply.status(404).send({ error: "no such connection" });
-      if (connectionKeyRefs(connection).length === 0) {
-        return reply.status(400).send({ error: "this connection does not use a key" });
-      }
-      const refs = connectionKeyRefs(connection);
-
-      // Multi-part auth sends { keys: { <keyRef>: value } }; the single-secret
-      // styles keep the original { key } shape so nothing existing breaks.
-      const supplied: Record<string, string> = {};
-      if (request.body?.keys && typeof request.body.keys === "object") {
-        for (const [ref, value] of Object.entries(request.body.keys)) {
-          if (typeof value === "string" && value.trim()) supplied[ref] = value.trim();
-        }
-      } else if (typeof request.body?.key === "string" && request.body.key.trim()) {
-        // Only unambiguous when there is exactly one secret to set.
-        if (refs.length > 1) {
-          return reply.status(400).send({
-            error: `${connection.title} needs ${refs.length} separate values — send { keys: { … } }, not a single key.`,
-          });
-        }
-        supplied[refs[0]!] = request.body.key.trim();
-      }
-
-      const missing = refs.filter((ref) => !supplied[ref] && !keys.has(ref));
-      if (Object.keys(supplied).length === 0 || missing.length > 0) {
-        return reply.status(400).send({
-          error:
-            missing.length > 0
-              ? `still missing a value for: ${missing.join(", ")}`
-              : "a key is required",
-        });
-      }
-
-      for (const [ref, value] of Object.entries(supplied)) {
-        if (refs.includes(ref)) keys.set(ref, value);
-      }
-      const keyed = { ...connection, credentialsRevision: (connection.credentialsRevision ?? 0) + 1 };
-      /* A new app's values: tokens obtained with the old ones are not theirs. */
-      await broker.forget(connection);
-      store.putConnection(keyed);
-      queries.invalidate(connection.id);
-      // The key is all a person should have to give: the rest is checked by itself.
-      integration.whenReady(keyed);
-      // Echo only the fact that it worked. Never the key, not even truncated.
-      return { ok: true, hasKey: true };
-    },
-  );
-
-  app.delete<{ Params: { id: string } }>("/api/connections/:id/key", async (request, reply) => {
-    const connection = store.getConnection(request.params.id);
-    if (!connection) return reply.status(404).send({ error: "no such connection" });
-    for (const ref of connectionKeyRefs(connection)) keys.delete(ref);
-    store.putConnection({
-      ...connection,
-      credentialsRevision: (connection.credentialsRevision ?? 0) + 1,
-    });
-    queries.invalidate(connection.id);
-    return { ok: true, hasKey: false };
-  });
+  void app.register(keyRoutes({ store, keys, broker, queries, integration }));
 
   /**
    * Say where this connection's API lives.
@@ -2794,216 +2670,26 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     });
   }
 
-  /** What has changed on a connection's endpoints since they were checked, in words. */
-  app.get<{ Params: { id: string } }>("/api/connections/:id/drift", async (request, reply) => {
-    const connection = store.getConnection(request.params.id);
-    if (!connection) return reply.status(404).send({ error: "no such connection" });
-    try {
-      return { changes: await drift.open(connection) };
-    } catch (error) {
-      return reply.status(503).send({ error: `What has changed could not be read: ${error instanceof Error ? error.message : String(error)}` });
-    }
-  });
-
-  app.post<{ Body: unknown }>("/api/query", async (request, reply) => {
-    const parsed = querySchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.status(400).send({ error: "invalid query", detail: parsed.error.issues });
-    }
-    const { connection, op, params, range, filters, mode } = parsed.data;
-    /* Somebody is there. Recorded before anything can fail, because a refused
-     * read is still evidence that a board is open. */
-    seen.touch(connection, Date.now());
-
-    const spec = store.getConnection(connection);
-    if (!spec) return reply.status(404).send({ error: `no connection "${connection}"` });
-    const resolvedOp = getOp(spec, op);
-    if (!resolvedOp) return reply.status(404).send({ error: `no operation "${op}"` });
-    registry.addConnection(spec);
-
-    /*
-     * One spelling of the request, shared with the chat harness, the keeper
-     * and onboarding's checks — every one of them has to land on the key this
-     * writes. See `buildQueryRequest`.
-     */
-    refreshQueryIdentity(spec);
-    const { key, overrides, resolved } = buildQueryRequest({
-      connection,
-      op: resolvedOp,
-      params,
-      resolved: { range: resolveRequestedRange(range, Date.now()), filters },
-    });
-    /* What was asked, so the keeper refreshes exactly this and not a guess. */
-    viewed.record(
-      { key, connection, op, overrides, resolved, shape: paramShape(params) },
-      Date.now(),
-    );
-
-    try {
-      /*
-       * A key whose whole answer was read in the background is refreshed the
-       * same way — its first stretch read, the rest carried on — never by a
-       * capped read that would put a partial answer back over the whole one.
-       */
-      const heldAt = queries.storedAt(key);
-      const owned =
-        mode !== "view" &&
-        heldAt !== null &&
-        Date.now() - heldAt > clampMaxAge(parsed.data.maxAgeMs) &&
-        (await longReads.owns(key).catch(() => false));
-      if (owned)
-        void longReads
-          .refresh({ key, connection: spec, op: resolvedOp, overrides, resolved })
-          .catch((error: unknown) => app.log.warn(`a long read could not be refreshed: ${String(error)}`));
-      const outcome = await queries.read({
-        key,
-        connection,
-        mode: owned ? "view" : mode,
-        maxAgeMs: clampMaxAge(parsed.data.maxAgeMs),
-        /*
-         * Old is measured against how often this endpoint is refreshed, not
-         * only against what the widget asked for. A daily endpoint read at
-         * noon is not stale; labelling it so on every tile would teach people
-         * to ignore the label. Only a label — a view serves what it holds
-         * either way — and only while the keeper is running, since without
-         * it nothing refreshes on that cadence.
-         */
-        ...(options.keeper === true
-          ? { freshForMs: Math.round(1.5 * everyMsForOp(connection, op)) }
-          : {}),
-        fetcher: (validators) =>
-          registry.fetch(connection, op, overrides, {
-            params: resolved,
-            now: Date.now(),
-            resolveSecret: secretFor,
-            ...(validators ? { validators } : {}),
-          }),
-      });
-
-      if (outcome.outcome === "miss") watchShape(spec, resolvedOp, outcome.body);
-      /* Stopped at its own limit with more to read: the rest is read in the background, from there. */
-      if (outcome.outcome === "miss" && outcome.meta.continuation)
-        await longReads
-          .carryOn({ key, connection: spec, op: resolvedOp, overrides, resolved, first: outcome })
-          .catch((error: unknown) => app.log.warn(`a long read could not be carried on: ${String(error)}`));
-      const reading = await longReads.status(key).catch(() => null);
-      const told = withReadingOn(outcome.meta, reading);
-      /* A change open on this endpoint is said on every tile that reads it, however old the copy. */
-      const changed = await drift.noteFor(spec, op).catch(() => null);
-      return {
-        body: outcome.body,
-        meta: {
-          ...told,
-          ...(changed ? { warnings: [...told.warnings, changed] } : {}),
-          receipt: previews.record(key, spec, op, resolved, overrides),
-          cache: outcome.outcome,
-          ageMs: Number.isFinite(outcome.ageMs) ? outcome.ageMs : 0,
-          ...(outcome.staleReason ? { staleReason: outcome.staleReason } : {}),
-        },
-      };
-    } catch (error) {
-      // The cache re-throws the adapter's own error, which is already phrased
-      // for a person; the generic handler below would flatten it to a 500.
-      if (error instanceof AdapterError) {
-        /*
-         * `retryAfter` both ways: as the standard header, and in the body
-         * because the browser reads this through `fetch` and the tile needs
-         * the number to count down with. Sending only the header would leave
-         * the retry button enabled during a wait it cannot win.
-         */
-        /*
-         * Nothing there yet, which for a record that exists at most once
-         * under its parent is a normal state rather than a failure: a unit
-         * with no listing answers 404. Said as an empty answer so the tile
-         * reads "none" instead of an error, and the page offers to add one.
-         */
-        if (error.upstreamStatus === 404 && isSingletonOp(spec.resources, op)) {
-          return {
-            // No rows, rather than one empty one: a count of these is zero.
-            body: [],
-            meta: {
-              url: "",
-              status: 404,
-              fetchedAt: Date.now(),
-              durationMs: 0,
-              pages: 0,
-              truncated: false,
-              warnings: [],
-              absent: true,
-              cache: "miss",
-              ageMs: 0,
-            },
-          };
-        }
-        if (error.retryAfter) reply.header("retry-after", error.retryAfter);
-        return reply.status(error.status === 429 ? 429 : 502).send({
-          error: error.message,
-          userMessage: error.userMessage,
-          ...(error.upstreamStatus !== undefined ? { upstreamStatus: error.upstreamStatus } : {}),
-          /*
-           * The upstream's status, separately from ours.
-           *
-           * The HTTP status above is about *this* request: everything but a
-           * rate limit becomes 502, because a 401 from the browser to its own
-           * origin would mean something else entirely. But that flattening
-           * also lost the distinction the tile needs — a 401, a 403 and a
-           * generic failure are three different sentences and only one of them
-           * is worth a Retry button. `describeFailure` has always had that copy
-           * and could never reach it, so a permission error offered a retry
-           * that could not possibly succeed.
-           */
-          status: error.status,
-          ...(error.retryAfter ? { retryAfter: error.retryAfter } : {}),
-        });
-      }
-      throw error;
-    }
-  });
-
-  /*
-   * The rest of a tile's per-record reads, read here in the background.
-   *
-   * A tile reads the first twenty-five records' related records itself and
-   * says the rest are missing; this reads every one it names, behind every
-   * board's own reads, and answers "reading" until it has them all. Each read
-   * is the request the tile would have sent — the same spelling, so one
-   * already held is not asked again — and one not held is read without being
-   * stored, so two hundred of them cannot push a board's reads out of the
-   * cache. See `EachReads`.
-   */
-  app.post<{ Body: unknown }>("/api/query/each", async (request, reply) => {
-    const parsed = eachSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.status(400).send({ error: "invalid query", detail: parsed.error.issues });
-    }
-    const { connection, op, params, input, values, range, filters } = parsed.data;
-    seen.touch(connection, Date.now());
-    const spec = store.getConnection(connection);
-    if (!spec) return reply.status(404).send({ error: `no connection "${connection}"` });
-    const resolvedOp = getOp(spec, op);
-    if (!resolvedOp) return reply.status(404).send({ error: `no operation "${op}"` });
-    registry.addConnection(spec);
-    refreshQueryIdentity(spec);
-
-    const asked: EachRequest = {
-      connection,
-      op,
-      params,
-      input,
-      values,
-      window: { range: resolveRequestedRange(range, Date.now()), filters },
-      configVersion: fingerprintConnection(spec),
-    };
-    const plan = eachPlan(asked);
-    if (!plan) return reply.status(404).send({ error: `no operation "${op}"` });
-    return eachReads.ask({
-      key: eachKey(connection, plan.keys),
-      connection,
-      count: plan.keys.length,
-      read: plan.read,
-      request: asked,
-    });
-  });
+  void app.register(
+    queryRoutes({
+      store,
+      options,
+      registry,
+      queries,
+      longReads,
+      eachReads,
+      eachPlan,
+      everyMsForOp,
+      refreshQueryIdentity,
+      secretFor,
+      seen,
+      withReadingOn,
+      drift,
+      viewed,
+      previews,
+      watchShape,
+    }),
+  );
 
   // ── endpoints on an existing connection ─────────────────────────────────
   //
@@ -3805,95 +3491,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     };
   });
 
-  /**
-   * Walk the discovery ladder for a URL the user typed.
-   *
-   * Returns a *proposal* whatever rung answers. Nothing here is saved and
-   * nothing is marked verified — the oracle is the validate-and-sample step,
-   * because documentation lies and a live 200 does not.
-   */
-  app.post<{ Body: unknown }>("/api/discover", async (request, reply) => {
-    const parsed = z.object({ url: z.string().min(1) }).safeParse(request.body);
-    if (!parsed.success) return reply.status(400).send({ error: "a url is required" });
-
-    const result = await discover(parsed.data.url, {
-      fetchDocument: async (url) => {
-        const response = await fetchPublicDocument(url);
-        return { status: response.status, text: response.text, url: response.url };
-      },
-      catalog: options.catalog,
-      llm: resolveLlm("discover"),
-      search: resolveSearch(),
-      /* A small section is read by itself when nothing else answered; a large one is still offered. */
-      readIndexUpTo: AUTO_INDEX_PAGES,
-      ...(options.renderDocs ? { renderDocs: options.renderDocs } : {}),
-      http: options.http ?? nodeHttp,
-    });
-
-    if (result.entry) discovered.hold(result.entry);
-    return result.entry ? { ...result, entry: catalogForBrowser(result.entry) } : result;
-  });
-
-  /*
-   * The browser that reads documentation drawn by scripts: whether it is
-   * here, and the one-time download, started only when the person agrees.
-   * Under `/api/discover`, so only somebody who may add connections starts it.
-   */
-  app.get("/api/discover/renderer", async (): Promise<RendererStatus> =>
-    options.rendererSetup?.status() ?? {
-      state: options.renderDocs ? "ready" : "off",
-      consented: true,
-      downloadMb: RENDERER_DOWNLOAD_MB,
-    },
-  );
-  app.post("/api/discover/renderer", async (_request, reply) => {
-    if (!options.rendererSetup) return reply.status(404).send({ error: "Nothing here downloads a browser." });
-    return options.rendererSetup.install();
-  });
-
-  /**
-   * Read every documented page in a section and merge what they declare.
-   *
-   * Separate from `/api/discover` on purpose: one request per page against
-   * somebody else's documentation site is not something to do speculatively.
-   * The discovery result reports the page count and the time it would take,
-   * and this runs only once a person has seen those numbers and asked.
-   */
-  app.post<{ Body: unknown }>("/api/discover/read-index", async (request, reply) => {
-    const parsed = z.object({ url: z.string().min(1) }).safeParse(request.body);
-    if (!parsed.success) return reply.status(400).send({ error: "a url is required" });
-
-    const result = await readIndex(parsed.data.url, {
-      fetchDocument: async (url) => {
-        const response = await fetchPublicDocument(url);
-        return { status: response.status, text: response.text, url: response.url };
-      },
-      catalog: options.catalog,
-    });
-    if (result.entry) discovered.hold(result.entry);
-    return result.entry ? { ...result, entry: catalogForBrowser(result.entry) } : result;
-  });
-
-  /*
-   * There is no `/api/agent/propose`.
-   *
-   * It backed a drawer that took an endpoint and had a model propose a binding
-   * from a live sample. The concierge does the same job from the capability
-   * report — no extra request, and a conversation instead of a one-shot — so
-   * the drawer and this route went together. `proposeWidget` stays exported
-   * from `@freebirdai/dash-agent` for anyone building on the package.
-   */
-
-  /**
-   * What each connection has cost, and what the cache saved.
-   *
-   * Counts only — never what was read — so it carries none of the customer's
-   * data and none of the retention questions that come with it.
-   */
-  app.get("/api/cost", async () => ({
-    connections: queries.accounting.all(),
-    cache: queries.store.stats(),
-  }));
+  void app.register(discoverRoutes({ options, discovered, resolveLlm, resolveSearch }));
 
   // ── dashboards ──────────────────────────────────────────────────────────
   app.get("/api/dashboards", async () =>
