@@ -1,38 +1,38 @@
 import { join, resolve } from "node:path";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
-import { CatalogStore } from "../catalog.js";
-import { httpRegistry, syncRegistry } from "../registry/registry.js";
+import { CatalogStore } from "@freebirdai/connect/catalog";
+import { httpRegistry, syncRegistry } from "@freebirdai/connect/registry/registry";
 import { bindAllowed } from "../identity/guard.js";
 import { DbMembershipStore, MemoryMembershipStore } from "../identity/members.js";
 import { oidcJwtResolver } from "../identity/oidc.js";
 import { rolePolicy } from "../identity/policy.js";
-import { DbLeaseLock } from "./lease.js";
-import { allowlistEgress, configureEgress, fetchPublicDocument } from "../safe-fetch.js";
+import { DbLeaseLock } from "@freebirdai/connect/platform/lease";
+import { allowlistEgress, configureEgress, fetchPublicDocument } from "@freebirdai/connect/safe-fetch";
 import { openChatDb } from "../chat/db.js";
-import { DbEvidenceStore, scopedEvidence, type EvidenceStore } from "../evidence/store.js";
-import { openDashDb } from "./db.js";
-import { DbWriteJournal } from "../writes/journal-db.js";
-import { DbCredentialMetaStore } from "../auth/credential-meta.js";
-import { DbSeenValueStore } from "../values/store.js";
-import { DbShapeStore } from "../drift/store.js";
-import { DbJobStore } from "../jobs/store.js";
+import { DbEvidenceStore, scopedEvidence, type EvidenceStore } from "@freebirdai/connect/evidence/store";
+import { openDashDb } from "@freebirdai/connect/platform/db";
+import { DbWriteJournal } from "@freebirdai/connect/writes/journal-db";
+import { DbCredentialMetaStore } from "@freebirdai/connect/auth/credential-meta";
+import { DbSeenValueStore } from "@freebirdai/connect/values/store";
+import { DbShapeStore } from "@freebirdai/connect/drift/store";
+import { DbJobStore } from "@freebirdai/connect/jobs/store";
 import { LOCAL_WORKSPACE_ID, type IdentityResolver } from "../identity/resolver.js";
 import { isWorkspaceId } from "./workspaces.js";
-import { BrowserDocsRenderer } from "../discovery/render/browser.js";
-import { RendererTooling, type RendererMode } from "../discovery/render/tooling.js";
+import { BrowserDocsRenderer } from "@freebirdai/connect/discovery/render/browser";
+import { RendererTooling, type RendererMode } from "@freebirdai/connect/discovery/render/tooling";
 import { DbSnapshotStore } from "../history/store.js";
-import type { SearchProvider } from "../discovery/search.js";
-import { searchFromEnv } from "../discovery/search.js";
+import type { SearchProvider } from "@freebirdai/connect/discovery/search";
+import { searchFromEnv } from "@freebirdai/connect/discovery/search";
 import { defaultModelId, llmForModel, modelForTask } from "../llm.js";
-import { isTask, providerFor } from "../models.js";
+import { TIER_MODELS, isTask, providerFor } from "../models.js";
 import { buildPartRegistry } from "../parts.js";
 import type { BuildServerOptions } from "../server.js";
 import { NarrowingStore } from "../narrowings.js";
-import { RhythmStore } from "../rhythm-store.js";
+import { RhythmStore } from "@freebirdai/connect/rhythm-store";
 import { SettingsStore } from "../settings.js";
 import { SpecStore } from "../store.js";
 import { GrantStore } from "../grants.js";
-import { KeyStore, LocalAesVault } from "../vault.js";
+import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
 
 
 /**
@@ -166,7 +166,7 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
   // not leave the web search beside it quietly going through Anthropic.
   const search = (): SearchProvider | null => {
     const provider = providerFor(modelFor("discover") ?? "");
-    return searchFromEnv(provider ?? undefined);
+    return searchFromEnv(provider ?? undefined, { openai: TIER_MODELS.openai.fast });
   };
 
   /*

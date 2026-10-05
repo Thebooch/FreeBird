@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { componentIdSchema, contractFor } from "./contracts.js";
-import { dashboardParamsSchema } from "./params.js";
+import { dashboardParamsSchema } from "@freebirdai/connect-spec";
 import { facetsSchema } from "./facet.js";
 import { widgetBriefSchema } from "./brief-schema.js";
 import { metricSchema } from "./metric.js";

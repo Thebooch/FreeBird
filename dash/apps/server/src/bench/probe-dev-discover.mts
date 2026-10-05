@@ -5,8 +5,8 @@
  */
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { analysePage, endpointsNamed } from "../discovery/docs.js";
-import { AUTO_INDEX_PAGES, discover } from "../discovery/index.js";
+import { analysePage, endpointsNamed } from "@freebirdai/connect/discovery/docs";
+import { AUTO_INDEX_PAGES, discover } from "@freebirdai/connect/discovery/index";
 import { loadEnvFile } from "../env.js";
 import { defaultModelId, llmForModel } from "../llm.js";
 import { PROVIDERS } from "./providers/index.js";

@@ -1,12 +1,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isChangedNote, isIncompleteNote } from "@freebirdai/dash-adapters";
+import { isChangedNote, isIncompleteNote } from "@freebirdai/connect/adapters";
 import { connectionSchema, dashboardSchema, getOp, type DashboardSpec } from "@freebirdai/dash-spec";
 import { afterEach, describe, expect, it } from "vitest";
-import { openDashDb } from "../platform/db.js";
-import { driftBetween, driftNote, likelyRenames, shapeOf } from "./detect.js";
-import { DbShapeStore, MemoryShapeStore } from "./store.js";
+import { openDashDb } from "@freebirdai/connect/platform/db";
+import { driftBetween, driftNote, likelyRenames, shapeOf } from "@freebirdai/connect/drift/detect";
+import { DbShapeStore, MemoryShapeStore } from "@freebirdai/connect/drift/store";
 import { DriftWatch, savedReads } from "./watch.js";
 
 /* An endpoint whose answers change shape after it was accepted. */

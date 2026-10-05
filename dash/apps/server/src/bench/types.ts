@@ -1,7 +1,7 @@
-import type { HttpFetch } from "@freebirdai/dash-adapters";
+import type { HttpFetch } from "@freebirdai/connect/adapters";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
 import type { ConnectionSpec, WidgetSpec } from "@freebirdai/dash-spec";
-import type { CredentialBroker } from "../auth/broker.js";
+import type { CredentialBroker } from "@freebirdai/connect/auth/broker";
 
 /**
  * The onboarding benchmark's vocabulary. See `dash/bench/PROTOCOL.md`: that

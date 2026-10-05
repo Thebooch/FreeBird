@@ -13,10 +13,10 @@ import {
 import type { CatalogEntry, EntitySpec, ResourceSpec } from "@freebirdai/dash-spec";
 import { ENTITY_VERSION, MAP_VERSION, pathParamNames } from "@freebirdai/dash-spec";
 import type { FastifyInstance } from "fastify";
-import type { CatalogStore } from "../catalog.js";
-import { looksLikeOpenApi, parseOpenApi, parseSpecDocument } from "../discovery/openapi.js";
-import { extractInlineSpec } from "../discovery/inline-spec.js";
-import { withConnectDetails } from "../discovery/connect-details.js";
+import type { CatalogStore } from "@freebirdai/connect/catalog";
+import { looksLikeOpenApi, parseOpenApi, parseSpecDocument } from "@freebirdai/connect/discovery/openapi";
+import { extractInlineSpec } from "@freebirdai/connect/discovery/inline-spec";
+import { withConnectDetails } from "@freebirdai/connect/discovery/connect-details";
 
 /**
  * Mapping an API once, for everyone who ever connects to it.

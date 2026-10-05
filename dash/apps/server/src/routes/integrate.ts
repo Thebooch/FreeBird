@@ -1,4 +1,4 @@
-import type { HttpFetch } from "@freebirdai/dash-adapters";
+import type { HttpFetch } from "@freebirdai/connect/adapters";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
 import {
   boardInputs,
@@ -13,13 +13,13 @@ import {
   type ConnectionSpec,
 } from "@freebirdai/dash-spec";
 import type { FastifyInstance } from "fastify";
-import type { EvidenceStore } from "../evidence/store.js";
-import { integrate, type IntegrateDeps, type IntegrationReport } from "../integrate/agent.js";
-import { seekRecords } from "../integrate/seek.js";
-import type { ConnectorKit } from "../integrate/connector.js";
-import { inputSources } from "../integrate/inputs.js";
-import { CheckQueue, type BlockedBecause } from "../jobs/check-queue.js";
-import { MemoryJobStore } from "../jobs/store.js";
+import type { EvidenceStore } from "@freebirdai/connect/evidence/store";
+import { integrate, type IntegrateDeps, type IntegrationReport } from "@freebirdai/connect/integrate/agent";
+import { seekRecords } from "@freebirdai/connect/integrate/seek";
+import type { ConnectorKit } from "@freebirdai/connect/integrate/connector";
+import { inputSources } from "@freebirdai/connect/integrate/inputs";
+import { CheckQueue, type BlockedBecause } from "@freebirdai/connect/jobs/check-queue";
+import { MemoryJobStore } from "@freebirdai/connect/jobs/store";
 
 /**
  * The integration loop, for a connection somebody has just given a key to.

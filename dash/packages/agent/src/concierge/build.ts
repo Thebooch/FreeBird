@@ -14,7 +14,7 @@ import {
 } from "@freebirdai/dash-spec";
 import { coercionsFor, widgetId, type RoleBinding } from "../bind.js";
 import { facetFields } from "./facets.js";
-import type { FieldInfo } from "../infer.js";
+import type { FieldInfo } from "@freebirdai/connect/agent";
 import type { Ambiguity } from "../propose.js";
 import { flatten, highlightCandidates, pane } from "../authoring.js";
 import type { PipelineStep } from "@freebirdai/dash-spec";

@@ -1,6 +1,6 @@
 import type { ConnectionSpec } from "@freebirdai/dash-spec";
-import { CredentialBroker, pkcePair, vaultApps } from "../auth/broker.js";
-import { MemoryCredentialMetaStore } from "../auth/credential-meta.js";
+import { CredentialBroker, pkcePair, vaultApps } from "@freebirdai/connect/auth/broker";
+import { MemoryCredentialMetaStore } from "@freebirdai/connect/auth/credential-meta";
 import type { IntegrationEnv } from "./types.js";
 
 /**

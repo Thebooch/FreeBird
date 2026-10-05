@@ -12,7 +12,7 @@ import {
   isIncompleteNote,
   type FetchResult,
   type HttpFetch,
-} from "@freebirdai/dash-adapters";
+} from "@freebirdai/connect/adapters";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
 import type {
   Arrangement,
@@ -83,7 +83,7 @@ import {
   fromReport,
   toReport,
   withVerifiedParams,
-} from "./capabilities.js";
+} from "@freebirdai/connect/capabilities";
 import type { ChatDb } from "./chat/db.js";
 import { resolveChatLlm } from "./chat/llm-bridge.js";
 import { LOOK_UP_TOOL, lookUpEndpoint, lookUpSchema } from "./chat/concierge-actions.js";
@@ -100,10 +100,10 @@ import {
   keepPlacement,
   type DraftStore,
 } from "./concierge/store.js";
-import { CatalogStore, connectionFromCatalog, refreshCatalogConnection } from "./catalog.js";
-import { AUTO_INDEX_PAGES, discover, readIndex, type DocsRenderer } from "./discovery/index.js";
-import { RENDERER_DOWNLOAD_MB, type RendererStatus } from "./discovery/render/tooling.js";
-import type { SearchProvider } from "./discovery/search.js";
+import { CatalogStore, connectionFromCatalog, refreshCatalogConnection } from "@freebirdai/connect/catalog";
+import { AUTO_INDEX_PAGES, discover, readIndex, type DocsRenderer } from "@freebirdai/connect/discovery/index";
+import { RENDERER_DOWNLOAD_MB, type RendererStatus } from "@freebirdai/connect/discovery/render/tooling";
+import type { SearchProvider } from "@freebirdai/connect/discovery/search";
 import {
   type ModelChoices,
   availableProviders,
@@ -128,19 +128,19 @@ import {
   providerFor,
 } from "./models.js";
 import { RATES_AS_OF } from "./pricing.js";
-import { BlockedUrlError, fetchPublicDocument, guardedFetch } from "./safe-fetch.js";
+import { BlockedUrlError, fetchPublicDocument, guardedFetch } from "@freebirdai/connect/safe-fetch";
 import type { PartRegistry } from "@freebirdai/dash-parts";
 import { partsRoutes } from "./routes/parts.js";
 import { installIdentity } from "./identity/context.js";
 import { ownerPolicy, type Policy } from "./identity/policy.js";
 import { installRouteGuard } from "./identity/guard.js";
-import type { LeaseLock } from "./platform/lease.js";
+import type { LeaseLock } from "@freebirdai/connect/platform/lease";
 import { LOCAL_USER_ID, LOCAL_WORKSPACE_ID, localOwner, type IdentityResolver } from "./identity/resolver.js";
-import { nullJournal, type WriteJournal } from "./writes/journal.js";
-import { JournalingAdapter, readEventFor } from "./writes/read-journal.js";
-import { Discovered, catalogForBrowser, preservedWrites } from "./writes/catalog-writes.js";
-import { WriteEndpointReader, type FetchDocument } from "./writes/read-writes.js";
-import { WriteService, describeFields } from "./writes/service.js";
+import { nullJournal, type WriteJournal } from "@freebirdai/connect/writes/journal";
+import { JournalingAdapter, readEventFor } from "@freebirdai/connect/writes/read-journal";
+import { Discovered, catalogForBrowser, preservedWrites } from "@freebirdai/connect/writes/catalog-writes";
+import { WriteEndpointReader, type FetchDocument } from "@freebirdai/connect/writes/read-writes";
+import { WriteService, describeFields } from "@freebirdai/connect/writes/service";
 import { allowedWritesView, writeRoutes } from "./routes/writes.js";
 import { conciergeRoutes } from "./routes/concierge.js";
 import { SetupPreviews } from "./concierge/preview.js";
@@ -167,25 +167,25 @@ import {
   widgetBriefSchema,
 } from "@freebirdai/dash-spec";
 import { describeMissingRecords, mapRoutes, mergeDescribedEntities } from "./routes/map.js";
-import { withAddedReads, withEntryResources, withObservedFields } from "./integrate/observed.js";
+import { withAddedReads, withEntryResources, withObservedFields } from "@freebirdai/connect/integrate/observed";
 import { onboardingRoutes } from "./routes/onboarding.js";
-import { refreshOutdatedConnectDetails } from "./discovery/connect-details.js";
+import { refreshOutdatedConnectDetails } from "@freebirdai/connect/discovery/connect-details";
 import { allocateDashboardId } from "./onboarding/materialise.js";
-import { DEFAULT_EVERY_MS, Keeper, LastSeen } from "./keeper/keeper.js";
-import { decideAll, opsOfResource } from "./keeper/rhythm.js";
-import { RhythmStore } from "./rhythm-store.js";
+import { DEFAULT_EVERY_MS, Keeper, LastSeen } from "@freebirdai/connect/keeper/keeper";
+import { decideAll, opsOfResource } from "@freebirdai/connect/keeper/rhythm";
+import { RhythmStore } from "@freebirdai/connect/rhythm-store";
 import { warmTargets } from "./keeper/targets.js";
 import { ViewedRequests, paramShape } from "./keeper/viewed.js";
 import { VERIFY_BUDGET_DEFAULT, VERIFY_BUDGET_MAX, verifyRecords } from "./routes/verify.js";
 import type { Settings, SettingsStore } from "./settings.js";
-import { QueryCache, clampMaxAge } from "./cache/queryCache.js";
+import { QueryCache, clampMaxAge } from "@freebirdai/connect/cache/queryCache";
 import { extractRows, parsePath } from "@freebirdai/dash-expr";
-import { catalogEntryToVerify, validationCandidates } from "./verified.js";
-import { buildQueryRequest, resolveRequestedRange } from "./query.js";
-import { EACH_KEEP_MS, EACH_MAX, EachReads, eachKey, type EachReader, type EachRequest } from "./fanout/each.js";
-import { LongReads, type LongReadStatus } from "./jobs/long-reads.js";
-import { CheckQueue } from "./jobs/check-queue.js";
-import { MemoryJobStore, type JobStore } from "./jobs/store.js";
+import { catalogEntryToVerify, validationCandidates } from "@freebirdai/connect/verified";
+import { buildQueryRequest, resolveRequestedRange } from "@freebirdai/connect/query";
+import { EACH_KEEP_MS, EACH_MAX, EachReads, eachKey, type EachReader, type EachRequest } from "@freebirdai/connect/fanout/each";
+import { LongReads, type LongReadStatus } from "@freebirdai/connect/jobs/long-reads";
+import { CheckQueue } from "@freebirdai/connect/jobs/check-queue";
+import { MemoryJobStore, type JobStore } from "@freebirdai/connect/jobs/store";
 import { ANSWER_TOOL, answerFromData } from "./context/tool.js";
 import { bindingFor, bindingsFor } from "./tools/bindings.js";
 import { READ_TOOL, READ_TOOL_NAME, readRecords, readToolSchema } from "./tools/read.js";
@@ -212,28 +212,28 @@ import {
   parseView,
 } from "./context/onscreen.js";
 import { LOOK_UP_WIDGET_TOOL, lookUpWidget, lookUpWidgetSchema } from "./chat/lookUpWidget.js";
-import type { CacheStore } from "./cache/store.js";
-import { coolingMessage, retryAfterSeconds, waitPhrase } from "./cache/cooldown.js";
-import { ConnectionGate, Priority } from "./cache/gate.js";
+import type { CacheStore } from "@freebirdai/connect/cache/store";
+import { coolingMessage, retryAfterSeconds, waitPhrase } from "@freebirdai/connect/cache/cooldown";
+import { ConnectionGate, Priority } from "@freebirdai/connect/cache/gate";
 import { SpecStore, type SpecRepository } from "./store.js";
 import { GrantStore, approveWidget, dashboardApprovals, widgetGrantSubject } from "./grants.js";
-import { KeyStore, type SecretRepository } from "./vault.js";
-import { MemoryEvidenceStore, type EvidenceStore } from "./evidence/store.js";
-import { CredentialBroker, vaultApps, type OAuthAppRegistry } from "./auth/broker.js";
-import { MemoryCredentialMetaStore, type CredentialMetaStore } from "./auth/credential-meta.js";
-import { MemorySeenValueStore, type SeenValueStore } from "./values/store.js";
-import { MemoryShapeStore, type ShapeStore } from "./drift/store.js";
+import { KeyStore, type SecretRepository } from "@freebirdai/connect/vault";
+import { MemoryEvidenceStore, type EvidenceStore } from "@freebirdai/connect/evidence/store";
+import { CredentialBroker, vaultApps, type OAuthAppRegistry } from "@freebirdai/connect/auth/broker";
+import { MemoryCredentialMetaStore, type CredentialMetaStore } from "@freebirdai/connect/auth/credential-meta";
+import { MemorySeenValueStore, type SeenValueStore } from "@freebirdai/connect/values/store";
+import { MemoryShapeStore, type ShapeStore } from "@freebirdai/connect/drift/store";
 import { DriftWatch } from "./drift/watch.js";
-import { openMcpClient } from "./mcp/client.js";
-import { registryIndex } from "./registry/registry.js";
+import { openMcpClient } from "@freebirdai/connect/mcp/client";
+import { registryIndex } from "@freebirdai/connect/registry/registry";
 import { MemorySnapshotStore, type SnapshotStore } from "./history/store.js";
 import { dayOf, numbersFrom } from "./history/record.js";
-import { seenByRecordType } from "./integrate/values.js";
-import { OAuthRetryAdapter, RateLimitWaitAdapter } from "./auth/retry-adapter.js";
-import { ConnectorAdapter } from "./connector/adapter.js";
-import type { ConnectorTokenStore } from "./connector/host.js";
-import { QuickJsSandbox, type ConnectorSandbox } from "./connector/sandbox.js";
-import { VaultConnectorTokens } from "./connector/tokens.js";
+import { seenByRecordType } from "@freebirdai/connect/integrate/values";
+import { OAuthRetryAdapter, RateLimitWaitAdapter } from "@freebirdai/connect/auth/retry-adapter";
+import { ConnectorAdapter } from "@freebirdai/connect/connector/adapter";
+import type { ConnectorTokenStore } from "@freebirdai/connect/connector/host";
+import { QuickJsSandbox, type ConnectorSandbox } from "@freebirdai/connect/connector/sandbox";
+import { VaultConnectorTokens } from "@freebirdai/connect/connector/tokens";
 import { oauthRoutes } from "./routes/oauth.js";
 import { createIntegrationRunner, integrateRoutes, type IntegrateRouteDeps } from "./routes/integrate.js";
 

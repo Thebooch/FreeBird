@@ -1,6 +1,6 @@
 import { widgetSources, type ConnectionSpec, type DashboardSpec, type OpSpec } from "@freebirdai/dash-spec";
-import { driftBetween, driftFields, driftNote, shapeOf, type AcceptedShape } from "./detect.js";
-import type { ShapeStore } from "./store.js";
+import { driftBetween, driftFields, driftNote, shapeOf, type AcceptedShape } from "@freebirdai/connect/drift/detect";
+import type { ShapeStore } from "@freebirdai/connect/drift/store";
 
 /**
  * Holding each fresh answer against the shape its endpoint was accepted in.

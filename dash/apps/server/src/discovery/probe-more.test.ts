@@ -4,8 +4,8 @@ import { ledgerly } from "../bench/providers/ledgerly.js";
 import { json } from "../bench/seed.js";
 import { benchTransport } from "../bench/transport.js";
 import type { BenchRequest, BenchResponse, MockProvider } from "../bench/types.js";
-import { budgetOf, tryRead } from "../integrate/read.js";
-import { nextAddressPaths, probePagination } from "./probe-pagination.js";
+import { budgetOf, tryRead } from "@freebirdai/connect/integrate/read";
+import { nextAddressPaths, probePagination } from "@freebirdai/connect/discovery/probe-pagination";
 
 /*
  * Ways of paging the check could not confirm: an

@@ -13,7 +13,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildServer } from "./server.js";
 import { SpecStore } from "./store.js";
-import { KeyStore, LocalAesVault } from "./vault.js";
+import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
 
 /**
  * Guided setup over HTTP, with no model anywhere in the picture.

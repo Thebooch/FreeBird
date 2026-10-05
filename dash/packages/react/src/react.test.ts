@@ -1,4 +1,4 @@
-import { AdapterError, AdapterRegistry, InlineAdapter } from "@freebirdai/dash-adapters";
+import { AdapterError, AdapterRegistry, InlineAdapter } from "@freebirdai/connect/adapters";
 import type { LayoutCell, ResolvedParams } from "@freebirdai/dash-spec";
 import { connectionSchema, parseWidget, resolveRange, widgetSchema } from "@freebirdai/dash-spec";
 import { type TrailEntry, detailPanes, popTrail, truncateTrail } from "./detail.js";

@@ -7,10 +7,10 @@ import { benchTransport } from "../../bench/transport.js";
 import { benchTooling } from "../../bench/integrator.js";
 import { buildServer } from "../../server.js";
 import { SpecStore } from "../../store.js";
-import { KeyStore, LocalAesVault } from "../../vault.js";
-import { discover } from "../index.js";
-import { BrowserDocsRenderer } from "./browser.js";
-import { RendererTooling, type PlaywrightLike } from "./tooling.js";
+import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
+import { discover } from "@freebirdai/connect/discovery/index";
+import { BrowserDocsRenderer } from "@freebirdai/connect/discovery/render/browser";
+import { RendererTooling, type PlaywrightLike } from "@freebirdai/connect/discovery/render/tooling";
 
 /*
  * Playwright's own Chromium, for documentation drawn by scripts: fetched

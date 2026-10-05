@@ -43,7 +43,7 @@ Each provider (`MockProvider` in `bench/types.ts`) needs:
 
 - `apps/server/src/integrate/` — the loop, its repairs and its model prompts;
 - `apps/server/src/discovery/` — the importers;
-- the internals of `apps/server/src/connector/` (beyond `connectorHash`);
+- the internals of `connect/packages/connect/src/connector/` (beyond `connectorHash`);
 - `packages/agent/`;
 - `bench/results/` — what the loop has passed and failed;
 - the existing held-out and dev providers' designs, beyond one file for the format (`providers/heldout-ledgerline-quotient.ts`).

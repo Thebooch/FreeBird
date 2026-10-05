@@ -1,5 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
-import { connectorHash } from "../../connector/adapter.js";
+import { connectorHash } from "@freebirdai/connect/connector/adapter";
 import { BENCH_NOW, json, notFound, pick, random } from "../seed.js";
 import type { BenchRequest, BenchResponse, MockProvider } from "../types.js";
 

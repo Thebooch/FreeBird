@@ -297,7 +297,7 @@ Every fresh answer from an endpoint a board reads is held against the shape that
 
 ## APIs on a private network
 
-An API on the office network or a VPN is reached only when two people say so (`EgressPolicy` in `apps/server/src/safe-fetch.ts`): the server's operator lists the address (`DASH_PRIVATE_EGRESS`: hostnames, `*.suffix`, CIDR ranges), and the connection says it is on a private network — a choice shown on its address step and in the connections list. Without both, a private address is refused as it always was, and the refusal says which is missing. Link-local addresses, where cloud metadata lives, are never reached. The address checked is the address connected to: a private one is pinned for the request, so a name that resolves somewhere else a moment later cannot be used to slip past. The connection's own host pin still holds.
+An API on the office network or a VPN is reached only when two people say so (`EgressPolicy` in `connect/packages/connect/src/safe-fetch.ts`): the server's operator lists the address (`DASH_PRIVATE_EGRESS`: hostnames, `*.suffix`, CIDR ranges), and the connection says it is on a private network — a choice shown on its address step and in the connections list. Without both, a private address is refused as it always was, and the refusal says which is missing. Link-local addresses, where cloud metadata lives, are never reached. The address checked is the address connected to: a private one is pinned for the request, so a name that resolves somewhere else a moment later cannot be used to slip past. The connection's own host pin still holds.
 
 ## Sharing what was worked out
 

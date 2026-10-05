@@ -30,6 +30,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@freebirdai/connect": "workspace:*",
+    "@freebirdai/connect-spec": "workspace:*",
     "@freebirdai/dash-expr": "workspace:*",
     "@freebirdai/dash-runtime": "workspace:*",
     "@freebirdai/dash-spec": "workspace:*"

@@ -1,16 +1,16 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AdapterError, RestAdapter, type FetchResult, type HttpFetch } from "@freebirdai/dash-adapters";
+import { AdapterError, RestAdapter, type FetchResult, type HttpFetch } from "@freebirdai/connect/adapters";
 import { connectionSchema, getOp, resolveRange, type ConnectionSpec } from "@freebirdai/dash-spec";
 import { sql } from "kysely";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { openDashDb } from "../platform/db.js";
+import { openDashDb } from "@freebirdai/connect/platform/db";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
-import { KeyStore, LocalAesVault } from "../vault.js";
-import { LongReads, longReadId, type LongReadDeps } from "./long-reads.js";
-import { DbJobStore, MemoryJobStore, type JobStore } from "./store.js";
+import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
+import { LongReads, longReadId, type LongReadDeps } from "@freebirdai/connect/jobs/long-reads";
+import { DbJobStore, MemoryJobStore, type JobStore } from "@freebirdai/connect/jobs/store";
 
 /*
  * A read past a tile's own limits, carried on in the background from where it

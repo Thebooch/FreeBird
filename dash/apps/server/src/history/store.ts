@@ -1,5 +1,5 @@
 import { sql } from "kysely";
-import type { DashDb } from "../platform/db.js";
+import type { DashDb } from "@freebirdai/connect/platform/db";
 
 /**
  * What a number on a board was, day by day — history the API does not keep.

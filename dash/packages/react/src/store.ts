@@ -3,7 +3,7 @@ import {
   type AdapterRegistry,
   type FetchMeta,
   parseRetryAfter,
-} from "@freebirdai/dash-adapters";
+} from "@freebirdai/connect/adapters";
 /*
  * Re-exported, not re-implemented. The server caches on the same identity,
  * and a second copy that drifted would serve one widget the rows of another.

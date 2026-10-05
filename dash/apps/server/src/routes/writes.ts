@@ -4,12 +4,12 @@ import type { CatalogEntry, ConnectionSpec, EntityWritesView, Principal } from "
 import { entityById, mapWriteFields, unmappedFields, writesEmpty, writesView } from "@freebirdai/dash-spec";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import type { CatalogStore } from "../catalog.js";
+import type { CatalogStore } from "@freebirdai/connect/catalog";
 import { requirePermission } from "../identity/context.js";
 import type { Policy } from "../identity/policy.js";
 import type { SpecRepository } from "../store.js";
-import { readWriteEndpoints, type FetchDocument } from "../writes/read-writes.js";
-import { WriteError, WriteService, describeFields } from "../writes/service.js";
+import { readWriteEndpoints, type FetchDocument } from "@freebirdai/connect/writes/read-writes";
+import { WriteError, WriteService, describeFields } from "@freebirdai/connect/writes/service";
 
 /**
  * The routes a change travels through. The logic is in `WriteService`;

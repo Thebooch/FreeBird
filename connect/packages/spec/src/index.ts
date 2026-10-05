@@ -410,6 +410,56 @@ export type {
 
 export { credentialNameSchema } from "./primitives.js";
 
+export {
+  TOKEN_FILTERS,
+  dashboardParamsSchema,
+  defaultGrainFor,
+  filterDeclSchema,
+  grainSchema,
+  hasTokens,
+  interpolate,
+  interpolatePath,
+  interpolateValue,
+  parseTokens,
+  quantiseEnd,
+  paramsForWidget,
+  rangeForWindow,
+  opOfQueryKey,
+  queryKey,
+  queryKeyOpPrefix,
+  queryKeyPrefix,
+  rangePresetSchema,
+  resolveGrain,
+  resolveRange,
+} from "./params.js";
+
+export type {
+  DashboardParams,
+  FilterDecl,
+  ParsedToken,
+  QueryParams,
+  RangePreset,
+  ResolvedParams,
+  ResolveRangeInput,
+  TimeRange,
+  TimeWindow,
+  TokenFilter,
+} from "./params.js";
+
+export {
+  CAPABILITIES,
+  capability,
+  capabilityNote,
+  compatibilityMarkdown,
+} from "./capabilities.js";
+
+export type {
+  Capability,
+  CapabilityArea,
+  CapabilityId,
+  CapabilityStatus,
+} from "./capabilities.js";
+
 export { componentIdSchema } from "./primitives.js";
 export type { ComponentId } from "./primitives.js";
 export { FACET_MAX_PER_WIDGET } from "./entity.js";

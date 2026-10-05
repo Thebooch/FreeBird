@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { catalogEntrySchema } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CatalogStore } from "../catalog.js";
-import { connectorHash } from "../connector/adapter.js";
-import { fromRegistry, httpRegistry, registryIndex, syncRegistry } from "./registry.js";
+import { CatalogStore } from "@freebirdai/connect/catalog";
+import { connectorHash } from "@freebirdai/connect/connector/adapter";
+import { fromRegistry, httpRegistry, registryIndex, syncRegistry } from "@freebirdai/connect/registry/registry";
 
 /* Catalog entries pulled from a read-only registry, and what is never taken from one. */
 
@@ -144,7 +144,7 @@ describe("an instance serving its entries", () => {
   it("serves its verified entries, without their code, in the form another instance pulls", async () => {
     const { buildServer } = await import("../server.js");
     const { SpecStore } = await import("../store.js");
-    const { KeyStore, LocalAesVault } = await import("../vault.js");
+    const { KeyStore, LocalAesVault } = await import("@freebirdai/connect/vault");
     const catalog = new CatalogStore(join(dir, "seed"), join(dir, "overlay"));
     catalog.put(catalogEntrySchema.parse({ ...withCode, id: "coded", verified: true }));
     catalog.put(catalogEntrySchema.parse(entry("guessed", { verified: false })));

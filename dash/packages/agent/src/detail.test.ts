@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildDetailPrompt, planDetail, type ChildOption } from "./detail.js";
-import type { FieldInfo } from "./infer.js";
-import { fakeLlm } from "./llm.js";
+import type { FieldInfo } from "@freebirdai/connect/agent";
+import { fakeLlm } from "@freebirdai/connect/agent";
 
 /**
  * What a record shows, and the guards on the model that chooses it.

@@ -1,12 +1,5 @@
 import { z } from "zod";
-import {
-  CATEGORIES_MAX,
-  catalogEntrySchema as apiCatalogEntrySchema,
-  categoriesSchemaOf,
-  categorySchemaOf,
-  connectionSchema as apiConnectionSchema,
-  idSchema,
-} from "@freebirdai/connect-spec";
+import { CATEGORIES_MAX, categorySchemaOf, idSchema } from "@freebirdai/connect-spec";
 import { widgetBriefSchema } from "./brief-schema.js";
 import { dashboardSchema } from "./dashboard.js";
 
@@ -17,9 +10,7 @@ import { dashboardSchema } from "./dashboard.js";
  * The categories themselves, the profile and the catalog entry they sit on
  * describe the API and live in `@freebirdai/connect-spec`. That package
  * stores a category's starters and a connection's onboarding without reading
- * them; the schemas here are the same records with Dash's own parts typed, so
- * everything Dash reads and writes is validated exactly as it was before the
- * split.
+ * them; `startersOf` and `onboardingOf` are how Dash reads them back.
  */
 
 /**
@@ -207,14 +198,28 @@ export const onboardingSchema = z.preprocess(
 export type OnboardingSpec = z.infer<typeof onboardingSchema>;
 
 
-/** A catalog entry, with its categories' starters typed as Dash briefs. */
-export const catalogEntrySchema = apiCatalogEntrySchema.extend({
-  categories: categoriesSchemaOf(starterSchema),
-});
-export type CatalogEntry = z.infer<typeof catalogEntrySchema>;
+/**
+ * One connection's setup, as Dash reads it.
+ *
+ * The engine keeps `onboarding` on the connection without reading it, so it
+ * arrives here unchecked. Anything that does not parse reads as no setup at
+ * all, which starts it again rather than acting on a record nobody can trust.
+ */
+export const onboardingOf = (connection: { readonly onboarding?: unknown }): OnboardingSpec | undefined => {
+  if (connection.onboarding === undefined) return undefined;
+  const parsed = onboardingSchema.safeParse(connection.onboarding);
+  return parsed.success ? parsed.data : undefined;
+};
 
-/** A saved connection, with its onboarding typed as Dash's setup record. */
-export const connectionSchema = apiConnectionSchema.extend({
-  onboarding: onboardingSchema.optional(),
-});
-export type ConnectionSpec = z.infer<typeof connectionSchema>;
+/**
+ * A category's starters, as Dash reads them.
+ *
+ * Stored by the engine without being read, like a connection's onboarding.
+ * A starter that does not parse is left out rather than failing the whole
+ * category: the rest of its set is still worth opening with.
+ */
+export const startersOf = (category: { readonly starters: readonly unknown[] }): StarterSpec[] =>
+  category.starters.flatMap((one) => {
+    const parsed = starterSchema.safeParse(one);
+    return parsed.success ? [parsed.data] : [];
+  });

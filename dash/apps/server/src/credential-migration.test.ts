@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { connectionSchema } from "@freebirdai/dash-spec";
 import { SpecStore } from "./store.js";
-import { KeyStore, LocalAesVault } from "./vault.js";
+import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
 import { migrateCredentialRefs } from "./credential-migration.js";
 
 const directories: string[] = [];

@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { IdentityResolver } from "../identity/resolver.js";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
-import { KeyStore, LocalAesVault } from "../vault.js";
+import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
 import { WorkspaceHost } from "./workspaces.js";
 
 /*

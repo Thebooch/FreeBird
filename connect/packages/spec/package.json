@@ -29,6 +29,9 @@
     "dev": "tsup src/index.ts --format esm --dts --sourcemap --watch",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@freebirdai/dash-expr": "workspace:*"
+  },
   "peerDependencies": {
     "zod": "^3.23.0"
   },

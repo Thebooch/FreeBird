@@ -12,7 +12,7 @@ import {
 } from "@freebirdai/dash-spec";
 import { componentFits, fieldsForRole, valueTypesOf, type BindableField } from "../bind.js";
 import { facetableFields } from "./facets.js";
-import type { FieldInfo, InferredShape } from "../infer.js";
+import type { FieldInfo, InferredShape } from "@freebirdai/connect/agent";
 import { highlightCandidates, nounFromTitle } from "../authoring.js";
 import {
   ROLE_STEP,

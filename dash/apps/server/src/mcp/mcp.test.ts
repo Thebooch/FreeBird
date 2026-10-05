@@ -1,17 +1,17 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { McpAdapter, type HttpFetch } from "@freebirdai/dash-adapters";
+import { McpAdapter, type HttpFetch } from "@freebirdai/connect/adapters";
 import { connectionSchema, getOp, resolveRange } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { connectionFromCatalog } from "../catalog.js";
-import { discover } from "../discovery/index.js";
-import { integrate } from "../integrate/agent.js";
+import { connectionFromCatalog } from "@freebirdai/connect/catalog";
+import { discover } from "@freebirdai/connect/discovery/index";
+import { integrate } from "@freebirdai/connect/integrate/agent";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
-import { KeyStore, LocalAesVault } from "../vault.js";
-import { openMcpClient, rpcAnswerIn } from "./client.js";
-import { discoverMcp, looksLikeMcpAddress, readGround } from "./discover.js";
+import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
+import { openMcpClient, rpcAnswerIn } from "@freebirdai/connect/mcp/client";
+import { discoverMcp, looksLikeMcpAddress, readGround } from "@freebirdai/connect/mcp/discover";
 
 /*
  * An MCP server as a connection: a small server that speaks

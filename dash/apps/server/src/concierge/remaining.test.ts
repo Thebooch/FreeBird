@@ -15,11 +15,11 @@ import {
   connectionKeyRefs,
 } from "@freebirdai/dash-spec";
 import { executeWidget } from "@freebirdai/dash-runtime";
-import { RestAdapter } from "@freebirdai/dash-adapters";
+import { RestAdapter } from "@freebirdai/connect/adapters";
 import { buildConciergeContext } from "./context.js";
-import { parseOpenApi } from "../discovery/openapi.js";
-import { connectionFromCatalog } from "../catalog.js";
-import { CatalogStore } from "../catalog.js";
+import { parseOpenApi } from "@freebirdai/connect/discovery/openapi";
+import { connectionFromCatalog } from "@freebirdai/connect/catalog";
+import { CatalogStore } from "@freebirdai/connect/catalog";
 import { mapRoutes } from "../routes/map.js";
 import Fastify from "fastify";
 import { mkdtempSync, rmSync } from "node:fs";

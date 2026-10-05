@@ -2,8 +2,8 @@ import type { ColumnMeta, ResolvedParams, WidgetShape, WidgetSpec } from "@freeb
 import { resolveRange } from "@freebirdai/dash-spec";
 import type { Row } from "@freebirdai/dash-runtime";
 import { executeWidget } from "@freebirdai/dash-runtime";
-import { type InferredShape, inferShape } from "./infer.js";
-import type { LlmAdapter } from "./llm.js";
+import { type InferredShape, inferShape } from "@freebirdai/connect/agent";
+import type { LlmAdapter } from "@freebirdai/connect/agent";
 import { mapProposal } from "./map.js";
 import {
   type Proposal,

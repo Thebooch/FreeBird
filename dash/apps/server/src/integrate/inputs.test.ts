@@ -1,16 +1,16 @@
-import { DEPENDENT_MAX, DependentAdapter, INCOMPLETE, RestAdapter, isIncompleteNote } from "@freebirdai/dash-adapters";
+import { DEPENDENT_MAX, DependentAdapter, INCOMPLETE, RestAdapter, isIncompleteNote } from "@freebirdai/connect/adapters/index";
 import { connectionSchema, getOp, resolveRange } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import { ledgerly } from "../bench/providers/ledgerly.js";
 import { json } from "../bench/seed.js";
 import { benchTransport } from "../bench/transport.js";
 import type { MockProvider } from "../bench/types.js";
-import { connectionFromCatalog } from "../catalog.js";
-import { discover } from "../discovery/index.js";
-import { integrate } from "./agent.js";
-import { inputSources, namedInRequest } from "./inputs.js";
-import { budgetOf, tryRead } from "./read.js";
-import { seekRecords } from "./seek.js";
+import { connectionFromCatalog } from "@freebirdai/connect/catalog";
+import { discover } from "@freebirdai/connect/discovery/index";
+import { integrate } from "@freebirdai/connect/integrate/agent";
+import { inputSources, namedInRequest } from "@freebirdai/connect/integrate/inputs";
+import { budgetOf, tryRead } from "@freebirdai/connect/integrate/read";
+import { seekRecords } from "@freebirdai/connect/integrate/seek";
 
 /*
  * An input no board gives, supplied by another list's records: settled by a

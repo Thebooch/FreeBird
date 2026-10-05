@@ -3,11 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IMPORT_VERSION, WRITES_VERSION } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CatalogStore } from "../catalog.js";
+import { CatalogStore } from "@freebirdai/connect/catalog";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
-import { KeyStore, LocalAesVault } from "../vault.js";
-import type { FetchDocument } from "./read-writes.js";
+import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
+import type { FetchDocument } from "@freebirdai/connect/writes/read-writes";
 
 /**
  * Changing records is part of every connection, so nobody has to go and read

@@ -2,13 +2,13 @@ import { catalogEntrySchema } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import { taskpad } from "../bench/providers/taskpad.js";
 import { benchTransport } from "../bench/transport.js";
-import { connectionFromCatalog } from "../catalog.js";
-import { discover } from "../discovery/index.js";
-import { openDashDb } from "../platform/db.js";
-import { DbSeenValueStore, MemorySeenValueStore } from "../values/store.js";
-import { integrate } from "./agent.js";
-import { observedShape, withObservedFields } from "./observed.js";
-import { seenByRecordType, seenValues } from "./values.js";
+import { connectionFromCatalog } from "@freebirdai/connect/catalog";
+import { discover } from "@freebirdai/connect/discovery/index";
+import { openDashDb } from "@freebirdai/connect/platform/db";
+import { DbSeenValueStore, MemorySeenValueStore } from "@freebirdai/connect/values/store";
+import { integrate } from "@freebirdai/connect/integrate/agent";
+import { observedShape, withObservedFields } from "@freebirdai/connect/integrate/observed";
+import { seenByRecordType, seenValues } from "@freebirdai/connect/integrate/values";
 
 /*
  * What this account's records hold, where a field holds a small set — so a

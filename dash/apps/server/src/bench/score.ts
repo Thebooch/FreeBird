@@ -6,11 +6,11 @@ import {
   type FetchMeta,
   type FetchResult,
   type SourceAdapter,
-} from "@freebirdai/dash-adapters";
-import { OAuthRetryAdapter, RateLimitWaitAdapter } from "../auth/retry-adapter.js";
-import { ConnectorAdapter } from "../connector/adapter.js";
-import { LongReads } from "../jobs/long-reads.js";
-import { MemoryJobStore } from "../jobs/store.js";
+} from "@freebirdai/connect/adapters";
+import { OAuthRetryAdapter, RateLimitWaitAdapter } from "@freebirdai/connect/auth/retry-adapter";
+import { ConnectorAdapter } from "@freebirdai/connect/connector/adapter";
+import { LongReads } from "@freebirdai/connect/jobs/long-reads";
+import { MemoryJobStore } from "@freebirdai/connect/jobs/store";
 import { benchConnectors } from "./connectors.js";
 import { executeWidget } from "@freebirdai/dash-runtime";
 import { getOp, paramsForWidget, resolveRange, type ConnectionSpec, type OpSpec, type ResolvedParams } from "@freebirdai/dash-spec";

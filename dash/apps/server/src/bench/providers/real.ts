@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { HttpFetch } from "@freebirdai/dash-adapters";
+import type { HttpFetch } from "@freebirdai/connect/adapters";
 import { REAL_SOURCES, readSource } from "../real/sources.js";
 import type { MockProvider } from "../types.js";
 

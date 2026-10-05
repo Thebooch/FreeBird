@@ -1,4 +1,4 @@
-import { AdapterRegistry, ProxyAdapter } from "@freebirdai/dash-adapters";
+import { AdapterRegistry, ProxyAdapter } from "@freebirdai/connect/adapters";
 import { FramePanel } from "./FramePanel.jsx";
 import { Dashboard, DashStyleSheet, RecordPage, changeRowActions, recordChangeRequests } from "@freebirdai/dash-react";
 import type {

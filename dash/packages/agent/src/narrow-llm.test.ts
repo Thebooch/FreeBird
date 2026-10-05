@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { FieldInfo } from "./infer.js";
-import { fakeLlm } from "./llm.js";
+import type { FieldInfo } from "@freebirdai/connect/agent";
+import { fakeLlm } from "@freebirdai/connect/agent";
 import { matchValues, pickNarrowingField } from "./narrow-llm.js";
 import type { FieldValue } from "./narrow.js";
 

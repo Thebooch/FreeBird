@@ -2,9 +2,9 @@ import type { ActionContext, ActionDefinition, ActionPreflightResult } from "@fr
 import type { Principal } from "@freebirdai/dash-spec";
 import { principalSchema } from "@freebirdai/dash-spec";
 import { z } from "zod";
-import type { WriteIntent, WriteReview } from "../writes/pending.js";
-import type { CommitResult } from "../writes/service.js";
-import { WriteError } from "../writes/service.js";
+import type { WriteIntent, WriteReview } from "@freebirdai/connect/writes/pending";
+import type { CommitResult } from "@freebirdai/connect/writes/service";
+import { WriteError } from "@freebirdai/connect/writes/service";
 
 /**
  * The assistant asking to change a record — and never changing one.

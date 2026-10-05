@@ -2,7 +2,8 @@ import { mkdirSync, readFileSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import type { CapabilityReport, ConnectionSpec, DashboardSpec } from "@freebirdai/dash-spec";
 import { capabilityReportSchema, connectionSchema, dashboardSchema } from "@freebirdai/dash-spec";
-import { writeJsonAtomic } from "./json-file.js";
+import type { ConnectionRepository } from "@freebirdai/connect/connections";
+import { writeJsonAtomic } from "@freebirdai/connect/json-file";
 
 /**
  * Specs live as files on disk: git-friendly, diffable, reviewable in a pull
@@ -16,19 +17,11 @@ import { writeJsonAtomic } from "./json-file.js";
  * server depends on this, not on the file store below, so a
  * hosted build can keep the same shapes in its own database.
  */
-export interface SpecRepository {
+export interface SpecRepository extends ConnectionRepository {
   listDashboards(): DashboardSpec[];
   getDashboard(id: string): DashboardSpec | null;
   putDashboard(spec: DashboardSpec): void;
   deleteDashboard(id: string): void;
-  listConnections(): ConnectionSpec[];
-  getConnection(id: string): ConnectionSpec | null;
-  putConnection(spec: ConnectionSpec): void;
-  deleteConnection(id: string): void;
-  listReports(): CapabilityReport[];
-  getReport(connectionId: string): CapabilityReport | null;
-  putReport(report: CapabilityReport): CapabilityReport;
-  deleteReport(connectionId: string): void;
 }
 
 export class SpecStore implements SpecRepository {

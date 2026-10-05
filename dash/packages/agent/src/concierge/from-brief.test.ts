@@ -8,7 +8,7 @@ import {
 } from "@freebirdai/dash-spec";
 import { executeWidget } from "@freebirdai/dash-runtime";
 import { describe, expect, it } from "vitest";
-import { inferShape } from "../infer.js";
+import { inferShape } from "@freebirdai/connect/agent";
 import type { ConciergeContext } from "./steps.js";
 import { readiness } from "./steps.js";
 import { buildAll, buildFromDraft } from "./build.js";

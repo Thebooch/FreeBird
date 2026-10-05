@@ -6,7 +6,7 @@ import { DEFAULT_PROVIDER, TASKS, TIER_MODELS } from "./models.js";
 import { buildServer } from "./server.js";
 import { SettingsStore } from "./settings.js";
 import { SpecStore } from "./store.js";
-import { KeyStore, LocalAesVault } from "./vault.js";
+import { KeyStore, LocalAesVault } from "@freebirdai/connect/vault";
 
 /**
  * The picker's own endpoint.

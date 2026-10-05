@@ -13,19 +13,19 @@ import {
   type ConnectionSpec,
   type WidgetSpec,
 } from "@freebirdai/dash-spec";
-import { connectionFromCatalog } from "../catalog.js";
-import { AUTO_INDEX_PAGES, discover } from "../discovery/index.js";
-import { integrate } from "../integrate/agent.js";
-import { DependentAdapter, RestAdapter } from "@freebirdai/dash-adapters";
+import { connectionFromCatalog } from "@freebirdai/connect/catalog";
+import { AUTO_INDEX_PAGES, discover } from "@freebirdai/connect/discovery/index";
+import { integrate } from "@freebirdai/connect/integrate/agent";
+import { DependentAdapter, RestAdapter } from "@freebirdai/connect/adapters";
 import { getOp, paramsForWidget, resolveRange } from "@freebirdai/dash-spec";
-import { OAuthRetryAdapter, RateLimitWaitAdapter } from "../auth/retry-adapter.js";
-import { ConnectorAdapter } from "../connector/adapter.js";
-import { withAddedReads, withEntryResources, withObservedFields } from "../integrate/observed.js";
-import { seekRecords } from "../integrate/seek.js";
-import type { SeenSet } from "../integrate/values.js";
+import { OAuthRetryAdapter, RateLimitWaitAdapter } from "@freebirdai/connect/auth/retry-adapter";
+import { ConnectorAdapter } from "@freebirdai/connect/connector/adapter";
+import { withAddedReads, withEntryResources, withObservedFields } from "@freebirdai/connect/integrate/observed";
+import { seekRecords } from "@freebirdai/connect/integrate/seek";
+import type { SeenSet } from "@freebirdai/connect/integrate/values";
 import { integrationTargets, samplingTargets } from "../routes/integrate.js";
-import { BrowserDocsRenderer } from "../discovery/render/browser.js";
-import { RendererTooling } from "../discovery/render/tooling.js";
+import { BrowserDocsRenderer } from "@freebirdai/connect/discovery/render/browser";
+import { RendererTooling } from "@freebirdai/connect/discovery/render/tooling";
 import { chooseByBrief, observeFirstRead } from "./brief-choice.js";
 import { benchConnectors } from "./connectors.js";
 import { benchCredentials, signInAsThePerson } from "./oauth.js";

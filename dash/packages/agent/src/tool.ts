@@ -1,7 +1,7 @@
 import { COMPONENT_CONTRACTS, COMPONENT_IDS } from "@freebirdai/dash-spec";
 import { z } from "zod";
-import type { InferredShape } from "./infer.js";
-import type { LlmTool } from "./llm.js";
+import type { InferredShape } from "@freebirdai/connect/agent";
+import type { LlmTool } from "@freebirdai/connect/agent";
 
 /**
  * The proposal schema handed to the model.

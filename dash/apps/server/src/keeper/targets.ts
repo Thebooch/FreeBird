@@ -13,8 +13,11 @@ import {
   safeByProtocol,
   widgetSources,
 } from "@freebirdai/dash-spec";
-import { buildQueryRequest } from "../query.js";
+import { buildQueryRequest } from "@freebirdai/connect/query";
+import type { WarmTarget } from "@freebirdai/connect/keeper/keeper";
 import { paramShape, type ViewedRequest } from "./viewed.js";
+
+export type { WarmTarget };
 
 /**
  * What is worth having in the cache before anybody asks for it.
@@ -53,28 +56,6 @@ import { paramShape, type ViewedRequest } from "./viewed.js";
  * somebody opened, so their keys cannot be known without fetching first.
  */
 
-export interface WarmTarget {
-  readonly connection: string;
-  readonly op: string;
-  /** The cache key this will occupy — the same one a view reads. */
-  readonly key: string;
-  /** Query-string values, as the upstream request will send them. */
-  readonly overrides: Readonly<Record<string, string | number | boolean>>;
-  /** The window, and the filters with path inputs folded in. */
-  readonly resolved: ResolvedParams;
-  /** Why this is being warmed, for the status panel and the tests. */
-  readonly because: "viewed" | "widget" | "reference";
-  /** A board that wants it, for reporting. Absent for a viewed request. */
-  readonly dashboard?: string | undefined;
-  /**
-   * The shortest `refresh.every` of any widget reading this endpoint.
-   *
-   * A widget that says "every minute" is somebody's stated wish, and the
-   * keeper is now the only thing that asks the API on a schedule — so the
-   * wish has to reach it or it means nothing.
-   */
-  readonly everyMs?: number | undefined;
-}
 
 export interface TargetsInput {
   readonly dashboards: readonly DashboardSpec[];

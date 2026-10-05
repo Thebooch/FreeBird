@@ -1,7 +1,7 @@
 // The connection side of the spec lives in @freebirdai/connect-spec and is
 // re-exported whole, so every existing import from dash-spec keeps working.
-// Names declared below (the category, catalog entry and connection schemas)
-// take precedence: they are the same records with Dash's own parts typed.
+// `categorySchema` and `CategorySpec` below take precedence: they are the
+// same record with its starters typed as Dash briefs.
 export * from "@freebirdai/connect-spec";
 
 // Re-exported so consumers have a single import surface for spec vocabulary.
@@ -56,15 +56,15 @@ export {
   boardLayoutSchema,
   categorySchema,
   onboardingChoicesSchema,
+  onboardingOf,
   onboardingPreviewSchema,
   onboardingSchema,
   onboardingStatusSchema,
   starterSchema,
   starterSizeSchema,
+  startersOf,
   widgetCheckSchema,
   widgetCheckStatusSchema,
-  catalogEntrySchema,
-  connectionSchema,
 } from "./category.js";
 
 export type {
@@ -77,8 +77,6 @@ export type {
   StarterSpec,
   WidgetCheck,
   WidgetCheckStatus,
-  ConnectionSpec,
-  CatalogEntry,
 } from "./category.js";
 
 export { clampCell, completeLayout, solveLayout } from "./layout.js";
@@ -196,42 +194,6 @@ export type {
 } from "./presentation.js";
 
 export {
-  TOKEN_FILTERS,
-  dashboardParamsSchema,
-  defaultGrainFor,
-  filterDeclSchema,
-  grainSchema,
-  hasTokens,
-  interpolate,
-  interpolatePath,
-  interpolateValue,
-  parseTokens,
-  quantiseEnd,
-  paramsForWidget,
-  rangeForWindow,
-  opOfQueryKey,
-  queryKey,
-  queryKeyOpPrefix,
-  queryKeyPrefix,
-  rangePresetSchema,
-  resolveGrain,
-  resolveRange,
-} from "./params.js";
-
-export type {
-  DashboardParams,
-  FilterDecl,
-  ParsedToken,
-  QueryParams,
-  RangePreset,
-  ResolvedParams,
-  ResolveRangeInput,
-  TimeRange,
-  TimeWindow,
-  TokenFilter,
-} from "./params.js";
-
-export {
   annotateStepSchema,
   coerceStepSchema,
   deriveStepSchema,
@@ -274,20 +236,6 @@ export type { BuiltinComponentId } from "./contracts.js";
 export { findNarrowing, narrowingFileSchema, narrowingSchema } from "./narrowing.js";
 
 export type { Narrowing, NarrowingFile } from "./narrowing.js";
-
-export {
-  CAPABILITIES,
-  capability,
-  capabilityNote,
-  compatibilityMarkdown,
-} from "./capabilities.js";
-
-export type {
-  Capability,
-  CapabilityArea,
-  CapabilityId,
-  CapabilityStatus,
-} from "./capabilities.js";
 
 export { describeMetric, metricSchema, reconcileRuleSchema } from "./metric.js";
 

@@ -4,12 +4,12 @@ import { ledgerly } from "../bench/providers/ledgerly.js";
 import { json } from "../bench/seed.js";
 import { benchTransport } from "../bench/transport.js";
 import type { MockProvider } from "../bench/types.js";
-import { MemoryEvidenceStore } from "../evidence/store.js";
-import { openDashDb } from "../platform/db.js";
+import { MemoryEvidenceStore } from "@freebirdai/connect/evidence/store";
+import { openDashDb } from "@freebirdai/connect/platform/db";
 import { createIntegrationRunner } from "../routes/integrate.js";
-import { LocalAesVault } from "../vault.js";
-import { CheckQueue } from "./check-queue.js";
-import { DbJobStore, MemoryJobStore } from "./store.js";
+import { LocalAesVault } from "@freebirdai/connect/vault";
+import { CheckQueue } from "@freebirdai/connect/jobs/check-queue";
+import { DbJobStore, MemoryJobStore } from "@freebirdai/connect/jobs/store";
 
 /*
  * Which endpoints a check reads next, kept in the job store: settled only

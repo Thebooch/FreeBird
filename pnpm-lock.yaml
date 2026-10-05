@@ -43,7 +43,57 @@ importers:
         specifier: ^2.1.6
         version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
 
+  connect/packages/connect:
+    dependencies:
+      '@electric-sql/pglite':
+        specifier: ^0.5.4
+        version: 0.5.5
+      '@freebirdai/adapters-db-postgres':
+        specifier: workspace:*
+        version: link:../../../guide/packages/adapters-db-postgres
+      '@freebirdai/connect-spec':
+        specifier: workspace:*
+        version: link:../spec
+      '@freebirdai/core':
+        specifier: workspace:*
+        version: link:../../../guide/packages/core
+      '@freebirdai/dash-expr':
+        specifier: workspace:*
+        version: link:../../../dash/packages/expr
+      '@jitl/quickjs-wasmfile-release-sync':
+        specifier: 0.32.0
+        version: 0.32.0
+      kysely:
+        specifier: ^0.27.4
+        version: 0.27.6
+      playwright-core:
+        specifier: 1.63.0
+        version: 1.63.0
+      quickjs-emscripten-core:
+        specifier: 0.32.0
+        version: 0.32.0
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.19.17
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.6
+        version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+
   connect/packages/spec:
+    dependencies:
+      '@freebirdai/dash-expr':
+        specifier: workspace:*
+        version: link:../../../dash/packages/expr
     devDependencies:
       tsup:
         specifier: ^8.3.5
@@ -66,12 +116,12 @@ importers:
       '@freebirdai/adapters-db-postgres':
         specifier: workspace:*
         version: link:../../../guide/packages/adapters-db-postgres
+      '@freebirdai/connect':
+        specifier: workspace:*
+        version: link:../../../connect/packages/connect
       '@freebirdai/core':
         specifier: workspace:*
         version: link:../../../guide/packages/core
-      '@freebirdai/dash-adapters':
-        specifier: workspace:*
-        version: link:../../packages/adapters
       '@freebirdai/dash-agent':
         specifier: workspace:*
         version: link:../../packages/agent
@@ -127,15 +177,15 @@ importers:
 
   dash/apps/web:
     dependencies:
+      '@freebirdai/connect':
+        specifier: workspace:*
+        version: link:../../../connect/packages/connect
       '@freebirdai/core':
         specifier: workspace:*
         version: link:../../../guide/packages/core
       '@freebirdai/core-state':
         specifier: workspace:*
         version: link:../../../guide/packages/core-state
-      '@freebirdai/dash-adapters':
-        specifier: workspace:*
-        version: link:../../packages/adapters
       '@freebirdai/dash-agent':
         specifier: workspace:*
         version: link:../../packages/agent
@@ -183,30 +233,14 @@ importers:
         specifier: ^5.4.11
         version: 5.4.21(@types/node@22.19.17)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
 
-  dash/packages/adapters:
-    dependencies:
-      '@freebirdai/dash-expr':
-        specifier: workspace:*
-        version: link:../expr
-      '@freebirdai/dash-spec':
-        specifier: workspace:*
-        version: link:../spec
-    devDependencies:
-      tsup:
-        specifier: ^8.3.5
-        version: 8.5.1(jiti@1.21.7)(postcss@8.5.10)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.9.0)
-      typescript:
-        specifier: ^5.7.2
-        version: 5.9.3
-      vitest:
-        specifier: ^2.1.6
-        version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
-      zod:
-        specifier: ^3.23.8
-        version: 3.25.76
-
   dash/packages/agent:
     dependencies:
+      '@freebirdai/connect':
+        specifier: workspace:*
+        version: link:../../../connect/packages/connect
+      '@freebirdai/connect-spec':
+        specifier: workspace:*
+        version: link:../../../connect/packages/spec
       '@freebirdai/dash-expr':
         specifier: workspace:*
         version: link:../expr
@@ -290,9 +324,9 @@ importers:
 
   dash/packages/react:
     dependencies:
-      '@freebirdai/dash-adapters':
+      '@freebirdai/connect':
         specifier: workspace:*
-        version: link:../adapters
+        version: link:../../../connect/packages/connect
       '@freebirdai/dash-components':
         specifier: workspace:*
         version: link:../components

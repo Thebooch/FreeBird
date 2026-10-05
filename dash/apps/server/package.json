@@ -21,7 +21,7 @@
     "@electric-sql/pglite": "^0.5.4",
     "@freebirdai/adapters-db-postgres": "workspace:*",
     "@freebirdai/core": "workspace:*",
-    "@freebirdai/dash-adapters": "workspace:*",
+    "@freebirdai/connect": "workspace:*",
     "@freebirdai/dash-agent": "workspace:*",
     "@freebirdai/dash-expr": "workspace:*",
     "@freebirdai/dash-parts": "workspace:*",

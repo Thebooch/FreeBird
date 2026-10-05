@@ -31,7 +31,7 @@ import {
   type Step,
 } from "./concierge/steps.js";
 import { revise } from "./concierge/revise.js";
-import { inferShape } from "./infer.js";
+import { inferShape } from "@freebirdai/connect/agent";
 import { executeWidget } from "@freebirdai/dash-runtime";
 import { resolveRange } from "@freebirdai/dash-spec";
 

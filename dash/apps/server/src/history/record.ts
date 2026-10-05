@@ -7,7 +7,7 @@ import {
   type DashboardSpec,
   type ResolvedParams,
 } from "@freebirdai/dash-spec";
-import { buildQueryRequest } from "../query.js";
+import { buildQueryRequest } from "@freebirdai/connect/query";
 
 /** A refreshed read, as the keeper holds it. */
 export interface Refreshed {
