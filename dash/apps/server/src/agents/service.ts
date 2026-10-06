@@ -117,6 +117,9 @@ export class AgentService {
         out.push({ item: tool.id, reason: "unknown-connection", message: `"${tool.scope.connection}" is not one of this workspace's connections.` });
         continue;
       }
+      if (tool.kind === "highlight" && (!tool.label?.trim() || !tool.description.trim())) {
+        out.push({ item: tool.id, reason: "invalid", message: "A highlight needs a title and a description of what to watch for." });
+      }
       if (tool.kind === "run_workflow" && !tool.workflow) {
         out.push({ item: tool.id, reason: "invalid", message: "A workflow tool needs to say which workflow it starts." });
       }

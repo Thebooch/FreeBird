@@ -23,7 +23,7 @@ apps/
 - Web: `#/agent/<section>[/<id>]` in `apps/web/src/route.ts`; `agent/AgentShell.tsx` picks the section; the shared `AgentChip` is in `packages/components/src/ui/`.
 - Replies: `role`, `instructions`, `personality` sit on `BASE_RESPONSE_PROMPT` via `composeResponsePrompt` (`packages/spec/src/agent-prompt.ts`). **Only for an agent replying to a person**; workflow steps never use it. Generate is `POST /api/agents/assist` (`agents/assist.ts`, model task `agent`).
 - Knowledge: per agent (`knowledge.notes`, `knowledge.context` rules: plain-words trigger + endpoints to read) and shared (`/api/agent-knowledge`, table `dash_agent_shared`). An agent rule may only read connections its reach reads; a shared rule is checked per agent when it fires.
-- Tools: `tools[]`, each `auto | approve | deny` with a deny reply. A record tool that acts needs `reachCovers` its permission (`AgentService.toolProblems`). `run_workflow` waits for plan 2.
+- Tools: `tools[]`, each `auto | approve | deny` with a deny reply. A record tool that acts needs `reachCovers` its permission (`AgentService.toolProblems`). `run_workflow` waits for plan 2. A `highlight` tool (title in `label`, `description`) is not a reply tool: every message received is checked against all active highlights (`agents/highlights.ts`, `checkHighlights`) and a match goes to a `HighlightNotifier`; Comms wires both.
 - Anything later steps label with an owner should store `{ kind: "agent" | "member"; id }`, not a bare agent id. Approval vs automatic belongs to the workflow action, not the agent.
 
 ## Conventions

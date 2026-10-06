@@ -137,6 +137,7 @@ export {
   contextSourceSchema,
   dedupeReach,
   describeScope,
+  isReplyTool,
   reachCovers,
   sharedAgentKnowledgeSchema,
   summarizeReach,

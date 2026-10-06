@@ -55,6 +55,7 @@ const ToolRow = ({
   onRemove: () => void;
 }): JSX.Element => {
   const info = AGENT_TOOL_INFO[tool.kind];
+  if (tool.kind === "highlight") return <HighlightRow tool={tool} onChange={onChange} onRemove={onRemove} />;
   const beyond = tool.enabled && tool.mode !== "deny" && info.permission !== undefined && !reachCovers(reach, info.permission, tool.scope);
 
   return (
@@ -164,6 +165,58 @@ const ToolRow = ({
   );
 };
 
+/**
+ * A highlight: a topic the team wants to hear about. It is checked on every
+ * message received and a match notifies the team, so it has no mode, scope or
+ * reply of its own: only what to call it and what to watch for.
+ */
+const HighlightRow = ({
+  tool,
+  onChange,
+  onRemove,
+}: {
+  tool: AgentTool;
+  onChange: (next: AgentTool) => void;
+  onRemove: () => void;
+}): JSX.Element => (
+  <div className="dash-tool" data-enabled={tool.enabled} data-testid={`agent-tool-${tool.id}`}>
+    <div className="dash-tool__head">
+      <label className="dash-tool__on">
+        <input
+          type="checkbox"
+          checked={tool.enabled}
+          aria-label={tool.enabled ? "Active" : "Inactive"}
+          onChange={(event) => onChange({ ...tool, enabled: event.target.checked })}
+        />
+        <span className="dash-tool__name">Highlight</span>
+      </label>
+      <button type="button" className="dash-reach__remove" aria-label="Remove this tool" onClick={onRemove}>
+        ✕
+      </button>
+    </div>
+    <div className="dash-tool__body">
+      <span className="dash-hint">Checked on every message received. A match notifies the team.</span>
+      <input
+        className="dash-tool__when"
+        aria-label="Title"
+        placeholder="Title, e.g. Legal threat"
+        maxLength={80}
+        value={tool.label ?? ""}
+        onChange={(event) => onChange({ ...tool, label: event.target.value })}
+      />
+      <textarea
+        className="dash-tool__deny"
+        aria-label="What to watch for"
+        rows={2}
+        maxLength={2000}
+        placeholder="What to watch for, e.g. They mention a lawyer, court, or taking legal action."
+        value={tool.description}
+        onChange={(event) => onChange({ ...tool, description: event.target.value })}
+      />
+    </div>
+  </div>
+);
+
 export const ToolsEditor = ({
   tools,
   onChange,
@@ -221,6 +274,7 @@ export const ToolsEditor = ({
                 scope: {},
                 whenToUse: "",
                 denyReply: "",
+                description: "",
               },
             ])
           }

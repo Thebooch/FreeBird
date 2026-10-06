@@ -1,4 +1,4 @@
-import { AGENT_TOOL_INFO, type AgentSpec, type AgentTool, type SharedAgentKnowledge } from "./agent.js";
+import { AGENT_TOOL_INFO, isReplyTool, type AgentSpec, type AgentTool, type SharedAgentKnowledge } from "./agent.js";
 
 /**
  * The prompt an agent writes its replies with.
@@ -114,7 +114,8 @@ export const composeResponsePrompt = (input: ComposeResponsePromptInput): string
     );
   }
 
-  const tools = agent.tools.filter((tool) => tool.enabled);
+  /* Highlights are checked on every message received, apart from the reply (`agent-highlight.ts`). */
+  const tools = agent.tools.filter((tool) => tool.enabled && isReplyTool(tool));
   parts.push(
     section(
       "What you can do",

@@ -78,6 +78,7 @@ export const AGENT_TOOL_KINDS = [
   "schedule_appointment",
   "schedule_follow_up",
   "run_workflow",
+  "highlight",
 ] as const;
 export const agentToolKindSchema = z.enum(AGENT_TOOL_KINDS);
 export type AgentToolKind = z.infer<typeof agentToolKindSchema>;
@@ -104,7 +105,16 @@ export const AGENT_TOOL_INFO: Readonly<Record<AgentToolKind, AgentToolKindInfo>>
   schedule_appointment: { kind: "schedule_appointment", label: "Schedule an appointment", does: "schedule an appointment", scoped: false, defaultMode: "approve" },
   schedule_follow_up: { kind: "schedule_follow_up", label: "Schedule a follow-up", does: "schedule a follow-up with the person", scoped: false, defaultMode: "auto" },
   run_workflow: { kind: "run_workflow", label: "Run a workflow", does: "start a workflow", scoped: false, defaultMode: "approve" },
+  /*
+   * Not something the agent decides to do: every message received is checked
+   * against every active highlight, and a match notifies the team. It has no
+   * mode and never appears in the reply prompt.
+   */
+  highlight: { kind: "highlight", label: "Highlight", does: "flag the conversation for the team", scoped: false, defaultMode: "auto" },
 };
+
+/** Tools the agent chooses to use while replying; a highlight is checked on every message instead. */
+export const isReplyTool = (tool: { kind: AgentToolKind }): boolean => tool.kind !== "highlight";
 
 export const agentToolSchema = z.object({
   id: idSchema,
@@ -118,6 +128,8 @@ export const agentToolSchema = z.object({
   workflow: idSchema.optional(),
   /** An optional name the person gives it, e.g. "Book a showing". */
   label: z.string().trim().max(80).optional(),
+  /** For `highlight`: what to watch for, in plain words. Its title is `label`. */
+  description: z.string().max(2000).default(""),
   /** When to use it, in plain words. */
   whenToUse: z.string().max(1000).default(""),
   /** For `deny`: how to answer instead, in plain words. */

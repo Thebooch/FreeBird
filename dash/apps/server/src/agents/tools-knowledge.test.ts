@@ -31,8 +31,8 @@ describe("an agent's tools", () => {
       color: 1,
       reach: readPms,
       tools: [
-        { id: "look", kind: "look_up_record", mode: "auto", scope: { connection: "pms" }, enabled: true, whenToUse: "", denyReply: "" },
-        { id: "follow", kind: "schedule_follow_up", mode: "auto", scope: {}, enabled: true, whenToUse: "", denyReply: "" },
+        { id: "look", kind: "look_up_record", mode: "auto", scope: { connection: "pms" }, enabled: true, whenToUse: "", denyReply: "", description: "" },
+        { id: "follow", kind: "schedule_follow_up", mode: "auto", scope: {}, enabled: true, whenToUse: "", denyReply: "", description: "" },
         {
           id: "refund",
           kind: "record_action",
@@ -41,6 +41,7 @@ describe("an agent's tools", () => {
           enabled: true,
           whenToUse: "",
           denyReply: "Refunds are handled by the office; give them the office number.",
+          description: "",
         },
       ],
     });
@@ -53,7 +54,7 @@ describe("an agent's tools", () => {
 
   it("refuses a record tool the reach does not cover, unless it is set to deny or off", async () => {
     const agents = service();
-    const update = { id: "upd", kind: "update_record" as const, scope: { connection: "pms" }, whenToUse: "", denyReply: "" };
+    const update = { id: "upd", kind: "update_record" as const, scope: { connection: "pms" }, whenToUse: "", denyReply: "", description: "" };
     await expect(
       agents.create(owner, { name: "A", color: 1, reach: readPms, tools: [{ ...update, mode: "approve", enabled: true }] }),
     ).rejects.toMatchObject({ status: 400, problems: [{ reason: "tool-beyond-reach", item: "upd" }] });
@@ -62,7 +63,7 @@ describe("an agent's tools", () => {
   });
 
   it("refuses two tools with one id, and a workflow tool that names no workflow", async () => {
-    const tool = { id: "t", kind: "schedule_appointment" as const, mode: "auto" as const, scope: {}, enabled: true, whenToUse: "", denyReply: "" };
+    const tool = { id: "t", kind: "schedule_appointment" as const, mode: "auto" as const, scope: {}, enabled: true, whenToUse: "", denyReply: "", description: "" };
     await expect(service().create(owner, { name: "A", color: 1, tools: [tool, tool] })).rejects.toMatchObject({ status: 400 });
     await expect(
       service().create(owner, { name: "B", color: 1, tools: [{ ...tool, kind: "run_workflow" }] }),
