@@ -21,6 +21,9 @@ apps/
 - Spec: `packages/spec/src/agent.ts` (`agentSchema`, colour is an index into `--dash-series-N`, reach in `access.ts`'s own words). Permission: `agents.manage` (owner, admin).
 - Server: `apps/server/src/agents/` (`AgentStore`, `AgentService` — one place for the routes and the chat to share), `routes/agents.ts`, chat actions in `chat/agent-actions.ts`. Table `dash_agents` in `platform/db.ts`.
 - Web: `#/agent/<section>[/<id>]` in `apps/web/src/route.ts`; `agent/AgentShell.tsx` picks the section; the shared `AgentChip` is in `packages/components/src/ui/`.
+- Replies: `role`, `instructions`, `personality` sit on `BASE_RESPONSE_PROMPT` via `composeResponsePrompt` (`packages/spec/src/agent-prompt.ts`). **Only for an agent replying to a person**; workflow steps never use it. Generate is `POST /api/agents/assist` (`agents/assist.ts`, model task `agent`).
+- Knowledge: per agent (`knowledge.notes`, `knowledge.context` rules: plain-words trigger + endpoints to read) and shared (`/api/agent-knowledge`, table `dash_agent_shared`). An agent rule may only read connections its reach reads; a shared rule is checked per agent when it fires.
+- Tools: `tools[]`, each `auto | approve | deny` with a deny reply. A record tool that acts needs `reachCovers` its permission (`AgentService.toolProblems`). `run_workflow` waits for plan 2.
 - Anything later steps label with an owner should store `{ kind: "agent" | "member"; id }`, not a bare agent id. Approval vs automatic belongs to the workflow action, not the agent.
 
 ## Conventions

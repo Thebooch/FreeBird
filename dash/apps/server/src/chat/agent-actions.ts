@@ -45,6 +45,20 @@ const colorSchema = z
   .max(AGENT_COLORS)
   .describe(`Its colour, 1 to ${AGENT_COLORS}: which of the eight palette swatches it wears everywhere it appears.`);
 
+/* The three parts of the prompt the agent replies with. Only for replies; workflows never use them. */
+const roleSchema = z
+  .string()
+  .max(4000)
+  .describe("Who the agent is and who it works for, e.g. 'You are a collections agent for Example Co.' Replaces the old.");
+const instructionsSchema = z
+  .string()
+  .max(8000)
+  .describe("The team's specific rules for its replies, one per line, e.g. '- DO NOT accept Friday as a pay date.' Replaces the old.");
+const personalitySchema = z
+  .string()
+  .max(2000)
+  .describe("The tone of every message it writes, e.g. 'Firm and brief.' Replaces the old.");
+
 const reachSchema = z
   .array(reachItemSchema)
   .max(100)
@@ -53,7 +67,9 @@ const reachSchema = z
 export const createAgentSchema = z.object({
   name: z.string().trim().min(1).max(60).describe("What the agent is called."),
   color: colorSchema.optional(),
-  instructions: z.string().max(8000).optional().describe("How it should work, in plain words."),
+  role: roleSchema.optional(),
+  instructions: instructionsSchema.optional(),
+  personality: personalitySchema.optional(),
   reach: reachSchema.optional(),
 });
 
@@ -61,7 +77,9 @@ export const updateAgentSchema = z.object({
   agentId: z.string().min(1).describe("Id of an agent from the AGENTS list."),
   name: z.string().trim().min(1).max(60).optional(),
   color: colorSchema.optional(),
-  instructions: z.string().max(8000).optional().describe("The agent's whole new instructions, replacing the old."),
+  role: roleSchema.optional(),
+  instructions: instructionsSchema.optional(),
+  personality: personalitySchema.optional(),
   reach: reachSchema.optional(),
 });
 
@@ -117,7 +135,8 @@ export const agentActions = (ops: AgentChatOps): ActionDefinition<any, unknown, 
   const create: ActionDefinition<Create, unknown, unknown> = {
     id: "create_agent",
     description:
-      "Create an agent: a named AI worker with a colour, instructions, and a reach (what it may read or change). " +
+      "Create an agent: a named AI worker with a colour, a role, instructions and a personality for its replies, " +
+      "and a reach (what it may read or change). Its tools and knowledge are set on the Agents page. " +
       "Shown to the user for confirmation first. An agent given no reach touches nothing.",
     schema: createAgentSchema,
     requiresConfirmation: "preview",
@@ -136,7 +155,9 @@ export const agentActions = (ops: AgentChatOps): ActionDefinition<any, unknown, 
           name: args.name,
           // Spread across the palette by how many exist, so a new agent is rarely a twin of an old one.
           color: args.color ?? (ops.roster.length % AGENT_COLORS) + 1,
+          ...(args.role !== undefined ? { role: args.role } : {}),
           ...(args.instructions !== undefined ? { instructions: args.instructions } : {}),
+          ...(args.personality !== undefined ? { personality: args.personality } : {}),
           ...(args.reach ? { reach: reachOf(args.reach) } : {}),
         }),
       );
@@ -147,7 +168,7 @@ export const agentActions = (ops: AgentChatOps): ActionDefinition<any, unknown, 
   const update: ActionDefinition<Update, unknown, unknown> = {
     id: "update_agent",
     description:
-      "Change an agent: rename it, recolour it, rewrite its instructions or replace its reach. " +
+      "Change an agent: rename it, recolour it, rewrite its role, instructions or personality, or replace its reach. " +
       "Send only what changes; `reach` and `instructions` replace the old value whole.",
     schema: updateAgentSchema,
     requiresConfirmation: "preview",
@@ -169,7 +190,9 @@ export const agentActions = (ops: AgentChatOps): ActionDefinition<any, unknown, 
         rows: [
           ...(args.name !== undefined ? [{ label: "Name", value: `${held?.name ?? "—"} → ${args.name}` }] : []),
           ...(args.color !== undefined ? [{ label: "Colour", value: `${held?.color ?? "—"} → ${args.color}` }] : []),
+          ...(args.role !== undefined ? [{ label: "Role", value: "rewritten" }] : []),
           ...(args.instructions !== undefined ? [{ label: "Instructions", value: "rewritten" }] : []),
+          ...(args.personality !== undefined ? [{ label: "Personality", value: "rewritten" }] : []),
           ...(args.reach !== undefined
             ? [{ label: "May touch", value: `${held ? summarizeReach(held.reach) : "—"} → ${summarizeReach(reachOf(args.reach) ?? [])}` }]
             : []),
@@ -185,9 +208,11 @@ export const agentActions = (ops: AgentChatOps): ActionDefinition<any, unknown, 
         ops.update(principal, args.agentId, {
           name: args.name ?? held.name,
           color: args.color ?? held.color,
-          instructions: args.instructions ?? held.instructions,
-          reach: args.reach ? reachOf(args.reach) : held.reach,
-          ...(held.model ? { model: held.model } : {}),
+          /* Anything not sent stays as it is, tools and knowledge included. */
+          ...(args.role !== undefined ? { role: args.role } : {}),
+          ...(args.instructions !== undefined ? { instructions: args.instructions } : {}),
+          ...(args.personality !== undefined ? { personality: args.personality } : {}),
+          ...(args.reach ? { reach: reachOf(args.reach) } : {}),
         }),
       );
       return { updated: true, ...summaryOf(next) };

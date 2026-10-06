@@ -123,15 +123,43 @@ export type { Invite, Member, Permission, Principal, Role, Scope, Workspace } fr
 export {
   AGENT_COLORS,
   AGENT_PERMISSIONS,
+  AGENT_TOOL_INFO,
+  AGENT_TOOL_KINDS,
+  AGENT_TOOL_MODES,
   agentInputSchema,
+  agentKnowledgeSchema,
   agentReachSchema,
   agentSchema,
+  agentToolKindSchema,
+  agentToolModeSchema,
+  agentToolSchema,
+  contextRuleSchema,
+  contextSourceSchema,
   dedupeReach,
   describeScope,
+  reachCovers,
+  sharedAgentKnowledgeSchema,
   summarizeReach,
 } from "./agent.js";
 
-export type { AgentInput, AgentReach, AgentSpec, ReachProblem } from "./agent.js";
+export type {
+  AgentInput,
+  AgentKnowledge,
+  AgentReach,
+  AgentSpec,
+  AgentTool,
+  AgentToolKind,
+  AgentToolKindInfo,
+  AgentToolMode,
+  ContextRule,
+  ContextSource,
+  ReachProblem,
+  SharedAgentKnowledge,
+} from "./agent.js";
+
+export { BASE_RESPONSE_PROMPT, composeResponsePrompt } from "./agent-prompt.js";
+
+export type { ComposeResponsePromptInput, FoundContext, ResponseChannel } from "./agent-prompt.js";
 
 export { referenceIds, targetOfRow } from "./reference.js";
 

@@ -1,4 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
+import type { LlmAdapter } from "@freebirdai/dash-agent";
+import { assistRequestSchema, draftAgentText } from "../agents/assist.js";
 import { AgentError, type AgentService } from "../agents/service.js";
 import { requirePermission } from "../identity/context.js";
 import type { Policy } from "../identity/policy.js";
@@ -10,7 +12,12 @@ import type { Policy } from "../identity/policy.js";
  * and removing are guarded by `agents.manage` in `identity/guard.ts`, and a
  * reach is checked again by the service against what the person saving holds.
  */
-export const agentRoutes = (service: AgentService, policy: Policy) =>
+export const agentRoutes = (
+  service: AgentService,
+  policy: Policy,
+  /** The model the Generate button drafts with; null when no AI key is set. */
+  llm: () => LlmAdapter | null = () => null,
+) =>
   async (app: FastifyInstance): Promise<void> => {
     const fail = (reply: FastifyReply, error: unknown) => {
       if (error instanceof AgentError) {
@@ -22,6 +29,38 @@ export const agentRoutes = (service: AgentService, policy: Policy) =>
     app.get<{ Querystring: { archived?: string } }>("/api/agents", async (request) =>
       service.list({ includeArchived: request.query.archived === "1" || request.query.archived === "true" }),
     );
+
+    /**
+     * The Generate button: what the person typed for one part of an agent, made
+     * into a prompt a model follows well. Returns the draft; nothing is saved
+     * until the person saves the agent.
+     */
+    app.post<{ Body: unknown }>("/api/agents/assist", async (request, reply) => {
+      const principal = await requirePermission(policy, request, reply, "agents.manage");
+      if (!principal) return reply;
+      const parsed = assistRequestSchema.safeParse(request.body);
+      if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues.map((one) => one.message).join("; ") });
+      const model = llm();
+      if (!model) return reply.status(503).send({ error: "No AI model is set up. Add an AI key to use Generate." });
+      try {
+        return { text: await draftAgentText(model, parsed.data) };
+      } catch (error) {
+        return reply.status(502).send({ error: error instanceof Error ? error.message : "The model could not draft this." });
+      }
+    });
+
+    /** The knowledge every agent shares, beside its own. */
+    app.get("/api/agent-knowledge", async () => service.shared());
+
+    app.put<{ Body: unknown }>("/api/agent-knowledge", async (request, reply) => {
+      const principal = await requirePermission(policy, request, reply, "agents.manage");
+      if (!principal) return reply;
+      try {
+        return await service.putShared(request.body);
+      } catch (error) {
+        return fail(reply, error);
+      }
+    });
 
     app.get<{ Params: { id: string } }>("/api/agents/:id", async (request, reply) => {
       const agent = await service.get(request.params.id);

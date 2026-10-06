@@ -50,6 +50,11 @@ CREATE TABLE IF NOT EXISTS dash_agents (
   PRIMARY KEY (workspace, id)
 );
 
+CREATE TABLE IF NOT EXISTS dash_agent_shared (
+  workspace TEXT PRIMARY KEY,
+  record    JSONB NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS dash_invites (
   id         TEXT PRIMARY KEY,
   workspace  TEXT NOT NULL,

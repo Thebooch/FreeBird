@@ -2,6 +2,7 @@ import type { EachAnswer, EachRequest } from "@freebirdai/dash-react";
 import type {
   AgentInput,
   AgentSpec,
+  SharedAgentKnowledge,
   ApiProfile,
   CatalogEntry,
   ConnectionSpec,
@@ -1136,6 +1137,22 @@ export const api = {
 
   restoreAgent: (id: string): Promise<AgentSpec> =>
     request(`/api/agents/${encodeURIComponent(id)}/restore`, { method: "POST" }),
+
+  /** The Generate button: a draft of one part of an agent, from what was typed. Nothing is saved. */
+  assistAgent: (input: {
+    field: "role" | "instructions" | "personality" | "knowledge";
+    text: string;
+    agent: { name?: string; role?: string };
+  }): Promise<{ text: string }> => request("/api/agents/assist", json(input)),
+
+  sharedKnowledge: (): Promise<SharedAgentKnowledge> => request("/api/agent-knowledge"),
+
+  saveSharedKnowledge: (knowledge: Pick<SharedAgentKnowledge, "notes" | "context">): Promise<SharedAgentKnowledge> =>
+    request("/api/agent-knowledge", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(knowledge),
+    }),
 
   /**
    * Connect a catalog API. Marked for onboarding, so it opens with the boards

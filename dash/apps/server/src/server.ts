@@ -907,8 +907,9 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     store: options.agents ?? new MemoryAgentStore(),
     policy,
     hasConnection: (id) => store.getConnection(id) !== null,
+    hasOp: (connection, op) => store.getConnection(connection)?.ops.some((one) => one.id === op) ?? false,
   });
-  void app.register(agentRoutes(agents, policy));
+  void app.register(agentRoutes(agents, policy, () => resolveLlm("agent")));
 
   /*
    * Half-finished widget setups, one per board.

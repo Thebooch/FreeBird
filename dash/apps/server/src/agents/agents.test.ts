@@ -163,7 +163,9 @@ describe("/api/agents", () => {
     expect((await app.inject({ method: "GET", url: "/api/agents/scout" })).json().name).toBe("Scout");
 
     const renamed = await put("scout", { name: "Lease Scout", color: 3 });
-    expect(renamed.json()).toMatchObject({ id: "scout", name: "Lease Scout", reach: [] });
+    /* What was not sent stays: a rename does not take away its access. */
+    expect(renamed.json()).toMatchObject({ id: "scout", name: "Lease Scout", reach: [{ permission: "records.read", scope: { connection: "pms" } }] });
+    expect((await put("scout", { name: "Lease Scout", color: 3, reach: [] })).json().reach).toEqual([]);
 
     expect((await app.inject({ method: "DELETE", url: "/api/agents/scout" })).json().archived).toBe(true);
     expect((await app.inject({ method: "GET", url: "/api/agents" })).json()).toEqual([]);

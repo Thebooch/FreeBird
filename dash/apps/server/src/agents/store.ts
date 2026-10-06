@@ -1,4 +1,4 @@
-import { agentSchema, type AgentSpec } from "@freebirdai/dash-spec";
+import { agentSchema, sharedAgentKnowledgeSchema, type AgentSpec, type SharedAgentKnowledge } from "@freebirdai/dash-spec";
 import { sql } from "kysely";
 import type { DashDb } from "../platform/db.js";
 
@@ -16,12 +16,24 @@ export interface AgentStore {
   get(id: string): Promise<AgentSpec | null>;
   put(agent: AgentSpec): Promise<void>;
   delete(id: string): Promise<void>;
+  /** The knowledge every agent in the workspace shares. Empty until somebody writes some. */
+  shared(): Promise<SharedAgentKnowledge>;
+  putShared(knowledge: SharedAgentKnowledge): Promise<void>;
 }
+
+const EMPTY_SHARED = (): SharedAgentKnowledge => sharedAgentKnowledgeSchema.parse({});
 
 const byCreation = (a: AgentSpec, b: AgentSpec): number => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
 
 export class MemoryAgentStore implements AgentStore {
   private readonly rows = new Map<string, AgentSpec>();
+  private held: SharedAgentKnowledge = EMPTY_SHARED();
+  async shared(): Promise<SharedAgentKnowledge> {
+    return this.held;
+  }
+  async putShared(knowledge: SharedAgentKnowledge): Promise<void> {
+    this.held = sharedAgentKnowledgeSchema.parse(knowledge);
+  }
   async list(): Promise<AgentSpec[]> {
     return [...this.rows.values()].sort(byCreation);
   }
@@ -64,6 +76,22 @@ export class DbAgentStore implements AgentStore {
     await sql`
       INSERT INTO dash_agents (workspace, id, record) VALUES (${this.workspace}, ${one.id}, ${JSON.stringify(one)}::jsonb)
       ON CONFLICT (workspace, id) DO UPDATE SET record = EXCLUDED.record
+    `.execute(this.db.kysely);
+  }
+
+  async shared(): Promise<SharedAgentKnowledge> {
+    const result = await sql<{ record: unknown }>`
+      SELECT record FROM dash_agent_shared WHERE workspace = ${this.workspace}
+    `.execute(this.db.kysely);
+    const row = result.rows[0];
+    return row ? sharedAgentKnowledgeSchema.parse(parsed(row.record)) : EMPTY_SHARED();
+  }
+
+  async putShared(knowledge: SharedAgentKnowledge): Promise<void> {
+    const one = sharedAgentKnowledgeSchema.parse(knowledge);
+    await sql`
+      INSERT INTO dash_agent_shared (workspace, record) VALUES (${this.workspace}, ${JSON.stringify(one)}::jsonb)
+      ON CONFLICT (workspace) DO UPDATE SET record = EXCLUDED.record
     `.execute(this.db.kysely);
   }
 
