@@ -1,27 +1,23 @@
 import type { LeaseLock } from "@freebirdai/connect/host";
-import type { AgentSpec, AgentTool, Principal, Proposal, WorkflowInputDef, WorkflowRun, WorkflowSpec, WorkflowStart } from "@freebirdai/dash-spec";
+import type { AgentSpec, AgentTool, Principal, Task, WorkflowInputDef, WorkflowRun, WorkflowSpec, WorkflowStart } from "@freebirdai/dash-spec";
+import type { WorkflowEngine } from "./engine.js";
 import type { WorkflowEnv } from "./env.js";
-import type { ExecutorRegistry } from "./executors.js";
-import { runWorkflow, type RunResult } from "./run.js";
+import { runTrigger, type RunResult } from "./run.js";
 
 /**
- * The one way a workflow starts, whatever starts it: the runner (time, an
- * API), a person's "Run now", an agent's tool, or a person applying an
- * agent's request to start one. It records who or what started the run, and
- * takes the workflow's lease so two servers — or the runner and a person —
- * never run the same workflow at once.
+ * The one way a workflow's trigger fires, whatever fires it: the runner (time,
+ * an API), a person's "Run now", an agent's tool, or a person approving an
+ * agent's request. It records who or what started the run, and takes the
+ * workflow's lease so two servers never run the same trigger at once.
  */
 
 export interface Starter {
   readonly env: WorkflowEnv;
-  /** Shared between servers when several use one database; absent, this server does all of it. */
+  readonly engine: WorkflowEngine;
   readonly leases?: LeaseLock | undefined;
-  /** This server, among any others. */
   readonly holder: string;
-  readonly executors?: ExecutorRegistry | undefined;
 }
 
-/** How long a run may hold its workflow before another server may take it. */
 export const RUN_LEASE_MS = 10 * 60_000;
 
 export class StartError extends Error {
@@ -47,49 +43,38 @@ export const startWorkflow = async (
     throw new StartError(`"${workflow.name}" is already running.`, 409);
   }
   try {
-    return await runWorkflow(starter.env, workflow, {
+    return await runTrigger(starter.env, starter.engine, workflow, {
       start,
       ...(options.inputs ? { inputs: options.inputs } : {}),
       ...(options.actor !== undefined ? { actor: options.actor } : {}),
-      ...(starter.executors ? { executors: starter.executors } : {}),
     });
   } finally {
     await starter.leases?.release(key, starter.holder);
   }
 };
 
-/* ── started by an agent ───────────────────────────────────────────────── */
-
 /** The parameters an agent's tool takes for a workflow: its trigger's inputs. */
-export const workflowToolInputs = (workflow: WorkflowSpec): readonly WorkflowInputDef[] =>
-  workflow.trigger.kind === "agent" ? workflow.trigger.inputs : [];
+export const workflowToolInputs = (workflow: WorkflowSpec): readonly WorkflowInputDef[] => (workflow.trigger.kind === "agent" ? workflow.trigger.inputs : []);
 
 /**
- * What came of an agent using a `run_workflow` tool — what the agent tells
- * the person next.
+ * What came of an agent using a `run_workflow` tool: what the agent tells the person next.
  *
- * - `started`: the tool is auto; the run happened. The agent says it is done or underway.
- * - `approval`: the tool is approve; a request went to the team. The agent
- *   says the team will look into it.
+ * - `started`: the tool is auto; the run happened. The agent says it is underway.
+ * - `approval`: the tool is approve; a request went to the team.
  * - `declined`: the tool is deny. The agent answers with the tool's reply.
  * - `needs_input`: something the workflow needs was not given. The agent asks for it.
- * - `unavailable`: the workflow is gone, off or paused. The agent hands the request to the team.
+ * - `unavailable`: the workflow is gone, off or paused. The agent hands it to the team.
  */
 export type AgentToolOutcome =
   | { readonly outcome: "started"; readonly run: WorkflowRun }
-  | { readonly outcome: "approval"; readonly proposal: Proposal }
+  | { readonly outcome: "approval"; readonly task: Task }
   | { readonly outcome: "declined"; readonly reply: string }
   | { readonly outcome: "needs_input"; readonly missing: readonly WorkflowInputDef[] }
   | { readonly outcome: "unavailable"; readonly reason: string };
 
 export const startFromAgentTool = async (
   starter: Starter,
-  request: {
-    readonly agent: AgentSpec;
-    readonly tool: AgentTool;
-    readonly inputs?: Readonly<Record<string, unknown>>;
-    readonly conversation?: string;
-  },
+  request: { readonly agent: AgentSpec; readonly tool: AgentTool; readonly inputs?: Readonly<Record<string, unknown>>; readonly conversation?: string },
 ): Promise<AgentToolOutcome> => {
   const { env } = starter;
   const { agent, tool } = request;
@@ -109,21 +94,24 @@ export const startFromAgentTool = async (
   const inputs = Object.fromEntries(Object.entries(given).filter(([name]) => known.has(name)));
 
   if (tool.mode === "approve") {
-    const proposal: Proposal = {
+    const task: Task = {
       id: env.newId(),
-      kind: "workflow_start",
-      agent: agent.id,
       workflow: workflow.id,
-      ...(request.conversation ? { conversation: request.conversation } : {}),
-      intent: { workflow: workflow.id, inputs },
+      workflowName: workflow.name,
+      action: "run_workflow.start",
+      base: "run_workflow",
       title: `Start "${workflow.name}"${Object.keys(inputs).length > 0 ? ` (${Object.entries(inputs).map(([name, value]) => `${name}: ${String(value)}`).join(", ")})` : ""}`,
+      status: "waiting_approval",
+      body: { kind: "notice", text: `${agent.name} asked to start it.` },
+      agent: agent.id,
+      pending: { workflow: workflow.id, inputs, ...(request.conversation ? { conversation: request.conversation } : {}) },
+      links: {},
       reason: `${agent.name} asked to start it.`,
-      status: "waiting",
       createdAt: new Date(env.now()).toISOString(),
     };
-    await env.proposals.put(proposal);
-    env.onEvent?.({ type: "proposal.created", proposal: proposal.id, kind: proposal.kind, workflow: workflow.id, agent: agent.id });
-    return { outcome: "approval", proposal };
+    await env.tasks.put(task);
+    env.onEvent?.({ type: "task.waiting", task: task.id, workflow: workflow.id, agent: agent.id });
+    return { outcome: "approval", task };
   }
 
   if (!workflow.enabled || workflow.parked) return { outcome: "unavailable", reason: workflow.parked?.reason ?? `"${workflow.name}" is turned off.` };

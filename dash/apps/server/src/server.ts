@@ -60,6 +60,7 @@ import {
   createRecordReader,
   describeFields,
   fetchPublicDocument,
+  guardedFetch,
   Keeper,
   KeyStore,
   MemoryShapeStore,
@@ -133,19 +134,26 @@ import type { PartRegistry } from "@freebirdai/dash-parts";
 import { partsRoutes } from "./routes/parts.js";
 import { agentRoutes } from "./routes/agents.js";
 import { workflowRoutes } from "./routes/workflows.js";
-import { ProposalService } from "./workflows/proposals.js";
+import { explainDraft } from "./workflows/draft.js";
+import { WorkflowEngine } from "./workflows/engine.js";
 import { WorkflowRunner } from "./workflows/runner.js";
 import { WorkflowService } from "./workflows/service.js";
 import { startFromAgentTool, type Starter } from "./workflows/start.js";
+import { TaskService } from "./workflows/tasks.js";
+import { TemplateService } from "./workflows/templates.js";
 import {
   MemoryCalendarStore,
-  MemoryProposalStore,
+  MemoryCaseStore,
+  MemoryTaskStore,
+  MemoryTemplateStore,
   MemoryWorkflowStore,
   type CalendarStore,
-  type ProposalStore,
+  type CaseStore,
+  type TaskStore,
+  type TemplateStore,
   type WorkflowStore,
 } from "./workflows/store.js";
-import type { WorkflowEnv } from "./workflows/env.js";
+import type { OutreachSender, WorkflowEnv } from "./workflows/env.js";
 import { AgentService } from "./agents/service.js";
 import { MemoryAgentStore, type AgentStore } from "./agents/store.js";
 import { installIdentity } from "./identity/context.js";
@@ -381,13 +389,19 @@ export interface BuildServerOptions {
    */
   readonly agents?: AgentStore;
   /**
-   * Where this workspace's workflows, their runs and what each has acted on
-   * are kept; what waits for a person; and the calendar entries steps make
-   * (`workflows/store.ts`). Absent means in this process only.
+   * Where this workspace's workflows are kept, with their runs, cases (one
+   * record's way through a workflow), tasks (one record per action), calendar
+   * entries and templates (`workflows/store.ts`). Absent means in this process only.
    */
   readonly workflows?: WorkflowStore;
-  readonly proposals?: ProposalStore;
+  readonly cases?: CaseStore;
+  readonly tasks?: TaskStore;
   readonly calendar?: CalendarStore;
+  readonly templates?: TemplateStore;
+  /** Sends Outreach (texts, calls, email). Comms supplies it; absent, nothing leaves Dash and tasks say so. */
+  readonly outreach?: OutreachSender;
+  /** Where this server is reached from outside, for webhook addresses a Wait step hands out. */
+  readonly publicOrigin?: string;
   /**
    * The shape each endpoint was accepted in, and any change seen since
    * (`drift/`). Memory unless supplied: tests and embedders get a store that
@@ -952,9 +966,24 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   const workflowEnv: WorkflowEnv = {
     workspaceId: options.workspace?.id ?? LOCAL_WORKSPACE_ID,
     store: workflowStore,
-    proposals: options.proposals ?? new MemoryProposalStore(),
+    cases: options.cases ?? new MemoryCaseStore(),
+    tasks: options.tasks ?? new MemoryTaskStore(),
     calendar: options.calendar ?? new MemoryCalendarStore(),
+    templates: options.templates ?? new MemoryTemplateStore(),
     agents: agentStore,
+    ...(options.outreach ? { outreach: options.outreach } : {}),
+    /* A webhook goes through the same guard as every other request to an address someone typed. */
+    post: async (url, body) => {
+      const answer = await guardedFetch(url, { method: "POST", purpose: "write", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }, null);
+      let parsed: unknown = answer.text;
+      try {
+        parsed = JSON.parse(answer.text);
+      } catch {
+        /* Plain text stays text. */
+      }
+      return { status: answer.status, body: parsed };
+    },
+    ...(options.publicOrigin ? { publicOrigin: options.publicOrigin } : {}),
     policy,
     read: createRecordReader({ engine, store, entryOf: catalogEntryOf }),
     writes: {
@@ -972,7 +1001,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       return entity?.identity?.field;
     },
     connectionTitle: (id) => store.getConnection(id)?.title ?? id,
-    llm: () => resolveLlm("workflow"),
+    /* Each kind of call has its own model task; a step may name its own model (`task@model`). */
+    llm: (task, model) => resolveLlm(model ? `${task}@${model}` : task),
     withBudget: async (run) => {
       enterTurnBudget(turnCeilingUsd());
       return run();
@@ -981,9 +1011,12 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     now: () => Date.now(),
     newId: () => randomUUID(),
   };
+  const workflowHolder = `${process.pid}-${randomUUID()}`;
+  const workflowEngine = new WorkflowEngine({ env: workflowEnv, holder: workflowHolder, ...(options.leases ? { leases: options.leases } : {}) });
   const workflowStarter: Starter = {
     env: workflowEnv,
-    holder: `${process.pid}-${randomUUID()}`,
+    engine: workflowEngine,
+    holder: workflowHolder,
     ...(options.leases ? { leases: options.leases } : {}),
   };
   const workflows = new WorkflowService({
@@ -992,12 +1025,23 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     agents: { list: () => agentStore.list() },
     hasConnection: (id) => store.getConnection(id) !== null,
   });
-  const proposals = new ProposalService(workflowStarter);
+  const workflowTasks = new TaskService(workflowStarter);
+  const workflowTemplates = new TemplateService({ templates: workflowEnv.templates, workflows: workflowStore, newId: () => randomUUID() });
   void app.register(agentRoutes(agents, policy, () => resolveLlm("agent"), {
     useTool: (agent, tool, inputs, conversation) =>
       startFromAgentTool(workflowStarter, { agent, tool, inputs, ...(conversation ? { conversation } : {}) }),
   }));
-  void app.register(workflowRoutes({ workflows, proposals, starter: workflowStarter, policy, agents: () => agentStore.list() }));
+  void app.register(
+    workflowRoutes({
+      workflows,
+      tasks: workflowTasks,
+      templates: workflowTemplates,
+      starter: workflowStarter,
+      policy,
+      agents: () => agentStore.list(),
+      connectionTitle: (id) => store.getConnection(id)?.title ?? id,
+    }),
+  );
   const workflowRunner = new WorkflowRunner({ ...workflowStarter, log: { warn: (line) => app.log.warn(line) } });
   if (options.workflowRunner === true) workflowRunner.start();
   app.addHook("onClose", async () => workflowRunner.stop());
@@ -3302,9 +3346,20 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           },
           workflows: {
             roster: await workflows.list(),
+            templates: await workflowTemplates.list(),
             mayManage: async (principal) => (await policy.can(principal, "workflows.manage", {})).ok,
+            explain: async (principal, workflow) =>
+              explainDraft(workflows, principal, workflow, await agentStore.list(), { connection: (id) => store.getConnection(id)?.title ?? id }),
             create: (principal, input) => workflows.create(principal, input),
             update: (principal, id, input) => workflows.update(principal, id, input),
+            saveTemplate: (input) => workflowTemplates.saveFrom(input),
+            fromTemplate: async (principal, id, values, name) => {
+              const { input, template } = await workflowTemplates.workflowFrom(id, values, name);
+              const made = await workflows.create(principal, input);
+              const marked = { ...made, fromTemplate: { id: template.id, version: template.version } };
+              await workflowStore.put(marked);
+              return marked;
+            },
           },
           changes: {
             prepare: (principal, intent, sessionId) =>

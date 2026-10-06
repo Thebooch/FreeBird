@@ -1,78 +1,115 @@
 import {
   calendarEventSchema,
-  proposalSchema,
+  taskSchema,
+  workflowCaseSchema,
   workflowRunSchema,
   workflowSchema,
+  workflowTemplateSchema,
   type CalendarEvent,
-  type Proposal,
-  type ProposalStatus,
+  type CaseStatus,
+  type Task,
+  type TaskStatus,
+  type WorkflowCase,
   type WorkflowRun,
   type WorkflowSpec,
+  type WorkflowTemplate,
 } from "@freebirdai/dash-spec";
 import { sql } from "kysely";
 import type { DashDb } from "../platform/db.js";
 
 /**
- * Where a workspace's workflows, their runs and what each has already acted
- * on are kept (`@freebirdai/dash-spec` `workflow.ts`); and, beside them, what
- * waits for a person (proposals) and the calendar entries steps make.
+ * Where a workspace's workflows are kept, with everything they make: runs,
+ * cases (one record's way through a workflow), tasks (one record per action),
+ * calendar entries and templates.
  *
  * Plug-in points like the others: memory for tests and embedders, Dash's
  * database in the open-source build. One store answers for one workspace.
  */
 
-/**
- * The key a workflow's first look at an API is marked done under. A real row
- * never has an empty key — a row without one is skipped — so it cannot clash.
- */
+/** The key a workflow's first look at an API is marked done under. A real row never has an empty key. */
 export const SEEDED_KEY = "";
 
+/** What a workflow has seen of one record: its fingerprint, how many cases it opened, and when last. */
+export interface FiredRow {
+  readonly fingerprint: string;
+  readonly count: number;
+  readonly lastAt?: string | undefined;
+}
+
 export interface WorkflowStore {
-  /** Every workflow, in the order they were made. */
   list(): Promise<WorkflowSpec[]>;
   get(id: string): Promise<WorkflowSpec | null>;
   put(workflow: WorkflowSpec): Promise<void>;
-  /** Removes the workflow and what it had acted on. Its runs stay, as history. */
   delete(id: string): Promise<void>;
 
   putRun(run: WorkflowRun): Promise<void>;
-  /** Newest first: every workflow's, or one's. */
+  /** Newest first. */
   runs(options?: { readonly workflow?: string; readonly limit?: number }): Promise<WorkflowRun[]>;
 
-  /**
-   * What a workflow has already seen or acted on, by row key, with each row's
-   * fingerprint. An API trigger keeps every row it has seen, to tell new rows
-   * and changed ones from the rest; `once: "per-row"` keeps the rows it acted on.
-   */
-  fired(workflow: string): Promise<Map<string, string>>;
-  markFired(workflow: string, rows: ReadonlyArray<{ readonly key: string; readonly fingerprint: string }>, at: string): Promise<void>;
+  fired(workflow: string): Promise<Map<string, FiredRow>>;
+  markFired(workflow: string, rows: ReadonlyArray<{ readonly key: string } & FiredRow>): Promise<void>;
   unfire(workflow: string, keys: readonly string[]): Promise<void>;
-  /** Forget everything it has seen: its trigger or what it reads changed. */
   clearFired(workflow: string): Promise<void>;
 }
 
-export interface ProposalStore {
-  put(proposal: Proposal): Promise<void>;
-  get(id: string): Promise<Proposal | null>;
+/** A write whose revision is not the stored one: somebody else moved the case on first. */
+export class RevisionConflict extends Error {
+  constructor(readonly caseId: string) {
+    super(`Case ${caseId} changed underneath this write.`);
+    this.name = "RevisionConflict";
+  }
+}
+
+export interface CaseStore {
+  get(id: string): Promise<WorkflowCase | null>;
+  /**
+   * Save a case. `expected` is the revision it was read at (absent for a new
+   * one); the stored revision must match or the write is refused. The saved
+   * case comes back with its revision moved on.
+   */
+  put(one: WorkflowCase, expected?: number): Promise<WorkflowCase>;
   /** Newest first. */
-  list(options?: { readonly status?: ProposalStatus; readonly workflow?: string; readonly limit?: number }): Promise<Proposal[]>;
+  list(options?: { readonly workflow?: string; readonly status?: CaseStatus; readonly limit?: number }): Promise<WorkflowCase[]>;
+  /** Cases waiting on this key. */
+  waitingOn(key: string): Promise<WorkflowCase[]>;
+  /** Waiting cases whose deadline has passed. */
+  overdue(now: string): Promise<WorkflowCase[]>;
+  /** Waiting cases that watch a record for a change. */
+  watchingRecords(): Promise<WorkflowCase[]>;
+}
+
+export interface TaskStore {
+  put(task: Task): Promise<void>;
+  get(id: string): Promise<Task | null>;
+  /** Newest first. */
+  list(options?: { readonly status?: TaskStatus; readonly workflow?: string; readonly case?: string; readonly limit?: number }): Promise<Task[]>;
 }
 
 export interface CalendarStore {
   put(event: CalendarEvent): Promise<void>;
+  delete(id: string): Promise<void>;
   /** In time order. */
   list(options?: { readonly from?: string; readonly to?: string; readonly limit?: number }): Promise<CalendarEvent[]>;
 }
 
-const byCreation = (a: WorkflowSpec, b: WorkflowSpec): number => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
-const limitOf = (limit: number | undefined, fallback = 50): number => Math.min(Math.max(limit ?? fallback, 1), 500);
+export interface TemplateStore {
+  list(): Promise<WorkflowTemplate[]>;
+  get(id: string): Promise<WorkflowTemplate | null>;
+  put(template: WorkflowTemplate): Promise<void>;
+  delete(id: string): Promise<void>;
+}
+
+const byCreation = (a: { createdAt: string; id: string }, b: { createdAt: string; id: string }): number =>
+  a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+const limitOf = (limit: number | undefined, fallback = 50): number => Math.min(Math.max(limit ?? fallback, 1), 1000);
+const newestFirst = <T extends { id: string }>(at: (one: T) => string) => (a: T, b: T) => at(b).localeCompare(at(a)) || b.id.localeCompare(a.id);
 
 /* ── memory ────────────────────────────────────────────────────────────── */
 
 export class MemoryWorkflowStore implements WorkflowStore {
   private readonly rows = new Map<string, WorkflowSpec>();
   private readonly runRows = new Map<string, WorkflowRun>();
-  private readonly seen = new Map<string, Map<string, string>>();
+  private readonly seen = new Map<string, Map<string, FiredRow>>();
 
   async list(): Promise<WorkflowSpec[]> {
     return [...this.rows.values()].sort(byCreation);
@@ -93,15 +130,15 @@ export class MemoryWorkflowStore implements WorkflowStore {
   async runs(options: { workflow?: string; limit?: number } = {}): Promise<WorkflowRun[]> {
     return [...this.runRows.values()]
       .filter((run) => options.workflow === undefined || run.workflow === options.workflow)
-      .sort((a, b) => b.startedAt.localeCompare(a.startedAt) || b.id.localeCompare(a.id))
+      .sort(newestFirst((run) => run.startedAt))
       .slice(0, limitOf(options.limit));
   }
-  async fired(workflow: string): Promise<Map<string, string>> {
+  async fired(workflow: string): Promise<Map<string, FiredRow>> {
     return new Map(this.seen.get(workflow) ?? []);
   }
-  async markFired(workflow: string, rows: ReadonlyArray<{ key: string; fingerprint: string }>, _at?: string): Promise<void> {
-    const held = this.seen.get(workflow) ?? new Map<string, string>();
-    for (const row of rows) held.set(row.key, row.fingerprint);
+  async markFired(workflow: string, rows: ReadonlyArray<{ key: string } & FiredRow>): Promise<void> {
+    const held = this.seen.get(workflow) ?? new Map<string, FiredRow>();
+    for (const { key, ...row } of rows) held.set(key, row);
     this.seen.set(workflow, held);
   }
   async unfire(workflow: string, keys: readonly string[]): Promise<void> {
@@ -113,19 +150,54 @@ export class MemoryWorkflowStore implements WorkflowStore {
   }
 }
 
-export class MemoryProposalStore implements ProposalStore {
-  private readonly rows = new Map<string, Proposal>();
-  async put(proposal: Proposal): Promise<void> {
-    this.rows.set(proposal.id, proposalSchema.parse(proposal));
-  }
-  async get(id: string): Promise<Proposal | null> {
+export class MemoryCaseStore implements CaseStore {
+  private readonly rows = new Map<string, WorkflowCase>();
+  async get(id: string): Promise<WorkflowCase | null> {
     return this.rows.get(id) ?? null;
   }
-  async list(options: { status?: ProposalStatus; workflow?: string; limit?: number } = {}): Promise<Proposal[]> {
+  async put(one: WorkflowCase, expected?: number): Promise<WorkflowCase> {
+    const held = this.rows.get(one.id);
+    if (held && held.revision !== expected) throw new RevisionConflict(one.id);
+    if (!held && expected !== undefined) throw new RevisionConflict(one.id);
+    const next = workflowCaseSchema.parse({ ...one, revision: (held?.revision ?? -1) + 1 });
+    this.rows.set(one.id, next);
+    return next;
+  }
+  async list(options: { workflow?: string; status?: CaseStatus; limit?: number } = {}): Promise<WorkflowCase[]> {
     return [...this.rows.values()]
-      .filter((one) => (options.status === undefined || one.status === options.status) && (options.workflow === undefined || one.workflow === options.workflow))
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
-      .slice(0, limitOf(options.limit));
+      .filter((one) => (options.workflow === undefined || one.workflow === options.workflow) && (options.status === undefined || one.status === options.status))
+      .sort(newestFirst((one) => one.startedAt))
+      .slice(0, limitOf(options.limit, 200));
+  }
+  async waitingOn(key: string): Promise<WorkflowCase[]> {
+    return [...this.rows.values()].filter((one) => one.status === "waiting" && one.waiting?.key === key);
+  }
+  async overdue(now: string): Promise<WorkflowCase[]> {
+    return [...this.rows.values()].filter((one) => one.status === "waiting" && one.waiting?.deadline !== undefined && one.waiting.deadline <= now);
+  }
+  async watchingRecords(): Promise<WorkflowCase[]> {
+    return [...this.rows.values()].filter((one) => one.status === "waiting" && one.waiting?.kind === "record_change");
+  }
+}
+
+export class MemoryTaskStore implements TaskStore {
+  private readonly rows = new Map<string, Task>();
+  async put(task: Task): Promise<void> {
+    this.rows.set(task.id, taskSchema.parse(task));
+  }
+  async get(id: string): Promise<Task | null> {
+    return this.rows.get(id) ?? null;
+  }
+  async list(options: { status?: TaskStatus; workflow?: string; case?: string; limit?: number } = {}): Promise<Task[]> {
+    return [...this.rows.values()]
+      .filter(
+        (one) =>
+          (options.status === undefined || one.status === options.status) &&
+          (options.workflow === undefined || one.workflow === options.workflow) &&
+          (options.case === undefined || one.case === options.case),
+      )
+      .sort(newestFirst((one) => one.finishedAt ?? one.createdAt))
+      .slice(0, limitOf(options.limit, 200));
   }
 }
 
@@ -133,6 +205,9 @@ export class MemoryCalendarStore implements CalendarStore {
   private readonly rows = new Map<string, CalendarEvent>();
   async put(event: CalendarEvent): Promise<void> {
     this.rows.set(event.id, calendarEventSchema.parse(event));
+  }
+  async delete(id: string): Promise<void> {
+    this.rows.delete(id);
   }
   async list(options: { from?: string; to?: string; limit?: number } = {}): Promise<CalendarEvent[]> {
     return [...this.rows.values()]
@@ -142,140 +217,212 @@ export class MemoryCalendarStore implements CalendarStore {
   }
 }
 
+export class MemoryTemplateStore implements TemplateStore {
+  private readonly rows = new Map<string, WorkflowTemplate>();
+  async list(): Promise<WorkflowTemplate[]> {
+    return [...this.rows.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+  async get(id: string): Promise<WorkflowTemplate | null> {
+    return this.rows.get(id) ?? null;
+  }
+  async put(template: WorkflowTemplate): Promise<void> {
+    this.rows.set(template.id, workflowTemplateSchema.parse(template));
+  }
+  async delete(id: string): Promise<void> {
+    this.rows.delete(id);
+  }
+}
+
 /* ── Dash's database ───────────────────────────────────────────────────── */
 
 const parsed = (value: unknown): unknown => (typeof value === "string" ? JSON.parse(value) : value);
 
-export class DbWorkflowStore implements WorkflowStore {
+/** One JSON record per row, by workspace and id: workflows and templates. */
+class DbRecords<T extends { id: string }> {
   constructor(
     private readonly db: DashDb,
-    private readonly workspace = "local",
+    private readonly workspace: string,
+    private readonly table: "dash_workflows" | "dash_workflow_templates",
+    private readonly parse: (value: unknown) => T,
   ) {}
-
-  async list(): Promise<WorkflowSpec[]> {
-    const result = await sql<{ record: unknown }>`
-      SELECT record FROM dash_workflows WHERE workspace = ${this.workspace}
-    `.execute(this.db.kysely);
-    return result.rows.map((row) => workflowSchema.parse(parsed(row.record))).sort(byCreation);
+  async list(): Promise<T[]> {
+    const result = await sql<{ record: unknown }>`SELECT record FROM ${sql.table(this.table)} WHERE workspace = ${this.workspace}`.execute(this.db.kysely);
+    return result.rows.map((row) => this.parse(parsed(row.record)));
   }
-
-  async get(id: string): Promise<WorkflowSpec | null> {
-    const result = await sql<{ record: unknown }>`
-      SELECT record FROM dash_workflows WHERE workspace = ${this.workspace} AND id = ${id}
-    `.execute(this.db.kysely);
+  async get(id: string): Promise<T | null> {
+    const result = await sql<{ record: unknown }>`SELECT record FROM ${sql.table(this.table)} WHERE workspace = ${this.workspace} AND id = ${id}`.execute(this.db.kysely);
     const row = result.rows[0];
-    return row ? workflowSchema.parse(parsed(row.record)) : null;
+    return row ? this.parse(parsed(row.record)) : null;
   }
-
-  async put(workflow: WorkflowSpec): Promise<void> {
-    const one = workflowSchema.parse(workflow);
+  async put(one: T): Promise<void> {
     await sql`
-      INSERT INTO dash_workflows (workspace, id, record) VALUES (${this.workspace}, ${one.id}, ${JSON.stringify(one)}::jsonb)
+      INSERT INTO ${sql.table(this.table)} (workspace, id, record) VALUES (${this.workspace}, ${one.id}, ${JSON.stringify(one)}::jsonb)
       ON CONFLICT (workspace, id) DO UPDATE SET record = EXCLUDED.record
     `.execute(this.db.kysely);
   }
-
   async delete(id: string): Promise<void> {
-    await sql`DELETE FROM dash_workflows WHERE workspace = ${this.workspace} AND id = ${id}`.execute(this.db.kysely);
+    await sql`DELETE FROM ${sql.table(this.table)} WHERE workspace = ${this.workspace} AND id = ${id}`.execute(this.db.kysely);
+  }
+}
+
+export class DbWorkflowStore implements WorkflowStore {
+  private readonly records: DbRecords<WorkflowSpec>;
+  constructor(
+    private readonly db: DashDb,
+    private readonly workspace = "local",
+  ) {
+    this.records = new DbRecords(db, workspace, "dash_workflows", (value) => workflowSchema.parse(value));
+  }
+  async list(): Promise<WorkflowSpec[]> {
+    return (await this.records.list()).sort(byCreation);
+  }
+  get(id: string): Promise<WorkflowSpec | null> {
+    return this.records.get(id);
+  }
+  put(workflow: WorkflowSpec): Promise<void> {
+    return this.records.put(workflowSchema.parse(workflow));
+  }
+  async delete(id: string): Promise<void> {
+    await this.records.delete(id);
     await this.clearFired(id);
   }
-
   async putRun(run: WorkflowRun): Promise<void> {
     const one = workflowRunSchema.parse(run);
     await sql`
-      INSERT INTO dash_workflow_runs
-        (workspace, id, workflow, agent, trigger_kind, started_at, finished_at, status, matched, summary, outputs, error, record)
-      VALUES (${this.workspace}, ${one.id}, ${one.workflow}, ${one.agent ?? null}, ${one.start.kind}, ${one.startedAt},
-              ${one.finishedAt ?? null}, ${one.status}, ${one.matched}, ${one.summary}, ${JSON.stringify(one.outputs)}::jsonb,
-              ${one.error ?? null}, ${JSON.stringify(one)}::jsonb)
-      ON CONFLICT (workspace, id) DO UPDATE SET
-        agent = EXCLUDED.agent, finished_at = EXCLUDED.finished_at, status = EXCLUDED.status, matched = EXCLUDED.matched,
-        summary = EXCLUDED.summary, outputs = EXCLUDED.outputs, error = EXCLUDED.error, record = EXCLUDED.record
+      INSERT INTO dash_workflow_runs (workspace, id, workflow, started_at, status, record)
+      VALUES (${this.workspace}, ${one.id}, ${one.workflow}, ${one.startedAt}, ${one.status}, ${JSON.stringify(one)}::jsonb)
+      ON CONFLICT (workspace, id) DO UPDATE SET status = EXCLUDED.status, record = EXCLUDED.record
     `.execute(this.db.kysely);
   }
-
   async runs(options: { workflow?: string; limit?: number } = {}): Promise<WorkflowRun[]> {
-    const limit = limitOf(options.limit);
-    const result = options.workflow
-      ? await sql<{ record: unknown }>`
-          SELECT record FROM dash_workflow_runs WHERE workspace = ${this.workspace} AND workflow = ${options.workflow}
-          ORDER BY started_at DESC, id DESC LIMIT ${limit}
-        `.execute(this.db.kysely)
-      : await sql<{ record: unknown }>`
-          SELECT record FROM dash_workflow_runs WHERE workspace = ${this.workspace}
-          ORDER BY started_at DESC, id DESC LIMIT ${limit}
-        `.execute(this.db.kysely);
+    const result = await sql<{ record: unknown }>`
+      SELECT record FROM dash_workflow_runs
+      WHERE workspace = ${this.workspace} AND (${options.workflow ?? null}::text IS NULL OR workflow = ${options.workflow ?? null})
+      ORDER BY started_at DESC, id DESC LIMIT ${limitOf(options.limit)}
+    `.execute(this.db.kysely);
     return result.rows.map((row) => workflowRunSchema.parse(parsed(row.record)));
   }
-
-  async fired(workflow: string): Promise<Map<string, string>> {
-    const result = await sql<{ row_key: string; fingerprint: string }>`
-      SELECT row_key, fingerprint FROM dash_workflow_fired WHERE workspace = ${this.workspace} AND workflow = ${workflow}
+  async fired(workflow: string): Promise<Map<string, FiredRow>> {
+    const result = await sql<{ row_key: string; fingerprint: string; fire_count: number; last_at: string | null }>`
+      SELECT row_key, fingerprint, fire_count, last_at FROM dash_workflow_fired WHERE workspace = ${this.workspace} AND workflow = ${workflow}
     `.execute(this.db.kysely);
-    return new Map(result.rows.map((row) => [row.row_key, row.fingerprint]));
+    return new Map(result.rows.map((row) => [row.row_key, { fingerprint: row.fingerprint, count: Number(row.fire_count), ...(row.last_at ? { lastAt: row.last_at } : {}) }]));
   }
-
-  async markFired(workflow: string, rows: ReadonlyArray<{ key: string; fingerprint: string }>, at: string): Promise<void> {
+  async markFired(workflow: string, rows: ReadonlyArray<{ key: string } & FiredRow>): Promise<void> {
     for (const row of rows) {
       await sql`
-        INSERT INTO dash_workflow_fired (workspace, workflow, row_key, fingerprint, fired_at)
-        VALUES (${this.workspace}, ${workflow}, ${row.key}, ${row.fingerprint}, ${at})
-        ON CONFLICT (workspace, workflow, row_key) DO UPDATE SET fingerprint = EXCLUDED.fingerprint, fired_at = EXCLUDED.fired_at
+        INSERT INTO dash_workflow_fired (workspace, workflow, row_key, fingerprint, fire_count, last_at)
+        VALUES (${this.workspace}, ${workflow}, ${row.key}, ${row.fingerprint}, ${row.count}, ${row.lastAt ?? null})
+        ON CONFLICT (workspace, workflow, row_key) DO UPDATE SET fingerprint = EXCLUDED.fingerprint, fire_count = EXCLUDED.fire_count, last_at = EXCLUDED.last_at
       `.execute(this.db.kysely);
     }
   }
-
   async unfire(workflow: string, keys: readonly string[]): Promise<void> {
     for (const key of keys) {
-      await sql`
-        DELETE FROM dash_workflow_fired WHERE workspace = ${this.workspace} AND workflow = ${workflow} AND row_key = ${key}
-      `.execute(this.db.kysely);
+      await sql`DELETE FROM dash_workflow_fired WHERE workspace = ${this.workspace} AND workflow = ${workflow} AND row_key = ${key}`.execute(this.db.kysely);
     }
   }
-
   async clearFired(workflow: string): Promise<void> {
     await sql`DELETE FROM dash_workflow_fired WHERE workspace = ${this.workspace} AND workflow = ${workflow}`.execute(this.db.kysely);
   }
 }
 
-export class DbProposalStore implements ProposalStore {
+export class DbCaseStore implements CaseStore {
   constructor(
     private readonly db: DashDb,
     private readonly workspace = "local",
   ) {}
+  private parse(rows: Array<{ record: unknown }>): WorkflowCase[] {
+    return rows.map((row) => workflowCaseSchema.parse(parsed(row.record)));
+  }
+  async get(id: string): Promise<WorkflowCase | null> {
+    const result = await sql<{ record: unknown }>`SELECT record FROM dash_workflow_cases WHERE workspace = ${this.workspace} AND id = ${id}`.execute(this.db.kysely);
+    return this.parse(result.rows)[0] ?? null;
+  }
+  async put(one: WorkflowCase, expected?: number): Promise<WorkflowCase> {
+    const next = workflowCaseSchema.parse({ ...one, revision: expected === undefined ? 0 : expected + 1 });
+    const columns = {
+      status: next.status,
+      waitKey: next.status === "waiting" ? (next.waiting?.key ?? null) : null,
+      waitKind: next.status === "waiting" ? (next.waiting?.kind ?? null) : null,
+      deadline: next.status === "waiting" ? (next.waiting?.deadline ?? null) : null,
+    };
+    if (expected === undefined) {
+      const result = await sql`
+        INSERT INTO dash_workflow_cases (workspace, id, workflow, status, wait_key, wait_kind, deadline, started_at, revision, record)
+        VALUES (${this.workspace}, ${next.id}, ${next.workflow}, ${columns.status}, ${columns.waitKey}, ${columns.waitKind}, ${columns.deadline},
+                ${next.startedAt}, ${next.revision}, ${JSON.stringify(next)}::jsonb)
+        ON CONFLICT (workspace, id) DO NOTHING
+      `.execute(this.db.kysely);
+      if (Number(result.numAffectedRows ?? 1) === 0) throw new RevisionConflict(next.id);
+      return next;
+    }
+    const result = await sql`
+      UPDATE dash_workflow_cases SET status = ${columns.status}, wait_key = ${columns.waitKey}, wait_kind = ${columns.waitKind},
+        deadline = ${columns.deadline}, revision = ${next.revision}, record = ${JSON.stringify(next)}::jsonb
+      WHERE workspace = ${this.workspace} AND id = ${next.id} AND revision = ${expected}
+    `.execute(this.db.kysely);
+    if (Number(result.numAffectedRows ?? 0) === 0) throw new RevisionConflict(next.id);
+    return next;
+  }
+  async list(options: { workflow?: string; status?: CaseStatus; limit?: number } = {}): Promise<WorkflowCase[]> {
+    const result = await sql<{ record: unknown }>`
+      SELECT record FROM dash_workflow_cases
+      WHERE workspace = ${this.workspace}
+        AND (${options.workflow ?? null}::text IS NULL OR workflow = ${options.workflow ?? null})
+        AND (${options.status ?? null}::text IS NULL OR status = ${options.status ?? null})
+      ORDER BY started_at DESC, id DESC LIMIT ${limitOf(options.limit, 200)}
+    `.execute(this.db.kysely);
+    return this.parse(result.rows);
+  }
+  async waitingOn(key: string): Promise<WorkflowCase[]> {
+    const result = await sql<{ record: unknown }>`
+      SELECT record FROM dash_workflow_cases WHERE workspace = ${this.workspace} AND status = 'waiting' AND wait_key = ${key}
+    `.execute(this.db.kysely);
+    return this.parse(result.rows);
+  }
+  async overdue(now: string): Promise<WorkflowCase[]> {
+    const result = await sql<{ record: unknown }>`
+      SELECT record FROM dash_workflow_cases WHERE workspace = ${this.workspace} AND status = 'waiting' AND deadline IS NOT NULL AND deadline <= ${now}
+    `.execute(this.db.kysely);
+    return this.parse(result.rows);
+  }
+  async watchingRecords(): Promise<WorkflowCase[]> {
+    const result = await sql<{ record: unknown }>`
+      SELECT record FROM dash_workflow_cases WHERE workspace = ${this.workspace} AND status = 'waiting' AND wait_kind = 'record_change'
+    `.execute(this.db.kysely);
+    return this.parse(result.rows);
+  }
+}
 
-  async put(proposal: Proposal): Promise<void> {
-    const one = proposalSchema.parse(proposal);
+export class DbTaskStore implements TaskStore {
+  constructor(
+    private readonly db: DashDb,
+    private readonly workspace = "local",
+  ) {}
+  async put(task: Task): Promise<void> {
+    const one = taskSchema.parse(task);
     await sql`
-      INSERT INTO dash_proposals
-        (workspace, id, kind, agent, workflow, run, conversation, intent, reason, status, created_at, decided_at, decided_by, journal_id, record)
-      VALUES (${this.workspace}, ${one.id}, ${one.kind}, ${one.agent ?? null}, ${one.workflow ?? null}, ${one.run ?? null},
-              ${one.conversation ?? null}, ${JSON.stringify(one.intent)}::jsonb, ${one.reason}, ${one.status}, ${one.createdAt},
-              ${one.decidedAt ?? null}, ${one.decidedBy ?? null}, ${one.journalId ?? null}, ${JSON.stringify(one)}::jsonb)
-      ON CONFLICT (workspace, id) DO UPDATE SET
-        status = EXCLUDED.status, decided_at = EXCLUDED.decided_at, decided_by = EXCLUDED.decided_by,
-        journal_id = EXCLUDED.journal_id, record = EXCLUDED.record
+      INSERT INTO dash_tasks (workspace, id, workflow, case_id, status, at, record)
+      VALUES (${this.workspace}, ${one.id}, ${one.workflow ?? null}, ${one.case ?? null}, ${one.status}, ${one.finishedAt ?? one.createdAt}, ${JSON.stringify(one)}::jsonb)
+      ON CONFLICT (workspace, id) DO UPDATE SET status = EXCLUDED.status, at = EXCLUDED.at, record = EXCLUDED.record
     `.execute(this.db.kysely);
   }
-
-  async get(id: string): Promise<Proposal | null> {
-    const result = await sql<{ record: unknown }>`
-      SELECT record FROM dash_proposals WHERE workspace = ${this.workspace} AND id = ${id}
-    `.execute(this.db.kysely);
+  async get(id: string): Promise<Task | null> {
+    const result = await sql<{ record: unknown }>`SELECT record FROM dash_tasks WHERE workspace = ${this.workspace} AND id = ${id}`.execute(this.db.kysely);
     const row = result.rows[0];
-    return row ? proposalSchema.parse(parsed(row.record)) : null;
+    return row ? taskSchema.parse(parsed(row.record)) : null;
   }
-
-  async list(options: { status?: ProposalStatus; workflow?: string; limit?: number } = {}): Promise<Proposal[]> {
-    const limit = limitOf(options.limit);
+  async list(options: { status?: TaskStatus; workflow?: string; case?: string; limit?: number } = {}): Promise<Task[]> {
     const result = await sql<{ record: unknown }>`
-      SELECT record FROM dash_proposals
+      SELECT record FROM dash_tasks
       WHERE workspace = ${this.workspace}
         AND (${options.status ?? null}::text IS NULL OR status = ${options.status ?? null})
         AND (${options.workflow ?? null}::text IS NULL OR workflow = ${options.workflow ?? null})
-      ORDER BY created_at DESC, id DESC LIMIT ${limit}
+        AND (${options.case ?? null}::text IS NULL OR case_id = ${options.case ?? null})
+      ORDER BY at DESC, id DESC LIMIT ${limitOf(options.limit, 200)}
     `.execute(this.db.kysely);
-    return result.rows.map((row) => proposalSchema.parse(parsed(row.record)));
+    return result.rows.map((row) => taskSchema.parse(parsed(row.record)));
   }
 }
 
@@ -284,7 +431,6 @@ export class DbCalendarStore implements CalendarStore {
     private readonly db: DashDb,
     private readonly workspace = "local",
   ) {}
-
   async put(event: CalendarEvent): Promise<void> {
     const one = calendarEventSchema.parse(event);
     await sql`
@@ -292,16 +438,36 @@ export class DbCalendarStore implements CalendarStore {
       ON CONFLICT (workspace, id) DO UPDATE SET at = EXCLUDED.at, record = EXCLUDED.record
     `.execute(this.db.kysely);
   }
-
+  async delete(id: string): Promise<void> {
+    await sql`DELETE FROM dash_calendar_events WHERE workspace = ${this.workspace} AND id = ${id}`.execute(this.db.kysely);
+  }
   async list(options: { from?: string; to?: string; limit?: number } = {}): Promise<CalendarEvent[]> {
-    const limit = limitOf(options.limit, 200);
     const result = await sql<{ record: unknown }>`
       SELECT record FROM dash_calendar_events
       WHERE workspace = ${this.workspace}
         AND (${options.from ?? null}::text IS NULL OR at >= ${options.from ?? null})
         AND (${options.to ?? null}::text IS NULL OR at < ${options.to ?? null})
-      ORDER BY at, id LIMIT ${limit}
+      ORDER BY at, id LIMIT ${limitOf(options.limit, 200)}
     `.execute(this.db.kysely);
     return result.rows.map((row) => calendarEventSchema.parse(parsed(row.record)));
+  }
+}
+
+export class DbTemplateStore implements TemplateStore {
+  private readonly records: DbRecords<WorkflowTemplate>;
+  constructor(db: DashDb, workspace = "local") {
+    this.records = new DbRecords(db, workspace, "dash_workflow_templates", (value) => workflowTemplateSchema.parse(value));
+  }
+  async list(): Promise<WorkflowTemplate[]> {
+    return (await this.records.list()).sort((a, b) => a.name.localeCompare(b.name));
+  }
+  get(id: string): Promise<WorkflowTemplate | null> {
+    return this.records.get(id);
+  }
+  put(template: WorkflowTemplate): Promise<void> {
+    return this.records.put(workflowTemplateSchema.parse(template));
+  }
+  delete(id: string): Promise<void> {
+    return this.records.delete(id);
   }
 }

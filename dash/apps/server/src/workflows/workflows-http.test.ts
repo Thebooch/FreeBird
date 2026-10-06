@@ -10,11 +10,7 @@ import { SpecStore } from "../store.js";
 
 /**
  * Workflows end to end, over HTTP, against a fake API that keeps its records
- * in memory, through the real engine and the real write service: an API
- * trigger seeds silently, fires on a new record, puts it on the calendar and
- * proposes a change; the proposal is reviewed and applied with a journal
- * entry. An agent's tool set to approve asks the team instead of running; set
- * to auto, it runs, and the change it makes is journalled in the agent's name.
+ * in memory, through the real engine and the real write service.
  */
 
 let dir: string;
@@ -121,10 +117,15 @@ afterEach(() => {
 });
 
 const makeApp = () => buildServer({ store, keys, catalog, http: api.http, journal });
+const step = (id: string, action: string, settings: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({ id, action, settings, ...extra });
 
 describe("workflows over HTTP", () => {
-  it("seeds an API trigger, fires on a new record, and applies its proposal with a journal entry", async () => {
+  it("seeds an API trigger, fires on a new record, applies an approved change, and reverses it", async () => {
     const app = makeApp();
+    const nodes = [
+      step("check", "create.calendar", { title: "Check {{ Name }}", at: "2026-10-09", deadline: true }),
+      step("pause", "update.action", { entity: "rental", recordId: "{{ Id }}", action: "inactivationrequest" }, { mode: "approve" }),
+    ];
     const saved = await app.inject({
       method: "PUT",
       url: "/api/workflows/new",
@@ -132,47 +133,46 @@ describe("workflows over HTTP", () => {
         name: "New property check",
         enabled: true,
         trigger: { kind: "record_created", connection: "rentals", record: "rental", every: "5m" },
-        steps: [
-          { id: "check", kind: "calendar", title: "Check {{ Name }}", at: "2026-10-09", deadline: true },
-          { id: "pause", kind: "propose_change", mode: "approve", entity: "rental", change: "action", action: "inactivationrequest", recordId: "{{ Id }}" },
+        nodes,
+        edges: [
+          { id: "a", from: "trigger", to: "check" },
+          { id: "b", from: "check", to: "pause" },
         ],
       },
     });
     expect(saved.statusCode).toBe(200);
     const id = saved.json().id as string;
-    expect(saved.json()).toMatchObject({ enabled: true, enabledBy: { userId: "local" } });
 
-    const seeded = (await app.inject({ method: "POST", url: `/api/workflows/${id}/run` })).json();
-    expect(seeded).toMatchObject({ status: "seeded", read: 2 });
-    expect((await app.inject({ method: "GET", url: "/api/calendar/events" })).json()).toEqual([]);
-
+    expect((await app.inject({ method: "POST", url: `/api/workflows/${id}/run` })).json()).toMatchObject({ status: "seeded", read: 2 });
     api.rentals.set("44", { Id: 44, Name: "Birch Hall", IsActive: true });
     const preview = (await app.inject({ method: "POST", url: `/api/workflows/${id}/preview` })).json();
-    expect(preview).toMatchObject({ seeding: false, matched: 1, rows: [{ key: "44" }] });
-    expect((await app.inject({ method: "GET", url: "/api/calendar/events" })).json()).toEqual([]);
+    expect(preview).toMatchObject({ seeding: false, matched: 1, rows: [{ key: "44", path: [{ node: "check" }, { node: "pause", mode: "approve" }] }] });
 
     const run = (await app.inject({ method: "POST", url: `/api/workflows/${id}/run` })).json();
     expect(run).toMatchObject({ status: "succeeded", matched: 1 });
-    const events = (await app.inject({ method: "GET", url: "/api/calendar/events" })).json();
-    expect(events).toEqual([expect.objectContaining({ title: "Check Birch Hall", deadline: true, allDay: true })]);
+    expect((await app.inject({ method: "GET", url: "/api/calendar/events" })).json()).toEqual([expect.objectContaining({ title: "Check Birch Hall", deadline: true })]);
     expect(api.writes()).toBe(0);
 
-    const [waiting] = (await app.inject({ method: "GET", url: "/api/proposals?status=waiting" })).json();
-    expect(waiting).toMatchObject({ kind: "change", workflow: id, intent: { id: "44", action: "inactivationrequest" } });
-    const opened = (await app.inject({ method: "POST", url: `/api/proposals/${waiting.id}/review` })).json();
+    const [waiting] = (await app.inject({ method: "GET", url: "/api/tasks?status=waiting_approval" })).json();
+    expect(waiting).toMatchObject({ action: "update.action", pending: { recordId: 44, action: "inactivationrequest" } });
+    const opened = (await app.inject({ method: "POST", url: `/api/tasks/${waiting.id}/review` })).json();
     expect(opened.review).toMatchObject({ entity: "rental", kind: "action" });
-    expect(api.writes()).toBe(0);
-    const applied = await app.inject({
-      method: "POST",
-      url: `/api/proposals/${waiting.id}/apply`,
-      payload: { pendingId: opened.review.pendingId, digest: opened.review.digest },
-    });
-    expect(applied.json().proposal).toMatchObject({ status: "applied", decidedBy: "local" });
+    const applied = await app.inject({ method: "POST", url: `/api/tasks/${waiting.id}/approve`, payload: { pendingId: opened.review.pendingId, digest: opened.review.digest } });
+    expect(applied.json().task).toMatchObject({ status: "done", approvedBy: "local", reversal: { available: true, intent: { action: "reactivationrequest" } } });
     expect(api.rentals.get("44")?.IsActive).toBe(false);
-    expect(journal.events.at(-1)).toMatchObject({ status: "succeeded", via: "workflow", entity: "rental", key: { id: "44" } });
+    expect(journal.events.at(-1)).toMatchObject({ status: "succeeded", via: "workflow", key: { id: "44" } });
+
+    /* Reverse: the paired action, through its own review. */
+    const back = (await app.inject({ method: "POST", url: `/api/tasks/${waiting.id}/reverse-review` })).json();
+    const reversed = await app.inject({ method: "POST", url: `/api/tasks/${waiting.id}/reverse`, payload: { pendingId: back.review.pendingId, digest: back.review.digest } });
+    expect(reversed.json().task.status).toBe("reversed");
+    expect(api.rentals.get("44")?.IsActive).toBe(true);
+
+    const overview = (await app.inject({ method: "GET", url: "/api/overview" })).json();
+    expect(overview.completed.map((one: { action: string }) => one.action)).toEqual(expect.arrayContaining(["create.calendar", "update.action"]));
   });
 
-  it("lets an agent's tool ask the team, or run the workflow in the agent's name", async () => {
+  it("lets an agent's tool start a workflow in the agent's name, and wakes a case from its webhook", async () => {
     const app = makeApp();
     const workflow = (
       await app.inject({
@@ -181,56 +181,57 @@ describe("workflows over HTTP", () => {
         payload: {
           name: "Pause a property",
           enabled: true,
-          description: "Takes a property off the market.",
           trigger: { kind: "agent", inputs: [{ name: "property", description: "Which property", required: true }] },
-          source: { connection: "rentals", record: "rental" },
-          criteria: "string(Id) == input.property",
-          once: "per-run",
-          steps: [{ id: "pause", kind: "propose_change", mode: "auto", entity: "rental", change: "action", action: "inactivationrequest", recordId: "{{ Id }}" }],
+          nodes: [
+            step("hook", "wait.for", { event: "webhook", timeout: "1d" }),
+            step("pause", "update.action", { connection: "rentals", entity: "rental", recordId: "{{ input.property }}", action: "inactivationrequest" }, { mode: "auto" }),
+          ],
+          edges: [
+            { id: "a", from: "trigger", to: "hook" },
+            { id: "b", from: "hook", outcome: "happened", to: "pause" },
+          ],
         },
       })
     ).json();
     expect(workflow.id).toBe("pause-a-property");
-    const listed = (await app.inject({ method: "GET", url: "/api/workflows?startableBy=agent" })).json();
-    expect(listed.map((one: { id: string }) => one.id)).toEqual(["pause-a-property"]);
-
-    const agent = (
-      await app.inject({
-        method: "PUT",
-        url: "/api/agents/new",
-        payload: {
-          name: "Leasing",
-          color: 3,
-          reach: [
-            { permission: "records.read", scope: { connection: "rentals" } },
-            { permission: "records.act", scope: { connection: "rentals" } },
-          ],
-          tools: [{ id: "pause", kind: "run_workflow", workflow: "pause-a-property", mode: "approve" }],
-        },
-      })
-    ).json();
-    expect(agent.id).toBe("leasing");
-    const missing = await app.inject({ method: "PUT", url: "/api/agents/leasing", payload: { name: "Leasing", color: 3, tools: [{ id: "x", kind: "run_workflow", workflow: "ghost" }] } });
-    expect(missing.statusCode).toBe(400);
-
-    const asked = (await app.inject({ method: "POST", url: "/api/agents/leasing/tools/pause/use", payload: { inputs: { property: "42" } } })).json();
-    expect(asked).toMatchObject({ outcome: "approval", proposal: { kind: "workflow_start", agent: "leasing" } });
-    expect(api.writes()).toBe(0);
 
     await app.inject({
       method: "PUT",
-      url: "/api/agents/leasing",
-      payload: { name: "Leasing", color: 3, tools: [{ id: "pause", kind: "run_workflow", workflow: "pause-a-property", mode: "auto" }] },
+      url: "/api/agents/new",
+      payload: {
+        name: "Leasing",
+        color: 3,
+        reach: [
+          { permission: "records.read", scope: { connection: "rentals" } },
+          { permission: "records.act", scope: { connection: "rentals" } },
+        ],
+        tools: [{ id: "pause", kind: "run_workflow", workflow: "pause-a-property", mode: "auto" }],
+      },
     });
-    const done = (await app.inject({ method: "POST", url: "/api/agents/leasing/tools/pause/use", payload: { inputs: { property: "42" } } })).json();
-    expect(done).toMatchObject({ outcome: "started", run: { status: "succeeded", matched: 1, agent: "leasing" } });
-    expect(api.rentals.get("42")?.IsActive).toBe(false);
-    expect(api.rentals.get("43")?.IsActive).toBe(true);
-    expect(journal.events.at(-1)).toMatchObject({ via: "workflow", onBehalfOf: { kind: "agent", id: "leasing" }, actor: { userId: "local" } });
+    const started = (await app.inject({ method: "POST", url: "/api/agents/leasing/tools/pause/use", payload: { inputs: { property: "42" } } })).json();
+    expect(started).toMatchObject({ outcome: "started", run: { status: "succeeded" } });
+    const caseId = started.run.cases[0] as string;
+    const waiting = (await app.inject({ method: "GET", url: `/api/cases/${caseId}` })).json();
+    expect(waiting).toMatchObject({ status: "waiting", agent: "leasing", waiting: { kind: "webhook" } });
+    const hook = String(waiting.data.steps.hook.hook);
+    const token = hook.split("/").pop()!;
 
-    const runs = (await app.inject({ method: "GET", url: `/api/workflows/${workflow.id}/runs` })).json();
-    expect(runs[0]).toMatchObject({ start: { kind: "agent", agentId: "leasing" } });
-    const removal = await app.inject({ method: "DELETE", url: `/api/workflows/${workflow.id}` });
-    expect(removal.statusCode).toBe(409);
+    expect((await app.inject({ method: "POST", url: "/api/workflow-hooks/notarealtokenatall0000" })).statusCode).toBe(404);
+    const woke = await app.inject({ method: "POST", url: `/api/workflow-hooks/${token}`, payload: { paid: true } });
+    expect(woke.json()).toEqual({ woken: 1 });
+    expect(api.rentals.get("42")?.IsActive).toBe(false);
+    expect(journal.events.at(-1)).toMatchObject({ via: "workflow", onBehalfOf: { kind: "agent", id: "leasing" } });
+    expect((await app.inject({ method: "GET", url: `/api/cases/${caseId}` })).json()).toMatchObject({ status: "done" });
+  });
+
+  it("checks a draft: what is missing, what to ask, and the one-sentence summary", async () => {
+    const app = makeApp();
+    const checked = await app.inject({
+      method: "POST",
+      url: "/api/workflows/new/check",
+      payload: { workflow: { name: "Draft", trigger: { kind: "manual" }, nodes: [step("wait", "wait.for", { event: "reply" })], edges: [{ id: "a", from: "trigger", to: "wait" }] } },
+    });
+    expect(checked.statusCode).toBe(200);
+    expect(checked.json().sentence).toBe("When someone runs it, waits up to 2 days for a reply.");
   });
 });

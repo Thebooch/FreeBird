@@ -42,7 +42,7 @@ export const GUARDED_ROUTES: readonly GuardRule[] = [
   { methods: WRITE, path: /^\/api\/agent-knowledge(\/|$)/, permission: "agents.manage" },
   /* Workflows: making, changing, running and previewing them, and deciding what waits for a person. */
   { methods: WRITE, path: /^\/api\/workflows(\/|$)/, permission: "workflows.manage" },
-  { methods: WRITE, path: /^\/api\/proposals(\/|$)/, permission: "workflows.manage" },
+  { methods: WRITE, path: /^\/api\/(tasks|cases|workflow-templates|workflow-events)(\/|$)/, permission: "workflows.manage" },
   /* The parts a board is built from, and which models do what. */
   { methods: ["PUT", "DELETE"], path: /^\/api\/parts(\/|$)/, permission: "boards.edit" },
   { methods: ["PUT"], path: /^\/api\/models(\/|$)/, permission: "connections.manage" },

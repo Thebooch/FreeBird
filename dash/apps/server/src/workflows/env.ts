@@ -1,13 +1,13 @@
 import type { CommitResult, WriteIntent, WriteReview } from "@freebirdai/connect";
 import type { RecordReader, WriteOnBehalfOf, WriteVia } from "@freebirdai/connect/host";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
-import type { AgentSpec, Principal } from "@freebirdai/dash-spec";
+import type { ActionModelTask, AgentSpec, Principal, SharedAgentKnowledge } from "@freebirdai/dash-spec";
 import type { Policy } from "../identity/policy.js";
-import type { CalendarStore, ProposalStore, WorkflowStore } from "./store.js";
+import type { CalendarStore, CaseStore, TaskStore, TemplateStore, WorkflowStore } from "./store.js";
 
 /**
- * Everything a workflow run reaches for, in one place, so the runner, a
- * person's "Run now", an agent's tool and the tests all run the same code.
+ * Everything a workflow reaches for, in one place, so the runner, a person's
+ * "Run now", an approval, an agent's tool and the tests all run the same code.
  */
 
 /** The two steps of a reviewed change, as a workflow uses them. */
@@ -23,27 +23,52 @@ export interface WorkflowWrites {
 
 /** Something that happened, for the server's log and whatever listens. */
 export type WorkflowEvent =
-  | { readonly type: "workflow.run"; readonly workflow: string; readonly run: string; readonly status: string; readonly matched: number }
+  | { readonly type: "workflow.run"; readonly workflow: string; readonly run: string; readonly status: string; readonly cases: number }
   | { readonly type: "workflow.parked"; readonly workflow: string; readonly reason: string }
-  | { readonly type: "proposal.created"; readonly proposal: string; readonly kind: string; readonly workflow?: string | undefined; readonly agent?: string | undefined };
+  | { readonly type: "case.finished"; readonly workflow: string; readonly case: string; readonly status: string }
+  | { readonly type: "task.waiting"; readonly task: string; readonly workflow?: string | undefined; readonly agent?: string | undefined };
+
+/** Sends Outreach. Comms supplies the real one; until then nothing leaves Dash. */
+export interface OutreachSender {
+  send(message: {
+    readonly channel: "text" | "call" | "email";
+    readonly to: string;
+    readonly subject?: string | undefined;
+    readonly text: string;
+    readonly agent: Pick<AgentSpec, "id" | "name">;
+    /** At most once: the same key is never sent twice. */
+    readonly key: string;
+  }): Promise<{ readonly status: "queued" | "sent" | "delivered" | "failed" | "not_sent"; readonly detail?: string; readonly conversation?: string }>;
+}
+
+export const notConnectedSender: OutreachSender = {
+  send: async () => ({ status: "not_sent", detail: "Texts, calls and email are not connected yet, so nothing was sent." }),
+};
 
 export interface WorkflowEnv {
   readonly workspaceId: string;
   readonly store: WorkflowStore;
-  readonly proposals: ProposalStore;
+  readonly cases: CaseStore;
+  readonly tasks: TaskStore;
   readonly calendar: CalendarStore;
-  readonly agents: { get(id: string): Promise<AgentSpec | null> };
+  readonly templates: TemplateStore;
+  readonly agents: { get(id: string): Promise<AgentSpec | null>; shared?(): Promise<SharedAgentKnowledge> };
   readonly policy: Policy;
-  /** The single read, at background priority: a person's open board is never slowed. */
+  /** The single read, at background priority. */
   readonly read: RecordReader;
   readonly writes: WorkflowWrites;
+  readonly outreach?: OutreachSender;
+  /** Posts a webhook: the SSRF guard applies. Absent: Send to a system is not available. */
+  readonly post?: (url: string, body: unknown) => Promise<{ readonly status: number; readonly body: unknown }>;
   /** The field that tells a record type's rows apart, where the catalog knows it. */
   readonly rowKeyField?: (connection: string, record: string) => string | undefined;
   readonly connectionTitle?: (connection: string) => string;
-  /** The model the `think` step runs on (task `workflow`); null when no AI key is set. */
-  readonly llm?: () => LlmAdapter | null;
-  /** Wraps a run so its model calls count against the spend cap. */
+  /** A model for one kind of call; a step may name its own. Null when no AI key is set. */
+  readonly llm?: (task: ActionModelTask, model?: string) => LlmAdapter | null;
+  /** Wraps a model call so it counts against the spend cap. */
   readonly withBudget?: <T>(run: () => Promise<T>) => Promise<T>;
+  /** Where a webhook wait's address starts, e.g. https://dash.example.com. */
+  readonly publicOrigin?: string;
   readonly onEvent?: (event: WorkflowEvent) => void;
   readonly now: () => number;
   readonly newId: () => string;

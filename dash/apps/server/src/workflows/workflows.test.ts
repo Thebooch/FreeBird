@@ -3,53 +3,60 @@ import { AdapterError } from "@freebirdai/connect/adapters";
 import type { ReadRequest, ReadResult } from "@freebirdai/connect/host";
 import { MemoryLeaseLock, WriteError } from "@freebirdai/connect/host";
 import { fakeLlm } from "@freebirdai/dash-agent";
-import { agentSchema, workflowSchema, type AgentSpec, type Principal, type WorkflowSpec } from "@freebirdai/dash-spec";
+import { agentSchema, chainEdges, workflowSchema, type AgentSpec, type Principal, type WorkflowNode, type WorkflowSpec } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import { MemoryMembershipStore } from "../identity/members.js";
 import { rolePolicy, type Policy } from "../identity/policy.js";
-import type { WorkflowEnv } from "./env.js";
+import { explainDraft } from "./draft.js";
+import { WorkflowEngine } from "./engine.js";
+import type { OutreachSender, WorkflowEnv } from "./env.js";
 import { buildOverview } from "./overview.js";
-import { ProposalService } from "./proposals.js";
-import { previewWorkflow, runWorkflow } from "./run.js";
+import { previewWorkflow } from "./run.js";
 import { WorkflowRunner } from "./runner.js";
 import { nextDue, nextScheduled } from "./schedule.js";
 import { WorkflowError, WorkflowService } from "./service.js";
 import { startFromAgentTool, startWorkflow, type Starter } from "./start.js";
-import { MemoryCalendarStore, MemoryProposalStore, MemoryWorkflowStore } from "./store.js";
+import { MemoryCalendarStore, MemoryCaseStore, MemoryTaskStore, MemoryTemplateStore, MemoryWorkflowStore, RevisionConflict } from "./store.js";
+import { TaskService } from "./tasks.js";
+import { TemplateService } from "./templates.js";
 
 /**
- * Workflows, without a server: a fake read, a fake write service that records
- * what it was asked, and a clock the test moves.
+ * Workflows without a server: fake reads, a fake write service that records
+ * what it was asked and says how to undo it, and a clock the test moves.
  */
 
 const T0 = Date.parse("2026-10-06T12:00:00.000Z");
 const owner: Principal = { userId: "local", workspaceId: "acme", role: "owner", kind: "local-owner" };
 const member = (userId: string, role: Principal["role"]): Principal => ({ userId, workspaceId: "acme", role, kind: "member" });
+const at = new Date(T0).toISOString();
 
 interface Fake {
   env: WorkflowEnv;
+  starter: Starter;
+  engine: WorkflowEngine;
+  tasks: TaskService;
   clock: { now: number };
   rows: Record<string, unknown>[];
   prepared: Array<{ principal: Principal; intent: WriteIntent; via: string; onBehalfOf?: unknown }>;
   committed: string[];
-  reads: ReadRequest[];
   agents: Map<string, AgentSpec>;
+  sent: Array<{ to: string; text: string; key: string }>;
   failRead: Error | null;
-  failPrepare: Error | null;
+  failCommit: Error | null;
 }
 
-const fake = (options: { policy?: Policy; llm?: ReturnType<typeof fakeLlm> } = {}): Fake => {
+const fake = (options: { policy?: Policy; llm?: ReturnType<typeof fakeLlm>; sender?: boolean } = {}): Fake => {
   let id = 0;
-  const state: Fake = {
+  const intents = new Map<string, WriteIntent>();
+  const state = {
     clock: { now: T0 },
-    rows: [],
-    prepared: [],
-    committed: [],
-    reads: [],
-    agents: new Map(),
-    failRead: null,
-    failPrepare: null,
-    env: undefined as never,
+    rows: [] as Record<string, unknown>[],
+    prepared: [] as Fake["prepared"],
+    committed: [] as string[],
+    agents: new Map<string, AgentSpec>(),
+    sent: [] as Fake["sent"],
+    failRead: null as Error | null,
+    failCommit: null as Error | null,
   };
   const review = (intent: WriteIntent, pendingId: string): WriteReview =>
     ({
@@ -62,60 +69,81 @@ const fake = (options: { policy?: Policy; llm?: ReturnType<typeof fakeLlm> } = {
       kind: intent.kind,
       mode: "merge",
       title: "Update a work order",
-      summary: `Change ${intent.entity} ${intent.id ?? ""}`,
-      rows: [],
+      summary: `Change ${intent.entity} ${intent.id ?? ""}`.trim(),
+      rows: Object.entries(intent.values ?? {}).map(([field, value]) => ({ field, label: field, before: "old", after: String(value), changed: true })),
       warnings: [],
       danger: false,
       unverified: false,
       inferred: false,
       expiresAt: new Date(state.clock.now + 600_000).toISOString(),
     }) as unknown as WriteReview;
-  state.env = {
+  const sender: OutreachSender = {
+    send: async (message) => {
+      if (!state.sent.some((one) => one.key === message.key)) state.sent.push({ to: message.to, text: message.text, key: message.key });
+      return { status: "sent", conversation: `conv-${message.key}` };
+    },
+  };
+  const env: WorkflowEnv = {
     workspaceId: "acme",
     store: new MemoryWorkflowStore(),
-    proposals: new MemoryProposalStore(),
+    cases: new MemoryCaseStore(),
+    tasks: new MemoryTaskStore(),
     calendar: new MemoryCalendarStore(),
+    templates: new MemoryTemplateStore(),
     agents: { get: async (agentId) => state.agents.get(agentId) ?? null },
     policy: options.policy ?? { can: () => ({ ok: true }) },
-    read: async (_connection, request): Promise<ReadResult> => {
-      state.reads.push(request);
+    read: async (_connection, _request: ReadRequest): Promise<ReadResult> => {
       if (state.failRead) throw state.failRead;
-      return {
-        rows: state.rows.map((row) => ({ ...row })),
-        body: state.rows,
-        op: "work_orders",
-        cache: "miss",
-        ageMs: 0,
-        warnings: [],
-        complete: true,
-        pages: 1,
-        progress: null,
-        changed: null,
-      };
+      return { rows: state.rows.map((row) => ({ ...row })), body: state.rows, op: "work_orders", cache: "miss", ageMs: 0, warnings: [], complete: true, pages: 1, progress: null, changed: null };
     },
     writes: {
       prepare: async (principal, intent, how) => {
-        if (state.failPrepare) throw state.failPrepare;
         state.prepared.push({ principal, intent, via: how.via, ...(how.onBehalfOf ? { onBehalfOf: how.onBehalfOf } : {}) });
-        return review(intent, `p${state.prepared.length}`);
+        const pendingId = `p${state.prepared.length}`;
+        intents.set(pendingId, intent);
+        return review(intent, pendingId);
       },
       commit: async (_principal, pendingId) => {
+        if (state.failCommit) {
+          const error = state.failCommit;
+          state.failCommit = null;
+          throw error;
+        }
         state.committed.push(pendingId);
-        return { status: "succeeded", connection: "pms", entity: "work_order", kind: "update", changed: [], invalidated: { connection: "pms", ops: [] }, title: "Update" };
+        const intent = intents.get(pendingId)!;
+        return {
+          status: "succeeded",
+          connection: intent.connection,
+          entity: intent.entity,
+          kind: intent.kind,
+          ...(intent.id ? { key: { id: intent.id } } : {}),
+          changed: Object.keys(intent.values ?? {}),
+          invalidated: { connection: intent.connection, ops: [] },
+          title: "Update a work order",
+          eventId: pendingId,
+          ...(intent.kind === "update" ? { reversal: { kind: "update" as const, values: Object.fromEntries(Object.keys(intent.values ?? {}).map((key) => [key, "old"])) } } : {}),
+        };
       },
       discard: () => undefined,
     },
+    ...(options.sender ? { outreach: sender } : {}),
     connectionTitle: (connection) => (connection === "pms" ? "Property system" : connection),
     ...(options.llm ? { llm: () => options.llm! } : {}),
     now: () => state.clock.now,
     newId: () => `id${++id}`,
   };
-  return state;
+  const engine = new WorkflowEngine({ env, holder: "me" });
+  const starter: Starter = { env, engine, holder: "me" };
+  return Object.assign(state, { env, engine, starter, tasks: new TaskService(starter) }) as Fake;
 };
 
-const at = new Date(T0).toISOString();
-const workflowOf = (fields: Record<string, unknown>): WorkflowSpec =>
-  workflowSchema.parse({ id: "wf", name: "Overdue work", enabled: true, enabledBy: owner, createdAt: at, updatedAt: at, ...fields });
+const node = (id: string, action: string, settings: Record<string, unknown> = {}, extra: Partial<WorkflowNode> = {}): WorkflowNode =>
+  ({ id, action, settings, mode: "auto", onFailure: "stop", reversible: true, position: { x: 0, y: 0 }, ...extra }) as WorkflowNode;
+
+const workflowOf = (fields: Record<string, unknown>): WorkflowSpec => {
+  const nodes = (fields["nodes"] as WorkflowNode[] | undefined) ?? [];
+  return workflowSchema.parse({ id: "wf", name: "Work orders", enabled: true, enabledBy: owner, createdAt: at, updatedAt: at, edges: chainEdges(nodes), ...fields });
+};
 
 const agentOf = (fields: Record<string, unknown> = {}): AgentSpec =>
   agentSchema.parse({
@@ -123,7 +151,6 @@ const agentOf = (fields: Record<string, unknown> = {}): AgentSpec =>
     name: "Maintenance agent",
     color: 2,
     role: "You are the SECRET-ROLE maintenance coordinator.",
-    instructions: "SECRET-INSTRUCTIONS",
     reach: [
       { permission: "records.read", scope: { connection: "pms" } },
       { permission: "records.update", scope: { connection: "pms" } },
@@ -134,230 +161,315 @@ const agentOf = (fields: Record<string, unknown> = {}): AgentSpec =>
   });
 
 const ORDERS = [
-  { id: 1, status: "open", cost: 120, unit: "1A" },
-  { id: 2, status: "open", cost: 900, unit: "2B" },
-  { id: 3, status: "closed", cost: 50, unit: "3C" },
+  { id: 1, status: "open", cost: 120, unit: "1A", phone: "+15550001" },
+  { id: 2, status: "open", cost: 900, unit: "2B", phone: "+15550002" },
+  { id: 3, status: "closed", cost: 50, unit: "3C", phone: "+15550003" },
 ];
 
-const assignSteps = [
-  { id: "cheap", kind: "propose_change", mode: "auto", when: "cost < 500", entity: "work_order", change: "update", recordId: "{{ id }}", values: { vendor: "v-default" } },
-  { id: "dear", kind: "propose_change", mode: "approve", when: "cost >= 500", entity: "work_order", change: "update", recordId: "{{ id }}", values: { vendor: "v-default" } },
-  { id: "deadline", kind: "calendar", mode: "approve", title: "Unit {{ unit }} due", at: "2026-10-09", deadline: true },
-];
+const source = { connection: "pms", record: "work_order" };
+const every = { kind: "every", every: "1h" } as const;
+const run = (f: Fake, workflow: WorkflowSpec) => startWorkflow(f.starter, workflow, { kind: "every" });
+const byHand = (f: Fake, workflow: WorkflowSpec) => startWorkflow(f.starter, workflow, { kind: "manual" }, { actor: owner });
 
-/* ── phase 1: saving ────────────────────────────────────────────────── */
+/* ── 1. tasks ───────────────────────────────────────────────────────── */
 
-describe("WorkflowService", () => {
+describe("tasks", () => {
+  it("leaves one task per action, whatever happens, and opens a case per matching record", async () => {
+    const f = fake();
+    f.rows = ORDERS;
+    const workflow = workflowOf({
+      trigger: every,
+      source,
+      criteria: 'status == "open"',
+      nodes: [node("cal", "create.calendar", { title: "Unit {{ unit }}", at: "2026-10-09" }), node("note", "create.note", { text: "Done {{ id }}" }, { when: "cost < 500" })],
+    });
+    await f.env.store.put(workflow);
+    const { run: done } = await run(f, workflow);
+    expect(done).toMatchObject({ status: "succeeded", matched: 2 });
+    expect(done.cases).toHaveLength(2);
+    const tasks = await f.env.tasks.list();
+    expect(tasks.map((one) => [one.action, one.status]).sort()).toEqual([
+      ["create.calendar", "done"],
+      ["create.calendar", "done"],
+      ["create.note", "done"],
+      ["create.note", "skipped"],
+    ]);
+    expect((await f.env.cases.list()).every((one) => one.status === "done")).toBe(true);
+  });
+
+  it("makes an approval a task that waits, and runs it as the approver", async () => {
+    const f = fake();
+    f.rows = [ORDERS[1]!];
+    const workflow = workflowOf({ trigger: every, source, nodes: [node("assign", "update.record", { entity: "work_order", recordId: "{{ id }}", values: { vendor: "v1" } }, { mode: "approve" })] });
+    await f.env.store.put(workflow);
+    await run(f, workflow);
+    const [waiting] = await f.env.tasks.list({ status: "waiting_approval" });
+    expect(waiting).toMatchObject({ title: "Update work_order 2 on Property system: vendor", pending: { recordId: 2, values: { vendor: "v1" } } });
+    expect(f.committed).toHaveLength(0);
+
+    const boss = member("boss", "admin");
+    await expect(f.tasks.approve(boss, waiting!.id)).rejects.toMatchObject({ status: 400 });
+    const { review } = await f.tasks.review(boss, waiting!.id);
+    expect(f.prepared.at(-1)?.principal.userId).toBe("boss");
+    const { task, case: one } = await f.tasks.approve(boss, waiting!.id, { pendingId: review!.pendingId, digest: review!.digest });
+    expect(task).toMatchObject({ status: "done", approvedBy: "boss", body: { kind: "change", changes: [{ field: "vendor", before: "old", after: "v1" }] } });
+    expect(one?.status).toBe("done");
+    expect(f.committed).toEqual([review!.pendingId]);
+  });
+
+  it("goes back to waiting with a fresh review when the record moved before it was approved", async () => {
+    const f = fake();
+    f.rows = [ORDERS[1]!];
+    const workflow = workflowOf({ trigger: every, source, nodes: [node("assign", "update.record", { entity: "work_order", recordId: "{{ id }}", values: { vendor: "v1" } }, { mode: "approve" })] });
+    await f.env.store.put(workflow);
+    await run(f, workflow);
+    const [waiting] = await f.env.tasks.list({ status: "waiting_approval" });
+    const { review } = await f.tasks.review(owner, waiting!.id);
+    f.failCommit = new WriteError(409, "stale", "This work order changed on Property system after the review.");
+    await expect(f.tasks.approve(owner, waiting!.id, { pendingId: review!.pendingId, digest: review!.digest })).rejects.toMatchObject({ status: 409, extra: { review: { entity: "work_order" } } });
+    expect((await f.env.tasks.get(waiting!.id))?.status).toBe("waiting_approval");
+  });
+
+  it("follows the declined arrow when a person says no", async () => {
+    const f = fake();
+    const nodes = [node("assign", "update.record", { entity: "work_order", recordId: "{{ id }}", values: { vendor: "v1" } }, { mode: "approve" }), node("tell", "notify.team", { title: "Declined" })];
+    f.rows = [ORDERS[0]!];
+    const workflow = workflowOf({ trigger: every, source, nodes, edges: [...chainEdges(nodes.slice(0, 1)), { id: "d", from: "assign", outcome: "declined", to: "tell" }] });
+    await f.env.store.put(workflow);
+    await run(f, workflow);
+    const [waiting] = await f.env.tasks.list({ status: "waiting_approval" });
+    expect((await f.tasks.decline(owner, waiting!.id)).status).toBe("dismissed");
+    expect((await f.env.tasks.list()).map((one) => one.title)).toContain("Declined");
+  });
+});
+
+/* ── 2. reverse ─────────────────────────────────────────────────────── */
+
+describe("reverse", () => {
+  it("puts back only what a change changed, through a fresh review, and records the reversal as a task", async () => {
+    const f = fake();
+    f.rows = [ORDERS[0]!];
+    const workflow = workflowOf({ trigger: every, source, nodes: [node("assign", "update.record", { entity: "work_order", recordId: "{{ id }}", values: { vendor: "v1" } })] });
+    await f.env.store.put(workflow);
+    await run(f, workflow);
+    const [done] = await f.env.tasks.list({ status: "done" });
+    expect(done?.reversal).toMatchObject({ available: true, intent: { kind: "update", id: "1", values: { vendor: "old" } } });
+    const { review } = await f.tasks.reverseReview(owner, done!.id);
+    expect(f.prepared.at(-1)?.intent).toMatchObject({ kind: "update", values: { vendor: "old" } });
+    const { task, reversal } = await f.tasks.reverse(owner, done!.id, { pendingId: review!.pendingId, digest: review!.digest });
+    expect(task).toMatchObject({ status: "reversed", reversal: { reversedBy: "local", reversalTask: reversal.id } });
+    expect(reversal.title).toMatch(/^Reversed: /);
+    await expect(f.tasks.reverse(owner, done!.id)).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("removes a calendar entry inside Dash, and says a message cannot be unsent", async () => {
+    const f = fake({ sender: true });
+    f.agents.set("maint", agentOf());
+    const workflow = workflowOf({
+      trigger: { kind: "manual" },
+      nodes: [node("cal", "create.calendar", { title: "Inspect", at: "2026-10-09" }), node("text", "outreach.text", { agentId: "maint", to: "+1555", purpose: "Hello", content: "fixed", wording: "Hi there" })],
+    });
+    await f.env.store.put(workflow);
+    await byHand(f, workflow);
+    const done = await f.env.tasks.list({ status: "done" });
+    const text = done.find((one) => one.action === "outreach.text");
+    const cal = done.find((one) => one.action === "create.calendar");
+    expect(text?.reversal).toMatchObject({ available: false, reason: "A message cannot be unsent. Send a correction instead." });
+    await f.tasks.reverse(owner, cal!.id);
+    expect(await f.env.calendar.list()).toHaveLength(0);
+  });
+});
+
+/* ── 3. saving ──────────────────────────────────────────────────────── */
+
+describe("saving a workflow", () => {
   const build = async () => {
     const memberships = new MemoryMembershipStore();
     const join = (userId: string, role: "admin" | "editor" | "viewer", grants: unknown[] = []) =>
       memberships.putMember({ workspaceId: "acme", userId, email: `${userId}@acme.test`, role, grants: grants as never, joinedAt: at });
     await join("boss", "admin");
-    await join("lead", "editor");
     await join("reader", "viewer", [{ permission: "workflows.manage", scope: {} }]);
     const store = new MemoryWorkflowStore();
-    return {
-      store,
-      service: new WorkflowService({
-        store,
-        policy: rolePolicy(memberships),
-        agents: { list: async () => [agentOf()] },
-        hasConnection: (id) => id === "pms",
-        now: () => new Date(T0),
-      }),
-    };
+    return { store, service: new WorkflowService({ store, policy: rolePolicy(memberships), agents: { list: async () => [agentOf()] }, hasConnection: (id) => id === "pms", now: () => new Date(T0) }) };
   };
-  const input = (fields: Record<string, unknown> = {}) =>
-    ({ name: "Overdue work orders", trigger: { kind: "every", every: "1h" }, source: { connection: "pms", record: "work_order" }, ...fields }) as never;
+  const input = (fields: Record<string, unknown> = {}) => ({ name: "Overdue", trigger: every, source, ...fields }) as never;
 
-  it("makes a workflow with an id from its name, runs it as whoever saved it, and starts it off", async () => {
+  it("refuses an arrow from an outcome the step does not have, and an action that is not in the catalog", async () => {
     const { service } = await build();
-    const made = await service.create(member("lead", "editor"), input());
-    expect(made).toMatchObject({ id: "overdue-work-orders", enabled: false, enabledBy: { userId: "lead" }, once: "per-row" });
-    const again = await service.create(member("boss", "admin"), input());
-    expect(again.id).toBe("overdue-work-orders-2");
+    const nodes = [node("text", "outreach.text", { agentId: "maint", to: "x", purpose: "y" }), node("wait", "wait.for", { event: "reply", step: "text", timeout: "2d" }), node("next", "create.note", { text: "x" })];
+    await expect(service.create(member("boss", "admin"), input({ nodes, edges: [...chainEdges(nodes.slice(0, 2)), { id: "b", from: "wait", outcome: "yes", to: "next" }] }))).rejects.toThrow(/has no outcome "yes"/);
+    await expect(service.create(member("boss", "admin"), input({ nodes: [node("x", "teleport.now")], edges: [{ id: "a", from: "trigger", to: "x" }] }))).rejects.toThrow(/is not an action/);
   });
 
-  it("refuses criteria, conditions and templates it cannot read, before anything runs", async () => {
+  it("allows loops, saves an incomplete step while off, and refuses to turn it on until it is complete", async () => {
     const { service } = await build();
-    const attempt = service.create(member("lead", "editor"), input({
-      criteria: "cost >=",
-      steps: [{ id: "n", kind: "note", text: "Hello {{ }}", when: "((" }],
-    }));
-    await expect(attempt).rejects.toBeInstanceOf(WorkflowError);
-    const problems = (await attempt.catch((error: WorkflowError) => error.problems)) as WorkflowError["problems"];
-    expect(problems.map((one) => one.field)).toEqual(expect.arrayContaining(["criteria", "when", "text"]));
-  });
-
-  it("refuses an unknown connection and an agent that is not there", async () => {
-    const { service } = await build();
-    await expect(service.create(member("lead", "editor"), input({ source: { connection: "nope", record: "x" } }))).rejects.toMatchObject({ status: 400 });
-    await expect(
-      service.create(member("lead", "editor"), input({ steps: [{ id: "m", kind: "message", agentId: "ghost", channel: "text", to: "{{ phone }}", purpose: "Say hi" }] })),
-    ).rejects.toThrow(/no agent "ghost"/);
+    const nodes = [node("text", "outreach.text", { agentId: "maint" }, { mode: "approve" }), node("wait", "wait.duration", { duration: "1d" })];
+    const edges = [...chainEdges(nodes), { id: "loop", from: "wait", outcome: "next", to: "text" }];
+    const saved = await service.create(member("boss", "admin"), input({ nodes, edges }));
+    expect(saved.edges).toHaveLength(3);
+    const problems = await service.problems(member("boss", "admin"), saved);
+    expect(problems.filter((one) => one.incomplete).map((one) => one.ask)).toEqual(["Who should it reach? (a field on the record, or an address)", "What should the message say or be for?"]);
+    await expect(service.setEnabled(member("boss", "admin"), saved.id, true)).rejects.toBeInstanceOf(WorkflowError);
   });
 
   it("only lets somebody who holds a change's permission set it to automatic", async () => {
     const { service } = await build();
-    const auto = { steps: [assignSteps[0]] };
-    await expect(service.create(member("reader", "viewer"), input(auto))).rejects.toMatchObject({ status: 403 });
-    const approve = { steps: [{ ...assignSteps[0], mode: "approve" }] };
-    expect((await service.create(member("reader", "viewer"), input(approve))).steps[0]?.mode).toBe("approve");
-    expect((await service.create(member("lead", "editor"), input(auto))).steps[0]?.mode).toBe("auto");
-  });
-
-  it("makes the person who turns it on the one it runs as, and clears a pause", async () => {
-    const { service, store } = await build();
-    const made = await service.create(member("boss", "admin"), input());
-    await store.put({ ...made, parked: { reason: "Access lost", at }, failures: 3 });
-    const on = await service.setEnabled(member("lead", "editor"), made.id, true);
-    expect(on).toMatchObject({ enabled: true, enabledBy: { userId: "lead" }, failures: 0 });
-    expect(on.parked).toBeUndefined();
-  });
-
-  it("forgets what it has seen when what it watches changes", async () => {
-    const { service, store } = await build();
-    const made = await service.create(member("boss", "admin"), input());
-    await store.markFired(made.id, [{ key: "1", fingerprint: "" }], at);
-    await service.update(member("boss", "admin"), made.id, input({ name: "Renamed" }));
-    expect((await store.fired(made.id)).size).toBe(1);
-    await service.update(member("boss", "admin"), made.id, input({ source: { connection: "pms", record: "unit" } }));
-    expect((await store.fired(made.id)).size).toBe(0);
-  });
-
-  it("keeps a workflow an agent can start until the agent lets go of it", async () => {
-    const memberships = new MemoryMembershipStore();
-    const store = new MemoryWorkflowStore();
-    const service = new WorkflowService({
-      store,
-      policy: rolePolicy(memberships),
-      agents: { list: async () => [agentOf({ tools: [{ id: "t", kind: "run_workflow", workflow: "inspect" }] })] },
-      hasConnection: () => true,
-    });
-    await store.put(workflowOf({ id: "inspect", trigger: { kind: "agent", inputs: [] } }));
-    await expect(service.remove("inspect")).rejects.toThrow(/Maintenance agent can start this workflow/);
+    const nodes = [node("assign", "update.record", { entity: "work_order", recordId: "{{ id }}", values: { vendor: "v1" } })];
+    await expect(service.create(member("reader", "viewer"), input({ nodes, edges: chainEdges(nodes) }))).rejects.toMatchObject({ status: 403 });
+    expect((await service.create(member("boss", "admin"), input({ nodes, edges: chainEdges(nodes) }))).enabledBy?.userId).toBe("boss");
   });
 });
 
-/* ── phase 1: criteria, once, reach ─────────────────────────────────── */
+/* ── 4. cases and paths ─────────────────────────────────────────────── */
 
-describe("a run", () => {
-  it("keeps the rows the criteria match, and acts on each once", async () => {
-    const f = fake();
-    f.rows = ORDERS;
-    const workflow = workflowOf({ trigger: { kind: "every", every: "1h" }, source: { connection: "pms", record: "work_order" }, criteria: 'status == "open"', steps: [{ id: "n", kind: "calendar", title: "{{ unit }}", at: "2026-10-09" }] });
-    await f.env.store.put(workflow);
-    const first = await runWorkflow(f.env, workflow, { start: { kind: "every" } });
-    expect(first.run).toMatchObject({ status: "succeeded", read: 3, matched: 2 });
-    expect((await f.env.calendar.list()).map((one) => one.title)).toEqual(["1A", "2B"]);
-    const second = await runWorkflow(f.env, workflow, { start: { kind: "every" } });
-    expect(second.run.matched).toBe(0);
-    /* Order 1 is closed, then opened again: it matches again, so it is acted on again. */
-    f.rows = [{ ...ORDERS[0]!, status: "closed" }, ORDERS[1]!];
-    await runWorkflow(f.env, workflow, { start: { kind: "every" } });
-    f.rows = [ORDERS[0]!, ORDERS[1]!];
-    expect((await runWorkflow(f.env, workflow, { start: { kind: "every" } })).run.matched).toBe(1);
-  });
-
-  it("acts on every match every run when told to", async () => {
-    const f = fake();
-    f.rows = ORDERS;
-    const workflow = workflowOf({ trigger: { kind: "every", every: "1h" }, source: { connection: "pms", record: "work_order" }, once: "per-run", steps: [{ id: "n", kind: "note", text: "{{ count }} orders" }] });
-    await f.env.store.put(workflow);
-    await runWorkflow(f.env, workflow, { start: { kind: "every" } });
-    const again = await runWorkflow(f.env, workflow, { start: { kind: "every" } });
-    expect(again.run.outputs).toEqual([expect.objectContaining({ outcome: "done", detail: "3 orders" })]);
-  });
-
-  it("reads at background priority, with a bounded wait", async () => {
-    const f = fake();
-    const workflow = workflowOf({ trigger: { kind: "manual" }, source: { connection: "pms", record: "work_order" } });
-    await runWorkflow(f.env, workflow, { start: { kind: "manual" }, actor: owner });
-    expect(f.reads[0]).toMatchObject({ record: "work_order", wait: true, waitMs: 60_000 });
-  });
-
-  it("parks when the person it runs as may no longer read what it reads", async () => {
-    const f = fake({ policy: { can: (_who, permission) => (permission === "records.read" ? { ok: false, reason: "Not shared with you." } : { ok: true }) } });
-    const workflow = workflowOf({ trigger: { kind: "every", every: "1h" }, source: { connection: "pms", record: "work_order" } });
-    await f.env.store.put(workflow);
-    const { run } = await runWorkflow(f.env, workflow, { start: { kind: "every" } });
-    expect(run.status).toBe("parked");
-    expect((await f.env.store.get("wf"))?.parked?.reason).toMatch(/may no longer read Property system/);
-    expect(f.reads).toHaveLength(0);
-  });
-
-  it("parks when an agent's run would read beyond the agent's reach", async () => {
-    const f = fake();
-    f.agents.set("maint", agentOf({ reach: [] }));
-    const workflow = workflowOf({ trigger: { kind: "agent", inputs: [] }, source: { connection: "pms", record: "work_order" } });
-    await f.env.store.put(workflow);
-    const { run } = await runWorkflow(f.env, workflow, { start: { kind: "agent", agentId: "maint" } });
-    expect(run).toMatchObject({ status: "parked", agent: "maint" });
-    expect(run.error).toMatch(/Maintenance agent may not read/);
-  });
-
-  it("previews the path each row would take, and changes nothing", async () => {
-    const f = fake();
-    f.rows = ORDERS;
-    const workflow = workflowOf({ trigger: { kind: "every", every: "1h" }, source: { connection: "pms", record: "work_order" }, criteria: 'status == "open"', steps: assignSteps });
-    const preview = await previewWorkflow(f.env, workflow, owner);
-    expect(preview.matched).toBe(2);
-    expect(preview.rows[0]?.steps.map((one) => [one.step, one.runs, one.mode])).toEqual([
-      ["cheap", true, "auto"],
-      ["dear", false, "approve"],
-      ["deadline", true, "auto"],
-    ]);
-    expect(f.prepared).toHaveLength(0);
-    expect(await f.env.proposals.list()).toHaveLength(0);
-    expect(await f.env.calendar.list()).toHaveLength(0);
-  });
-});
-
-/* ── phase 2: when, triggers, the runner ────────────────────────────── */
-
-describe("when a workflow is due", () => {
-  it("reads a schedule in the workflow's own time zone", () => {
-    /* 06:59 in Chicago (CDT, UTC-5) is 11:59 UTC; weekdays at 7 is 12:00 UTC. */
-    const from = Date.parse("2026-10-06T11:59:00Z");
-    expect(new Date(nextScheduled("0 7 * * 1-5", "America/Chicago", from)!).toISOString()).toBe("2026-10-06T12:00:00.000Z");
-    /* Friday after 7 → Monday. */
-    expect(new Date(nextScheduled("0 7 * * 1-5", "America/Chicago", Date.parse("2026-10-09T13:00:00Z"))!).toISOString()).toBe("2026-10-12T12:00:00.000Z");
-  });
-
-  it("brings an interval round after the last start, and an API trigger at once the first time", () => {
-    expect(nextDue({ kind: "every", every: "1h" }, T0, 0)).toBe(T0 + 3_600_000);
-    expect(nextDue({ kind: "record_created", connection: "pms", record: "x", every: "15m" }, null, T0)).toBe(T0);
-    expect(nextDue({ kind: "manual" }, null, T0)).toBeNull();
-  });
-});
-
-describe("an API trigger", () => {
-  it("only takes note of what exists the first time, then fires on what is new", async () => {
+describe("cases and paths", () => {
+  it("routes each record down its branch", async () => {
     const f = fake();
     f.rows = ORDERS.slice(0, 2);
-    const workflow = workflowOf({ trigger: { kind: "record_created", connection: "pms", record: "work_order" }, steps: [{ id: "n", kind: "calendar", title: "New: {{ unit }}", at: "2026-10-09" }] });
+    const nodes = [node("check", "branch.if", { condition: "cost >= 500" }), node("dear", "create.note", { text: "dear {{ id }}" }), node("cheap", "create.note", { text: "cheap {{ id }}" })];
+    const workflow = workflowOf({
+      trigger: every,
+      source,
+      nodes,
+      edges: [{ id: "a", from: "trigger", to: "check" }, { id: "y", from: "check", outcome: "yes", to: "dear" }, { id: "n", from: "check", outcome: "no", to: "cheap" }],
+    });
     await f.env.store.put(workflow);
-    const seeded = await runWorkflow(f.env, workflow, { start: { kind: "record_created" } });
-    expect(seeded.run).toMatchObject({ status: "seeded", matched: 0 });
-    expect(await f.env.calendar.list()).toHaveLength(0);
-
-    f.rows = ORDERS;
-    const next = await runWorkflow(f.env, workflow, { start: { kind: "record_created" } });
-    expect(next.run.matched).toBe(1);
-    expect((await f.env.calendar.list()).map((one) => one.title)).toEqual(["New: 3C"]);
-    expect((await runWorkflow(f.env, workflow, { start: { kind: "record_created" } })).run.matched).toBe(0);
+    await run(f, workflow);
+    const notes = (await f.env.tasks.list()).filter((one) => one.action === "create.note").map((one) => one.title).sort();
+    expect(notes).toEqual(["cheap 1", "dear 2"]);
   });
 
-  it("fires on a change to the fields it watches, and not on others", async () => {
+  it("stops a loop at its visit limit", async () => {
+    const f = fake();
+    const nodes = [node("count", "update.case", { name: "n", value: "{{ coalesce(vars.n, 0) + 1 }}" })];
+    const workflow = workflowOf({ trigger: { kind: "manual" }, nodes, edges: [...chainEdges(nodes), { id: "loop", from: "count", outcome: "next", to: "count" }], limits: { visitsPerStep: 3, stepsPerCase: 200 } });
+    await f.env.store.put(workflow);
+    const { run: done } = await byHand(f, workflow);
+    const one = await f.env.cases.get(done.cases[0]!);
+    expect(one).toMatchObject({ status: "failed", data: { vars: { n: 3 } } });
+    expect(one?.error).toMatch(/reached 3 times/);
+  });
+
+  it("refuses a write from a stale revision, and cancelling is sticky", async () => {
+    const f = fake();
+    const workflow = workflowOf({ trigger: { kind: "manual" }, nodes: [node("wait", "wait.duration", { duration: "1d" })] });
+    await f.env.store.put(workflow);
+    const { run: done } = await byHand(f, workflow);
+    const one = (await f.env.cases.get(done.cases[0]!))!;
+    await f.env.cases.put({ ...one, updatedAt: "x" }, one.revision);
+    await expect(f.env.cases.put({ ...one, updatedAt: "y" }, one.revision)).rejects.toBeInstanceOf(RevisionConflict);
+    expect((await f.engine.cancel(one.id)).status).toBe("cancelled");
+    f.clock.now += 2 * 86_400_000;
+    await f.engine.timeouts();
+    expect((await f.env.cases.get(one.id))?.status).toBe("cancelled");
+  });
+});
+
+/* ── 5. waiting ─────────────────────────────────────────────────────── */
+
+describe("waiting", () => {
+  const followUp = () => {
+    const nodes = [
+      node("text", "outreach.text", { agentId: "maint", to: "{{ phone }}", purpose: "Inspection", content: "fixed", wording: "Can we come Friday?" }),
+      node("wait", "wait.for", { event: "reply", step: "text", timeout: "2d" }),
+      node("booked", "create.note", { text: "booked" }),
+      node("again", "outreach.text", { agentId: "maint", to: "{{ phone }}", purpose: "Reminder", content: "fixed", wording: "Just checking in" }),
+    ];
+    return workflowOf({
+      trigger: every,
+      source,
+      nodes,
+      edges: [...chainEdges(nodes.slice(0, 2)), { id: "h", from: "wait", outcome: "happened", to: "booked" }, { id: "t", from: "wait", outcome: "timed_out", to: "again" }],
+    });
+  };
+
+  it("takes the happened path when the reply comes first", async () => {
+    const f = fake({ sender: true });
+    f.agents.set("maint", agentOf());
+    f.rows = [ORDERS[0]!];
+    const workflow = followUp();
+    await f.env.store.put(workflow);
+    await run(f, workflow);
+    const [one] = await f.env.cases.list({ status: "waiting" });
+    expect(one?.waiting?.key).toMatch(/^reply:conv-/);
+    expect(await f.engine.emit(one!.waiting!.key, { text: "Yes" })).toBe(1);
+    expect((await f.env.cases.get(one!.id))?.status).toBe("done");
+    expect((await f.env.tasks.list()).some((task) => task.title === "booked")).toBe(true);
+    expect(f.sent).toHaveLength(1);
+  });
+
+  it("takes the timed-out path when the time runs out first, and a late reply never reopens it", async () => {
+    const f = fake({ sender: true });
+    f.agents.set("maint", agentOf());
+    f.rows = [ORDERS[0]!];
+    const workflow = followUp();
+    await f.env.store.put(workflow);
+    await run(f, workflow);
+    const [one] = await f.env.cases.list({ status: "waiting" });
+    f.clock.now += 47 * 3_600_000;
+    expect(await f.engine.timeouts()).toBe(0);
+    f.clock.now += 2 * 3_600_000;
+    expect(await f.engine.timeouts()).toBe(1);
+    expect((await f.env.cases.get(one!.id))?.status).toBe("done");
+    expect(f.sent.map((sent) => sent.text)).toEqual(["Can we come Friday?", "Just checking in"]);
+    expect(await f.engine.emit(one!.waiting!.key, { text: "late" })).toBe(0);
+  });
+
+  it("asks a teammate, and goes the way they answer", async () => {
+    const f = fake();
+    const nodes = [node("ask", "ask.approve", { question: "Pay the deposit?", timeout: "1d" }), node("yes", "create.note", { text: "paid" }), node("no", "create.note", { text: "held" })];
+    const workflow = workflowOf({
+      trigger: { kind: "manual" },
+      nodes,
+      edges: [...chainEdges(nodes.slice(0, 1)), { id: "a", from: "ask", outcome: "approved", to: "yes" }, { id: "b", from: "ask", outcome: "declined", to: "no" }],
+    });
+    await f.env.store.put(workflow);
+    await byHand(f, workflow);
+    const [question] = await f.env.tasks.list({ status: "waiting" });
+    expect(question?.body).toMatchObject({ kind: "question", options: ["approved", "declined"] });
+    await expect(f.tasks.answer(owner, question!.id, "maybe")).rejects.toMatchObject({ status: 400 });
+    await f.tasks.answer(owner, question!.id, "declined");
+    expect((await f.env.tasks.list()).map((one) => one.title)).toContain("held");
+    await expect(f.tasks.answer(owner, question!.id, "approved")).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("wakes a case when the record it watches changes", async () => {
+    const f = fake();
+    f.rows = [ORDERS[0]!];
+    const nodes = [node("wait", "wait.for", { event: "record_change", condition: 'status == "scheduled"', timeout: "3d" }), node("done", "create.note", { text: "scheduled" })];
+    const workflow = workflowOf({ trigger: every, source, nodes, edges: [...chainEdges(nodes.slice(0, 1)), { id: "h", from: "wait", outcome: "happened", to: "done" }] });
+    await f.env.store.put(workflow);
+    await run(f, workflow);
+    const runner = new WorkflowRunner(f.starter);
+    expect(await runner.watchRecords()).toBe(0);
+    f.rows = [{ ...ORDERS[0]!, status: "scheduled" }];
+    expect(await runner.watchRecords()).toBe(1);
+    expect((await f.env.tasks.list()).some((task) => task.title === "scheduled")).toBe(true);
+  });
+
+  it("keeps each record within the trigger's limits: a budget and a cooldown", async () => {
     const f = fake();
     f.rows = ORDERS;
-    const workflow = workflowOf({ trigger: { kind: "record_changed", connection: "pms", record: "work_order", fields: ["status"] }, steps: [{ id: "n", kind: "note", text: "{{ count }} changed" }] });
+    const workflow = workflowOf({ trigger: every, source, once: "per-run", triggerLimits: { maxPerRecord: 2, cooldown: "2h" }, nodes: [node("n", "create.note", { text: "{{ id }}" })] });
     await f.env.store.put(workflow);
-    await runWorkflow(f.env, workflow, { start: { kind: "record_changed" } });
-    f.rows = [{ ...ORDERS[0]!, cost: 999 }, { ...ORDERS[1]!, status: "closed" }, ORDERS[2]!];
-    const { run } = await runWorkflow(f.env, workflow, { start: { kind: "record_changed" } });
-    expect(run.matched).toBe(1);
-    expect(run.outputs[0]?.detail).toBe("1 changed");
+    expect((await run(f, workflow)).run.matched).toBe(3);
+    f.clock.now += 3_600_000;
+    expect((await run(f, workflow)).run.matched).toBe(0);
+    f.clock.now += 2 * 3_600_000;
+    expect((await run(f, workflow)).run.matched).toBe(3);
+    f.clock.now += 3 * 3_600_000;
+    expect((await run(f, workflow)).run.matched).toBe(0);
+  });
+
+  it("only takes note of what exists the first time an API trigger looks", async () => {
+    const f = fake();
+    f.rows = ORDERS.slice(0, 2);
+    const workflow = workflowOf({ trigger: { kind: "record_created", connection: "pms", record: "work_order" }, nodes: [node("n", "create.note", { text: "new {{ unit }}" })] });
+    await f.env.store.put(workflow);
+    expect((await run(f, workflow)).run.status).toBe("seeded");
+    f.rows = ORDERS;
+    expect((await run(f, workflow)).run.matched).toBe(1);
+    expect((await f.env.tasks.list()).map((one) => one.title)).toEqual(["new 3C"]);
   });
 
   it("parks on a refusal from the API, and waits when asked to", async () => {
@@ -365,280 +477,165 @@ describe("an API trigger", () => {
     const workflow = workflowOf({ trigger: { kind: "record_created", connection: "pms", record: "work_order" } });
     await f.env.store.put(workflow);
     f.failRead = new AdapterError("Too many requests.", { status: 429, retryAfter: "120" });
-    const waited = await runWorkflow(f.env, workflow, { start: { kind: "record_created" } });
-    expect(waited.waitMs).toBe(120_000);
-    expect((await f.env.store.get("wf"))?.failures).toBe(0);
-    f.failRead = new AdapterError("The key was refused.", { status: 401, upstreamStatus: 401 });
-    const parked = await runWorkflow(f.env, workflow, { start: { kind: "record_created" } });
-    expect(parked.run.status).toBe("parked");
-    expect((await f.env.store.get("wf"))?.parked?.reason).toMatch(/refused the read \(401\)/);
+    expect((await run(f, workflow)).waitMs).toBe(120_000);
+    f.failRead = new AdapterError("Refused.", { status: 401, upstreamStatus: 401 });
+    expect((await run(f, workflow)).run.status).toBe("parked");
   });
 
-  it("turns itself off after three failed runs in a row, and says why", async () => {
-    const f = fake();
-    const workflow = workflowOf({ trigger: { kind: "every", every: "1h" }, source: { connection: "pms", record: "work_order" } });
-    await f.env.store.put(workflow);
-    f.failRead = new Error("socket hang up");
-    for (let i = 0; i < 3; i++) await runWorkflow(f.env, (await f.env.store.get("wf"))!, { start: { kind: "every" } });
-    const held = await f.env.store.get("wf");
-    expect(held).toMatchObject({ enabled: false, failures: 3 });
-    expect(held?.parked?.reason).toMatch(/Failed 3 runs in a row.*socket hang up/);
+  it("reads a schedule in the workflow's own time zone", () => {
+    expect(new Date(nextScheduled("0 7 * * 1-5", "America/Chicago", Date.parse("2026-10-06T11:59:00Z"))!).toISOString()).toBe("2026-10-06T12:00:00.000Z");
+    expect(nextDue({ kind: "record_created", connection: "pms", record: "x", every: "15m" }, null, T0)).toBe(T0);
   });
-});
 
-describe("the runner", () => {
-  it("runs what is due, once per lease, and leaves what another server holds", async () => {
+  it("runs a due trigger once per lease, leaving what another server holds", async () => {
     const f = fake();
-    f.rows = ORDERS;
     const leases = new MemoryLeaseLock(() => f.clock.now);
-    const workflow = workflowOf({ trigger: { kind: "every", every: "1h" }, source: { connection: "pms", record: "work_order" }, once: "per-run" });
+    const workflow = workflowOf({ trigger: every, nodes: [node("n", "create.note", { text: "tick" })] });
     await f.env.store.put(workflow);
-    const runner = new WorkflowRunner({ env: f.env, leases, holder: "me" });
-
+    const runner = new WorkflowRunner({ ...f.starter, leases });
     f.clock.now += 3_600_000;
-    await leases.acquire("workflow:wf", "someone-else", 60_000);
+    await leases.acquire("workflow:wf", "other", 60_000);
     await runner.tick();
     expect(await f.env.store.runs()).toHaveLength(0);
-
     f.clock.now += 120_000;
     await runner.tick();
-    expect(await f.env.store.runs()).toHaveLength(1);
     await runner.tick();
     expect(await f.env.store.runs()).toHaveLength(1);
-    f.clock.now += 3_600_000;
-    await runner.tick();
-    expect(await f.env.store.runs()).toHaveLength(2);
-  });
-
-  it("leaves a paused workflow and one that is off", async () => {
-    const f = fake();
-    await f.env.store.put(workflowOf({ id: "off", enabled: false, trigger: { kind: "every", every: "5m" } }));
-    await f.env.store.put(workflowOf({ id: "paused", parked: { reason: "x", at }, trigger: { kind: "every", every: "5m" } }));
-    await f.env.store.put(workflowOf({ id: "byhand", trigger: { kind: "manual" } }));
-    f.clock.now += 3_600_000;
-    expect(await new WorkflowRunner({ env: f.env, holder: "me" }).due()).toEqual([]);
   });
 });
 
-/* ── phase 3: paths, approve and auto ───────────────────────────────── */
+/* ── Outreach, Think, agents ────────────────────────────────────────── */
 
-describe("approve and auto", () => {
-  const assign = () => workflowOf({ trigger: { kind: "every", every: "1h" }, source: { connection: "pms", record: "work_order" }, criteria: 'status == "open"', steps: assignSteps });
-
-  it("routes each row down its path: cheap ones done, dear ones proposed", async () => {
-    const f = fake();
-    f.rows = ORDERS;
-    const workflow = assign();
-    await f.env.store.put(workflow);
-    const { run } = await runWorkflow(f.env, workflow, { start: { kind: "every" } });
-    expect(run.outputs.map((one) => [one.step, one.row, one.outcome])).toEqual([
-      ["cheap", "1", "done"],
-      ["deadline", "1", "done"],
-      ["dear", "2", "proposed"],
-      ["deadline", "2", "done"],
-    ]);
-    expect(f.prepared.map((one) => [one.intent.id, one.via, one.principal.userId])).toEqual([["1", "workflow", "local"]]);
-    expect(f.committed).toEqual(["p1"]);
-    const [waiting] = await f.env.proposals.list({ status: "waiting" });
-    expect(waiting).toMatchObject({ kind: "change", workflow: "wf", intent: { entity: "work_order", id: "2", kind: "update", values: { vendor: "v-default" } } });
-  });
-
-  it("never commits an approve step without a person", async () => {
-    const f = fake();
-    f.rows = [ORDERS[1]!];
-    await runWorkflow(f.env, assign(), { start: { kind: "every" } });
-    expect(f.prepared).toHaveLength(0);
-    expect(f.committed).toHaveLength(0);
-  });
-
-  it("parks an auto change the person it runs as may no longer make", async () => {
-    const f = fake();
-    f.rows = [ORDERS[0]!];
-    f.failPrepare = new WriteError(403, "forbidden", "Your role here (viewer) does not allow this.");
-    const workflow = assign();
-    await f.env.store.put(workflow);
-    const { run } = await runWorkflow(f.env, workflow, { start: { kind: "every" } });
-    expect(run.status).toBe("parked");
-    expect(f.committed).toHaveLength(0);
-  });
-
-  it("does an auto change in an agent's name only within its reach, and says so in the journal", async () => {
-    const f = fake();
-    f.rows = [ORDERS[0]!];
+describe("Outreach", () => {
+  it("writes in the agent's voice with the workflow's guardrails, and says when nothing is connected", async () => {
+    const llm = fakeLlm([{ text: "Hi! We got your work order." }]);
+    const f = fake({ llm });
     f.agents.set("maint", agentOf());
-    const workflow = workflowOf({ trigger: { kind: "agent", inputs: [] }, source: { connection: "pms", record: "work_order" }, steps: [assignSteps[0]] });
+    const workflow = workflowOf({ trigger: { kind: "manual" }, guardrails: "Never promise a date.", nodes: [node("text", "outreach.text", { agentId: "maint", to: "+1555", purpose: "Confirm receipt" })] });
     await f.env.store.put(workflow);
-    await runWorkflow(f.env, workflow, { start: { kind: "agent", agentId: "maint" } });
-    expect(f.prepared[0]).toMatchObject({ via: "workflow", onBehalfOf: { kind: "agent", id: "maint" } });
-    expect(f.committed).toEqual(["p1"]);
+    await byHand(f, workflow);
+    const system = llm.calls[0]!.messages[0]!.content;
+    expect(system).toContain("SECRET-ROLE");
+    expect(system).toContain("Never promise a date.");
+    const [task] = await f.env.tasks.list();
+    expect(task).toMatchObject({ agent: "maint", delivery: { status: "not_sent" }, body: { kind: "conversation", sent: "Hi! We got your work order." } });
+  });
 
-    f.agents.set("maint", agentOf({ reach: [{ permission: "records.read", scope: { connection: "pms" } }] }));
-    await f.env.store.put({ ...workflow, steps: [{ ...assignSteps[0], id: "again", recordId: "{{ id }}" } as never], once: "per-run" });
-    const { run } = await runWorkflow(f.env, (await f.env.store.get("wf"))!, { start: { kind: "agent", agentId: "maint" } });
-    expect(run.status).toBe("parked");
-    expect(f.committed).toEqual(["p1"]);
+  it("asks in trial whatever the step says, counts the trial down, and Approve always makes it automatic", async () => {
+    const f = fake({ sender: true });
+    f.agents.set("maint", agentOf());
+    const workflow = workflowOf({ trigger: { kind: "manual" }, trial: 2, nodes: [node("text", "outreach.text", { agentId: "maint", to: "+1", purpose: "Hi", content: "fixed", wording: "Hi" })] });
+    await f.env.store.put(workflow);
+    await byHand(f, workflow);
+    const [waiting] = await f.env.tasks.list({ status: "waiting_approval" });
+    expect(waiting?.reason).toMatch(/In trial/);
+    await f.tasks.approve(owner, waiting!.id, { always: true });
+    expect(f.sent).toHaveLength(1);
+    const after = await f.env.store.get("wf");
+    expect(after).toMatchObject({ trial: 1, nodes: [{ mode: "auto" }] });
   });
 });
 
-describe("proposals", () => {
-  const setup = async () => {
-    const f = fake();
-    f.rows = [ORDERS[1]!];
-    const workflow = workflowOf({ trigger: { kind: "every", every: "1h" }, source: { connection: "pms", record: "work_order" }, steps: [assignSteps[1]] });
+describe("Think", () => {
+  it("goes down the category the model picks, and never uses an agent's reply prompt", async () => {
+    const llm = fakeLlm([{ args: { category: "urgent", reason: "No heat." } }]);
+    const f = fake({ llm });
+    f.agents.set("maint", agentOf());
+    const nodes = [node("sort", "think.classify", { prompt: "How urgent?", categories: ["urgent", "routine"] }), node("hot", "create.note", { text: "hot" }), node("cool", "create.note", { text: "cool" })];
+    const workflow = workflowOf({
+      trigger: { kind: "manual" },
+      nodes,
+      edges: [...chainEdges(nodes.slice(0, 1)), { id: "u", from: "sort", outcome: "urgent", to: "hot" }, { id: "r", from: "sort", outcome: "routine", to: "cool" }],
+    });
     await f.env.store.put(workflow);
-    await runWorkflow(f.env, workflow, { start: { kind: "every" } });
-    const [proposal] = await f.env.proposals.list();
-    return { f, proposal: proposal!, service: new ProposalService({ env: f.env, holder: "me" }) };
-  };
-
-  it("is prepared fresh, as the person who opens it, and applied only to that review", async () => {
-    const { f, proposal, service } = await setup();
-    const reviewer = member("boss", "admin");
-    const { review } = await service.review(reviewer, proposal.id);
-    expect(f.prepared[0]?.principal.userId).toBe("boss");
-    await expect(service.apply(reviewer, proposal.id)).rejects.toMatchObject({ status: 400 });
-    const { proposal: applied } = await service.apply(reviewer, proposal.id, { pendingId: review!.pendingId, digest: review!.digest });
-    expect(applied).toMatchObject({ status: "applied", decidedBy: "boss", journalId: review!.pendingId });
-    await expect(service.dismiss(reviewer, proposal.id)).rejects.toMatchObject({ status: 409 });
+    await startWorkflow(f.starter, workflow, { kind: "agent", agentId: "maint" }, { actor: owner });
+    expect((await f.env.tasks.list()).map((one) => one.title)).toContain("hot");
+    expect(llm.calls[0]!.messages.map((one) => one.content).join("\n")).not.toContain("SECRET-ROLE");
   });
 
-  it("goes stale when the record has moved on, and can be dismissed", async () => {
-    const { f, proposal, service } = await setup();
-    f.failPrepare = new WriteError(422, "invalid", "Nothing would change — no value differs from what is there now.");
-    const { proposal: stale } = await service.review(owner, proposal.id);
-    expect(stale.status).toBe("stale");
-    expect((await service.dismiss(owner, proposal.id)).status).toBe("dismissed");
+  it("refuses an answer that does not fit the shape the step declares", async () => {
+    const llm = fakeLlm([{ args: { category: "purple" } }]);
+    const f = fake({ llm });
+    const workflow = workflowOf({ trigger: { kind: "manual" }, nodes: [node("sort", "think.classify", { prompt: "?", categories: ["urgent", "routine"] })] });
+    await f.env.store.put(workflow);
+    const { run: done } = await byHand(f, workflow);
+    expect((await f.env.cases.get(done.cases[0]!))?.error).toMatch(/did not fit/);
   });
 });
-
-/* ── phase 4: started by an agent; thinking ─────────────────────────── */
 
 describe("an agent's run_workflow tool", () => {
-  const setup = async (mode: "auto" | "approve" | "deny") => {
+  it("asks the team when the tool is approve, and starts it when a person approves", async () => {
     const f = fake();
-    const tool = { id: "inspect", kind: "run_workflow", workflow: "inspect", mode, denyReply: "Inspections are booked by the office." };
-    const agent = agentOf({ tools: [tool] });
+    const agent = agentOf({ tools: [{ id: "inspect", kind: "run_workflow", workflow: "wf", mode: "approve" }] });
     f.agents.set(agent.id, agent);
-    await f.env.store.put(
-      workflowOf({
-        id: "inspect",
-        name: "Move-out inspection",
-        trigger: { kind: "agent", inputs: [{ name: "unit", description: "Which unit", required: true }] },
-        steps: [{ id: "c", kind: "calendar", title: "Inspect {{ input.unit }}", at: "2026-10-12" }],
-      }),
-    );
-    const starter: Starter = { env: f.env, holder: "me" };
-    return { f, agent, tool: agent.tools[0]!, starter };
-  };
-
-  it("starts the run when the tool is auto, in the agent's name", async () => {
-    const { f, agent, tool, starter } = await setup("auto");
-    const outcome = await startFromAgentTool(starter, { agent, tool, inputs: { unit: "4B", sneaky: "x" }, conversation: "c1" });
-    expect(outcome).toMatchObject({ outcome: "started", run: { status: "succeeded", agent: "maint", start: { kind: "agent", conversation: "c1" }, inputs: { unit: "4B" } } });
-    expect((await f.env.calendar.list())[0]).toMatchObject({ title: "Inspect 4B", owner: { kind: "agent", id: "maint" } });
-  });
-
-  it("asks the team instead when the tool is approve, and starts it when a person applies that", async () => {
-    const { f, agent, tool, starter } = await setup("approve");
-    const outcome = await startFromAgentTool(starter, { agent, tool, inputs: { unit: "4B" } });
-    expect(outcome.outcome).toBe("approval");
-    expect(await f.env.store.runs()).toHaveLength(0);
-    const [proposal] = await f.env.proposals.list({ status: "waiting" });
-    expect(proposal).toMatchObject({ kind: "workflow_start", agent: "maint", intent: { workflow: "inspect", inputs: { unit: "4B" } } });
-    const { proposal: applied, run } = await new ProposalService(starter).apply(member("boss", "admin"), proposal!.id);
-    expect(applied).toMatchObject({ status: "applied", startedRun: run?.id });
-    expect(run).toMatchObject({ start: { kind: "proposal", userId: "boss", agentId: "maint" } });
-  });
-
-  it("declines with the tool's reply when it is deny, and asks for what is missing", async () => {
-    const denied = await setup("deny");
-    expect(await startFromAgentTool(denied.starter, { agent: denied.agent, tool: denied.tool, inputs: {} })).toEqual({
-      outcome: "declined",
-      reply: "Inspections are booked by the office.",
-    });
-    const auto = await setup("auto");
-    const missing = await startFromAgentTool(auto.starter, { agent: auto.agent, tool: auto.tool, inputs: {} });
-    expect(missing).toMatchObject({ outcome: "needs_input", missing: [{ name: "unit" }] });
-  });
-
-  it("refuses to run the same workflow twice at once", async () => {
-    const { f, starter } = await setup("auto");
-    const leases = new MemoryLeaseLock(() => f.clock.now);
-    await leases.acquire("workflow:inspect", "other", 60_000);
-    await expect(startWorkflow({ ...starter, leases }, (await f.env.store.get("inspect"))!, { kind: "manual" })).rejects.toMatchObject({ status: 409 });
+    const workflow = workflowOf({ trigger: { kind: "agent", inputs: [{ name: "unit", description: "Which unit", required: true }] }, nodes: [node("cal", "create.calendar", { title: "Inspect {{ input.unit }}", at: "2026-10-12" })] });
+    await f.env.store.put(workflow);
+    expect(await startFromAgentTool(f.starter, { agent, tool: agent.tools[0]!, inputs: {} })).toMatchObject({ outcome: "needs_input" });
+    expect((await startFromAgentTool(f.starter, { agent, tool: agent.tools[0]!, inputs: { unit: "4B" } })).outcome).toBe("approval");
+    const [waiting] = await f.env.tasks.list({ status: "waiting_approval" });
+    const { task } = await f.tasks.approve(member("boss", "admin"), waiting!.id);
+    expect(task).toMatchObject({ status: "done", approvedBy: "boss" });
+    expect((await f.env.calendar.list())[0]?.title).toBe("Inspect 4B");
   });
 });
 
-describe("the think step", () => {
-  it("thinks with the workflow's prompt and never the agent's reply prompt, and its changes wait for a person", async () => {
-    const llm = fakeLlm([{ args: { entity: "work_order", change: "update", id: "2", values: [{ field: "priority", value: "high" }], reason: "Costly and open." } }]);
-    const f = fake({ llm });
-    f.rows = ORDERS;
-    f.agents.set("maint", agentOf());
-    const workflow = workflowOf({
-      trigger: { kind: "agent", inputs: [] },
-      source: { connection: "pms", record: "work_order" },
-      once: "per-run",
-      steps: [{ id: "t", kind: "think", prompt: "Raise the priority of costly open orders." }],
-    });
-    await f.env.store.put(workflow);
-    const { run } = await runWorkflow(f.env, workflow, { start: { kind: "agent", agentId: "maint" } });
-    const sent = llm.calls[0]!.messages.map((one) => one.content).join("\n");
-    expect(sent).toContain("Raise the priority of costly open orders.");
-    expect(sent).not.toContain("SECRET-ROLE");
-    expect(sent).not.toContain("SECRET-INSTRUCTIONS");
-    expect(llm.calls[0]!.toolNames).not.toContain("commit");
-    expect(run.outputs[0]).toMatchObject({ kind: "think", outcome: "proposed" });
-    expect(f.committed).toHaveLength(0);
-    expect((await f.env.proposals.list())[0]).toMatchObject({ agent: "maint", reason: "Costly and open.", intent: { values: { priority: "high" } } });
+/* ── templates, drafts, overview, preview ───────────────────────────── */
+
+describe("templates", () => {
+  it("saves steps with blanks, asks for them on insert, and makes a new version on a second save", async () => {
+    const f = fake();
+    const nodes = [node("text", "outreach.text", { agentId: "{{ blank.agent }}", to: "{{ phone }}", purpose: "Follow up" }), node("wait", "wait.for", { event: "reply", step: "text", timeout: "{{ blank.wait }}" })];
+    await f.env.store.put(workflowOf({ trigger: { kind: "manual" }, nodes }));
+    const templates = new TemplateService({ templates: f.env.templates, workflows: f.env.store, newId: f.env.newId });
+    const saved = await templates.saveFrom({ workflow: "wf", kind: "path", name: "Follow up", steps: ["text", "wait"] });
+    expect(saved).toMatchObject({ version: 1, entry: "text", blanks: [{ name: "agent" }, { name: "wait" }] });
+    await expect(templates.insert(saved.id, { agent: "maint" })).rejects.toThrow(/needs: wait/);
+    const inserted = await templates.insert(saved.id, { agent: "maint", wait: "3d" }, { x: 100, y: 200 });
+    expect(inserted.nodes.map((one) => one.settings["agentId"] ?? one.settings["timeout"])).toEqual(["maint", "3d"]);
+    expect(inserted.nodes[1]!.settings["step"]).toBe(inserted.nodes[0]!.id);
+    expect(inserted.edges).toHaveLength(1);
+    expect((await templates.saveFrom({ workflow: "wf", kind: "path", name: "follow up", steps: ["text", "wait"] })).version).toBe(2);
   });
 });
 
-/* ── the Overview ───────────────────────────────────────────────────── */
-
-describe("the Overview", () => {
-  it("says what each active workflow is waiting for, and lists what was done, newest first", async () => {
+describe("drafts", () => {
+  it("says what is missing and suggests a follow-up, in one sentence and three questions at most", async () => {
     const f = fake();
-    f.rows = ORDERS;
-    const agent = agentOf({ tools: [{ id: "t", kind: "run_workflow", workflow: "inspect" }] });
-    f.agents.set(agent.id, agent);
-    const assign = workflowOf({ trigger: { kind: "every", every: "1h" }, source: { connection: "pms", record: "work_order" }, criteria: 'status == "open"', steps: assignSteps });
-    await f.env.store.put(assign);
-    await f.env.store.put(workflowOf({ id: "inspect", name: "Inspection", trigger: { kind: "agent", inputs: [] } }));
-    await f.env.store.put(workflowOf({ id: "daily", name: "Daily", trigger: { kind: "schedule", cron: "0 7 * * 1-5", timezone: "UTC" } }));
-    await f.env.store.put(workflowOf({ id: "stuck", name: "Stuck", parked: { reason: "Access lost.", at }, trigger: { kind: "every", every: "1h" } }));
-    await f.env.store.put(workflowOf({ id: "off", name: "Off", enabled: false, trigger: { kind: "manual" } }));
-    await runWorkflow(f.env, assign, { start: { kind: "every" } });
+    const service = new WorkflowService({ store: f.env.store, policy: { can: () => ({ ok: true }) }, agents: { list: async () => [agentOf()] }, hasConnection: () => true });
+    const workflow = workflowOf({ trigger: { kind: "record_created", connection: "pms", record: "work_order" }, nodes: [node("text", "outreach.text", { agentId: "maint", purpose: "Tell them it was received" })] });
+    const draft = await explainDraft(service, owner, workflow, [agentOf()]);
+    expect(draft.sentence).toBe("When a new work_order appears on pms, Maintenance agent texts them.");
+    expect(draft.steps[0]).toMatchObject({ picked: "Outreach · Text", mode: "Auto" });
+    expect(draft.questions.map((one) => [one.kind, one.question])).toEqual([
+      ["missing", "Who should it reach? (a field on the record, or an address)"],
+      ["suggestion", 'Add a follow-up if they don\'t reply to "Text"? How long should it wait first?'],
+      ["suggestion", '"Text" will reach people without anyone reviewing it. Keep it on Approve?'],
+    ]);
+  });
+});
 
-    const overview = await buildOverview(f.env, { agents: [agent] });
-    const state = Object.fromEntries(overview.active.map((one) => [one.workflow, one]));
-    expect(Object.keys(state)).not.toContain("off");
-    expect(state["wf"]).toMatchObject({ state: "waiting_approval", waiting: 1, tasks: ["propose_change", "calendar"] });
-    expect(state["inspect"]).toMatchObject({ state: "waiting_agent", waitingFor: "Maintenance agent to be asked", agents: ["maint"] });
-    expect(state["daily"]).toMatchObject({ state: "waiting_schedule", nextAt: "2026-10-07T07:00:00.000Z" });
-    expect(state["stuck"]?.waitingFor).toMatch(/turn it back on: Access lost/);
-    expect(overview.active[0]?.workflow).toBe("wf");
-    /* Row 1's change, row 1's deadline, row 2's deadline (row 2's change waits): newest first. */
-    expect(overview.completed.map((one) => one.task)).toEqual(["calendar", "calendar", "propose_change"]);
+describe("the Overview and preview", () => {
+  it("says what each case waits for, and lists completed tasks newest first", async () => {
+    const f = fake();
+    f.rows = [ORDERS[1]!];
+    const workflow = workflowOf({ trigger: every, source, nodes: [node("cal", "create.calendar", { title: "x", at: "2026-10-09" }), node("assign", "update.record", { entity: "work_order", recordId: "{{ id }}", values: { vendor: "v1" } }, { mode: "approve" })] });
+    await f.env.store.put(workflow);
+    await run(f, workflow);
+    const overview = await buildOverview(f.env, { agents: [] });
+    expect(overview.active[0]).toMatchObject({ state: "waiting_approval", waiting: 1, cases: [{ status: "waiting", waitingFor: "your approval", step: "Update record fields" }] });
+    expect(overview.completed.map((one) => one.action)).toEqual(["create.calendar"]);
   });
 
-  it("shows the step a running workflow is on", async () => {
+  it("previews each record's path without writing anything", async () => {
     const f = fake();
-    f.rows = ORDERS;
-    const workflow = workflowOf({ trigger: { kind: "manual" }, source: { connection: "pms", record: "work_order" }, once: "per-run", steps: [{ id: "n", kind: "calendar", title: "{{ unit }}", at: "2026-10-09" }] });
-    await f.env.store.put(workflow);
-    let seen: string | undefined;
-    const calendar = f.env.calendar;
-    (f.env as { calendar: typeof calendar }).calendar = {
-      ...calendar,
-      list: calendar.list.bind(calendar),
-      put: async (event) => {
-        seen ??= (await buildOverview(f.env, { agents: [] })).active[0]?.stage;
-        await calendar.put(event);
-      },
-    };
-    await runWorkflow(f.env, workflow, { start: { kind: "manual" }, actor: owner });
-    expect(seen).toBe("Step 1 of 1: Put it on the calendar, record 1 of 3");
-    expect((await buildOverview(f.env, { agents: [] })).active[0]?.state).toBe("waiting_trigger");
+    f.rows = ORDERS.slice(0, 2);
+    const nodes = [node("check", "branch.if", { condition: "cost >= 500" }), node("dear", "update.record", { entity: "work_order", recordId: "{{ id }}", values: { vendor: "v" } }, { mode: "approve" }), node("wait", "wait.duration", { duration: "1d" })];
+    const workflow = workflowOf({ trigger: every, source, nodes, edges: [{ id: "a", from: "trigger", to: "check" }, { id: "y", from: "check", outcome: "yes", to: "dear" }, { id: "n", from: "check", outcome: "no", to: "wait" }] });
+    const preview = await previewWorkflow(f.env, workflow, owner);
+    expect(preview.rows.map((row) => row.path.map((step) => step.node))).toEqual([
+      ["check", "wait"],
+      ["check", "dear"],
+    ]);
+    expect(await f.env.tasks.list()).toHaveLength(0);
   });
 });

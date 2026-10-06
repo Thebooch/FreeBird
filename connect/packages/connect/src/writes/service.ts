@@ -108,6 +108,10 @@ export interface CommitResult {
   /** What was made stale, so the browser can drop the same answers. */
   readonly invalidated: { readonly connection: string; readonly ops: readonly string[] };
   readonly title: string;
+  /** The journal event this change was recorded under. */
+  readonly eventId: string;
+  /** How to undo it, as far as the API allows: the same hint the journal keeps. */
+  readonly reversal?: WriteReversal | undefined;
 }
 
 interface Resolved {
@@ -667,6 +671,7 @@ export class WriteService {
     this.deps.seen.touch(connection.id, this.now());
     this.markVerified(entry, target.op);
     const changed = pending.review.rows.filter((row) => row.changed).map((row) => row.label);
+    const reversal = this.reversalOf(resolved, pending, key);
     this.record(principal, pending, resolved, {
       status: "succeeded",
       upstreamStatus: answer.status,
@@ -684,6 +689,8 @@ export class WriteService {
       changed,
       invalidated: { connection: connection.id, ops },
       title: target.title,
+      eventId: pending.id,
+      ...(reversal ? { reversal } : {}),
     };
   }
 

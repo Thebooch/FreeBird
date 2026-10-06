@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS dash_workflow_runs (
   id           TEXT NOT NULL,
   workflow     TEXT NOT NULL,
   agent        TEXT,
-  trigger_kind TEXT NOT NULL,
+  trigger_kind TEXT,
   started_at   TEXT NOT NULL,
   finished_at  TEXT,
   status       TEXT NOT NULL,
@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS dash_workflow_runs (
   PRIMARY KEY (workspace, id)
 );
 
+ALTER TABLE dash_workflow_runs ALTER COLUMN trigger_kind DROP NOT NULL;
 CREATE INDEX IF NOT EXISTS dash_workflow_runs_finished ON dash_workflow_runs (workspace, finished_at);
 CREATE INDEX IF NOT EXISTS dash_workflow_runs_workflow ON dash_workflow_runs (workspace, workflow, started_at);
 
@@ -87,30 +88,53 @@ CREATE TABLE IF NOT EXISTS dash_workflow_fired (
   workflow    TEXT NOT NULL,
   row_key     TEXT NOT NULL,
   fingerprint TEXT NOT NULL DEFAULT '',
-  fired_at    TEXT NOT NULL,
+  fired_at    TEXT,
   PRIMARY KEY (workspace, workflow, row_key)
 );
 
-CREATE TABLE IF NOT EXISTS dash_proposals (
-  workspace    TEXT NOT NULL,
-  id           TEXT NOT NULL,
-  kind         TEXT NOT NULL,
-  agent        TEXT,
-  workflow     TEXT,
-  run          TEXT,
-  conversation TEXT,
-  intent       JSONB NOT NULL,
-  reason       TEXT NOT NULL DEFAULT '',
-  status       TEXT NOT NULL,
-  created_at   TEXT NOT NULL,
-  decided_at   TEXT,
-  decided_by   TEXT,
-  journal_id   TEXT,
-  record       JSONB NOT NULL,
+ALTER TABLE dash_workflow_fired ADD COLUMN IF NOT EXISTS fire_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE dash_workflow_fired ADD COLUMN IF NOT EXISTS last_at TEXT;
+ALTER TABLE dash_workflow_fired ALTER COLUMN fired_at DROP NOT NULL;
+
+CREATE TABLE IF NOT EXISTS dash_workflow_cases (
+  workspace  TEXT NOT NULL,
+  id         TEXT NOT NULL,
+  workflow   TEXT NOT NULL,
+  status     TEXT NOT NULL,
+  wait_key   TEXT,
+  wait_kind  TEXT,
+  deadline   TEXT,
+  started_at TEXT NOT NULL,
+  revision   INTEGER NOT NULL DEFAULT 0,
+  record     JSONB NOT NULL,
   PRIMARY KEY (workspace, id)
 );
 
-CREATE INDEX IF NOT EXISTS dash_proposals_status ON dash_proposals (workspace, status, created_at);
+CREATE INDEX IF NOT EXISTS dash_workflow_cases_wait ON dash_workflow_cases (workspace, status, wait_key);
+CREATE INDEX IF NOT EXISTS dash_workflow_cases_deadline ON dash_workflow_cases (workspace, status, deadline);
+
+CREATE TABLE IF NOT EXISTS dash_tasks (
+  workspace TEXT NOT NULL,
+  id        TEXT NOT NULL,
+  workflow  TEXT,
+  case_id   TEXT,
+  status    TEXT NOT NULL,
+  at        TEXT NOT NULL,
+  record    JSONB NOT NULL,
+  PRIMARY KEY (workspace, id)
+);
+
+CREATE INDEX IF NOT EXISTS dash_tasks_status ON dash_tasks (workspace, status, at);
+CREATE INDEX IF NOT EXISTS dash_tasks_case ON dash_tasks (workspace, case_id);
+
+CREATE TABLE IF NOT EXISTS dash_workflow_templates (
+  workspace TEXT NOT NULL,
+  id        TEXT NOT NULL,
+  record    JSONB NOT NULL,
+  PRIMARY KEY (workspace, id)
+);
+
+DROP TABLE IF EXISTS dash_proposals;
 
 CREATE TABLE IF NOT EXISTS dash_calendar_events (
   workspace TEXT NOT NULL,

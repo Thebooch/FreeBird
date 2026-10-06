@@ -20,7 +20,7 @@ const ENV_KEYS = [
   "OPENAI_API_KEY",
   "DASH_LLM_MODEL",
   "DASH_REVIEW_MODEL",
-  ...TASKS.map((task) => `DASH_MODEL_${task.id.toUpperCase()}`),
+  ...TASKS.map((task) => `DASH_MODEL_${task.id.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`),
 ];
 
 let saved: Record<string, string | undefined> = {};
@@ -329,5 +329,18 @@ describe("switching provider on disk", () => {
     const path = join(dir, "settings.json");
     writeFileSync(path, JSON.stringify({ provider: "mistral", model: null, models: {} }), "utf8");
     expect(new SettingsStore(path).read().provider).toBeNull();
+  });
+});
+
+describe("workflow and agent tasks", () => {
+  const NONE = { model: null, provider: null, models: {} };
+
+  it("follow the chat's model until they are given their own", () => {
+    for (const task of ["outreach", "agent-reply", "agent-tools", "think", "wait-match", "workflow-draft"] as const) {
+      expect(findTask(task)?.follows).toBe("chat");
+      expect(modelForTask(task, NONE)).toBe(modelForTask("chat", NONE));
+      expect(modelForTask(task, { ...NONE, models: { chat: "claude-opus-5" } })).toBe("claude-opus-5");
+    }
+    expect(modelForTask("think", { ...NONE, models: { chat: "claude-opus-5", think: "claude-haiku-4-5" } })).toBe("claude-haiku-4-5");
   });
 });

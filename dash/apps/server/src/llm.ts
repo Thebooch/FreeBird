@@ -1106,6 +1106,9 @@ export const modelForTask = (task: LlmTask, settings?: ModelChoices | null): str
 
   const chosen = settings?.models?.[task];
   if (chosen) return chosen;
+  /* A task that follows another uses that one's model, wherever it came from. */
+  const follows = findTask(task)?.follows;
+  if (follows && follows !== task) return modelForTask(follows, settings);
   if (settings?.model) return settings.model;
 
   const provider = preferredProvider(settings);

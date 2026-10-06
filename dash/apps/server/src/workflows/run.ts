@@ -2,56 +2,52 @@ import { createHash } from "node:crypto";
 import { AdapterError } from "@freebirdai/connect/adapters";
 import { Priority, retryAfterMs } from "@freebirdai/connect/host";
 import {
-  WORKFLOW_STEP_INFO,
+  actionVariant,
+  durationMs,
+  firstNode,
   isApiTrigger,
+  nextNode,
+  nodeMode,
+  nodeName,
   passes,
   readField,
   reachCovers,
-  stepMode,
+  renderText,
   stepRow,
   workflowReads,
   type AgentSpec,
   type Principal,
   type WorkflowRun,
-  type WorkflowRunOutput,
   type WorkflowSpec,
   type WorkflowStart,
   type WorkflowStepMode,
 } from "@freebirdai/dash-spec";
+import type { WorkflowEngine } from "./engine.js";
 import { ParkWorkflow, type WorkflowEnv } from "./env.js";
-import { DEFAULT_EXECUTORS, type ExecutorRegistry, type StepInput, type WorkflowStepExecutor } from "./executors.js";
-import { SEEDED_KEY } from "./store.js";
+import { SEEDED_KEY, type FiredRow } from "./store.js";
 
 /**
- * One run of a workflow, whatever started it.
+ * One pass of a workflow's trigger: read what it reads, keep the records that
+ * are new (or changed) and match its criteria, and open a case for each.
  *
- * 1. Check access: the person whose permission it uses may read what it
- *    reads, and so may the agent, when the run is in an agent's name.
- * 2. Read through the engine at background priority, waiting a bounded time
- *    for a long read to finish, and record whether every record was reached.
- * 3. For an API trigger, keep only rows that are new (or changed) since the
- *    last look; the first look only takes note of what is there.
- * 4. Keep the rows the criteria match; with `once: "per-row"`, skip rows
- *    already acted on.
- * 5. Run the steps: once a row, each where its `when` holds, or once a run.
- * 6. Write the run down.
+ * The cases do the work (`engine.ts`). A run only decides which records start
+ * one, within the trigger's limits: how many cases one record may open, how
+ * long it rests in between, and when the trigger expires. What it has seen is
+ * moved on only once a record's case is open, so a record whose case could
+ * not open is tried again next time.
  *
- * Access lost parks the workflow with the reason. A refusal from the API
- * (401, 403) does too. A 429 waits as long as the API asked. Three failed
- * runs in a row turn it off and say why.
+ * Access lost parks the workflow with the reason, as does a 401 or 403 from
+ * the API; a 429 waits as long as the API asked.
  */
 
-/** Runs that fail in a row before a workflow is turned off. */
 export const MAX_FAILURES = 3;
-/** The longest a run waits for a long read to finish. */
 export const READ_WAIT_MS = 60_000;
 
 export interface RunOptions {
   readonly start: WorkflowStart;
   readonly inputs?: Readonly<Record<string, unknown>> | undefined;
-  /** The person who started it by hand, or applied the request that did. Absent: whoever turned it on. */
+  /** The person who started it by hand, or approved the request that did. Absent: whoever turned it on. */
   readonly actor?: Principal | null | undefined;
-  readonly executors?: ExecutorRegistry | undefined;
 }
 
 export interface RunResult {
@@ -66,12 +62,9 @@ interface Row {
 }
 
 interface Gathered {
-  readonly connection?: string | undefined;
   readonly read: number;
   readonly complete: boolean;
   readonly rows: readonly Row[];
-  /** Rows the read returned without a key, so nothing could be done with them. */
-  readonly keyless: number;
 }
 
 const stable = (value: unknown): string => {
@@ -100,23 +93,17 @@ const refusal = (error: unknown): number | undefined => {
   return status === 401 || status === 403 ? status : undefined;
 };
 
-/** Read what a workflow reads, as a person (and an agent) may. */
-const gather = async (
-  env: WorkflowEnv,
-  workflow: WorkflowSpec,
-  actor: Principal | null,
-  agent: AgentSpec | null,
-): Promise<Gathered> => {
-  const source = workflowReads(workflow);
-  /* Reads nothing: one run over its inputs. */
-  if (!source) return { read: 0, complete: true, rows: [{ key: "run", row: {} }], keyless: 0 };
+const plural = (count: number, one: string, many = `${one}s`): string => `${count} ${count === 1 ? one : many}`;
 
+/** Read what a workflow reads, as a person (and an agent) may. */
+const gather = async (env: WorkflowEnv, workflow: WorkflowSpec, actor: Principal | null, agent: AgentSpec | null): Promise<Gathered> => {
+  const source = workflowReads(workflow);
+  if (!source) return { read: 0, complete: true, rows: [{ key: "", row: {} }] };
   if (!actor) throw new ParkWorkflow("Nobody has turned this workflow on, so it has no one's permission to read with.");
+  const where = env.connectionTitle?.(source.connection) ?? source.connection;
   const may = await env.policy.can(actor, "records.read", { connection: source.connection });
-  if (!may.ok) throw new ParkWorkflow(`The person who turned this on may no longer read ${env.connectionTitle?.(source.connection) ?? source.connection}: ${may.reason}`);
-  if (agent && !reachCovers(agent.reach, "records.read", { connection: source.connection })) {
-    throw new ParkWorkflow(`${agent.name} may not read ${env.connectionTitle?.(source.connection) ?? source.connection}.`);
-  }
+  if (!may.ok) throw new ParkWorkflow(`The person who turned this on may no longer read ${where}: ${may.reason}`);
+  if (agent && !reachCovers(agent.reach, "records.read", { connection: source.connection })) throw new ParkWorkflow(`${agent.name} may not read ${where}.`);
 
   const answer = await env.read(
     source.connection,
@@ -134,99 +121,98 @@ const gather = async (
   );
   const field = workflow.rowKey ?? (source.record ? env.rowKeyField?.(source.connection, source.record) : undefined) ?? "id";
   const rows: Row[] = [];
-  let keyless = 0;
   const seen = new Set<string>();
   for (const row of answer.rows) {
     const key = keyOf(row, field);
-    if (key === undefined || seen.has(key)) {
-      keyless++;
-      continue;
-    }
+    if (key === undefined || seen.has(key)) continue;
     seen.add(key);
     rows.push({ key, row });
   }
-  return { connection: source.connection, read: answer.rows.length, complete: answer.complete, rows, keyless };
+  return { read: answer.rows.length, complete: answer.complete, rows };
 };
 
-const plural = (count: number, one: string, many = `${one}s`): string => `${count} ${count === 1 ? one : many}`;
-
-const summarize = (gathered: Gathered, matched: number, outputs: readonly WorkflowRunOutput[], hasSource: boolean): string => {
-  const counts = new Map<string, number>();
-  for (const output of outputs) counts.set(output.outcome, (counts.get(output.outcome) ?? 0) + 1);
-  const parts = [...counts].map(([outcome, count]) => `${count} ${outcome}`);
-  if (!hasSource) return parts.length > 0 ? parts.join(", ") : "Nothing to do";
-  const reading = `${matched} of ${plural(gathered.read, "record")} matched${gathered.complete ? "" : " (not every record was reached)"}`;
-  return parts.length > 0 ? `${reading} · ${parts.join(", ")}` : `${reading} · nothing to do`;
-};
-
-/** The rows a run acts on, after the trigger, the criteria and `once`. Writes what it has now seen. */
-const select = async (
-  env: WorkflowEnv,
-  workflow: WorkflowSpec,
-  gathered: Gathered,
-  inputs: Readonly<Record<string, unknown>>,
-  options: { readonly dryRun: boolean },
-): Promise<{ readonly seeding: boolean; readonly matched: Array<{ key: string; row: Record<string, unknown> }>; readonly toMark: Array<{ key: string; fingerprint: string }> }> => {
-  const now = env.now();
-  const at = new Date(now).toISOString();
-  const { trigger } = workflow;
-  let rows: readonly Row[] = gathered.rows;
-  const toMark: Array<{ key: string; fingerprint: string }> = [];
-
-  if (isApiTrigger(trigger)) {
-    const seen = await env.store.fired(workflow.id);
-    const prints = rows.map((one) => ({ key: one.key, fingerprint: fingerprint(one.row, trigger.kind === "record_changed" ? trigger.fields : undefined) }));
-    if (!seen.has(SEEDED_KEY)) {
-      if (!options.dryRun) await env.store.markFired(workflow.id, [...prints, { key: SEEDED_KEY, fingerprint: "" }], at);
-      return { seeding: true, matched: [], toMark: [] };
-    }
-    const fresh: Row[] = [];
-    const updates: Array<{ key: string; fingerprint: string }> = [];
-    rows.forEach((one, index) => {
-      const print = prints[index]!;
-      const before = seen.get(one.key);
-      if (before === print.fingerprint) return;
-      updates.push(print);
-      if (trigger.kind === "record_created" ? before === undefined : before !== undefined) fresh.push(one);
-    });
-    /* Seen now, whether or not it matches: a new row is new once. */
-    if (!options.dryRun) await env.store.markFired(workflow.id, updates, at);
-    rows = fresh;
-  }
-
-  let matched = rows
-    .map((one) => ({ key: one.key, row: stepRow(one.row, inputs) }))
-    .filter((one) => passes(workflow.criteria, one.row, now));
-
-  if (workflow.once === "per-row" && workflowReads(workflow) && !isApiTrigger(trigger)) {
-    const acted = await env.store.fired(workflow.id);
-    const matchedKeys = new Set(matched.map((one) => one.key));
-    /* A row that stopped matching can be acted on again when it matches again. Only rows this read reached. */
-    const lapsed = rows.map((one) => one.key).filter((key) => acted.has(key) && !matchedKeys.has(key));
-    if (lapsed.length > 0 && !options.dryRun) await env.store.unfire(workflow.id, lapsed);
-    matched = matched.filter((one) => !acted.has(one.key));
-    toMark.push(...matched.map((one) => ({ key: one.key, fingerprint: "" })));
-  }
-  return { seeding: false, matched, toMark };
-};
-
-/** Whether a step runs for a row, and how. */
-export interface StepPlan {
-  readonly step: string;
-  readonly kind: string;
-  readonly mode: WorkflowStepMode;
-  readonly runs: boolean;
+interface Selected {
+  readonly seeding: boolean;
+  readonly expired: boolean;
+  readonly matched: Array<{ key: string; row: Record<string, unknown> }>;
+  /** What to remember once each record's case is open, by key. */
+  readonly marks: Map<string, FiredRow>;
+  /** Seen whatever happens: new or changed records that did not match. */
+  readonly seen: Array<{ key: string } & FiredRow>;
 }
 
-const planFor = (workflow: WorkflowSpec, row: Record<string, unknown>, now: number): StepPlan[] =>
-  workflow.steps
-    .filter((step) => !WORKFLOW_STEP_INFO[step.kind].perRun)
-    .map((step) => ({ step: step.id, kind: step.kind, mode: stepMode(step), runs: passes(step.when, row, now) }));
+/** The records a run opens cases for, after the trigger, its limits, the criteria and `once`. */
+const select = async (env: WorkflowEnv, workflow: WorkflowSpec, gathered: Gathered, inputs: Readonly<Record<string, unknown>>, dryRun: boolean): Promise<Selected> => {
+  const now = env.now();
+  const at = new Date(now).toISOString();
+  const { trigger, triggerLimits: limits } = workflow;
+  const marks = new Map<string, FiredRow>();
+  const seenOnly: Array<{ key: string } & FiredRow> = [];
+  if (limits.expiresAt && Date.parse(limits.expiresAt) <= now) return { seeding: false, expired: true, matched: [], marks, seen: seenOnly };
+  if (!workflowReads(workflow)) {
+    return { seeding: false, expired: false, matched: [{ key: "", row: {} }], marks, seen: seenOnly };
+  }
 
-export const runWorkflow = async (env: WorkflowEnv, workflow: WorkflowSpec, options: RunOptions): Promise<RunResult> => {
-  const executors = { ...DEFAULT_EXECUTORS, ...options.executors };
+  const fired = await env.store.fired(workflow.id);
+  const cooldownMs = durationMs(limits.cooldown) ?? 0;
+  /* Within its limits: not too many cases for one record, and not too soon after the last. */
+  const allowed = (key: string): boolean => {
+    const held = fired.get(key);
+    if (!held) return true;
+    if (limits.maxPerRecord !== undefined && held.count >= limits.maxPerRecord) return false;
+    if (cooldownMs > 0 && held.lastAt && Date.parse(held.lastAt) + cooldownMs > now) return false;
+    return true;
+  };
+
+  let rows: readonly Row[] = gathered.rows;
+  const prints = new Map<string, string>();
+  if (isApiTrigger(trigger)) {
+    for (const one of rows) prints.set(one.key, fingerprint(one.row, trigger.kind === "record_changed" ? trigger.fields : undefined));
+    if (!fired.has(SEEDED_KEY)) {
+      if (!dryRun) await env.store.markFired(workflow.id, [...[...prints].map(([key, print]) => ({ key, fingerprint: print, count: 0 })), { key: SEEDED_KEY, fingerprint: "", count: 0 }]);
+      return { seeding: true, expired: false, matched: [], marks, seen: seenOnly };
+    }
+    rows = rows.filter((one) => {
+      const before = fired.get(one.key);
+      const print = prints.get(one.key)!;
+      if (before?.fingerprint === print) return false;
+      /* A new record is new once; a changed one counts only if it was there before. */
+      if (trigger.kind === "record_created" ? before !== undefined : before === undefined) {
+        seenOnly.push({ key: one.key, fingerprint: print, count: before?.count ?? 0, ...(before?.lastAt ? { lastAt: before.lastAt } : {}) });
+        return false;
+      }
+      return true;
+    });
+  }
+
+  let matched = rows.map((one) => ({ key: one.key, row: one.row as Record<string, unknown> })).filter((one) => passes(workflow.criteria, stepRow(one.row, inputs), now));
+  const matchedKeys = new Set(matched.map((one) => one.key));
+  if (isApiTrigger(trigger)) {
+    /* Changed or new but not a match: seen all the same, so it is not new again next time. */
+    for (const one of rows) {
+      if (matchedKeys.has(one.key)) continue;
+      const before = fired.get(one.key);
+      seenOnly.push({ key: one.key, fingerprint: prints.get(one.key)!, count: before?.count ?? 0, ...(before?.lastAt ? { lastAt: before.lastAt } : {}) });
+    }
+  } else if (workflow.once === "per-row") {
+    /* A record that stopped matching can open a case again when it matches again. Only records this read reached. */
+    const lapsed = rows.map((one) => one.key).filter((key) => fired.get(key)?.fingerprint === "acted" && !matchedKeys.has(key));
+    if (lapsed.length > 0 && !dryRun) await env.store.unfire(workflow.id, lapsed);
+    matched = matched.filter((one) => fired.get(one.key)?.fingerprint !== "acted");
+  }
+
+  matched = matched.filter((one) => allowed(one.key));
+  for (const one of matched) {
+    const before = fired.get(one.key);
+    const print = isApiTrigger(trigger) ? prints.get(one.key)! : workflow.once === "per-row" ? "acted" : (before?.fingerprint ?? "");
+    marks.set(one.key, { fingerprint: print, count: (before?.count ?? 0) + 1, lastAt: at });
+  }
+  return { seeding: false, expired: false, matched, marks, seen: seenOnly };
+};
+
+/** Run a workflow's trigger once: open a case for each record it should act on. */
+export const runTrigger = async (env: WorkflowEnv, engine: WorkflowEngine, workflow: WorkflowSpec, options: RunOptions): Promise<RunResult> => {
   const inputs = options.inputs ?? {};
-  const startedAt = new Date(env.now()).toISOString();
   const agentId = options.start.agentId;
   const agent = agentId ? await env.agents.get(agentId) : null;
   const actor = options.actor ?? workflow.enabledBy ?? null;
@@ -237,56 +223,41 @@ export const runWorkflow = async (env: WorkflowEnv, workflow: WorkflowSpec, opti
     ...(agentId ? { agent: agentId } : {}),
     start: options.start,
     ...(Object.keys(inputs).length > 0 ? { inputs: { ...inputs } } : {}),
-    startedAt,
+    startedAt: new Date(env.now()).toISOString(),
     status: "running",
     read: 0,
     matched: 0,
+    cases: [],
     complete: true,
     summary: "",
-    outputs: [],
   };
   await env.store.putRun(started);
-
   const finish = async (patch: Partial<WorkflowRun>): Promise<WorkflowRun> => {
     const done: WorkflowRun = { ...started, ...patch, finishedAt: new Date(env.now()).toISOString() };
     await env.store.putRun(done);
-    env.onEvent?.({ type: "workflow.run", workflow: workflow.id, run: done.id, status: done.status, matched: done.matched });
+    env.onEvent?.({ type: "workflow.run", workflow: workflow.id, run: done.id, status: done.status, cases: done.cases.length });
     return done;
   };
-
-  /* The workflow as it is now: a person may have edited it while this ran. */
   const amend = async (change: (held: WorkflowSpec) => WorkflowSpec): Promise<void> => {
     const held = await env.store.get(workflow.id);
     if (held) await env.store.put(change(held));
   };
-
-  const park = async (reason: string): Promise<RunResult> => {
-    await amend((held) => ({ ...held, parked: { reason, at: new Date(env.now()).toISOString() } }));
-    env.onEvent?.({ type: "workflow.parked", workflow: workflow.id, reason });
-    return { run: await finish({ status: "parked", error: reason, summary: `Paused: ${reason}` }) };
-  };
-
-  const failed = async (message: string, patch: Partial<WorkflowRun> = {}): Promise<RunResult> => {
+  const countFailure = async (message: string): Promise<void> => {
     let turnedOff = false;
     await amend((held) => {
       const failures = held.failures + 1;
       turnedOff = failures >= MAX_FAILURES;
-      return {
-        ...held,
-        failures,
-        ...(turnedOff ? { enabled: false, parked: { reason: `Failed ${MAX_FAILURES} runs in a row. The last: ${message}`, at: new Date(env.now()).toISOString() } } : {}),
-      };
+      return { ...held, failures, ...(turnedOff ? { enabled: false, parked: { reason: `Failed ${MAX_FAILURES} runs in a row. The last: ${message}`, at: new Date(env.now()).toISOString() } } : {}) };
     });
     if (turnedOff) env.onEvent?.({ type: "workflow.parked", workflow: workflow.id, reason: message });
-    return { run: await finish({ status: "failed", error: message, summary: patch.summary ?? `Failed: ${message}`, ...patch }) };
   };
 
   try {
     if (agentId && !agent) throw new ParkWorkflow(`The agent "${agentId}" that started it no longer exists.`);
     if (agent?.archived) throw new ParkWorkflow(`${agent.name} is archived.`);
-
     const gathered = await gather(env, workflow, actor, agent);
-    const selected = await select(env, workflow, gathered, inputs, { dryRun: false });
+    const selected = await select(env, workflow, gathered, inputs, false);
+    if (selected.seen.length > 0) await env.store.markFired(workflow.id, selected.seen);
     if (selected.seeding) {
       return {
         run: await finish({
@@ -297,134 +268,154 @@ export const runWorkflow = async (env: WorkflowEnv, workflow: WorkflowSpec, opti
         }),
       };
     }
+    if (selected.expired) return { run: await finish({ status: "succeeded", summary: "The trigger has expired, so nothing was started." }) };
 
-    const { matched } = selected;
-    const now = env.now();
-    const outputs: WorkflowRunOutput[] = [];
-    const common = { env, workflow, run: started.id, actor, agent, connection: gathered.connection, rows: matched, inputs };
-    /*
-     * Where the run has got to, for the Overview. Written when the step changes,
-     * and otherwise at most once a second, so a long run over many records does
-     * not cost a write per record.
-     */
-    let staged = { step: "", at: 0 };
-    const stage = async (step: WorkflowSpec["steps"][number], rowKey: string | undefined, rowIndex: number | undefined): Promise<void> => {
-      const at = env.now();
-      if (staged.step === step.id && at - staged.at < 1_000) return;
-      staged = { step: step.id, at };
-      await env.store.putRun({
-        ...started,
-        stage: {
-          step: step.id,
-          kind: step.kind,
-          index: workflow.steps.indexOf(step) + 1,
-          of: workflow.steps.length,
-          ...(rowKey !== undefined ? { row: rowKey } : {}),
-          ...(rowIndex !== undefined ? { rowIndex: rowIndex + 1, rows: matched.length } : {}),
-        },
+    const cases: string[] = [];
+    let failedCases = 0;
+    for (const one of selected.matched) {
+      const opened = await engine.open(workflow, {
+        row: one.row,
+        ...(one.key ? { rowKey: one.key } : {}),
+        inputs: { ...inputs },
+        start: options.start,
+        run: started.id,
+        actor,
       });
-    };
-    const execute = async (step: WorkflowSpec["steps"][number], input: Omit<StepInput, "step">): Promise<void> => {
-      const executor = executors[step.kind] as WorkflowStepExecutor | undefined;
-      if (!executor) {
-        outputs.push({ step: step.id, kind: step.kind, ...(input.rowKey !== undefined ? { row: input.rowKey } : {}), outcome: "skipped", detail: "This kind of step cannot run here yet." });
-        return;
-      }
-      outputs.push(...(await executor({ ...input, step } as StepInput)));
-    };
-
-    for (const [rowIndex, one] of matched.entries()) {
-      for (const step of workflow.steps) {
-        if (WORKFLOW_STEP_INFO[step.kind].perRun || !passes(step.when, one.row, now)) continue;
-        await stage(step, one.key, rowIndex);
-        await execute(step, { ...common, row: one.row, rowKey: one.key });
-      }
+      cases.push(opened.id);
+      if (opened.status === "failed") failedCases++;
+      const mark = selected.marks.get(one.key);
+      if (mark && one.key) await env.store.markFired(workflow.id, [{ key: one.key, ...mark }]);
     }
-    if (matched.length > 0) {
-      const runRow = { count: matched.length, input: inputs };
-      for (const step of workflow.steps) {
-        if (!WORKFLOW_STEP_INFO[step.kind].perRun || !passes(step.when, runRow, now)) continue;
-        await stage(step, undefined, undefined);
-        await execute(step, common);
-      }
-    }
-    if (selected.toMark.length > 0) await env.store.markFired(workflow.id, selected.toMark, new Date(env.now()).toISOString());
 
-    const summary = summarize(gathered, matched.length, outputs, workflowReads(workflow) !== undefined);
-    const patch = { read: gathered.read, matched: matched.length, complete: gathered.complete, outputs, summary };
-    if (outputs.length > 0 && outputs.every((one) => one.outcome === "failed")) return await failed(outputs[0]?.detail ?? "Every step failed.", patch);
+    const summary = workflowReads(workflow)
+      ? `${selected.matched.length} of ${plural(gathered.read, "record")} matched${gathered.complete ? "" : " (not every record was reached)"} · ${plural(cases.length, "case")} opened`
+      : `${plural(cases.length, "case")} opened`;
+    const patch = { read: gathered.read, matched: selected.matched.length, cases, complete: gathered.complete, summary };
+    if (cases.length > 0 && failedCases === cases.length) {
+      await countFailure("Every case failed.");
+      return { run: await finish({ status: "failed", error: "Every case failed.", ...patch }) };
+    }
     if (workflow.failures > 0) await amend((held) => ({ ...held, failures: 0 }));
     return { run: await finish({ status: "succeeded", ...patch }) };
   } catch (error) {
-    if (error instanceof ParkWorkflow) return park(error.reason);
+    if (error instanceof ParkWorkflow) {
+      await amend((held) => ({ ...held, parked: { reason: error.reason, at: new Date(env.now()).toISOString() } }));
+      env.onEvent?.({ type: "workflow.parked", workflow: workflow.id, reason: error.reason });
+      return { run: await finish({ status: "parked", error: error.reason, summary: `Paused: ${error.reason}` }) };
+    }
     const status = refusal(error);
     if (status !== undefined) {
       const source = workflowReads(workflow);
-      const where = source ? (env.connectionTitle?.(source.connection) ?? source.connection) : "The API";
-      return park(`${where} refused the read (${status}). Check its key or what it may read.`);
+      const reason = `${source ? (env.connectionTitle?.(source.connection) ?? source.connection) : "The API"} refused the read (${status}). Check its key or what it may read.`;
+      await amend((held) => ({ ...held, parked: { reason, at: new Date(env.now()).toISOString() } }));
+      env.onEvent?.({ type: "workflow.parked", workflow: workflow.id, reason });
+      return { run: await finish({ status: "parked", error: reason, summary: `Paused: ${reason}` }) };
     }
     if (error instanceof AdapterError && error.status === 429) {
       const waitMs = retryAfterMs(error.retryAfter, env.now()) ?? 60_000;
-      return { run: await finish({ status: "failed", error: error.userMessage, summary: `Asked to wait by the API; trying again later.` }), waitMs };
+      return { run: await finish({ status: "failed", error: error.userMessage, summary: "Asked to wait by the API; trying again later." }), waitMs };
     }
-    return failed(error instanceof AdapterError ? error.userMessage : error instanceof Error ? error.message : String(error));
+    const message = error instanceof AdapterError ? error.userMessage : error instanceof Error ? error.message : String(error);
+    await countFailure(message);
+    return { run: await finish({ status: "failed", error: message, summary: `Failed: ${message}` }) };
   }
 };
 
 /* ── preview ───────────────────────────────────────────────────────────── */
 
+export interface PathStep {
+  readonly node: string;
+  readonly name: string;
+  readonly mode: WorkflowStepMode;
+  /** Why the known path ends here: it waits, or a model decides. */
+  readonly stops?: string | undefined;
+  readonly skipped?: boolean | undefined;
+}
+
 export interface WorkflowPreview {
   readonly read: number;
   readonly complete: boolean;
-  /** An API trigger's first run takes note only. */
   readonly seeding: boolean;
   readonly matched: number;
-  /** Matched rows, each with the path it would take; the first few. */
-  readonly rows: ReadonlyArray<{ readonly key: string; readonly fields: Readonly<Record<string, unknown>>; readonly steps: readonly StepPlan[] }>;
-  /** Steps done once a run. */
-  readonly perRun: readonly StepPlan[];
-  /** What stopped it reading, if anything. */
+  /** Matched records, each with the path it would take; the first few. */
+  readonly rows: ReadonlyArray<{ readonly key: string; readonly fields: Readonly<Record<string, unknown>>; readonly path: readonly PathStep[] }>;
   readonly problem?: string | undefined;
 }
 
 const PREVIEW_ROWS = 25;
 const PREVIEW_FIELDS = 8;
+const PREVIEW_STEPS = 30;
+
+/**
+ * The path a record would take, as far as can be known without running it:
+ * conditions and branches are worked out from the record; a wait, a question
+ * or a model's choice is where the known path ends.
+ */
+export const pathFor = (workflow: WorkflowSpec, row: Record<string, unknown>, inputs: Readonly<Record<string, unknown>>, now: number): PathStep[] => {
+  const scope = { ...row, input: inputs, steps: {}, vars: {} };
+  const path: PathStep[] = [];
+  let at = firstNode(workflow);
+  const visits = new Map<string, number>();
+  while (at && path.length < PREVIEW_STEPS) {
+    const node = workflow.nodes.find((one) => one.id === at);
+    if (!node) break;
+    const count = (visits.get(node.id) ?? 0) + 1;
+    visits.set(node.id, count);
+    const mode = nodeMode(node, workflow.trial > 0);
+    if (count > 2) {
+      path.push({ node: node.id, name: nodeName(node), mode, stops: "loops back here" });
+      break;
+    }
+    if (node.when && !passes(node.when, scope, now)) {
+      path.push({ node: node.id, name: nodeName(node), mode, skipped: true });
+      at = nextNode(workflow, node.id, "next");
+      continue;
+    }
+    const variant = actionVariant(node.action);
+    let outcome = "next";
+    if (variant?.id === "branch.if") outcome = passes(String(node.settings["condition"] ?? ""), scope, now) ? "yes" : "no";
+    else if (variant?.id === "branch.switch") {
+      let value = "";
+      try {
+        value = renderText(String(node.settings["value"] ?? ""), scope, now);
+      } catch {
+        /* Not known before it runs. */
+      }
+      const cases = ((node.settings["cases"] as string[] | undefined) ?? []).map((one) => one.trim());
+      outcome = cases.find((one) => one.toLowerCase() === value.trim().toLowerCase()) ?? "otherwise";
+    } else if (variant && (variant.base === "wait" || variant.base === "ask" || variant.id === "think.classify")) {
+      path.push({ node: node.id, name: nodeName(node), mode, stops: variant.base === "think" ? "a model decides" : variant.base === "ask" ? "waits for an answer" : "waits" });
+      break;
+    }
+    path.push({ node: node.id, name: nodeName(node), mode });
+    at = nextNode(workflow, node.id, outcome);
+  }
+  return path;
+};
 
 const fieldsOf = (row: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(
     Object.entries(row)
-      .filter(([name, value]) => name !== "input" && (value === null || typeof value !== "object"))
+      .filter(([, value]) => value === null || typeof value !== "object")
       .slice(0, PREVIEW_FIELDS),
   );
 
-/**
- * A dry run, as the person asking: what it would read, which rows match, and
- * the path each would take. Nothing is written, proposed or remembered.
- */
-export const previewWorkflow = async (
-  env: WorkflowEnv,
-  workflow: WorkflowSpec,
-  actor: Principal,
-  inputs: Readonly<Record<string, unknown>> = {},
-): Promise<WorkflowPreview> => {
-  const now = env.now();
+/** A dry run, as the person asking: what it would read, which records match, and the path each would take. Nothing is written. */
+export const previewWorkflow = async (env: WorkflowEnv, workflow: WorkflowSpec, actor: Principal, inputs: Readonly<Record<string, unknown>> = {}): Promise<WorkflowPreview> => {
   let gathered: Gathered;
   try {
     gathered = await gather(env, workflow, actor, null);
   } catch (error) {
     const problem = error instanceof ParkWorkflow ? error.reason : error instanceof AdapterError ? error.userMessage : error instanceof Error ? error.message : String(error);
-    return { read: 0, complete: false, seeding: false, matched: 0, rows: [], perRun: [], problem };
+    return { read: 0, complete: false, seeding: false, matched: 0, rows: [], problem };
   }
-  const selected = await select(env, workflow, gathered, inputs, { dryRun: true });
-  const runRow = { count: selected.matched.length, input: inputs };
+  const selected = await select(env, workflow, gathered, inputs, true);
+  const now = env.now();
   return {
     read: gathered.read,
     complete: gathered.complete,
     seeding: selected.seeding,
     matched: selected.matched.length,
-    rows: selected.matched.slice(0, PREVIEW_ROWS).map((one) => ({ key: one.key, fields: fieldsOf(one.row), steps: planFor(workflow, one.row, now) })),
-    perRun: workflow.steps
-      .filter((step) => WORKFLOW_STEP_INFO[step.kind].perRun)
-      .map((step) => ({ step: step.id, kind: step.kind, mode: stepMode(step), runs: selected.matched.length > 0 && passes(step.when, runRow, now) })),
+    rows: selected.matched.slice(0, PREVIEW_ROWS).map((one) => ({ key: one.key, fields: fieldsOf(one.row), path: pathFor(workflow, one.row, inputs, now) })),
   };
 };

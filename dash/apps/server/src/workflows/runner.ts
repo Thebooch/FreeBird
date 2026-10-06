@@ -1,18 +1,22 @@
-import { isWatchedTrigger, type WorkflowSpec, type WorkflowStart } from "@freebirdai/dash-spec";
+import { isWatchedTrigger, passes, type WorkflowSpec, type WorkflowStart } from "@freebirdai/dash-spec";
+import { readRecord } from "./actions.js";
 import { isDue } from "./schedule.js";
 import { StartError, startWorkflow, type Starter } from "./start.js";
 
 /**
- * What starts workflows by themselves: one per workspace, beside the keeper.
+ * What moves workflows on by themselves: one per workspace, beside the keeper.
  *
- * Every 30 seconds it lists the enabled workflows whose trigger is time or an
- * API, works out which are due from the trigger and when each last started,
- * and runs those, one at a time, each under its lease. A workflow the API
- * asked to wait (429) is left until the wait is over. A tick still going when
- * the next comes round is not doubled.
+ * Every 30 seconds it:
+ * 1. fires each enabled workflow whose schedule or API poll is due (under its lease);
+ * 2. wakes every waiting case whose deadline has passed, down its time-out path;
+ * 3. checks the records waiting cases watch, and wakes those whose condition now holds.
  *
- * Not started in tests unless asked, like the keeper: a suite that builds a
- * server should not acquire a timer.
+ * A tick still going when the next comes round is not doubled. A workflow the
+ * API asked to wait (429) is left until the wait is over. A watched record
+ * that cannot be read is tried again next tick, not taken as unchanged.
+ *
+ * Not started in tests unless asked: a suite that builds a server should not
+ * acquire a timer.
  */
 
 export const RUNNER_TICK_MS = 30_000;
@@ -25,7 +29,6 @@ export interface WorkflowRunnerOptions extends Starter {
 export class WorkflowRunner {
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking: Promise<void> | null = null;
-  /** Workflows an API asked to wait, and until when. */
   private readonly notBefore = new Map<string, number>();
 
   constructor(private readonly options: WorkflowRunnerOptions) {}
@@ -42,7 +45,7 @@ export class WorkflowRunner {
     await this.ticking;
   }
 
-  /** The workflows due now. */
+  /** The workflows whose trigger is due now. */
   async due(): Promise<WorkflowSpec[]> {
     const { env } = this.options;
     const now = env.now();
@@ -51,11 +54,29 @@ export class WorkflowRunner {
       if (!workflow.enabled || workflow.parked || !isWatchedTrigger(workflow.trigger)) continue;
       if ((this.notBefore.get(workflow.id) ?? 0) > now) continue;
       const [last] = await env.store.runs({ workflow: workflow.id, limit: 1 });
-      const lastStartedAt = last ? Date.parse(last.startedAt) : null;
-      /* Never run: counted from when it was last saved, which is when it was turned on. */
-      if (isDue(workflow.trigger, lastStartedAt, Date.parse(workflow.updatedAt), now)) out.push(workflow);
+      if (isDue(workflow.trigger, last ? Date.parse(last.startedAt) : null, Date.parse(workflow.updatedAt), now)) out.push(workflow);
     }
     return out;
+  }
+
+  /** Waiting cases whose watched record now matches. */
+  async watchRecords(): Promise<number> {
+    const { env, engine } = this.options;
+    let woken = 0;
+    for (const one of await env.cases.watchingRecords()) {
+      const match = one.waiting?.match as { connection?: string; entity?: string; id?: string; condition?: string } | undefined;
+      if (!match?.connection || !match.entity || !match.id) continue;
+      try {
+        const record = await readRecord(env, match.connection, match.entity, match.id);
+        if (record && (!match.condition || passes(match.condition, record, env.now()))) {
+          await engine.advance(one.id, { resume: { kind: "event", payload: { record } } });
+          woken++;
+        }
+      } catch (error) {
+        this.options.log?.warn(`case ${one.id} could not check its record: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return woken;
   }
 
   /** One pass. Exposed for tests, which drive the clock themselves. */
@@ -69,11 +90,12 @@ export class WorkflowRunner {
             if (waitMs !== undefined) this.notBefore.set(workflow.id, this.options.env.now() + waitMs);
             else this.notBefore.delete(workflow.id);
           } catch (error) {
-            /* Another server holds it: it is running there. */
             if (error instanceof StartError && error.status === 409) continue;
             this.options.log?.warn(`workflow ${workflow.id} could not run: ${error instanceof Error ? error.message : String(error)}`);
           }
         }
+        await this.options.engine.timeouts();
+        await this.watchRecords();
       } catch (error) {
         this.options.log?.warn(`workflows could not be checked: ${error instanceof Error ? error.message : String(error)}`);
       } finally {

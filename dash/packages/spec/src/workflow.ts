@@ -1,36 +1,27 @@
 import { idSchema } from "@freebirdai/connect-spec";
 import { z } from "zod";
-import { principalSchema, type Permission } from "./access.js";
+import { principalSchema } from "./access.js";
+import { actionVariant, describeDuration, outcomesFor } from "./actions.js";
 
 /**
- * A workflow: a trigger and a path.
+ * A workflow: a trigger, and a graph of steps.
  *
- * Agents and workflows are two different things, and either can use the
- * other (`agent.ts`). A workflow starts from a trigger, follows its steps, and
- * ends. It is started one of four ways:
+ * Agents and workflows are two different things, and either can use the other
+ * (`agent.ts`). A workflow starts from a trigger (time, a record appearing or
+ * changing in an API, an agent being asked, or a person), and each record it
+ * matches opens a **case** that walks the graph: a step runs, its outcome
+ * names an arrow, and the arrow says which step is next. Arrows can go
+ * anywhere, back to an earlier step included; limits per case stop a loop
+ * going round forever.
  *
- * - **by time**: a schedule ("weekdays at 7") or an interval;
- * - **by something in an API**: a record appears, or one changes. Polled for
- *   now; a webhook replaces the polling later without changing this shape;
- * - **by an agent**, as a tool it calls in a conversation. Its `inputs` become
- *   the tool's parameters;
- * - **by hand**.
+ * Each step is an action from the catalog (`actions.ts`): a base action, a
+ * variant and its settings, plus settings every step shares: a condition,
+ * Auto or Approve, who it acts as, what to do on failure. **Every step leaves
+ * a task** (below), whatever happens.
  *
- * It can read records (`source`), keep only the ones that matter (`criteria`,
- * an `@freebirdai/expr` predicate over one row), and run its `steps` for each.
- *
- * **Each step is auto or approve.** An approve step becomes a proposal that
- * waits for a person; an auto step is done during the run, with the
- * permission of the person who turned the workflow on (`enabledBy`). A step's
- * optional `when` is a condition over the row, which is what gives simple
- * paths: if this, do X automatically; if that, propose Y. Calendar entries and
- * notes never leave Dash, so they are always done.
- *
- * **No agent's reply prompt is ever used here.** A workflow's own steps —
- * reading, criteria, changes, calendar entries, its `think` step — are set up
- * in the workflow and run on their own model task. An agent's role,
- * instructions and personality shape only messages it writes to a person,
- * which is what a `message` step hands it.
+ * **No agent's reply prompt is used by a workflow's own reasoning.** Think
+ * steps run on their own model task with the workflow's prompt; only Outreach
+ * (an agent writing to a person) uses the agent's voice.
  */
 
 /* ── modes ─────────────────────────────────────────────────────────────── */
@@ -136,158 +127,130 @@ export const workflowSourceSchema = z
   .refine((source) => Boolean(source.record) !== Boolean(source.op), "Read either a record type or an endpoint.");
 export type WorkflowSource = z.infer<typeof workflowSourceSchema>;
 
-/* ── steps ─────────────────────────────────────────────────────────────── */
-
 /**
- * Text in a step is a template: `{{ … }}` holds an `@freebirdai/expr`
- * expression over the row (`{{ unit.name }}`, `{{ input.date }}`). A value
- * that is one expression and nothing else keeps its type — a number stays a
- * number. `when` is a predicate, written without braces.
+ * How often a trigger may fire for one record, how long it rests in between,
+ * and when it stops. Conservative defaults; matching never asks a model.
  */
-const templateSchema = (max: number) => z.string().max(max);
+export const triggerLimitsSchema = z.object({
+  /** Times one record may open a case. Absent: no limit (a change trigger fires on every change). */
+  maxPerRecord: z.number().int().min(1).max(1000).optional(),
+  /** The least time between two cases for one record. */
+  cooldown: z.string().regex(/^\d+(m|h|d|w)$/).optional(),
+  /** After this, the trigger stops firing. ISO date. */
+  expiresAt: z.string().optional(),
+});
+export type TriggerLimits = z.infer<typeof triggerLimitsSchema>;
 
-const stepBase = {
-  id: idSchema,
-  /** Matters for steps that leave Dash; calendar entries and notes are always done. */
-  mode: workflowStepModeSchema.default("approve"),
-  /** Only for rows where this holds (`@freebirdai/expr`). Absent: every matched row. */
-  when: z.string().trim().max(2000).optional(),
-};
+/* ── steps and arrows ──────────────────────────────────────────────────── */
 
 export const ownerRefSchema = z.object({ kind: z.enum(["agent", "member"]), id: z.string().min(1).max(120) });
 export type OwnerRef = z.infer<typeof ownerRefSchema>;
 
-export const calendarStepSchema = z.object({
-  ...stepBase,
-  kind: z.literal("calendar"),
-  title: templateSchema(300).pipe(z.string().trim().min(1, "Give the calendar entry a title.")),
-  /** When: a date or a date and time, usually from the row (`{{ due_date }}`). */
-  at: templateSchema(300).pipe(z.string().trim().min(1, "Say when it goes on the calendar.")),
-  end: templateSchema(300).optional(),
-  allDay: z.boolean().default(false),
-  /** A deadline, rather than an appointment. */
-  deadline: z.boolean().default(false),
-  owner: ownerRefSchema.optional(),
+export const ON_FAILURE = ["stop", "continue", "path"] as const;
+
+export const workflowNodeSchema = z.object({
+  id: idSchema,
+  /** A catalog variant id: `outreach.text`, `update.record`. */
+  action: z.string().min(3).max(64),
+  /** What it is called in the builder and on its tasks. */
+  name: z.string().trim().max(80).optional(),
+  settings: z.record(z.unknown()).default({}),
+  /** For steps that leave Dash: done in the run, or waiting for a person. */
+  mode: workflowStepModeSchema.default("approve"),
+  /** Only when this holds (`@freebirdai/expr` over the case). Otherwise skipped, and the case goes on. */
+  when: z.string().trim().max(2000).optional(),
+  /** The agent it acts in the name of. Outreach always names one in its settings. */
+  agentId: idSchema.optional(),
+  /** `stop` the case, `continue` to the next step, or follow the step's `failed` arrow. */
+  onFailure: z.enum(ON_FAILURE).default("stop"),
+  /** Retries for errors worth retrying: never a step that finished, never a send whose outcome is unknown. */
+  retry: z.object({ times: z.number().int().min(0).max(5), delay: z.string().regex(/^\d+(m|h|d)$/) }).optional(),
+  /** Whether its task offers Reverse, where the variant can. */
+  reversible: z.boolean().default(true),
+  /** A model for this step alone. Hidden for now: every step follows its model task. */
+  model: z.string().min(1).max(120).optional(),
+  /** Where it sits on the canvas. */
+  position: z.object({ x: z.number(), y: z.number() }).default({ x: 0, y: 0 }),
+});
+export type WorkflowNode = z.infer<typeof workflowNodeSchema>;
+
+/** The arrow out of the trigger is `from: "trigger"`. */
+export const TRIGGER_NODE = "trigger";
+
+export const workflowEdgeSchema = z.object({
+  id: idSchema,
+  from: z.string().min(1).max(64),
+  /** Which of the step's outcomes it leaves from: next, happened, timed_out, yes, a category… */
+  outcome: z.string().min(1).max(80).default("next"),
+  to: idSchema,
+});
+export type WorkflowEdge = z.infer<typeof workflowEdgeSchema>;
+
+export const workflowLimitsSchema = z.object({
+  /** Times a case may pass through one step. */
+  visitsPerStep: z.number().int().min(1).max(1000).default(10),
+  /** Steps a case may take in all. */
+  stepsPerCase: z.number().int().min(1).max(10000).default(200),
 });
 
-export const PROPOSE_CHANGES = ["update", "action", "create"] as const;
-
-export const proposeChangeStepSchema = z.object({
-  ...stepBase,
-  kind: z.literal("propose_change"),
-  /** Default: the connection the workflow reads. */
-  connection: idSchema.optional(),
-  /** A record type, by id or name. */
-  entity: z.string().trim().min(1, "Say which record type the change is on.").max(120),
-  change: z.enum(PROPOSE_CHANGES),
-  /** For `action`: which one. */
-  action: z.string().trim().min(1).max(120).optional(),
-  /** Which record: usually `{{ id }}`. Not for a create. */
-  recordId: templateSchema(300).optional(),
-  /** Ids of what the record lives under, by parameter. */
-  parents: z.record(templateSchema(300)).optional(),
-  /** Request-body fields to set, by path. */
-  values: z.record(templateSchema(2000)).optional(),
-});
-
-export const MESSAGE_CHANNELS = ["text", "call", "email"] as const;
-
-/**
- * Hand a conversation to an agent: it texts, calls or emails someone, and
- * from then on answers with its own reply prompt and tools. Delivery arrives
- * with Comms (steps 7 and 9); until then a run says the step is waiting for it.
- */
-export const messageStepSchema = z.object({
-  ...stepBase,
-  kind: z.literal("message"),
-  agentId: z.string().min(1, "Pick the agent that reaches out.").pipe(idSchema),
-  channel: z.enum(MESSAGE_CHANNELS),
-  /** A phone number or address, usually from the row: `{{ tenant.phone }}`. */
-  to: templateSchema(300).pipe(z.string().trim().min(1, "Say who to reach.")),
-  /** What the conversation is for. The agent writes the words. */
-  purpose: templateSchema(2000).pipe(z.string().trim().min(1, "Say what the conversation is for.")),
-});
-
-/**
- * One bounded model turn over the matched rows, on the `workflow` model task,
- * with the workflow's own prompt. Its mode applies to the changes it proposes.
- */
-export const thinkStepSchema = z.object({
-  ...stepBase,
-  kind: z.literal("think"),
-  prompt: z.string().trim().min(1, "Say what to think through.").max(8000),
-});
-
-export const noteStepSchema = z.object({
-  ...stepBase,
-  kind: z.literal("note"),
-  text: templateSchema(2000).pipe(z.string().trim().min(1, "Write the note.")),
-});
-
-export const workflowStepSchema = z.discriminatedUnion("kind", [
-  calendarStepSchema,
-  proposeChangeStepSchema,
-  messageStepSchema,
-  thinkStepSchema,
-  noteStepSchema,
-]);
-export type WorkflowStep = z.infer<typeof workflowStepSchema>;
-export type WorkflowStepKind = WorkflowStep["kind"];
-export const WORKFLOW_STEP_KINDS = ["calendar", "propose_change", "message", "think", "note"] as const satisfies readonly WorkflowStepKind[];
-
-export interface WorkflowStepInfo {
-  readonly kind: WorkflowStepKind;
-  readonly label: string;
-  /** Whether it reaches outside Dash, and so whether its mode matters. */
-  readonly leavesDash: boolean;
-  /** Done once a run rather than once a row. */
-  readonly perRun: boolean;
-}
-
-export const WORKFLOW_STEP_INFO: Readonly<Record<WorkflowStepKind, WorkflowStepInfo>> = {
-  calendar: { kind: "calendar", label: "Put it on the calendar", leavesDash: false, perRun: false },
-  propose_change: { kind: "propose_change", label: "Change a record", leavesDash: true, perRun: false },
-  message: { kind: "message", label: "Have an agent reach out", leavesDash: true, perRun: false },
-  think: { kind: "think", label: "Think it through", leavesDash: true, perRun: true },
-  note: { kind: "note", label: "Write a note", leavesDash: false, perRun: true },
+/** The mode a step runs in: what it says for a step that leaves Dash (always approve in trial); auto otherwise. */
+export const nodeMode = (node: Pick<WorkflowNode, "action" | "mode">, trial = false): WorkflowStepMode => {
+  const variant = actionVariant(node.action);
+  if (!variant?.leavesDash) return "auto";
+  return trial ? "approve" : node.mode;
 };
 
-/** The mode a step actually runs in: what it says, for a step that leaves Dash; auto otherwise. */
-export const stepMode = (step: Pick<WorkflowStep, "kind" | "mode">): WorkflowStepMode =>
-  WORKFLOW_STEP_INFO[step.kind].leavesDash ? step.mode : "auto";
+/** A step's ways out, given its settings. */
+export const nodeOutcomes = (node: Pick<WorkflowNode, "action" | "settings">): string[] => {
+  const variant = actionVariant(node.action);
+  return variant ? outcomesFor(variant, node.settings) : ["next"];
+};
 
-/** The permission a step's change needs. Absent for steps that change no account. */
-export const changePermission = (change: (typeof PROPOSE_CHANGES)[number]): Permission =>
-  change === "create" ? "records.create" : change === "update" ? "records.update" : "records.act";
+/** What a step is called: its own name, or its variant's. */
+export const nodeName = (node: Pick<WorkflowNode, "name" | "action">): string => node.name?.trim() || actionVariant(node.action)?.label || node.action;
 
 /* ── the workflow ──────────────────────────────────────────────────────── */
 
 export const WORKFLOW_ONCE = ["per-row", "per-run"] as const;
 
-export const workflowSchema = z.object({
-  id: idSchema,
+const workflowShape = {
   name: z.string().trim().min(1).max(80),
-  enabled: z.boolean().default(false),
   /** Shown in an agent's tool list when an agent can start it. */
   description: z.string().max(1000).default(""),
   trigger: workflowTriggerSchema,
+  /** How often the trigger may fire per record. */
+  triggerLimits: triggerLimitsSchema.default({}),
   source: workflowSourceSchema.optional(),
   /** Which rows matter: an `@freebirdai/expr` predicate over one row. Absent: all of them. */
   criteria: z.string().trim().max(2000).optional(),
   /** The field that tells rows apart. Default the record type's id field, else `id`. */
   rowKey: z.string().trim().min(1).max(200).optional(),
-  /**
-   * `per-row`: a row is acted on once, ever (until it stops matching and
-   * matches again). `per-run`: every matching row, every run.
-   */
+  /** `per-row`: a record opens a case once (until it stops matching). `per-run`: every match, every run. */
   once: z.enum(WORKFLOW_ONCE).default("per-row"),
-  steps: z.array(workflowStepSchema).max(30).default([]),
-  /** The person who last turned it on or set a step to auto. Auto steps run with their permission. */
+  nodes: z.array(workflowNodeSchema).max(100).default([]),
+  edges: z.array(workflowEdgeSchema).max(300).default([]),
+  limits: workflowLimitsSchema.default({}),
+  /**
+   * Things no step may do, and when to stop and ask: read by Think steps and
+   * by agents doing Outreach for this workflow. Like a standing order.
+   */
+  guardrails: z.string().max(4000).default(""),
+};
+
+export const workflowSchema = z.object({
+  id: idSchema,
+  ...workflowShape,
+  enabled: z.boolean().default(false),
+  /** Trial: while above zero, every step that leaves Dash asks for approval. Counts down as cases finish. */
+  trial: z.number().int().min(0).max(100).default(0),
+  /** The person who last saved it or turned it on. Automatic steps run with their permission. */
   enabledBy: principalSchema.optional(),
-  /** Why it stopped by itself — access lost, or failing again and again — until someone turns it back on. */
+  /** Why it stopped by itself, until someone turns it back on. */
   parked: z.object({ reason: z.string(), at: z.string() }).optional(),
-  /** Runs that failed in a row; three turns it off. */
+  /** Runs that failed in a row. */
   failures: z.number().int().min(0).default(0),
+  /** The template it was made from, and which version. */
+  fromTemplate: z.object({ id: z.string(), version: z.number().int() }).optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -295,136 +258,296 @@ export type WorkflowSpec = z.infer<typeof workflowSchema>;
 
 /** What a person sends to make or change a workflow; the server owns the id, the dates and who enabled it. */
 export const workflowInputSchema = z.object({
-  name: workflowSchema.shape.name,
-  enabled: z.boolean().optional(),
+  name: workflowShape.name,
   description: z.string().max(1000).optional(),
+  enabled: z.boolean().optional(),
+  /** Cases to run in trial. The chat saves new workflows with 5. */
+  trial: z.number().int().min(0).max(100).optional(),
   trigger: workflowTriggerSchema,
+  triggerLimits: triggerLimitsSchema.optional(),
   source: workflowSourceSchema.optional(),
-  criteria: workflowSchema.shape.criteria,
-  rowKey: workflowSchema.shape.rowKey,
+  criteria: workflowShape.criteria,
+  rowKey: workflowShape.rowKey,
   once: z.enum(WORKFLOW_ONCE).optional(),
-  steps: z.array(workflowStepSchema).max(30).optional(),
+  nodes: z.array(workflowNodeSchema).max(100).optional(),
+  edges: z.array(workflowEdgeSchema).max(300).optional(),
+  limits: workflowLimitsSchema.optional(),
+  guardrails: z.string().max(4000).optional(),
 });
 export type WorkflowInput = z.infer<typeof workflowInputSchema>;
 
 /**
  * Where a workflow's rows come from: its source, or for an API trigger the
- * records it watches. Absent: it reads nothing and runs once, over its inputs.
+ * records it watches. Absent: it reads nothing and opens one case over its inputs.
  */
 export const workflowReads = (workflow: Pick<WorkflowSpec, "trigger" | "source">): WorkflowSource | undefined => {
   if (isApiTrigger(workflow.trigger)) return { connection: workflow.trigger.connection, record: workflow.trigger.record };
   return workflow.source;
 };
 
-/* ── runs, proposals, calendar entries ─────────────────────────────────── */
+/** The step a case starts on: where the trigger's arrow points. */
+export const firstNode = (workflow: Pick<WorkflowSpec, "edges" | "nodes">): string | undefined =>
+  workflow.edges.find((edge) => edge.from === TRIGGER_NODE)?.to ?? workflow.nodes[0]?.id;
 
-/** How a run started. */
+/**
+ * Where a step's outcome leads. An outcome with no arrow of its own falls
+ * back to the step's `next` arrow, except a failure, a time-out or a declined approval, which end
+ * the case unless an arrow says where they go.
+ */
+export const nextNode = (workflow: Pick<WorkflowSpec, "edges">, from: string, outcome: string): string | undefined =>
+  workflow.edges.find((edge) => edge.from === from && edge.outcome === outcome)?.to ??
+  (outcome === "failed" || outcome === "timed_out" || outcome === "declined" ? undefined : workflow.edges.find((edge) => edge.from === from && edge.outcome === "next")?.to);
+
+/** Arrows for a plain list of steps: trigger → first → second → … */
+export const chainEdges = (nodes: ReadonlyArray<{ id: string }>): WorkflowEdge[] =>
+  nodes.map((node, index) => {
+    const from = index === 0 ? TRIGGER_NODE : nodes[index - 1]!.id;
+    return { id: `e-${from}-${node.id}`.slice(0, 64), from, outcome: "next", to: node.id };
+  });
+
+/* ── runs, cases ───────────────────────────────────────────────────────── */
+
+/** How a run or a case started. */
 export const workflowStartSchema = z.object({
-  kind: z.enum(["schedule", "every", "record_created", "record_changed", "agent", "manual", "proposal"]),
-  /** The person who started it by hand, or applied the request that did. */
+  kind: z.enum(["schedule", "every", "record_created", "record_changed", "agent", "manual", "approval", "workflow"]),
+  /** The person who started it by hand, or approved the request that did. */
   userId: z.string().optional(),
   /** The agent that started it, or asked to. */
   agentId: z.string().optional(),
-  /** The conversation the agent was in. */
   conversation: z.string().optional(),
+  /** For a case another workflow's step started: that case. */
+  parentCase: z.string().optional(),
 });
 export type WorkflowStart = z.infer<typeof workflowStartSchema>;
 
-export const RUN_OUTCOMES = ["done", "proposed", "skipped", "failed"] as const;
-
-export const workflowRunOutputSchema = z.object({
-  step: z.string(),
-  kind: z.string(),
-  /** The row it was for, by its key. Absent for a step done once a run. */
-  row: z.string().optional(),
-  outcome: z.enum(RUN_OUTCOMES),
-  detail: z.string(),
-  proposal: z.string().optional(),
-  calendar: z.string().optional(),
-  /** The journal event of a change made during the run. */
-  journal: z.string().optional(),
-});
-export type WorkflowRunOutput = z.infer<typeof workflowRunOutputSchema>;
-
 export const RUN_STATUSES = ["running", "succeeded", "failed", "parked", "seeded"] as const;
 
+/** One pass of a trigger: what it read and which cases it opened. */
 export const workflowRunSchema = z.object({
   id: z.string(),
   workflow: z.string(),
   workflowName: z.string(),
-  /** Set when an agent started the run, or a step acted in its name. */
   agent: z.string().optional(),
   start: workflowStartSchema,
   inputs: z.record(z.unknown()).optional(),
   startedAt: z.string(),
   finishedAt: z.string().optional(),
-  /** `seeded`: an API trigger's first run, which only takes note of what exists. */
   status: z.enum(RUN_STATUSES),
-  /** Rows read, and rows that matched the criteria and were acted on. */
   read: z.number().int().default(0),
   matched: z.number().int().default(0),
-  /** Whether the read is known to have reached every record. */
+  cases: z.array(z.string()).default([]),
   complete: z.boolean().default(true),
   summary: z.string().default(""),
-  outputs: z.array(workflowRunOutputSchema).default([]),
-  /**
-   * Where a running run has got to: the step it is on (1-based, of how many)
-   * and the record it is on. Written as it goes, so the Overview can say so.
-   */
-  stage: z
-    .object({
-      step: z.string(),
-      kind: z.string(),
-      index: z.number().int(),
-      of: z.number().int(),
-      row: z.string().optional(),
-      rowIndex: z.number().int().optional(),
-      rows: z.number().int().optional(),
-    })
-    .optional(),
   error: z.string().optional(),
 });
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;
 
-export const PROPOSAL_STATUSES = ["waiting", "applied", "dismissed", "failed", "stale"] as const;
-export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
+export const CASE_STATUSES = ["running", "waiting", "done", "failed", "cancelled", "timed_out"] as const;
+export type CaseStatus = (typeof CASE_STATUSES)[number];
+
+/** What a waiting case waits for. `key` is what the event that wakes it carries. */
+export const caseWaitSchema = z.object({
+  node: z.string(),
+  /** `approval`, `ask`, `time`, `reply`, `record_change`, `workflow_done`, `webhook`. */
+  kind: z.string(),
+  /** `task:<id>`, `reply:<conversation>`, `case-done:<id>`, `hook:<token>`, `record:<connection>:<entity>:<id>`, or `time`. */
+  key: z.string(),
+  /** ISO time it gives up. */
+  deadline: z.string().optional(),
+  /** For a record change: what to read, and the condition. */
+  match: z.record(z.unknown()).optional(),
+  /** The task that shows this wait. */
+  task: z.string().optional(),
+});
+export type CaseWait = z.infer<typeof caseWaitSchema>;
 
 /**
- * Something waiting for a person.
- *
- * `kind` is `change` (an approve step's change to a record) or
- * `workflow_start` (an agent asked to start a workflow through a tool set to
- * approve). Comms adds `email` and `sms`; an agent tool set to approve, from a
- * conversation, is named by its tool kind.
- *
- * What is stored is the intent, never a review: a review is prepared fresh,
- * as the person looking at it, when they open it.
+ * One record's way through a workflow: its data, where it is, what it waits
+ * for. Durable and revisioned: a write that does not carry the revision it
+ * read is refused, so two writers never overwrite each other's progress.
  */
-export const proposalSchema = z.object({
+export const workflowCaseSchema = z.object({
   id: z.string(),
-  kind: z.string().min(1).max(60),
-  agent: z.string().optional(),
-  workflow: z.string().optional(),
+  workflow: z.string(),
+  workflowName: z.string(),
   run: z.string().optional(),
-  conversation: z.string().optional(),
-  /** For `change`: the write intent. For `workflow_start`: `{ workflow, inputs }`. */
-  intent: z.record(z.unknown()),
-  /** One line: what would happen. */
-  title: z.string(),
-  /** Why it was proposed. */
-  reason: z.string().default(""),
-  status: z.enum(PROPOSAL_STATUSES),
-  createdAt: z.string(),
-  decidedAt: z.string().optional(),
-  decidedBy: z.string().optional(),
-  /** The journal event of the change, once applied. */
-  journalId: z.string().optional(),
-  /** For `workflow_start`: the run that applying it started. */
-  startedRun: z.string().optional(),
-  /** Why it failed or went stale. */
+  rowKey: z.string().optional(),
+  status: z.enum(CASE_STATUSES),
+  /** The step it is on, or will run next. */
+  at: z.string().optional(),
+  /** `row`, `input`, `steps` (each step's outputs by step id), `vars` (Update · case value). */
+  data: z.object({
+    row: z.record(z.unknown()).default({}),
+    input: z.record(z.unknown()).default({}),
+    steps: z.record(z.unknown()).default({}),
+    vars: z.record(z.unknown()).default({}),
+  }),
+  waiting: caseWaitSchema.optional(),
+  visits: z.record(z.number().int()).default({}),
+  steps: z.number().int().default(0),
+  revision: z.number().int().default(0),
+  /** Sticky: no new step starts once set, even after a restart. */
+  cancelRequested: z.boolean().default(false),
+  agent: z.string().optional(),
+  /** Whose permission its automatic steps use: who started it by hand, else who turned the workflow on. */
+  actor: principalSchema.optional(),
+  start: workflowStartSchema,
+  /** Whether it runs in trial (every outside step asks). */
+  trial: z.boolean().default(false),
+  startedAt: z.string(),
+  updatedAt: z.string(),
+  finishedAt: z.string().optional(),
   error: z.string().optional(),
 });
-export type Proposal = z.infer<typeof proposalSchema>;
+export type WorkflowCase = z.infer<typeof workflowCaseSchema>;
+
+/** What a step's templates and conditions read: the record's fields, plus `input`, `steps`, `vars`. */
+export const caseScope = (one: Pick<WorkflowCase, "data">): Record<string, unknown> => ({
+  ...one.data.row,
+  input: one.data.input,
+  steps: one.data.steps,
+  vars: one.data.vars,
+});
+
+/* ── tasks ─────────────────────────────────────────────────────────────── */
+
+export const TASK_STATUSES = [
+  "waiting_approval",
+  "waiting",
+  "running",
+  "done",
+  "skipped",
+  "failed",
+  "timed_out",
+  "lost",
+  "reversed",
+  "dismissed",
+] as const;
+export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+/** Statuses a task never moves on from: a late signal is recorded, never applied. */
+export const FINAL_TASK_STATUSES: readonly TaskStatus[] = ["done", "skipped", "failed", "timed_out", "lost", "reversed", "dismissed"];
+
+const fieldChangeSchema = z.object({ field: z.string(), label: z.string().optional(), before: z.unknown().optional(), after: z.unknown().optional() });
+
+/** What a task shows, by kind (`actions.ts` `TASK_BODY_KINDS`). */
+export const taskBodySchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("notice"), text: z.string().default(""), audience: z.string().optional() }),
+  z.object({ kind: z.literal("change"), what: z.string(), changes: z.array(fieldChangeSchema).default([]) }),
+  z.object({ kind: z.literal("created"), what: z.string(), id: z.string().optional(), link: z.string().optional(), record: z.unknown().optional() }),
+  z.object({ kind: z.literal("removed"), what: z.string(), before: z.unknown().optional() }),
+  z.object({
+    kind: z.literal("conversation"),
+    channel: z.string(),
+    to: z.string(),
+    agent: z.string(),
+    sent: z.string().optional(),
+    reply: z.string().optional(),
+    conversation: z.string().optional(),
+  }),
+  z.object({ kind: z.literal("wait"), forWhat: z.string(), deadline: z.string().optional(), ended: z.enum(["happened", "timed_out"]).optional() }),
+  z.object({ kind: z.literal("decision"), outcome: z.string().optional(), reason: z.string().optional(), answer: z.unknown().optional() }),
+  z.object({ kind: z.literal("request"), url: z.string(), status: z.number().optional(), response: z.unknown().optional() }),
+  z.object({ kind: z.literal("todo"), details: z.string().default(""), assignee: z.string().optional(), due: z.string().optional(), done: z.boolean().default(false) }),
+  z.object({ kind: z.literal("question"), question: z.string(), options: z.array(z.string()).default([]), answer: z.string().optional(), assignee: z.string().optional() }),
+]);
+export type TaskBody = z.infer<typeof taskBodySchema>;
+
+/** How a task can be undone: through the write review, or inside Dash. */
+export const taskReversalSchema = z.object({
+  available: z.boolean(),
+  /** Why not, when not. */
+  reason: z.string().optional(),
+  /** For an account change: the change that undoes it, prepared fresh when someone presses Reverse. */
+  intent: z.record(z.unknown()).optional(),
+  /** For something inside Dash: what to remove or put back. */
+  internal: z.object({ kind: z.enum(["calendar", "note", "todo", "notice", "case_value"]), id: z.string(), value: z.unknown().optional() }).optional(),
+  /** Its effect: "a new record, with a new id". */
+  note: z.string().optional(),
+  reversedBy: z.string().optional(),
+  reversedAt: z.string().optional(),
+  reversalTask: z.string().optional(),
+});
+export type TaskReversal = z.infer<typeof taskReversalSchema>;
+
+/**
+ * The record of one action in one case. Every step leaves one, whatever
+ * happens; approvals are tasks waiting for approval. The Overview's completed
+ * list and "Waiting for you" both read tasks.
+ */
+export const taskSchema = z.object({
+  id: z.string(),
+  workflow: z.string().optional(),
+  workflowName: z.string().optional(),
+  case: z.string().optional(),
+  node: z.string().optional(),
+  /** Catalog variant id. */
+  action: z.string(),
+  base: z.string(),
+  title: z.string(),
+  status: z.enum(TASK_STATUSES),
+  body: taskBodySchema,
+  /** The person whose permission it used. */
+  actedAs: z.string().optional(),
+  agent: z.string().optional(),
+  approvedBy: z.string().optional(),
+  /** For a task waiting for approval: the settings it will run with, frozen when it was proposed. */
+  pending: z.record(z.unknown()).optional(),
+  links: z
+    .object({
+      journal: z.string().optional(),
+      record: z.object({ connection: z.string(), entity: z.string(), id: z.string().optional() }).optional(),
+      conversation: z.string().optional(),
+      calendar: z.string().optional(),
+      startedCase: z.string().optional(),
+    })
+    .default({}),
+  reversal: taskReversalSchema.optional(),
+  /** For Outreach: sending and delivery, apart from whether the step worked. */
+  delivery: z
+    .object({ status: z.enum(["queued", "sent", "delivered", "failed", "not_sent"]), detail: z.string().optional(), key: z.string().optional() })
+    .optional(),
+  model: z.object({ task: z.string(), model: z.string().optional() }).optional(),
+  reason: z.string().optional(),
+  error: z.string().optional(),
+  createdAt: z.string(),
+  startedAt: z.string().optional(),
+  finishedAt: z.string().optional(),
+  /** A signal that arrived after the task finished: kept, never applied. */
+  late: z.array(z.object({ at: z.string(), what: z.string() })).optional(),
+});
+export type Task = z.infer<typeof taskSchema>;
+
+/* ── templates ─────────────────────────────────────────────────────────── */
+
+export const TEMPLATE_KINDS = ["step", "path", "workflow"] as const;
+
+/**
+ * Something saved for reuse: one step, a piece of the graph with one way in,
+ * or a whole workflow. Its blanks (`{{ blank.<name> }}` in any setting) are
+ * asked for each time it is inserted. Inserting copies it; a newer version is
+ * offered, never forced.
+ */
+export const workflowTemplateSchema = z.object({
+  id: idSchema,
+  kind: z.enum(TEMPLATE_KINDS),
+  name: z.string().trim().min(1).max(80),
+  description: z.string().max(1000).default(""),
+  version: z.number().int().min(1).default(1),
+  blanks: z
+    .array(z.object({ name: z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_]*$/), label: z.string().max(200), default: z.string().max(2000).optional() }))
+    .max(30)
+    .default([]),
+  nodes: z.array(workflowNodeSchema).max(100).default([]),
+  edges: z.array(workflowEdgeSchema).max(300).default([]),
+  /** The step a path starts at. */
+  entry: z.string().optional(),
+  /** For a workflow template: everything but its steps. */
+  workflow: z.record(z.unknown()).optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type WorkflowTemplate = z.infer<typeof workflowTemplateSchema>;
 
 /**
  * An entry on the calendar. Defined here so a workflow's calendar step works
@@ -440,11 +563,27 @@ export const calendarEventSchema = z.object({
   deadline: z.boolean().default(false),
   owner: ownerRefSchema.optional(),
   workflow: z.string().optional(),
-  run: z.string().optional(),
-  row: z.string().optional(),
+  case: z.string().optional(),
+  task: z.string().optional(),
   createdAt: z.string(),
 });
 export type CalendarEvent = z.infer<typeof calendarEventSchema>;
+
+/** One line for a step: "Text — Maintenance agent", "Wait for an event — up to 2 days". */
+export const describeNode = (node: Pick<WorkflowNode, "action" | "settings" | "name">): string => {
+  const variant = actionVariant(node.action);
+  const label = variant ? variant.label : node.action;
+  const s = node.settings;
+  const extra =
+    variant?.id === "wait.for" || variant?.base === "ask"
+      ? `up to ${describeDuration(s["timeout"] ?? "2d")}`
+      : variant?.id === "wait.duration"
+        ? describeDuration(s["duration"])
+        : variant?.id === "branch.if" && typeof s["condition"] === "string"
+          ? String(s["condition"])
+          : "";
+  return `${node.name?.trim() || label}${extra ? ` — ${extra}` : ""}`;
+};
 
 /* ── words ─────────────────────────────────────────────────────────────── */
 

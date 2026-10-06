@@ -22,7 +22,7 @@ import { openChatDb } from "../chat/db.js";
 import { LOCAL_WORKSPACE_ID, type IdentityResolver } from "../identity/resolver.js";
 import { isWorkspaceId } from "./workspaces.js";
 import { DbAgentStore } from "../agents/store.js";
-import { DbCalendarStore, DbProposalStore, DbWorkflowStore } from "../workflows/store.js";
+import { DbCalendarStore, DbCaseStore, DbTaskStore, DbTemplateStore, DbWorkflowStore } from "../workflows/store.js";
 import { DbSnapshotStore } from "../history/store.js";
 import { defaultModelId, llmForModel, modelForTask } from "../llm.js";
 import { TIER_MODELS, isTask, providerFor } from "../models.js";
@@ -143,8 +143,10 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
   /** One workspace's workflows, their runs, what waits for a person, and calendar entries. */
   const workflowStores = (db: NonNullable<typeof dashDb>, workspace?: string) => ({
     workflows: new DbWorkflowStore(db, workspace),
-    proposals: new DbProposalStore(db, workspace),
+    cases: new DbCaseStore(db, workspace),
+    tasks: new DbTaskStore(db, workspace),
     calendar: new DbCalendarStore(db, workspace),
+    templates: new DbTemplateStore(db, workspace),
   });
 
   /**
@@ -154,7 +156,10 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
    * A missing task name means a caller outside the table, which still deserves a
    * working model rather than an error, so it falls back to the plain default.
    */
-  const modelFor = (task?: string): string | null => {
+  const modelFor = (label?: string): string | null => {
+    /* `think@claude-sonnet-5`: a step that names its own model. */
+    const [task, pinned] = (label ?? "").split("@") as [string | undefined, string | undefined];
+    if (pinned) return pinned;
     const chosen = settings.read();
     if (task && isTask(task)) return modelForTask(task, chosen);
     // Outside the table, so there is no tier to resolve — but the provider

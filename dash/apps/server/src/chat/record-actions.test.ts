@@ -57,6 +57,7 @@ const fakeOps = (overrides: Partial<RecordChangeOps> = {}) => {
       calls.commit++;
       return {
         status: "succeeded",
+        eventId: pendingId,
         connection: "rentals",
         entity: "rental",
         kind: "update",
