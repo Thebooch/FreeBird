@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { RENDERER_DOWNLOAD_MB } from "@freebirdai/connect/host";
+import { RENDERER_DOWNLOAD_MB, type RendererStatus } from "@freebirdai/connect/host";
 
 /**
  * Playwright's own Chromium, for reading documentation drawn by scripts:
@@ -32,19 +32,7 @@ export type RendererMode = "ask" | "hosted" | "off";
 /** Whether a page drawn by scripts can be read now. */
 export type RendererReadiness = "ready" | "needs-install" | "unavailable";
 
-export interface RendererStatus {
-  readonly state: "ready" | "missing" | "installing" | "failed" | "off";
-  /** How far the file being downloaded has got, 0–100, while installing. */
-  readonly progress?: number;
-  /** Which file of the download that is: Chromium comes in more than one. */
-  readonly part?: number;
-  /** What stopped it, in words, with what fixes it. */
-  readonly error?: string;
-  /** Whether the person has agreed to the download: kept, so it is asked once. */
-  readonly consented: boolean;
-  /** About how much is downloaded, for the question. */
-  readonly downloadMb: number;
-}
+export type { RendererStatus };
 
 export { RENDERER_DOWNLOAD_MB };
 

@@ -39,6 +39,9 @@ export const connectFastify =
   };
 
 export { connectionRoutes, type ConnectionRouteHooks } from "./connections.js";
+export { discoverRoutes, type DiscoverRouteDeps } from "./discover.js";
 export { integrateRoutes } from "./integrate.js";
+export { keyRoutes, type KeyRouteDeps } from "./keys.js";
+export { allowedWritesView, writeRoutes, type WriteRouteDeps } from "./writes.js";
 export { mapRoutes } from "./map.js";
 export { oauthRoutes, type OAuthRouteDeps } from "./oauth.js";

@@ -28,7 +28,7 @@ export type { ConnectorTokenStore } from "./connector/host.js";
 export { DEFAULT_LIMITS, SandboxError } from "./connector/sandbox.js";
 export type { ConnectorSandbox, SandboxHost, SandboxLimits, SandboxSession } from "./connector/sandbox.js";
 export { AUTO_INDEX_PAGES, RENDERER_DOWNLOAD_MB, discover, readIndex } from "./discovery/index.js";
-export type { DocsRenderer } from "./discovery/index.js";
+export type { DocsRenderer, RendererSetup, RendererStatus } from "./discovery/index.js";
 export { refreshOutdatedConnectDetails, withConnectDetails } from "./discovery/connect-details.js";
 export { analysePage, endpointsNamed } from "./discovery/docs.js";
 export { extractInlineSpec } from "./discovery/inline-spec.js";
@@ -89,8 +89,8 @@ export { Discovered, catalogForBrowser, preservedWrites } from "./writes/catalog
 export { MemoryJournal, nullJournal } from "./writes/journal.js";
 export type { ReadEvent, WriteEvent, WriteJournal } from "./writes/journal.js";
 export type { WriteIntent, WriteReview } from "./writes/pending.js";
-export type { WriteActor } from "./writes/policy.js";
 export { WriteEndpointReader, readWriteEndpoints } from "./writes/read-writes.js";
 export type { FetchDocument } from "./writes/read-writes.js";
 export { WriteError, WriteService, describeFields } from "./writes/service.js";
 export type { CommitResult } from "./writes/service.js";
+export type { PolicyDecision, WriteActor, WritePermission, WritePolicy, WriteScope } from "./writes/policy.js";

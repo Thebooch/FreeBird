@@ -1,8 +1,9 @@
-import type { LlmAdapter } from "@freebirdai/dash-agent";
+import type { LlmAdapter } from "@freebirdai/connect/agent";
 import { type FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   AUTO_INDEX_PAGES,
+  RENDERER_DOWNLOAD_MB,
   catalogForBrowser,
   discover,
   Discovered,
@@ -10,13 +11,19 @@ import {
   nodeHttp,
   readIndex,
 } from "@freebirdai/connect/host";
-import type { SearchProvider } from "@freebirdai/connect/host";
-import { RENDERER_DOWNLOAD_MB, type RendererStatus } from "@freebirdai/connect-browser";
-import type { BuildServerOptions } from "../server.js";
+import type { HttpFetch } from "@freebirdai/connect/adapters";
+import type { CatalogStore, DocsRenderer, RendererSetup, RendererStatus, SearchProvider } from "@freebirdai/connect/host";
 
 /** Finding an API from what somebody typed: the discovery ladder, a documentation section read page by page, and the browser that reads documentation drawn by scripts. */
 export interface DiscoverRouteDeps {
-  readonly options: Pick<BuildServerOptions, "catalog" | "renderDocs" | "http" | "rendererSetup">;
+  readonly options: {
+    readonly catalog?: CatalogStore | undefined;
+    /** Draws documentation rendered in a browser; see `@freebirdai/connect-browser`. */
+    readonly renderDocs?: DocsRenderer | undefined;
+    readonly http?: HttpFetch | undefined;
+    /** Whether that browser is here, and fetching it once the person agrees. */
+    readonly rendererSetup?: RendererSetup | undefined;
+  };
   /** Write endpoints discovery read, held until their entry is adopted. */
   readonly discovered: Discovered;
   readonly resolveLlm: (label?: string) => LlmAdapter | null;

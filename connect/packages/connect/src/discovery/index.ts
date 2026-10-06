@@ -64,6 +64,26 @@ export interface DocsIndex {
 /** What is downloaded, roughly: Chromium for Playwright, once. */
 export const RENDERER_DOWNLOAD_MB = 150;
 
+export interface RendererStatus {
+  readonly state: "ready" | "missing" | "installing" | "failed" | "off";
+  /** How far the file being downloaded has got, 0–100, while installing. */
+  readonly progress?: number;
+  /** Which file of the download that is: Chromium comes in more than one. */
+  readonly part?: number;
+  /** What stopped it, in words, with what fixes it. */
+  readonly error?: string;
+  /** Whether the person has agreed to the download: kept, so it is asked once. */
+  readonly consented: boolean;
+  /** About how much is downloaded, for the question. */
+  readonly downloadMb: number;
+}
+
+/** Whether the browser for drawn documentation is here, and fetching it once agreed. */
+export interface RendererSetup {
+  status(): RendererStatus;
+  install(): RendererStatus;
+}
+
 export interface DiscoveryDeps {
   /** SSRF-guarded, no host allowlist — there is no connection yet. */
   readonly fetchDocument: (url: string) => Promise<{ status: number; text: string; url: string }>;

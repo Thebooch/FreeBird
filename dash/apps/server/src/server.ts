@@ -134,7 +134,6 @@ import { installIdentity } from "./identity/context.js";
 import { ownerPolicy, type Policy } from "./identity/policy.js";
 import { installRouteGuard } from "./identity/guard.js";
 import { LOCAL_USER_ID, LOCAL_WORKSPACE_ID, localOwner, type IdentityResolver } from "./identity/resolver.js";
-import { allowedWritesView, writeRoutes } from "./routes/writes.js";
 import { conciergeRoutes } from "./routes/concierge.js";
 import { SetupPreviews } from "./concierge/preview.js";
 import { contextForConnection } from "@freebirdai/dash-agent";
@@ -190,18 +189,22 @@ import { GrantStore, approveWidget, dashboardApprovals, widgetGrantSubject } fro
 import { DriftWatch } from "./drift/watch.js";
 import { MemorySnapshotStore, type SnapshotStore } from "./history/store.js";
 import { dayOf, numbersFrom } from "./history/record.js";
-import { connectionRoutes, integrateRoutes, mapRoutes, oauthRoutes } from "@freebirdai/connect-server/fastify";
-import { discoverRoutes } from "./routes/discover.js";
-import { keyRoutes } from "./routes/keys.js";
+import {
+  connectionRoutes,
+  discoverRoutes,
+  integrateRoutes,
+  keyRoutes,
+  mapRoutes,
+  oauthRoutes,
+  allowedWritesView,
+  writeRoutes,
+} from "@freebirdai/connect-server/fastify";
 import { queryRoutes } from "./routes/query.js";
-import { type RendererStatus } from "@freebirdai/connect-browser";
 import { QuickJsSandbox } from "@freebirdai/connect-sandbox";
 
 /** Whether the browser for drawn documentation is here, and fetching it once agreed. See `RendererTooling`. */
-export interface RendererSetup {
-  status(): RendererStatus;
-  install(): RendererStatus;
-}
+import type { RendererSetup } from "@freebirdai/connect/host";
+export type { RendererSetup };
 
 export interface BuildServerOptions {
   readonly store: SpecRepository;
@@ -2553,6 +2556,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   let onWritesChanged: () => void = () => {};
   void app.register(
     writeRoutes({
+      actor: (request) => request.principal ?? null,
       service: writes,
       store,
       catalog: options.catalog,

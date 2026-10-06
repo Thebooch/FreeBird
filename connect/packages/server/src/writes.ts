@@ -1,14 +1,11 @@
-import type { LlmAdapter } from "@freebirdai/dash-agent";
-import { matchWriteFields } from "@freebirdai/dash-agent";
-import type { CatalogEntry, ConnectionSpec, EntityWritesView, Principal } from "@freebirdai/dash-spec";
-import { entityById, mapWriteFields, unmappedFields, writesEmpty, writesView } from "@freebirdai/dash-spec";
+import type { LlmAdapter } from "@freebirdai/connect/agent";
+import { matchWriteFields } from "@freebirdai/connect/agent";
+import type { CatalogEntry, ConnectionSpec, EntityWritesView } from "@freebirdai/connect-spec";
+import { entityById, mapWriteFields, unmappedFields, writesEmpty, writesView } from "@freebirdai/connect-spec";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { describeFields, readWriteEndpoints, WriteError, WriteService } from "@freebirdai/connect/host";
-import type { CatalogStore, FetchDocument } from "@freebirdai/connect/host";
-import { requirePermission } from "../identity/context.js";
-import type { Policy } from "../identity/policy.js";
-import type { SpecRepository } from "../store.js";
+import type { CatalogStore, ConnectionRepository, FetchDocument, PolicyDecision, WriteActor, WriteScope } from "@freebirdai/connect/host";
 
 /**
  * The routes a change travels through. The logic is in `WriteService`;
@@ -36,9 +33,14 @@ import type { SpecRepository } from "../store.js";
 
 export interface WriteRouteDeps {
   readonly service: WriteService;
-  readonly store: SpecRepository;
+  readonly store: ConnectionRepository;
   readonly catalog: CatalogStore | undefined;
-  readonly policy: Policy;
+  /** Who may do what. Asked before anything that changes what may be changed. */
+  readonly policy: {
+    can(actor: WriteActor, permission: string, scope?: WriteScope): PolicyDecision | Promise<PolicyDecision>;
+  };
+  /** Who is asking. Null means nobody signed in. */
+  readonly actor: (request: FastifyRequest) => WriteActor | null | undefined;
   readonly llm: () => { adapter: LlmAdapter; model?: string } | null;
   readonly fetchDocument: FetchDocument;
   /** Whatever caches what a connection can change — the chat's action registry — must hear of a change. */
@@ -60,10 +62,34 @@ const send = (reply: FastifyReply, error: unknown): FastifyReply => {
   throw error;
 };
 
-const whoIs = (request: FastifyRequest, reply: FastifyReply): Principal | null => {
-  if (request.principal) return request.principal;
-  void reply.status(401).send({ error: "Sign in to continue." });
-  return null;
+const whoIs =
+  (deps: Pick<WriteRouteDeps, "actor">) =>
+  (request: FastifyRequest, reply: FastifyReply): WriteActor | null => {
+    const actor = deps.actor(request);
+    if (actor) return actor;
+    void reply.status(401).send({ error: "Sign in to continue." });
+    return null;
+  };
+
+/** Ask the policy, and answer the request when it says no. */
+const requirePermission = async (
+  deps: Pick<WriteRouteDeps, "actor" | "policy">,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  permission: string,
+  scope: WriteScope = {},
+): Promise<WriteActor | null> => {
+  const actor = deps.actor(request);
+  if (!actor) {
+    await reply.status(401).send({ error: "Sign in to continue." });
+    return null;
+  }
+  const decision = await deps.policy.can(actor, permission, scope);
+  if (!decision.ok) {
+    await reply.status(403).send({ error: decision.reason, permission });
+    return null;
+  }
+  return actor;
 };
 
 const prepareSchema = z.object({
@@ -81,7 +107,7 @@ const prepareSchema = z.object({
  */
 export const allowedWritesView = async (
   service: WriteService,
-  principal: Principal,
+  principal: WriteActor,
   connection: ConnectionSpec,
   entityId: string,
   /** The connection's graph, when the caller already built it — several record types, one build. */
@@ -123,7 +149,7 @@ export const writeRoutes =
     /* ── what can be done ─────────────────────────────────────────── */
 
     app.get<{ Params: { id: string } }>("/api/connections/:id/writes", async (request, reply) => {
-      const principal = whoIs(request, reply);
+      const principal = whoIs(deps)(request, reply);
       if (!principal) return reply;
       const connection = connectionOr404(request.params.id, reply);
       if (!connection) return reply;
@@ -164,7 +190,7 @@ export const writeRoutes =
     app.post<{ Params: { id: string; entity: string }; Body: unknown }>(
       "/api/connections/:id/entities/:entity/writes/form",
       async (request, reply) => {
-        const principal = whoIs(request, reply);
+        const principal = whoIs(deps)(request, reply);
         if (!principal) return reply;
         const parsed = prepareSchema.omit({ entity: true, values: true }).safeParse(request.body);
         if (!parsed.success) return reply.status(400).send({ error: "a form needs a kind", detail: parsed.error.issues });
@@ -197,7 +223,7 @@ export const writeRoutes =
     app.post<{ Params: { id: string }; Body: unknown }>(
       "/api/connections/:id/writes/prepare",
       async (request, reply) => {
-        const principal = whoIs(request, reply);
+        const principal = whoIs(deps)(request, reply);
         if (!principal) return reply;
         const parsed = prepareSchema.safeParse(request.body);
         if (!parsed.success) {
@@ -212,7 +238,7 @@ export const writeRoutes =
     );
 
     app.get<{ Params: { pendingId: string } }>("/api/writes/:pendingId", async (request, reply) => {
-      const principal = whoIs(request, reply);
+      const principal = whoIs(deps)(request, reply);
       if (!principal) return reply;
       try {
         return service.review(principal, request.params.pendingId);
@@ -224,7 +250,7 @@ export const writeRoutes =
     app.post<{ Params: { pendingId: string }; Body: unknown }>(
       "/api/writes/:pendingId/commit",
       async (request, reply) => {
-        const principal = whoIs(request, reply);
+        const principal = whoIs(deps)(request, reply);
         if (!principal) return reply;
         const parsed = z.object({ digest: z.string().min(1) }).safeParse(request.body);
         if (!parsed.success) return reply.status(400).send({ error: "the approved digest is required" });
@@ -237,7 +263,7 @@ export const writeRoutes =
     );
 
     app.delete<{ Params: { pendingId: string } }>("/api/writes/:pendingId", async (request, reply) => {
-      const principal = whoIs(request, reply);
+      const principal = whoIs(deps)(request, reply);
       if (!principal) return reply;
       service.discard(principal, request.params.pendingId);
       return { discarded: true };
@@ -259,7 +285,7 @@ export const writeRoutes =
       async (request, reply) => {
         const connection = connectionOr404(request.params.id, reply);
         if (!connection) return reply;
-        if (!(await requirePermission(policy, request, reply, "connections.manage", { connection: connection.id }))) {
+        if (!(await requirePermission(deps, request, reply, "connections.manage", { connection: connection.id }))) {
           return reply;
         }
         const parsed = z
@@ -308,7 +334,7 @@ export const writeRoutes =
       async (request, reply) => {
         const connection = connectionOr404(request.params.id, reply);
         if (!connection) return reply;
-        if (!(await requirePermission(policy, request, reply, "connections.manage", { connection: connection.id }))) {
+        if (!(await requirePermission(deps, request, reply, "connections.manage", { connection: connection.id }))) {
           return reply;
         }
         const parsed = z.object({ offered: z.boolean() }).safeParse(request.body);
@@ -334,7 +360,7 @@ export const writeRoutes =
       async (request, reply) => {
         const connection = connectionOr404(request.params.id, reply);
         if (!connection) return reply;
-        if (!(await requirePermission(policy, request, reply, "connections.manage", { connection: connection.id }))) {
+        if (!(await requirePermission(deps, request, reply, "connections.manage", { connection: connection.id }))) {
           return reply;
         }
         const parsed = z.object({ entity: z.string().min(1) }).safeParse(request.body);
@@ -390,7 +416,7 @@ export const writeRoutes =
 
     app.post<{ Params: { id: string } }>("/api/catalog/:id/writes/refresh", async (request, reply) => {
       if (!catalog) return reply.status(501).send({ error: "no catalog configured" });
-      if (!(await requirePermission(policy, request, reply, "connections.manage"))) return reply;
+      if (!(await requirePermission(deps, request, reply, "connections.manage"))) return reply;
       const entry = catalog.get(request.params.id);
       if (!entry) return reply.status(404).send({ error: "no such catalog entry" });
       if (entry.origin !== "openapi" || !entry.specUrl) {

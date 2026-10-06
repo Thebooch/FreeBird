@@ -1,12 +1,11 @@
-import { connectionKeyRefs } from "@freebirdai/dash-spec";
+import { connectionKeyRefs } from "@freebirdai/connect-spec";
 import { type FastifyInstance } from "fastify";
-import type { SecretRepository } from "@freebirdai/connect/host";
-import { type SpecRepository } from "../store.js";
+import type { ConnectionRepository, SecretRepository } from "@freebirdai/connect/host";
 import type { Engine } from "@freebirdai/connect";
 
 /** A connection's key: saved (and the connection checked next, by itself), or forgotten. */
 export interface KeyRouteDeps {
-  readonly store: SpecRepository;
+  readonly store: ConnectionRepository;
   readonly keys: SecretRepository;
   readonly broker: Engine["broker"];
   readonly queries: Engine["queries"];
