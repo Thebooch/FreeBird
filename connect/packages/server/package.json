@@ -47,7 +47,8 @@
   },
   "peerDependencies": {
     "express": ">=4",
-    "fastify": ">=4"
+    "fastify": ">=4",
+    "zod": "^3.23.0"
   },
   "peerDependenciesMeta": {
     "express": {
@@ -63,7 +64,8 @@
     "express": "^4.21.1",
     "fastify": "^5.1.0",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.6"
+    "vitest": "^2.1.6",
+    "zod": "^3.23.8"
   },
   "publishConfig": {
     "access": "public"

@@ -2,8 +2,15 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  connectionKeyRefs,
+  connectionNeedsAuthSetup,
   type ConnectionSpec,
+  type EntityLinkView,
+  entityLinkViews,
+  type EntitySpec,
   type EvidenceLevel,
+  fieldLexicon,
+  opUsesRange,
   evidenceRank,
   fingerprintConnection,
   getOp,
@@ -733,6 +740,133 @@ export const createEngine = (options: EngineOptions) => {
   /** Write endpoints discovery read, held until their entry is adopted. */
   const discovered = new Discovered();
 
+  /**
+   * The rest of an API, for a brief that names two record types.
+   *
+   * The catalog's record types with *this connection's* endpoints, which is
+   * the same pairing a record page is built from and for the same reason: the
+   * catalog describes the whole API, a connection may hold a subset of it, and
+   * a join naming an endpoint this connection does not carry is one nothing
+   * here could ever fetch.
+   */
+  const relatedFor = (
+    connection: ConnectionSpec,
+    entities: readonly EntitySpec[],
+  ) => ({
+    entities,
+    resources: connection.resources,
+    ops: connection.ops.map((op) => ({ id: op.id, path: op.path, params: op.params })),
+  });
+
+  /**
+   * Which of a connection's fields point at other records.
+   *
+   * Extracted because two callers need the same answer: the public connection
+   * the browser reads, and the keeper deciding which reference lists are worth
+   * warming. Derived on every call rather than stored — it is a property of
+   * the API, read off the catalog, so re-describing one is live everywhere at
+   * once.
+   */
+  const linksFor = (
+    connection: ConnectionSpec,
+  ): readonly EntityLinkView[] => {
+    const entities = connection.catalog
+      ? (options.catalog?.get(connection.catalog)?.entities ?? [])
+      : [];
+    if (entities.length === 0) return [];
+    return entityLinkViews({
+      entities,
+      resources: connection.resources,
+      ops: connection.ops.map((op) => ({ id: op.id, path: op.path, params: op.params })),
+    });
+  };
+
+  const publicConnection = (connection: ConnectionSpec | null) => {
+    if (!connection) return null;
+    const refs = connectionKeyRefs(connection);
+    // `authRequired` with no auth style chosen yet is not "ready" — the key
+    // exists somewhere, we just have not been told where it goes.
+    const hasKey = !connectionNeedsAuthSetup(connection) && refs.every((ref) => keys.has(ref));
+    /*
+     * What this API's fields are called, derived rather than stored.
+     *
+     * Read off the described record types on every request, so there is one
+     * copy to correct and re-describing an API is live for every connection to
+     * it at once. It used to be written by a model pass of its own, run inside
+     * every mapping and costing a call per batch of field names — for a worse
+     * answer than the describing pass already gives, since one map keyed by
+     * bare field name has to give `Title` a single meaning for the whole API.
+     *
+     * This is the fallback, not the answer: a widget that knows its record
+     * type gets that record type's own words (`EntityLinkView.labels`), which
+     * outrank these. This serves the places holding a field name and nothing
+     * else.
+     *
+     * Empty for a connection to an API nobody has described, which every
+     * renderer already handles by falling back to the mechanical label.
+     */
+    const labels = connection.catalog
+      ? fieldLexicon(options.catalog?.get(connection.catalog)?.entities ?? [])
+      : {};
+    /*
+     * Which of this API's fields point at other records, resolved the same way
+     * and for the same reason — a property of the API, kept once on the
+     * catalog entry rather than copied onto every connection to it.
+     *
+     * Deliberately the *links* and not the record types. A browser needs to
+     * know that a column holds a vendor's id, what a vendor is called, and
+     * which endpoint returns one; it does not need the twelve hundred field
+     * descriptions that make the artifact worth sharing, and on a real API
+     * that difference is tens of kilobytes against well over a megabyte on a
+     * payload read at every page load.
+     *
+     * The ops come from the *connection* rather than the catalog: a reach plan
+     * that names an endpoint this connection does not carry is a link nothing
+     * here could follow.
+     */
+    const entities = connection.catalog
+      ? (options.catalog?.get(connection.catalog)?.entities ?? [])
+      : [];
+    const entityLinks = linksFor(connection);
+    /*
+     * Which of this connection's endpoints actually read the time range.
+     *
+     * Published rather than re-derived in the browser, because the browser and
+     * this server must build the *same* cache key and `queryKey`'s own
+     * docblock says what two spellings of a key cost. Cheap: it reads the op's
+     * own query and the dialect, with no resolution and no parse.
+     */
+    const rangeOps = connection.ops
+      .filter((op) => opUsesRange(connection, op))
+      .map((op) => op.id);
+
+    return { ...connection, hasKey, labels, entityLinks, rangeOps };
+  };
+
+  /** A connection with whether its key is in place. */
+  const withKeyFlag = (connection: ConnectionSpec | null) => {
+    if (!connection) return null;
+    const refs = connectionKeyRefs(connection);
+    // `authRequired` with no auth style chosen yet is not "ready" — the key
+    // exists somewhere, we just have not been told where it goes.
+    const hasKey = !connectionNeedsAuthSetup(connection) && refs.every((ref) => keys.has(ref));
+    return { ...connection, hasKey };
+  };
+
+  /**
+   * A field name that reads as somebody else's identity.
+   *
+   * `userId`, `album_id`, `postIds`, `id` — and deliberately not `valid` or
+   * `hybrid`, which is the whole reason this is not `/id$/i`. Two spellings
+   * rather than one clever pattern, because the two are genuinely different
+   * conventions and a reader should be able to see which one matched.
+   */
+  const looksLikeAnId = (path: string): boolean => {
+    const last = path.split(".").pop() ?? "";
+    return /[a-z0-9]Ids?$/.test(last) || /(?:^|_)ids?$/i.test(last);
+  };
+
+
   /* Catalog ids whose record types are being described right now: one pass per API at a time. */
   const describing = new Set<string>();
   /** Describe an API's record types where they have not been, when a model is configured. */
@@ -896,6 +1030,11 @@ export const createEngine = (options: EngineOptions) => {
     observeConnection,
     readWritesFor,
     discovered,
+    relatedFor,
+    linksFor,
+    publicConnection,
+    withKeyFlag,
+    looksLikeAnId,
     /** Carry on whatever was being read, read for every record, or waiting a check when the engine last stopped. */
     resume: (): void => {
       void longReads.resume().catch((error: unknown) => log.warn(`long reads could not resume: ${String(error)}`));

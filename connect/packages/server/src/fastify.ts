@@ -38,6 +38,7 @@ export const connectFastify =
     }
   };
 
+export { connectionRoutes, type ConnectionRouteHooks } from "./connections.js";
 export { integrateRoutes } from "./integrate.js";
 export { mapRoutes } from "./map.js";
 export { oauthRoutes, type OAuthRouteDeps } from "./oauth.js";
