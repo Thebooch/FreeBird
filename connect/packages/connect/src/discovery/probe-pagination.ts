@@ -6,7 +6,7 @@ import {
   type PaginationSpec,
   getOp,
 } from "@freebirdai/connect-spec";
-import { evalPath, parsePath } from "@freebirdai/dash-expr";
+import { evalPath, parsePath } from "@freebirdai/expr";
 import { rowsOf, tryRead, type Attempt, type ReadDeps } from "../integrate/read.js";
 
 /**

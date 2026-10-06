@@ -2,6 +2,7 @@
   "extends": "./tsconfig.base.json",
   "include": [
     "guide/packages/*/src/**/*",
+    "shared/packages/*/src/**/*",
     "examples/*/src/**/*",
     "connect/packages/*/src/**/*",
     "dash/packages/*/src/**/*",

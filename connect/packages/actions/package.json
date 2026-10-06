@@ -45,15 +45,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@freebirdai/connect": "workspace:*"
+    "@freebirdai/connect": "workspace:*",
+    "@freebirdai/core": "workspace:*"
   },
   "peerDependencies": {
-    "@freebirdai/core": "workspace:*",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@freebirdai/connect-spec": "workspace:*",
-    "@freebirdai/core": "workspace:*",
     "@types/node": "^22.9.0",
     "typescript": "^5.7.2",
     "vitest": "^2.1.6",

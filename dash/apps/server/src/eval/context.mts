@@ -31,7 +31,7 @@ import type {
 } from "@freebirdai/dash-spec";
 import { getOp, queryKey, resolveRange } from "@freebirdai/dash-spec";
 import { AdapterRegistry, RestAdapter } from "@freebirdai/connect/adapters";
-import { extractRows, parsePath } from "@freebirdai/dash-expr";
+import { extractRows, parsePath } from "@freebirdai/expr";
 import { buildChatRegistry } from "../chat/registry.js";
 import { workspaceHandles } from "../chat/handles.js";
 import { buildConciergeContext } from "../concierge/context.js";

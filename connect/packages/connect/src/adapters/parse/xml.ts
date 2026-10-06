@@ -1,7 +1,7 @@
 /**
  * XML, read into the same plain values JSON gives.
  *
- * Hand-rolled and small on purpose, like `@freebirdai/dash-expr`: an API's
+ * Hand-rolled and small on purpose, like `@freebirdai/expr`: an API's
  * answer is untrusted input, and the dangerous parts of XML are the parts a
  * data answer never needs. So there is no DTD processing at all — a DOCTYPE is
  * stepped over, its entity declarations never read — and the only entities

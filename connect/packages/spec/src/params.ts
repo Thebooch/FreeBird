@@ -1,5 +1,5 @@
-import type { Grain } from "@freebirdai/dash-expr";
-import { GRAINS, parseGrain } from "@freebirdai/dash-expr";
+import type { Grain } from "@freebirdai/expr";
+import { GRAINS, parseGrain } from "@freebirdai/expr";
 import { z } from "zod";
 
 /**

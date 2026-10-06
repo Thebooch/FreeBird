@@ -28,7 +28,7 @@
     "@freebirdai/connect-server": "workspace:*",
     "@freebirdai/core": "workspace:*",
     "@freebirdai/dash-agent": "workspace:*",
-    "@freebirdai/dash-expr": "workspace:*",
+    "@freebirdai/expr": "workspace:*",
     "@freebirdai/dash-parts": "workspace:*",
     "@freebirdai/dash-runtime": "workspace:*",
     "@freebirdai/dash-spec": "workspace:*",

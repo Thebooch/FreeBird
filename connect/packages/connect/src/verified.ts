@@ -1,4 +1,4 @@
-import { extractRows, parsePath } from "@freebirdai/dash-expr";
+import { extractRows, parsePath } from "@freebirdai/expr";
 import { requiredInputs, resolveOp } from "@freebirdai/connect-spec";
 import type { CatalogEntry, ConnectionSpec, OpSpec } from "@freebirdai/connect-spec";
 

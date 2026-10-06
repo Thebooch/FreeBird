@@ -1,12 +1,12 @@
 {
-  "name": "@freebirdai/dash-spec",
+  "name": "@freebirdai/expr",
   "version": "0.1.0",
-  "description": "FreeBird Dash spec: the versioned schemas, semantic type registry, and component role contracts that every other package agrees on.",
+  "description": "FreeBird's safe path and expression language, hand-rolled to an AST with no eval. Shared by Connect and Dash.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Thebooch/FreeBird.git",
-    "directory": "dash/packages/spec"
+    "directory": "shared/packages/expr"
   },
   "type": "module",
   "main": "./dist/index.js",
@@ -29,18 +29,10 @@
     "dev": "tsup src/index.ts --format esm --dts --sourcemap --watch",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "@freebirdai/connect-spec": "workspace:*",
-    "@freebirdai/expr": "workspace:*"
-  },
-  "peerDependencies": {
-    "zod": "^3.23.0"
-  },
   "devDependencies": {
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.6",
-    "zod": "^3.23.8"
+    "vitest": "^2.1.6"
   },
   "publishConfig": {
     "access": "public"

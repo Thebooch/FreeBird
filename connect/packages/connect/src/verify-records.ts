@@ -1,4 +1,4 @@
-import { extractRows, parsePath } from "@freebirdai/dash-expr";
+import { extractRows, parsePath } from "@freebirdai/expr";
 import type { EntitySpec, GraphOp, ResourceSpec } from "@freebirdai/connect-spec";
 import { entityGraph, parentsFrom, readField } from "@freebirdai/connect-spec";
 // The budgets live in the spec package: the screen that offers this check

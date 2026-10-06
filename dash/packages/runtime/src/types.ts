@@ -1,4 +1,4 @@
-import type { ExprAst, PathAst } from "@freebirdai/dash-expr";
+import type { ExprAst, PathAst } from "@freebirdai/expr";
 import type {
   ColumnMeta,
   ComponentId,

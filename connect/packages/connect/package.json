@@ -44,8 +44,8 @@
   },
   "dependencies": {
     "@freebirdai/connect-spec": "workspace:*",
-    "@freebirdai/core": "workspace:*",
-    "@freebirdai/dash-expr": "workspace:*",
+    "@freebirdai/contracts": "workspace:*",
+    "@freebirdai/expr": "workspace:*",
     "yaml": "^2.9.0"
   },
   "peerDependencies": {

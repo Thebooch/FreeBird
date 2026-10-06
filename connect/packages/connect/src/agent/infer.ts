@@ -1,4 +1,4 @@
-import { evalPath, parsePath } from "@freebirdai/dash-expr";
+import { evalPath, parsePath } from "@freebirdai/expr";
 import { fnv1a } from "@freebirdai/connect-spec";
 
 /**

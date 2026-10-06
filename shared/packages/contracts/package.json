@@ -1,12 +1,12 @@
 {
-  "name": "@freebirdai/dash-expr",
+  "name": "@freebirdai/contracts",
   "version": "0.1.0",
-  "description": "FreeBird Dash safe expression engine: a hand-rolled, non-Turing-complete path and expression language with no eval.",
+  "description": "The contracts FreeBird's products share: the LLM adapter shape and the approval digest.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Thebooch/FreeBird.git",
-    "directory": "dash/packages/expr"
+    "directory": "shared/packages/contracts"
   },
   "type": "module",
   "main": "./dist/index.js",
@@ -29,10 +29,14 @@
     "dev": "tsup src/index.ts --format esm --dts --sourcemap --watch",
     "typecheck": "tsc --noEmit"
   },
+  "peerDependencies": {
+    "zod": "^3.23.0"
+  },
   "devDependencies": {
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.6"
+    "vitest": "^2.1.6",
+    "zod": "^3.23.8"
   },
   "publishConfig": {
     "access": "public"

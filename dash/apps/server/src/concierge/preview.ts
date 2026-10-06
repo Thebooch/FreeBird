@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { ResolvedParams, WidgetSpec, ConnectionSpec } from "@freebirdai/dash-spec";
 import { fingerprintConnection, widgetSources, interpolateValue } from "@freebirdai/dash-spec";
 import { executeWidget } from "@freebirdai/dash-runtime";
-import { evalPath, parsePath } from "@freebirdai/dash-expr";
+import { evalPath, parsePath } from "@freebirdai/expr";
 import type { CacheStore } from "@freebirdai/connect/host";
 
 export type PreviewStatus = "checked" | "empty" | "partial" | "invalid" | "unchecked";

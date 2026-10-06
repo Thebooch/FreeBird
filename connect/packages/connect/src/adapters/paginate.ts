@@ -1,5 +1,5 @@
 import { INCOMPLETE } from "./incomplete.js";
-import { evalPath, parsePath } from "@freebirdai/dash-expr";
+import { evalPath, parsePath } from "@freebirdai/expr";
 import type { PaginationSpec } from "@freebirdai/connect-spec";
 
 /**

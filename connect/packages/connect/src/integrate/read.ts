@@ -1,5 +1,5 @@
 import { AdapterError, DependentAdapter, RestAdapter, type FetchMeta, type HttpFetch, type SourceAdapter } from "../adapters/index.js";
-import { extractRows, parsePath } from "@freebirdai/dash-expr";
+import { extractRows, parsePath } from "@freebirdai/expr";
 import { getOp, pagingParamNames, resolveRange, type ConnectionSpec, type OpSpec } from "@freebirdai/connect-spec";
 import { ENVELOPE_KEY } from "../discovery/openapi.js";
 

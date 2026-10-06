@@ -5,9 +5,9 @@
 export * from "@freebirdai/connect-spec";
 
 // Re-exported so consumers have a single import surface for spec vocabulary.
-export type { Grain } from "@freebirdai/dash-expr";
+export type { Grain } from "@freebirdai/expr";
 
-export { GRAINS, parseGrain, truncateToBucket } from "@freebirdai/dash-expr";
+export { GRAINS, parseGrain, truncateToBucket } from "@freebirdai/expr";
 
 export { isAggregation, parseAggregation } from "./aggregation.js";
 

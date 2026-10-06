@@ -1,4 +1,4 @@
-import { parseExpr, parsePath } from "@freebirdai/dash-expr";
+import { parseExpr, parsePath } from "@freebirdai/expr";
 import { z } from "zod";
 import { parseAggregation } from "./aggregation.js";
 import { coercionSchema } from "@freebirdai/connect-spec";

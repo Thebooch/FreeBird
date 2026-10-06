@@ -157,7 +157,7 @@ import { allocateDashboardId } from "./onboarding/materialise.js";
 import { warmTargets } from "./keeper/targets.js";
 import { ViewedRequests } from "./keeper/viewed.js";
 import type { Settings, SettingsStore } from "./settings.js";
-import { extractRows, parsePath } from "@freebirdai/dash-expr";
+import { extractRows, parsePath } from "@freebirdai/expr";
 import { ANSWER_TOOL, answerFromData } from "./context/tool.js";
 import { bindingFor, bindingsFor } from "./tools/bindings.js";
 import { READ_TOOL, READ_TOOL_NAME, readRecords, readToolSchema } from "./tools/read.js";

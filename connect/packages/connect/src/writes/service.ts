@@ -1,4 +1,4 @@
-import { digest } from "@freebirdai/core";
+import { digest } from "@freebirdai/contracts";
 import { AdapterError, type AdapterRegistry, type RestAdapter } from "../adapters/index.js";
 import type {
   CatalogEntry,

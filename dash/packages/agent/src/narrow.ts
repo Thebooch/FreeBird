@@ -1,4 +1,4 @@
-import { evalPath, parsePath } from "@freebirdai/dash-expr";
+import { evalPath, parsePath } from "@freebirdai/expr";
 
 /**
  * Finding out what values a field actually holds, so a person can pick one.

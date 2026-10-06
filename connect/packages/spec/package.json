@@ -30,7 +30,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@freebirdai/dash-expr": "workspace:*"
+    "@freebirdai/expr": "workspace:*"
   },
   "peerDependencies": {
     "zod": "^3.23.0"

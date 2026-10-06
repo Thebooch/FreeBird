@@ -33,7 +33,7 @@ import {
   type ConciergeContext,
 } from "./steps.js";
 import { contextForConnection } from "./steps.js";
-import { renameExprFields } from "@freebirdai/dash-expr";
+import { renameExprFields } from "@freebirdai/expr";
 
 /**
  * The answers, turned into a widget.

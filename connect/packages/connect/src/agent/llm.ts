@@ -1,8 +1,8 @@
-import type { LlmAdapter, LlmMessage } from "@freebirdai/core";
+import type { LlmAdapter, LlmMessage } from "@freebirdai/contracts";
 
 /**
- * The LLM adapter shape is `@freebirdai/core`'s, so guide and the engine plug
- * in a model the same way: `@freebirdai/adapters-llm-openai` and `-anthropic`
+ * The LLM adapter shape is `@freebirdai/contracts`', the one guide's core uses
+ * too, so guide and the engine plug in a model the same way: `@freebirdai/adapters-llm-openai` and `-anthropic`
  * drop straight in.
  */
 export type {
@@ -12,7 +12,7 @@ export type {
   LlmStreamChunk,
   LlmTokenUsage,
   LlmTool,
-} from "@freebirdai/core";
+} from "@freebirdai/contracts";
 
 /**
  * A scripted adapter for tests and for running the whole flow offline —
