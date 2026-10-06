@@ -21,6 +21,7 @@
     "@electric-sql/pglite": "^0.5.4",
     "@freebirdai/adapters-db-postgres": "workspace:*",
     "@freebirdai/connect": "workspace:*",
+    "@freebirdai/connect-bench": "workspace:*",
     "@freebirdai/connect-browser": "workspace:*",
     "@freebirdai/connect-postgres": "workspace:*",
     "@freebirdai/connect-sandbox": "workspace:*",

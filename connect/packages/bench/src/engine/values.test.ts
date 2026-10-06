@@ -1,7 +1,7 @@
-import { catalogEntrySchema } from "@freebirdai/dash-spec";
+import { catalogEntrySchema } from "@freebirdai/connect-spec";
 import { describe, expect, it } from "vitest";
-import { taskpad } from "../bench/providers/taskpad.js";
-import { benchTransport } from "../bench/transport.js";
+import { taskpad } from "../providers/taskpad.js";
+import { benchTransport } from "../index.js";
 import {
   connectionFromCatalog,
   discover,
@@ -12,7 +12,7 @@ import {
   seenValues,
   withObservedFields,
 } from "@freebirdai/connect/host";
-import { openDashDb } from "../platform/db.js";
+import { openConnectDb } from "@freebirdai/connect-postgres";
 import { DbSeenValueStore } from "@freebirdai/connect-postgres";
 
 /*
@@ -98,7 +98,7 @@ describe("where they are kept", () => {
   });
 
   it("is per connection, replaced per endpoint, and forgotten with the connection", async () => {
-    const db = await openDashDb({ inMemory: true });
+    const db = await openConnectDb({ inMemory: true });
     try {
       for (const store of [new MemorySeenValueStore(), new DbSeenValueStore(db)]) {
         await store.put("bank", "transactions", { fields: { direction: ["debit", "credit"] }, everyRecord: false });

@@ -12,15 +12,15 @@ import {
   type Evidence,
 } from "@freebirdai/dash-spec";
 import { afterEach, describe, expect, it } from "vitest";
-import { json } from "../bench/seed.js";
-import { billhub } from "../bench/providers/billhub.js";
-import { casebook } from "../bench/providers/casebook.js";
-import { keyring } from "../bench/providers/keyring.js";
-import { ledgerly } from "../bench/providers/ledgerly.js";
-import { multicur } from "../bench/providers/multicur.js";
-import { rentroll } from "../bench/providers/rentroll.js";
-import { taskpad } from "../bench/providers/taskpad.js";
-import { benchTransport } from "../bench/transport.js";
+import { json } from "@freebirdai/connect-bench";
+import { billhub } from "@freebirdai/connect-bench/providers/billhub";
+import { casebook } from "@freebirdai/connect-bench/providers/casebook";
+import { keyring } from "@freebirdai/connect-bench/providers/keyring";
+import { ledgerly } from "@freebirdai/connect-bench/providers/ledgerly";
+import { multicur } from "@freebirdai/connect-bench/providers/multicur";
+import { rentroll } from "@freebirdai/connect-bench/providers/rentroll";
+import { taskpad } from "@freebirdai/connect-bench/providers/taskpad";
+import { benchTransport } from "@freebirdai/connect-bench";
 import type { BenchRequest, MockProvider } from "../bench/types.js";
 import {
   applyPatch,

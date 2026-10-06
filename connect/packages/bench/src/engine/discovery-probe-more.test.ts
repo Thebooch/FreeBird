@@ -1,9 +1,9 @@
-import { connectionSchema } from "@freebirdai/dash-spec";
+import { connectionSchema } from "@freebirdai/connect-spec";
 import { describe, expect, it } from "vitest";
-import { ledgerly } from "../bench/providers/ledgerly.js";
-import { json } from "../bench/seed.js";
-import { benchTransport } from "../bench/transport.js";
-import type { BenchRequest, BenchResponse, MockProvider } from "../bench/types.js";
+import { ledgerly } from "../providers/ledgerly.js";
+import { json } from "../index.js";
+import { benchTransport } from "../index.js";
+import type { BenchRequest, BenchResponse, MockProvider } from "../types.js";
 import { budgetOf, nextAddressPaths, probePagination, tryRead } from "@freebirdai/connect/host";
 
 /*

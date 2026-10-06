@@ -18,6 +18,7 @@
     "freebird-static-embed-example",
     "freebird-docs",
     "freebird-connect-node-example",
-    "freebird-connect-express-example"
+    "freebird-connect-express-example",
+    "@freebirdai/connect-bench"
   ]
 }

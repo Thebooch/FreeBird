@@ -1,8 +1,8 @@
 import { connectionSchema, type ConnectionSpec } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
-import { ledgerly } from "../bench/providers/ledgerly.js";
-import { json } from "../bench/seed.js";
-import { benchTransport } from "../bench/transport.js";
+import { ledgerly } from "@freebirdai/connect-bench/providers/ledgerly";
+import { json } from "@freebirdai/connect-bench";
+import { benchTransport } from "@freebirdai/connect-bench";
 import type { MockProvider } from "../bench/types.js";
 import {
   CheckQueue,

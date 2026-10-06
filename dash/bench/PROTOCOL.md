@@ -27,7 +27,7 @@ Each provider records why it is in the corpus (its `pattern`), so the population
 
 The corpus has these sources:
 
-- **Mock providers** (`apps/server/src/bench/providers/`). Each one is a small in-process API with documentation, seeded data and answer keys, and each exercises one hard pattern. They run offline, deterministically and for free, so they are what CI runs.
+- **Mock providers** (`connect/packages/bench/src/providers/`, the engine's test bed). Each one is a small in-process API with documentation, seeded data and answer keys, and each exercises one hard pattern. They run offline, deterministically and for free, so they are what CI runs.
 - **Real public APIs** (the `real` split, `providers/real.ts`). Public APIs that need no key: DummyJSON, JSONPlaceholder, Rick and Morty, PokéAPI, Open Brewery DB and Cat Facts. They are reached over the network through the server's SSRF guard, and only on their own hosts.
   - Answer keys come from a snapshot of the full data taken by `real/snapshot.mts`, with at most two documented requests each (the first may say how many there are). They were fixed before any integrator ran against them.
   - Each key is checked against the live API before scoring. A changed API is reported as a stale key (`stopped:stale-key`), never scored.

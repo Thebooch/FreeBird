@@ -1,9 +1,9 @@
 import type { LlmAdapter } from "@freebirdai/dash-agent";
 import { benchTooling } from "./integrator.js";
-import { PROVIDERS, providersIn } from "./providers/index.js";
-import { BENCH_NOW } from "./seed.js";
+import { PROVIDERS, providersIn } from "@freebirdai/connect-bench";
+import { BENCH_NOW } from "@freebirdai/connect-bench";
 import { scoreOutcome } from "./score.js";
-import { benchTransport, liveTransport } from "./transport.js";
+import { benchTransport, liveTransport } from "@freebirdai/connect-bench";
 import type { Integrator, MockProvider, ScenarioScore, Split } from "./types.js";
 
 /**

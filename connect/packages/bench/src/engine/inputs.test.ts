@@ -5,12 +5,12 @@ import {
   isIncompleteNote,
   RestAdapter,
 } from "@freebirdai/connect/adapters";
-import { connectionSchema, getOp, resolveRange } from "@freebirdai/dash-spec";
+import { connectionSchema, getOp, resolveRange } from "@freebirdai/connect-spec";
 import { describe, expect, it } from "vitest";
-import { ledgerly } from "../bench/providers/ledgerly.js";
-import { json } from "../bench/seed.js";
-import { benchTransport } from "../bench/transport.js";
-import type { MockProvider } from "../bench/types.js";
+import { ledgerly } from "../providers/ledgerly.js";
+import { json } from "../index.js";
+import { benchTransport } from "../index.js";
+import type { MockProvider } from "../types.js";
 import {
   budgetOf,
   connectionFromCatalog,

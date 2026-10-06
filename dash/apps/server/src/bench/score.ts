@@ -14,10 +14,10 @@ import {
   OAuthRetryAdapter,
   RateLimitWaitAdapter,
 } from "@freebirdai/connect/host";
-import { benchConnectors } from "./connectors.js";
+import { benchConnectors } from "@freebirdai/connect-bench";
 import { executeWidget } from "@freebirdai/dash-runtime";
 import { getOp, paramsForWidget, resolveRange, type ConnectionSpec, type OpSpec, type ResolvedParams } from "@freebirdai/dash-spec";
-import type { BenchTransport } from "./transport.js";
+import type { BenchTransport } from "@freebirdai/connect-bench";
 import type {
   Completeness,
   IntegrationOutcome,

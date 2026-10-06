@@ -1,7 +1,7 @@
-import { catalogEntrySchema, type CatalogEntry } from "@freebirdai/dash-spec";
+import { catalogEntrySchema, type CatalogEntry } from "@freebirdai/connect-spec";
 import { describe, expect, it } from "vitest";
-import { taskpad } from "../bench/providers/taskpad.js";
-import { benchTransport } from "../bench/transport.js";
+import { taskpad } from "../providers/taskpad.js";
+import { benchTransport } from "../index.js";
 import {
   connectionFromCatalog,
   discover,

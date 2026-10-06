@@ -43,6 +43,34 @@ importers:
         specifier: ^2.1.6
         version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
 
+  connect/packages/bench:
+    dependencies:
+      '@freebirdai/connect':
+        specifier: workspace:*
+        version: link:../connect
+      '@freebirdai/connect-sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
+      '@freebirdai/connect-spec':
+        specifier: workspace:*
+        version: link:../spec
+    devDependencies:
+      '@freebirdai/connect-postgres':
+        specifier: workspace:*
+        version: link:../postgres
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.19.17
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.6
+        version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+
   connect/packages/browser:
     dependencies:
       '@freebirdai/connect':
@@ -204,6 +232,9 @@ importers:
       '@freebirdai/connect':
         specifier: workspace:*
         version: link:../../../connect/packages/connect
+      '@freebirdai/connect-bench':
+        specifier: workspace:*
+        version: link:../../../connect/packages/bench
       '@freebirdai/connect-browser':
         specifier: workspace:*
         version: link:../../../connect/packages/browser

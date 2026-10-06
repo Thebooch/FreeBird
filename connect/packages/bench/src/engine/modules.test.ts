@@ -1,9 +1,9 @@
 import { fakeLlm } from "@freebirdai/connect/agent";
-import { connectorServes, type ConnectionSpec } from "@freebirdai/dash-spec";
+import { connectorServes, type ConnectionSpec } from "@freebirdai/connect-spec";
 import { describe, expect, it } from "vitest";
-import { benchConnectors } from "../bench/connectors.js";
-import { tfPayments, twofold } from "../bench/providers/twofold.js";
-import { benchTransport } from "../bench/transport.js";
+import { benchConnectors } from "../index.js";
+import { tfPayments, twofold } from "../providers/twofold.js";
+import { benchTransport } from "../index.js";
 import {
   authorConnector,
   budgetOf,

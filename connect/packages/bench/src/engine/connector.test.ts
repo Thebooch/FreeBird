@@ -1,11 +1,11 @@
 import { fakeLlm } from "@freebirdai/connect/agent";
-import { authCredentials, getOp } from "@freebirdai/dash-spec";
+import { authCredentials, getOp } from "@freebirdai/connect-spec";
 import { describe, expect, it } from "vitest";
-import { benchConnectors } from "../bench/connectors.js";
-import { sessionly } from "../bench/providers/sessionly.js";
-import { stampede } from "../bench/providers/stampede.js";
-import { benchTransport } from "../bench/transport.js";
-import type { MockProvider } from "../bench/types.js";
+import { benchConnectors } from "../index.js";
+import { sessionly } from "../providers/sessionly.js";
+import { stampede } from "../providers/stampede.js";
+import { benchTransport } from "../index.js";
+import type { MockProvider } from "../types.js";
 import { connectionFromCatalog, discover, integrate } from "@freebirdai/connect/host";
 
 /**

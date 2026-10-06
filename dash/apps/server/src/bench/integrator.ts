@@ -32,8 +32,8 @@ import type { SeenSet } from "@freebirdai/connect/host";
 import { DependentAdapter, RestAdapter } from "@freebirdai/connect/adapters";
 import { getOp, paramsForWidget, resolveRange } from "@freebirdai/dash-spec";
 import { chooseByBrief, observeFirstRead } from "./brief-choice.js";
-import { benchConnectors } from "./connectors.js";
-import { benchCredentials, signInAsThePerson } from "./oauth.js";
+import { benchConnectors } from "@freebirdai/connect-bench";
+import { benchCredentials, signInAsThePerson } from "@freebirdai/connect-bench";
 import type {
   IntegrationEnv,
   IntegrationOutcome,
