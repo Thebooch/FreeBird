@@ -154,7 +154,8 @@ export const createConnectKit = (connect: Connect, options: ConnectKitOptions = 
       ...(args.filter ? { filter: args.filter } : {}),
       ...(args.fresh ? { fresh: args.fresh } : {}),
     });
-    const base = { count: result.rows.length, warnings: result.warnings, fromMemory: result.cache === "hit" };
+    /* `complete` only when the read is known to have reached its end: a count over part of the records is not a total. */
+    const base = { count: result.rows.length, complete: result.complete, warnings: result.warnings, fromMemory: result.cache === "hit" };
     if (args.measure) return { ...base, value: measureRows(result.rows, args.measure), measure: args.measure };
     return { ...base, rows: result.rows.slice(0, maxRows), ...(result.rows.length > maxRows ? { shown: maxRows } : {}) };
   };

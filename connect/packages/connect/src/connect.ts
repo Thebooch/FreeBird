@@ -140,7 +140,12 @@ export interface ReadResult {
   readonly ageMs: number;
   /** What the reader should know: pages not read, a read carried on, a change in shape. */
   readonly warnings: readonly string[];
-  /** Whether these are all the records: every page read, nothing still being read. */
+  /**
+   * Whether these are known to be all the records: the read reached its end
+   * (`completion.state` is `traversed`), nothing was cut short, and nothing is
+   * still being read. False whenever that is not established, including when
+   * the end is unknown.
+   */
   readonly complete: boolean;
   /** How the read ended, as the adapter judged it: traversed to its end, partial, or unknown. */
   readonly completion?: ReadCompletion | undefined;
@@ -306,7 +311,12 @@ export const createConnect = (options: ConnectOptions = {}) => {
             ...(reading.error ? { error: reading.error } : {}),
           }
         : null;
-      const complete = !unfinished(reading) && (reading?.state === "done" || (!meta.truncated && meta.completion?.state !== "partial"));
+      /*
+       * Only on affirmative evidence: the read was traversed to its end, nothing
+       * was cut short, and nothing is still being read. An unknown end (paging
+       * nobody confirmed, say) is not complete, however the background work went.
+       */
+      const complete = !unfinished(reading) && !meta.truncated && meta.completion?.state === "traversed";
       emit({ type: "read", connection: id, op: op.id, rows: rows.length, cache: outcome.outcome });
       return {
         rows,

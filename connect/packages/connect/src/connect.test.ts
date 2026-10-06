@@ -218,3 +218,30 @@ describe("a read longer than one read takes", () => {
     connect.stop();
   });
 });
+
+describe("whether a read is complete", () => {
+  /* Paging nobody has confirmed: the adapter reads one page and cannot say whether there are more. */
+  const unconfirmed = connectionSchema.parse({
+    id: "loose",
+    title: "Loose",
+    kind: "rest",
+    baseUrl: "https://api.loose.test",
+    ops: [{ id: "items", title: "Items", path: "/items", rowsPath: "$.data", pagination: { kind: "page", param: "page", startsAt: 1 } }],
+  });
+  const onePage: HttpFetch = async (url) => ({
+    status: 200,
+    text: JSON.stringify({ data: [{ id: "a" }, { id: "b" }] }),
+    url,
+    header: (name) => (name.toLowerCase() === "content-type" ? "application/json" : null),
+  });
+
+  it("is not claimed when the end of the read is unknown", async () => {
+    const store = new MemoryConnectionStore();
+    store.putConnection(unconfirmed);
+    const connect = createConnect({ dir, store, http: onePage, autoIntegrate: false });
+    const result = await connect.read("loose", { op: "items" });
+    expect(result.completion?.state).not.toBe("traversed");
+    expect(result.complete).toBe(false);
+    connect.stop();
+  });
+});
