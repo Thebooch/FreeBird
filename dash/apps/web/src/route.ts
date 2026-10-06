@@ -12,8 +12,22 @@
  * addresses.
  */
 
+/**
+ * The Agent side of the app: fixed sections in place of boards. Workflows,
+ * Communications has a place of its own (`#/comms`), because calls, texts and
+ * email are a lot to watch.
+ */
+export const AGENT_SECTIONS = ["workflows", "agents", "calendar"] as const;
+export type AgentSection = (typeof AGENT_SECTIONS)[number];
+/** Where an unknown section lands: the one place that already has something in it. */
+export const DEFAULT_AGENT_SECTION: AgentSection = "agents";
+
 export type Route =
   | { readonly kind: "board"; readonly dashboardId: string | null }
+  /** `#/agent/<section>[/<id>]` — one agent, workflow or day, depending on the section. */
+  /** `#/comms` — everything coming in and going out, in a section of its own. */
+  | { readonly kind: "comms" }
+  | { readonly kind: "agent"; readonly section: AgentSection; readonly id?: string }
   | {
       readonly kind: "record";
       readonly dashboardId: string;
@@ -84,6 +98,16 @@ export const parseRoute = (hash: string): Route => {
     };
   }
 
+  if (parts[0] === "comms") return { kind: "comms" };
+
+  /* `#/agent/<section>[/<id>]`. A section we do not have lands on Agents. */
+  if (parts[0] === "agent") {
+    const section = (AGENT_SECTIONS as readonly string[]).includes(parts[1] ?? "")
+      ? (parts[1] as AgentSection)
+      : DEFAULT_AGENT_SECTION;
+    return { kind: "agent", section, ...(parts[2] ? { id: parts[2] } : {}) };
+  }
+
   if (parts[0] !== "d" || !parts[1]) return BOARD_ROUTE;
   const dashboardId = parts[1];
 
@@ -96,6 +120,10 @@ export const parseRoute = (hash: string): Route => {
 export const routeToHash = (route: Route): string => {
   if (route.kind === "board") {
     return route.dashboardId ? `#/d/${encodeURIComponent(route.dashboardId)}` : "#/";
+  }
+  if (route.kind === "comms") return "#/comms";
+  if (route.kind === "agent") {
+    return `#/agent/${route.section}${route.id ? `/${encodeURIComponent(route.id)}` : ""}`;
   }
   if (route.kind === "entity") {
     return (

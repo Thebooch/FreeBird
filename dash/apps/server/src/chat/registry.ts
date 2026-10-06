@@ -24,6 +24,7 @@ import {
   type WidgetHandle,
 } from "./handles.js";
 
+import { agentActions, agentKnowledge, type AgentChatOps } from "./agent-actions.js";
 import { recordChangeActions, type RecordChangeOps } from "./record-actions.js";
 /**
  * The dashboard, described to the chat engine.
@@ -110,6 +111,12 @@ export interface BuildChatRegistryInput {
    * that cannot write never offers to.
    */
   readonly changes?: RecordChangeOps;
+  /**
+   * The agents that exist, and making, changing and archiving them.
+   *
+   * Absent means the three actions are not registered.
+   */
+  readonly agents?: AgentChatOps;
 }
 
 /* ── actions ──────────────────────────────────────────────────────────── */
@@ -821,6 +828,7 @@ export const buildChatRegistry = (input: BuildChatRegistryInput) => {
     ...(viewActions(handles) ?? []),
     ...(input.concierge ? (conciergeActions(input.concierge) ?? []) : []),
     ...(input.changes ? recordChangeActions(input.changes) : []),
+    ...(input.agents ? agentActions(input.agents) : []),
   ];
 
   /*
@@ -852,6 +860,7 @@ export const buildChatRegistry = (input: BuildChatRegistryInput) => {
       ...(input.records ? [{ text: input.records }] : []),
       ...inventoryKnowledge(input, handles),
       ...workspaceKnowledge(input),
+      ...(input.agents ? agentKnowledge(input.agents) : []),
       ...(input.concierge ? conciergeKnowledge(input.concierge) : []),
     ],
     grid: { minW: 12, minH: 4 },

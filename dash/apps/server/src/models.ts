@@ -238,7 +238,8 @@ export type LlmTask =
   | "respond"
   | "writes"
   | "repair"
-  | "connector";
+  | "connector"
+  | "agent";
 
 /**
  * Two tiers, not three.
@@ -336,6 +337,17 @@ export const TASKS: readonly TaskInfo[] = [
     label: "Writing connector code",
     tier: "capable",
     note: "Writes the small program an API needs when a connection cannot describe it — a signed request, a login, a read in several steps. Runs only when repairs cannot express the fix.",
+  },
+  {
+    /*
+     * Turning what somebody typed about an agent into a prompt a model follows
+     * well. Rare, and its output becomes every reply that agent writes, so it
+     * gets the model that writes best.
+     */
+    id: "agent",
+    label: "Drafting agent prompts",
+    tier: "capable",
+    note: "Structures an agent's role, instructions, personality or knowledge when you press Generate.",
   },
   {
     id: "record",

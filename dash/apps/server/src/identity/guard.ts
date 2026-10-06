@@ -37,6 +37,9 @@ export const GUARDED_ROUTES: readonly GuardRule[] = [
   { methods: WRITE, path: /^\/api\/discover(\/|$)/, permission: "connections.manage" },
   { methods: WRITE, path: /^\/api\/onboarding(\/|$)/, permission: "connections.manage" },
   { methods: WRITE, path: /^\/api\/oauth(\/|$)/, permission: "connections.manage" },
+  /* Agents: making, changing, archiving and restoring them. Reading them is not here. */
+  { methods: WRITE, path: /^\/api\/agents(\/|$)/, permission: "agents.manage" },
+  { methods: WRITE, path: /^\/api\/agent-knowledge(\/|$)/, permission: "agents.manage" },
   /* The parts a board is built from, and which models do what. */
   { methods: ["PUT", "DELETE"], path: /^\/api\/parts(\/|$)/, permission: "boards.edit" },
   { methods: ["PUT"], path: /^\/api\/models(\/|$)/, permission: "connections.manage" },
