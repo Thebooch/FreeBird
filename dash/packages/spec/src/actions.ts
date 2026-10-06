@@ -136,7 +136,7 @@ const CONNECTION: ActionField = { key: "connection", label: "Connection", kind: 
 const ENTITY: ActionField = { key: "entity", label: "Record type", kind: "record_type", required: true, ask: "Which kind of record?" };
 const RECORD_ID: ActionField = { key: "recordId", label: "Which record", kind: "template", required: true, default: "{{ id }}", placeholder: "{{ id }}" };
 const AGENT: ActionField = { key: "agentId", label: "From agent", kind: "agent", required: true, ask: "Which agent should it come from? It writes in that agent's voice." };
-const TO: ActionField = { key: "to", label: "To", kind: "template", required: true, placeholder: "{{ tenant.phone }}", ask: "Who should it reach? (a field on the record, or an address)" };
+const TO: ActionField = { key: "to", label: "To", kind: "template", required: true, placeholder: "{{ phone }}", ask: "Who should it reach? (a field on the record, or an address)" };
 const PURPOSE: ActionField = { key: "purpose", label: "What it is for", kind: "longtext", required: true, placeholder: "Let them know the work order was received", ask: "What should the message say or be for?" };
 const TIMEOUT: ActionField = { key: "timeout", label: "Give up after", kind: "duration", required: true, default: "2d", ask: "How long should it wait before giving up?" };
 

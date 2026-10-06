@@ -1,60 +1,62 @@
-import { AgentChip, Badge, Button, EmptyState, ErrorState } from "@freebirdai/dash-components";
-import { WriteReview } from "@freebirdai/dash-react";
-import { describeTrigger, type AgentSpec, type Proposal, type WorkflowRun, type WorkflowSpec, type WriteReviewView } from "@freebirdai/dash-spec";
+import { Badge, Button, EmptyState, ErrorState } from "@freebirdai/dash-components";
+import { describeTrigger, type AgentSpec, type Task, type WorkflowCase, type WorkflowSpec, type WorkflowTemplate } from "@freebirdai/dash-spec";
 import { useEffect, useMemo, useState } from "react";
 import { api, type ConnectionSummary } from "../../api";
 import type { Route } from "../../route.js";
 import { workflowState } from "./draft.js";
+import { TaskCard, when } from "./TaskCard.jsx";
 import { WorkflowEditor } from "./WorkflowEditor.jsx";
 
 /**
- * Workflows: a trigger and a path.
+ * Workflows: a trigger and a graph of steps.
  *
- * Three things, in the order a person needs them:
- * 1. **Waiting for you**: what an approve step, or an agent's tool set to
- *    approve, is asking a person to decide. A change opens as its review,
- *    prepared now, as you; Apply sends exactly that review.
- * 2. **Workflows**: each with its trigger in words and whether it is on.
- * 3. **Recent runs**: what each run read, matched and did.
+ * With nothing open: **Waiting for you** (approvals and questions for the
+ * team), the workflows with their triggers in words, and the templates saved
+ * for reuse. With a workflow open: the builder, its open cases, and the
+ * buttons to turn it on, run it or delete it.
  *
- * Every control is also something the chat can do (`create_workflow`,
- * `update_workflow`).
+ * Every control is also something the chat can do (`draft_workflow`,
+ * `create_workflow`, `update_workflow`, `save_workflow_template`,
+ * `use_workflow_template`).
  */
 
 const NEW = "new";
 
 const errorText = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));
 
-const when = (iso: string | undefined): string => {
-  if (!iso) return "";
-  const at = new Date(iso);
-  return Number.isNaN(at.getTime()) ? iso : at.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-};
-
-const useWorkflowsData = (reloadToken: number) => {
+const useData = (reloadToken: number) => {
   const [state, setState] = useState<{
     workflows: WorkflowSpec[];
     agents: AgentSpec[];
     connections: ConnectionSummary[];
-    waiting: Proposal[];
-    runs: WorkflowRun[];
+    waiting: Task[];
+    templates: WorkflowTemplate[];
     error: string | null;
     loaded: boolean;
-  }>({ workflows: [], agents: [], connections: [], waiting: [], runs: [], error: null, loaded: false });
+  }>({ workflows: [], agents: [], connections: [], waiting: [], templates: [], error: null, loaded: false });
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const [workflows, agents, connections, waiting, stale, runs] = await Promise.all([
+        const [workflows, agents, connections, approvals, questions, templates] = await Promise.all([
           api.workflows(),
-          api.agents(),
+          api.agents(true),
           api.connections(),
-          api.proposals("waiting"),
-          api.proposals("stale"),
-          api.workflowRuns(),
+          api.tasks({ status: "waiting_approval" }),
+          api.tasks({ status: "waiting" }),
+          api.templates(),
         ]);
-        if (!cancelled) setState({ workflows, agents, connections, waiting: [...waiting, ...stale], runs, error: null, loaded: true });
+        if (cancelled) return;
+        setState({
+          workflows,
+          agents,
+          connections,
+          waiting: [...approvals, ...questions.filter((task) => task.body.kind === "question")],
+          templates,
+          error: null,
+          loaded: true,
+        });
       } catch (cause) {
         if (!cancelled) setState((held) => ({ ...held, error: errorText(cause), loaded: true }));
       }
@@ -63,180 +65,71 @@ const useWorkflowsData = (reloadToken: number) => {
       cancelled = true;
     };
   }, [reloadToken]);
-
   return state;
 };
 
-/** One thing waiting for a person. */
-const ProposalCard = ({
-  proposal,
-  agent,
-  workflowName,
-  onDone,
-}: {
-  proposal: Proposal;
-  agent: AgentSpec | undefined;
-  workflowName: string | undefined;
-  onDone: () => void;
-}): JSX.Element => {
-  const [review, setReview] = useState<WriteReviewView | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(proposal.status === "stale" ? (proposal.error ?? "This no longer applies.") : null);
+const CASE_WORDS: Readonly<Record<string, string>> = { approval: "your approval", ask: "a teammate's answer", time: "a time", reply: "a reply", record_change: "a record to change", workflow_done: "another workflow", webhook: "its webhook" };
 
-  const act = async (work: () => Promise<unknown>): Promise<void> => {
-    setBusy(true);
-    setError(null);
-    try {
-      await work();
-    } catch (cause) {
-      setError(errorText(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const open = () =>
-    act(async () => {
-      const opened = await api.reviewProposal(proposal.id);
-      if (opened.proposal.status === "stale") {
-        setError(opened.proposal.error ?? "This no longer applies.");
-        return;
-      }
-      setReview(opened.review ?? null);
-    });
-
+const CasesList = ({ workflow, reloadToken, onChanged }: { workflow: WorkflowSpec; reloadToken: number; onChanged: () => void }): JSX.Element => {
+  const [cases, setCases] = useState<WorkflowCase[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void api.workflowCases(workflow.id).then((list) => !cancelled && setCases(list), () => !cancelled && setCases([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [workflow.id, reloadToken]);
+  if (!cases) return <p className="dash-hint">Loading cases…</p>;
+  if (cases.length === 0) return <p className="dash-hint">No cases yet. Each record the trigger matches opens one.</p>;
   return (
-    <li className="dash-proposal" data-testid={`proposal-${proposal.id}`} data-status={proposal.status}>
-      <div className="dash-proposal__head">
-        {agent && <AgentChip name={agent.name} color={agent.color} size="sm" />}
-        <strong className="dash-proposal__title">{proposal.title}</strong>
-        {proposal.status === "stale" && <Badge tone="stale">No longer applies</Badge>}
-      </div>
-      <span className="dash-hint">
-        {proposal.reason}
-        {workflowName ? ` · ${workflowName}` : ""} · {when(proposal.createdAt)}
-      </span>
-      {error && (
-        <p className="dash-callout dash-callout--bad" role="alert">
-          {error}
-        </p>
-      )}
-      {review ? (
-        <WriteReview
-          review={review}
-          compact
-          busy={busy}
-          onCancel={() => setReview(null)}
-          onConfirm={() =>
-            void act(async () => {
-              await api.applyProposal(proposal.id, { pendingId: review.pendingId, digest: review.digest });
-              setReview(null);
-              onDone();
-            })
-          }
-        />
-      ) : (
-        <div className="dash-row">
-          {proposal.status === "waiting" && proposal.kind === "change" && (
-            <Button size="sm" tone="primary" busy={busy} onClick={() => void open()} testId={`proposal-review-${proposal.id}`}>
-              Review
-            </Button>
-          )}
-          {proposal.status === "waiting" && proposal.kind === "workflow_start" && (
-            <Button
-              size="sm"
-              tone="primary"
-              busy={busy}
-              onClick={() =>
-                void act(async () => {
-                  await api.applyProposal(proposal.id);
-                  onDone();
-                })
-              }
-              testId={`proposal-start-${proposal.id}`}
-            >
-              Start it
-            </Button>
-          )}
-          <Button
-            size="sm"
-            busy={busy}
-            onClick={() =>
-              void act(async () => {
-                await api.dismissProposal(proposal.id);
-                onDone();
-              })
-            }
-            testId={`proposal-dismiss-${proposal.id}`}
-          >
-            Dismiss
-          </Button>
-        </div>
-      )}
-    </li>
+    <table className="dash-cases" data-testid="workflow-cases">
+      <thead>
+        <tr>
+          <th>Record</th>
+          <th>Status</th>
+          <th>At</th>
+          <th>Waiting for</th>
+          <th>Updated</th>
+          <th />
+        </tr>
+      </thead>
+      <tbody>
+        {cases.map((one) => {
+          const step = workflow.nodes.find((node) => node.id === (one.waiting?.node ?? one.at));
+          return (
+            <tr key={one.id} data-status={one.status}>
+              <td>{one.rowKey || "—"}</td>
+              <td>{one.status}</td>
+              <td>{step ? (step.name ?? step.id) : "—"}</td>
+              <td>
+                {one.waiting ? `${CASE_WORDS[one.waiting.kind] ?? one.waiting.kind}${one.waiting.deadline ? `, until ${when(one.waiting.deadline)}` : ""}` : (one.error ?? "")}
+              </td>
+              <td>{when(one.updatedAt)}</td>
+              <td>
+                {(one.status === "waiting" || one.status === "running") && (
+                  <Button size="sm" tone="ghost" onClick={() => void api.cancelCase(one.id).then(onChanged)}>
+                    Cancel
+                  </Button>
+                )}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 };
 
-const RunsList = ({ runs, agents, empty }: { runs: readonly WorkflowRun[]; agents: ReadonlyMap<string, AgentSpec>; empty: string }): JSX.Element =>
-  runs.length === 0 ? (
-    <p className="dash-hint">{empty}</p>
-  ) : (
-    <ul className="dash-workflow-runs" data-testid="workflow-runs">
-      {runs.map((run) => {
-        const agent = run.agent ? agents.get(run.agent) : undefined;
-        return (
-          <li key={run.id} className="dash-workflow-run" data-status={run.status}>
-            <div className="dash-proposal__head">
-              {agent && <AgentChip name={agent.name} color={agent.color} size="sm" />}
-              <strong>{run.workflowName}</strong>
-              <Badge tone={run.status === "failed" ? "danger" : run.status === "parked" ? "warn" : run.status === "running" ? "accent" : "neutral"}>
-                {run.status === "succeeded" ? "Done" : run.status === "seeded" ? "First look" : run.status === "parked" ? "Paused" : run.status === "failed" ? "Failed" : "Running"}
-              </Badge>
-              <span className="dash-hint">{when(run.startedAt)}</span>
-            </div>
-            <span className="dash-hint">{run.summary || run.error}</span>
-            {run.outputs.length > 0 && (
-              <details className="dash-agent-editor__preview">
-                <summary>What it did</summary>
-                <ul className="dash-workflow-run__outputs">
-                  {run.outputs.map((output, index) => (
-                    <li key={index} data-outcome={output.outcome}>
-                      <span className="dash-workflow-run__outcome">{output.outcome}</span> {output.detail}
-                    </li>
-                  ))}
-                </ul>
-              </details>
-            )}
-          </li>
-        );
-      })}
-    </ul>
-  );
-
-export const WorkflowsSection = ({
-  selected,
-  onNavigate,
-}: {
-  readonly selected: string | null;
-  readonly onNavigate: (route: Route) => void;
-}): JSX.Element => {
+export const WorkflowsSection = ({ selected, onNavigate }: { readonly selected: string | null; readonly onNavigate: (route: Route) => void }): JSX.Element => {
   const [reloadToken, setReloadToken] = useState(0);
-  const { workflows, agents, connections, waiting, runs, error, loaded } = useWorkflowsData(reloadToken);
+  const { workflows, agents, connections, waiting, templates, error, loaded } = useData(reloadToken);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const reload = (): void => setReloadToken((n) => n + 1);
   const go = (id?: string): void => onNavigate({ kind: "agent", section: "workflows", ...(id ? { id } : {}) });
-
   const agentById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
-  const workflowName = (id: string | undefined) => workflows.find((one) => one.id === id)?.name;
-  const names = useMemo(
-    () => ({ connection: (id: string) => connections.find((one) => one.id === id)?.title ?? id }),
-    [connections],
-  );
-  /* The agents whose tools start each workflow, for "When Maintenance agent is asked". */
-  const startedBy = (id: string): string[] =>
-    agents.filter((agent) => agent.tools.some((tool) => tool.kind === "run_workflow" && tool.workflow === id)).map((agent) => agent.name);
-
+  const names = useMemo(() => ({ connection: (id: string) => connections.find((one) => one.id === id)?.title ?? id }), [connections]);
+  const startedBy = (id: string): string[] => agents.filter((agent) => agent.tools.some((tool) => tool.kind === "run_workflow" && tool.workflow === id)).map((agent) => agent.name);
   const current = selected && selected !== NEW ? (workflows.find((one) => one.id === selected) ?? null) : null;
 
   const act = async (work: () => Promise<unknown>): Promise<void> => {
@@ -254,6 +147,68 @@ export const WorkflowsSection = ({
 
   if (error) return <ErrorState message={error} onRetry={reload} />;
 
+  /* A workflow open: the builder, full width. */
+  if (selected === NEW || current) {
+    const state = current ? workflowState(current) : null;
+    return (
+      <div className="dash-workflow-page" data-testid="workflows-section">
+        <div className="dash-agents__subhead">
+          <button type="button" className="dash-overview__link" onClick={() => go()}>
+            ← Workflows
+          </button>
+          {current && (
+            <span className="dash-row">
+              <Badge tone={state!.tone === "on" ? "accent" : state!.tone === "paused" ? "danger" : state!.tone === "trial" ? "warn" : "neutral"}>{state!.label}</Badge>
+              <Button size="sm" tone={current.enabled && !current.parked ? "default" : "primary"} busy={busy} onClick={() => void act(() => api.setWorkflowEnabled(current.id, !(current.enabled && !current.parked)))} testId="workflow-toggle">
+                {current.enabled && !current.parked ? "Turn off" : "Turn on"}
+              </Button>
+              {(current.trigger.kind !== "agent" || current.trigger.inputs.length === 0) && (
+                <Button size="sm" busy={busy} onClick={() => void act(() => api.runWorkflow(current.id))} testId="workflow-run">
+                  Run now
+                </Button>
+              )}
+              <Button size="sm" tone="ghost" busy={busy} onClick={() => void act(async () => (await api.deleteWorkflow(current.id), go()))} testId="workflow-delete">
+                Delete
+              </Button>
+            </span>
+          )}
+        </div>
+        {actionError && (
+          <p className="dash-callout dash-callout--bad" role="alert">
+            {actionError}
+          </p>
+        )}
+        {current?.parked && (
+          <p className="dash-callout dash-callout--warn" role="status" data-testid="workflow-parked">
+            Paused: {current.parked.reason} Turn it back on once that is fixed.
+          </p>
+        )}
+        {loaded && (
+          <WorkflowEditor
+            key={current ? `${current.id}:${current.updatedAt}` : NEW}
+            workflow={current}
+            agents={agents.filter((agent) => !agent.archived)}
+            workflows={workflows}
+            connections={connections}
+            templates={templates}
+            onSaved={(saved) => {
+              reload();
+              go(saved.id);
+            }}
+            onCancel={() => go()}
+            onTemplatesChanged={reload}
+          />
+        )}
+        {current && (
+          <>
+            <h4 className="dash-workflow-editor__heading">Cases</h4>
+            <CasesList workflow={current} reloadToken={reloadToken} onChanged={reload} />
+          </>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="dash-agents" data-testid="workflows-section">
       <aside className="dash-agents__list" aria-label="Workflows">
@@ -263,15 +218,9 @@ export const WorkflowsSection = ({
             ＋ New workflow
           </Button>
         </div>
-        <button type="button" className="dash-agent-row dash-agent-row--shared" data-active={!selected} onClick={() => go()} data-testid="workflow-row-waiting">
-          <span className="dash-agent-row__title">
-            Waiting for you {waiting.filter((one) => one.status === "waiting").length > 0 && <Badge tone="accent">{waiting.filter((one) => one.status === "waiting").length}</Badge>}
-          </span>
-          <span className="dash-agent-row__reach">And recent runs</span>
-        </button>
         {loaded && workflows.length === 0 ? (
           <p className="dash-hint" data-testid="workflows-empty">
-            No workflows yet. A workflow starts from a trigger — a schedule, a new record, an agent being asked — and follows its steps.
+            No workflows yet. A workflow starts from a trigger and follows its steps. You can also ask the assistant to make one.
           </p>
         ) : (
           <ul className="dash-agents__rows">
@@ -279,22 +228,52 @@ export const WorkflowsSection = ({
               const state = workflowState(workflow);
               return (
                 <li key={workflow.id}>
-                  <button
-                    type="button"
-                    className="dash-agent-row"
-                    data-active={workflow.id === selected}
-                    data-testid={`workflow-row-${workflow.id}`}
-                    onClick={() => go(workflow.id)}
-                  >
+                  <button type="button" className="dash-agent-row" data-testid={`workflow-row-${workflow.id}`} onClick={() => go(workflow.id)}>
                     <span className="dash-agent-row__title">
-                      {workflow.name} <Badge tone={state.tone === "on" ? "accent" : state.tone === "paused" ? "warn" : "neutral"}>{state.label}</Badge>
+                      {workflow.name} <Badge tone={state.tone === "on" ? "accent" : state.tone === "paused" ? "danger" : state.tone === "trial" ? "warn" : "neutral"}>{state.label}</Badge>
                     </span>
-                    <span className="dash-agent-row__reach">{describeTrigger(workflow.trigger, { ...names, agents: startedBy(workflow.id) })}</span>
+                    <span className="dash-agent-row__reach">
+                      {describeTrigger(workflow.trigger, { ...names, agents: startedBy(workflow.id) })} · {workflow.nodes.length} step{workflow.nodes.length === 1 ? "" : "s"}
+                    </span>
                   </button>
                 </li>
               );
             })}
           </ul>
+        )}
+        {templates.length > 0 && (
+          <>
+            <h3 className="dash-workflow-editor__heading">Templates</h3>
+            <ul className="dash-agents__rows" data-testid="templates">
+              {templates.map((template) => (
+                <li key={template.id} className="dash-template-row">
+                  <span>
+                    {template.name} <span className="dash-hint">{template.kind} · v{template.version}</span>
+                  </span>
+                  <span className="dash-row">
+                    {template.kind === "workflow" && (
+                      <Button
+                        size="sm"
+                        onClick={() =>
+                          void act(async () => {
+                            const values: Record<string, string> = {};
+                            for (const blank of template.blanks) values[blank.name] = blank.default ?? "";
+                            const made = await api.workflowFromTemplate(template.id, values);
+                            go(made.id);
+                          })
+                        }
+                      >
+                        Use
+                      </Button>
+                    )}
+                    <Button size="sm" tone="ghost" onClick={() => void act(() => api.deleteTemplate(template.id))}>
+                      Remove
+                    </Button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
         )}
       </aside>
 
@@ -304,102 +283,19 @@ export const WorkflowsSection = ({
             {actionError}
           </p>
         )}
-        {selected === NEW ? (
-          <>
-            <h3 className="dash-agents__subtitle">New workflow</h3>
-            <WorkflowEditor
-              key="new"
-              workflow={null}
-              agents={agents}
-              connections={connections}
-              onSaved={(saved) => {
-                reload();
-                go(saved.id);
-              }}
-              onCancel={() => go()}
-            />
-          </>
-        ) : current ? (
-          <>
-            <div className="dash-agents__subhead">
-              <h3 className="dash-agents__subtitle">{current.name}</h3>
-              <span className="dash-row">
-                <Button
-                  size="sm"
-                  tone={current.enabled && !current.parked ? "default" : "primary"}
-                  busy={busy}
-                  onClick={() => void act(() => api.setWorkflowEnabled(current.id, !(current.enabled && !current.parked)))}
-                  testId="workflow-toggle"
-                >
-                  {current.enabled && !current.parked ? "Turn off" : "Turn on"}
-                </Button>
-                {current.trigger.kind !== "agent" || current.trigger.inputs.length === 0 ? (
-                  <Button size="sm" busy={busy} onClick={() => void act(() => api.runWorkflow(current.id))} testId="workflow-run">
-                    Run now
-                  </Button>
-                ) : null}
-                <Button
-                  size="sm"
-                  tone="ghost"
-                  busy={busy}
-                  onClick={() =>
-                    void act(async () => {
-                      await api.deleteWorkflow(current.id);
-                      go();
-                    })
-                  }
-                  testId="workflow-delete"
-                >
-                  Delete
-                </Button>
-              </span>
-            </div>
-            {current.parked && (
-              <p className="dash-callout dash-callout--warn" role="status" data-testid="workflow-parked">
-                Paused: {current.parked.reason} Turn it back on once that is fixed.
-              </p>
-            )}
-            <p className="dash-hint">
-              {describeTrigger(current.trigger, { ...names, agents: startedBy(current.id) })}
-              {current.enabledBy ? ` · runs as ${current.enabledBy.kind === "local-owner" ? "the owner" : current.enabledBy.userId}` : ""}
-            </p>
-            <WorkflowEditor
-              key={`${current.id}:${current.updatedAt}`}
-              workflow={current}
-              agents={agents}
-              connections={connections}
-              onSaved={() => reload()}
-              onCancel={() => go()}
-            />
-            <h4 className="dash-workflow-editor__heading">Runs</h4>
-            <RunsList runs={runs.filter((run) => run.workflow === current.id)} agents={agentById} empty="It has not run yet." />
-          </>
-        ) : selected ? (
-          <EmptyState glyph="⇄" title="That workflow is not here" body="It may have been deleted." action={{ label: "Back to workflows", onClick: () => go() }} />
+        <h3 className="dash-agents__subtitle">Waiting for you</h3>
+        {waiting.length === 0 ? (
+          <p className="dash-hint" data-testid="waiting-empty">
+            Nothing is waiting. Steps set to Approve, questions for the team, and agents' requests to start a workflow appear here.
+          </p>
         ) : (
-          <>
-            <h3 className="dash-agents__subtitle">Waiting for you</h3>
-            {waiting.length === 0 ? (
-              <p className="dash-hint" data-testid="waiting-empty">
-                Nothing is waiting. Steps set to Approve, and agents' requests to start a workflow, appear here.
-              </p>
-            ) : (
-              <ul className="dash-proposals" data-testid="waiting">
-                {waiting.map((proposal) => (
-                  <ProposalCard
-                    key={`${proposal.id}:${proposal.status}`}
-                    proposal={proposal}
-                    agent={proposal.agent ? agentById.get(proposal.agent) : undefined}
-                    workflowName={workflowName(proposal.workflow)}
-                    onDone={reload}
-                  />
-                ))}
-              </ul>
-            )}
-            <h3 className="dash-agents__subtitle dash-workflow-editor__heading">Recent runs</h3>
-            <RunsList runs={runs} agents={agentById} empty="No runs yet." />
-          </>
+          <ul className="dash-proposals" data-testid="waiting">
+            {waiting.map((task) => (
+              <TaskCard key={`${task.id}:${task.status}`} task={task} agent={task.agent ? agentById.get(task.agent) : undefined} onChanged={reload} />
+            ))}
+          </ul>
         )}
+        {selected && !current && loaded && <EmptyState glyph="⇄" title="That workflow is not here" body="It may have been deleted." action={{ label: "Back to workflows", onClick: () => go() }} />}
       </section>
     </div>
   );

@@ -1,4 +1,4 @@
-import { WORKFLOW_STEP_INFO } from "@freebirdai/dash-spec";
+import { BASE_INFO, type ActionBase } from "@freebirdai/dash-spec";
 import type { AgentOverview } from "../../api";
 
 /**
@@ -27,9 +27,8 @@ export const keepCompleted = (item: Completed, filter: OverviewFilter): boolean 
   (!filter.task || item.task === filter.task) &&
   (!filter.workflow || item.workflow === filter.workflow);
 
-/** A task in words: a step's label, or "Approval". */
-export const taskLabel = (task: string): string =>
-  task === "approval" ? "Approval" : (WORKFLOW_STEP_INFO[task as keyof typeof WORKFLOW_STEP_INFO]?.label ?? task);
+/** A task in words: its base action, or "Approval" for one a person approved. */
+export const taskLabel = (task: string): string => (task === "approval" ? "Approval" : (BASE_INFO[task as ActionBase]?.label ?? task));
 
 /** The tasks the lists hold, for the filter's choices. */
 export const tasksIn = (overview: AgentOverview): string[] =>

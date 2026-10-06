@@ -1,490 +1,81 @@
 import { Button } from "@freebirdai/dash-components";
 import {
-  MESSAGE_CHANNELS,
-  WORKFLOW_EVERY,
-  WORKFLOW_STEP_INFO,
-  WORKFLOW_STEP_KINDS,
-  describeCron,
+  ACTION_BASES,
+  BASE_INFO,
+  TRIGGER_NODE,
+  describeTrigger,
+  nodeOutcomes,
+  variantsOf,
   type AgentSpec,
   type WorkflowInput,
-  type WorkflowInputDef,
+  type WorkflowNode,
   type WorkflowSource,
   type WorkflowSpec,
-  type WorkflowStep,
-  type WorkflowStepKind,
-  type WorkflowTrigger,
+  type WorkflowTemplate,
 } from "@freebirdai/dash-spec";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type ConnectionSummary, type WorkflowPreview } from "../../api";
-import { TRIGGER_CHOICES, blankStep, blankTrigger, fromSpec, toInput } from "./draft.js";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api, type ConnectionSummary, type WorkflowCheck, type WorkflowPreview } from "../../api";
+import { Canvas, outcomeLabel } from "./Canvas.jsx";
+import { NODE_H, autoLayout, blankNode, connect, fromSpec, removeNode, toInput } from "./draft.js";
+import { RecordPicker, TriggerEditor, type Entities } from "./fields.jsx";
+import { StepPanel } from "./StepPanel.jsx";
 
 /**
- * Setting up a workflow: a trigger, what it reads, which rows matter, and its
- * steps.
+ * The workflow builder: a canvas of steps and arrows, with a panel beside it.
  *
- * Each step that reaches outside Dash has an **Auto / Approve** switch: approve
- * puts it in "Waiting for you"; auto does it in the run, with the permission
- * of whoever saves the workflow. A step's "Only when" condition is what makes
- * a path: auto for small ones, approve for large ones. Calendar entries and
- * notes stay inside Dash and are always done.
- *
- * Preview runs it dry, as you: how many records match the criteria (live, as
- * you type), and the path each would take.
+ * - The panel edits whatever is selected: the trigger (and the workflow's own
+ *   settings), a step (its settings from the catalog, and the settings every
+ *   step shares), or an arrow.
+ * - **Add a step** from the catalog, grouped by base action; it lands below
+ *   the selected step and, if that step has a free way out, is joined to it.
+ * - **Insert a template**: its blanks are asked for, its steps copied in.
+ * - Above the canvas, the workflow in one sentence and what it still needs,
+ *   checked by the same rules the chat uses, as you edit.
+ * - **Preview** runs it dry, as you: which records match and each one's path.
  */
 
-type Entities = Record<string, Array<{ entity: string; name: string }>>;
-
 const errorText = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));
-
-const MODES = [
-  { id: "auto", label: "Auto", hint: "Done during the run, with the permission of whoever saved the workflow." },
-  { id: "approve", label: "Approve", hint: "Waits in “Waiting for you” until a person reviews and applies it." },
-] as const;
-
-const EVERY_LABEL: Readonly<Record<(typeof WORKFLOW_EVERY)[number], string>> = {
-  "5m": "every 5 minutes",
-  "15m": "every 15 minutes",
-  "1h": "every hour",
-  "6h": "every 6 hours",
-  "1d": "every day",
-};
-
-const RecordPicker = ({
-  connection,
-  record,
-  connections,
-  entities,
-  loadEntities,
-  onChange,
-  allowNone,
-}: {
-  connection: string;
-  record: string;
-  connections: readonly ConnectionSummary[];
-  entities: Entities;
-  loadEntities: (connection: string) => void;
-  onChange: (next: { connection: string; record: string }) => void;
-  allowNone?: string;
-}): JSX.Element => (
-  <div className="dash-reach__add">
-    <select
-      aria-label="Connection"
-      value={connection}
-      onChange={(event) => {
-        if (event.target.value) loadEntities(event.target.value);
-        onChange({ connection: event.target.value, record: "" });
-      }}
-    >
-      <option value="">{allowNone ?? "Pick a connection"}</option>
-      {connections.map((one) => (
-        <option key={one.id} value={one.id}>
-          {one.title}
-        </option>
-      ))}
-    </select>
-    <select
-      aria-label="Record type"
-      value={record}
-      disabled={!connection}
-      onFocus={() => connection && loadEntities(connection)}
-      onChange={(event) => onChange({ connection, record: event.target.value })}
-    >
-      <option value="">Pick a record type</option>
-      {(entities[connection] ?? []).map((one) => (
-        <option key={one.entity} value={one.entity}>
-          {one.name}
-        </option>
-      ))}
-      {record && !(entities[connection] ?? []).some((one) => one.entity === record) && <option value={record}>{record}</option>}
-    </select>
-  </div>
-);
-
-const InputsEditor = ({ inputs, onChange }: { inputs: readonly WorkflowInputDef[]; onChange: (next: WorkflowInputDef[]) => void }): JSX.Element => (
-  <div className="dash-tools">
-    <span className="dash-hint">
-      What the agent asks the person for before it can start this. Steps read each one as {"{{ input.name }}"}.
-    </span>
-    {inputs.map((one, index) => (
-      <div key={index} className="dash-reach__add">
-        <input
-          className="dash-tool__when dash-workflow__short"
-          aria-label="Input name"
-          placeholder="name"
-          value={one.name}
-          onChange={(event) => onChange(inputs.map((each, at) => (at === index ? { ...each, name: event.target.value.replace(/[^a-zA-Z0-9_]/g, "") } : each)))}
-        />
-        <input
-          className="dash-tool__when"
-          aria-label="What to ask for"
-          placeholder="What to ask for, e.g. Which unit is moving out"
-          value={one.description}
-          onChange={(event) => onChange(inputs.map((each, at) => (at === index ? { ...each, description: event.target.value } : each)))}
-        />
-        <label className="dash-reach__check">
-          <input
-            type="checkbox"
-            checked={one.required}
-            onChange={(event) => onChange(inputs.map((each, at) => (at === index ? { ...each, required: event.target.checked } : each)))}
-          />
-          Required
-        </label>
-        <button type="button" className="dash-reach__remove" aria-label="Remove this input" onClick={() => onChange(inputs.filter((_, at) => at !== index))}>
-          ✕
-        </button>
-      </div>
-    ))}
-    <div>
-      <Button size="sm" disabled={inputs.length >= 12} onClick={() => onChange([...inputs, { name: "", description: "", required: true }])}>
-        Add input
-      </Button>
-    </div>
-  </div>
-);
-
-const TriggerEditor = ({
-  trigger,
-  onChange,
-  connections,
-  entities,
-  loadEntities,
-}: {
-  trigger: WorkflowTrigger;
-  onChange: (next: WorkflowTrigger) => void;
-  connections: readonly ConnectionSummary[];
-  entities: Entities;
-  loadEntities: (connection: string) => void;
-}): JSX.Element => (
-  <div className="dash-tools" data-testid="workflow-trigger">
-    <select aria-label="Trigger" value={trigger.kind} onChange={(event) => onChange(blankTrigger(event.target.value as WorkflowTrigger["kind"], trigger))}>
-      {TRIGGER_CHOICES.map((one) => (
-        <option key={one.kind} value={one.kind}>
-          {one.label}
-        </option>
-      ))}
-    </select>
-    {(trigger.kind === "record_created" || trigger.kind === "record_changed") && (
-      <>
-        <RecordPicker
-          connection={trigger.connection}
-          record={trigger.record}
-          connections={connections}
-          entities={entities}
-          loadEntities={loadEntities}
-          onChange={(where) => onChange({ ...trigger, ...where })}
-        />
-        {trigger.kind === "record_changed" && (
-          <input
-            className="dash-tool__when"
-            aria-label="Fields to watch"
-            placeholder="Fields to watch, comma separated (leave empty for any change)"
-            value={(trigger.fields ?? []).join(", ")}
-            onChange={(event) => {
-              const fields = event.target.value.split(",").map((one) => one.trim()).filter(Boolean);
-              const { fields: _old, ...rest } = trigger;
-              onChange(fields.length > 0 ? { ...rest, fields } : rest);
-            }}
-          />
-        )}
-        <label className="dash-hint">
-          Checked{" "}
-          <select aria-label="How often to check" value={trigger.every} onChange={(event) => onChange({ ...trigger, every: event.target.value as typeof trigger.every })}>
-            {WORKFLOW_EVERY.map((one) => (
-              <option key={one} value={one}>
-                {EVERY_LABEL[one]}
-              </option>
-            ))}
-          </select>
-          . The first check only takes note of what is already there.
-        </label>
-      </>
-    )}
-    {trigger.kind === "schedule" && (
-      <>
-        <div className="dash-reach__add">
-          <input
-            className="dash-tool__when dash-workflow__short"
-            aria-label="Schedule"
-            value={trigger.cron}
-            onChange={(event) => onChange({ ...trigger, cron: event.target.value })}
-            placeholder="0 7 * * 1-5"
-          />
-          <input
-            className="dash-tool__when dash-workflow__short"
-            aria-label="Time zone"
-            value={trigger.timezone}
-            onChange={(event) => onChange({ ...trigger, timezone: event.target.value })}
-            placeholder="America/Chicago"
-          />
-        </div>
-        <span className="dash-hint">
-          {describeCron(trigger.cron)}. Minute, hour, day of month, month, day of week, in the time zone beside it.
-        </span>
-      </>
-    )}
-    {trigger.kind === "every" && (
-      <select aria-label="How often" value={trigger.every} onChange={(event) => onChange({ ...trigger, every: event.target.value as typeof trigger.every })}>
-        {WORKFLOW_EVERY.map((one) => (
-          <option key={one} value={one}>
-            {EVERY_LABEL[one]}
-          </option>
-        ))}
-      </select>
-    )}
-    {trigger.kind === "agent" && <InputsEditor inputs={trigger.inputs} onChange={(inputs) => onChange({ ...trigger, inputs })} />}
-    {trigger.kind === "agent" && (
-      <span className="dash-hint">Give an agent a “Run a workflow” tool for this on its Tools tab. That tool decides whether it starts on its own or asks the team.</span>
-    )}
-    {trigger.kind === "manual" && <span className="dash-hint">Runs when someone presses Run now.</span>}
-  </div>
-);
-
-/** Fields to set on a record: path and value, each value a template. */
-const ValuesEditor = ({ values, onChange }: { values: Record<string, string>; onChange: (next: Record<string, string>) => void }): JSX.Element => {
-  const pairs = Object.entries(values);
-  return (
-    <div className="dash-tools">
-      {pairs.map(([field, value], index) => (
-        <div key={index} className="dash-reach__add">
-          <input
-            className="dash-tool__when dash-workflow__short"
-            aria-label="Field"
-            placeholder="field"
-            value={field}
-            onChange={(event) => onChange(Object.fromEntries(pairs.map(([f, v], at) => (at === index ? [event.target.value, v] : [f, v]))))}
-          />
-          <input
-            className="dash-tool__when"
-            aria-label="Value"
-            placeholder="value, or {{ a field of the row }}"
-            value={value}
-            onChange={(event) => onChange(Object.fromEntries(pairs.map(([f, v], at) => (at === index ? [f, event.target.value] : [f, v]))))}
-          />
-          <button type="button" className="dash-reach__remove" aria-label="Remove this field" onClick={() => onChange(Object.fromEntries(pairs.filter((_, at) => at !== index)))}>
-            ✕
-          </button>
-        </div>
-      ))}
-      <div>
-        <Button size="sm" onClick={() => onChange({ ...values, [pairs.some(([f]) => f === "") ? `field${pairs.length + 1}` : ""]: "" })}>
-          Add a field
-        </Button>
-      </div>
-    </div>
-  );
-};
-
-const StepCard = ({
-  step,
-  agents,
-  connections,
-  onChange,
-  onRemove,
-  onMove,
-}: {
-  step: WorkflowStep;
-  agents: readonly AgentSpec[];
-  connections: readonly ConnectionSummary[];
-  onChange: (next: WorkflowStep) => void;
-  onRemove: () => void;
-  onMove: (by: -1 | 1) => void;
-}): JSX.Element => {
-  const info = WORKFLOW_STEP_INFO[step.kind];
-  /* Each field keeps its name beside it, so a filled-in template still says what it is. */
-  const text = (label: string, value: string | undefined, set: (value: string) => void, placeholder: string, multiline = false) => (
-    <label className="dash-workflow-field">
-      <span className="dash-workflow-field__label">{label}</span>
-      {multiline ? (
-        <textarea className="dash-tool__deny" aria-label={label} rows={3} placeholder={placeholder} value={value ?? ""} onChange={(event) => set(event.target.value)} />
-      ) : (
-        <input className="dash-tool__when" aria-label={label} placeholder={placeholder} value={value ?? ""} onChange={(event) => set(event.target.value)} />
-      )}
-    </label>
-  );
-
-  return (
-    <div className="dash-tool dash-workflow-step" data-testid={`workflow-step-${step.id}`} data-mode={info.leavesDash ? step.mode : "auto"}>
-      <div className="dash-tool__head">
-        <span className="dash-tool__name">{info.label}</span>
-        <span className="dash-workflow-step__spacer" />
-        {info.leavesDash ? (
-          <span className="dash-tool__modes" role="radiogroup" aria-label="Auto or approve">
-            {MODES.map((mode) => (
-              <button
-                key={mode.id}
-                type="button"
-                role="radio"
-                aria-checked={step.mode === mode.id}
-                className="dash-tool__mode"
-                data-mode={mode.id}
-                data-active={step.mode === mode.id}
-                title={mode.hint}
-                onClick={() => onChange({ ...step, mode: mode.id })}
-              >
-                {mode.label}
-              </button>
-            ))}
-          </span>
-        ) : (
-          <span className="dash-hint">Always done</span>
-        )}
-        <button type="button" className="dash-reach__remove" aria-label="Move up" onClick={() => onMove(-1)}>
-          ↑
-        </button>
-        <button type="button" className="dash-reach__remove" aria-label="Move down" onClick={() => onMove(1)}>
-          ↓
-        </button>
-        <button type="button" className="dash-reach__remove" aria-label="Remove this step" onClick={onRemove}>
-          ✕
-        </button>
-      </div>
-      <div className="dash-tool__body">
-        {info.leavesDash && <span className="dash-hint">{MODES.find((mode) => mode.id === step.mode)?.hint}</span>}
-        {!info.perRun &&
-          text("Only when", step.when, (when) => onChange({ ...step, when }), "Optional, e.g. cost >= 500")}
-
-        {step.kind === "calendar" && (
-          <>
-            {text("Title", step.title, (title) => onChange({ ...step, title }), "e.g. Inspect unit {{ unit.name }}")}
-            {text("When", step.at, (at) => onChange({ ...step, at }), "A date, or {{ due_date }}")}
-            <label className="dash-reach__check">
-              <input type="checkbox" checked={step.deadline} onChange={(event) => onChange({ ...step, deadline: event.target.checked })} />
-              It is a deadline
-            </label>
-          </>
-        )}
-
-        {step.kind === "propose_change" && (
-          <>
-            <div className="dash-reach__add">
-              <select aria-label="Connection" value={step.connection ?? ""} onChange={(event) => onChange(event.target.value ? { ...step, connection: event.target.value } : (({ connection: _c, ...rest }) => rest)(step))}>
-                <option value="">The connection it reads</option>
-                {connections.map((one) => (
-                  <option key={one.id} value={one.id}>
-                    {one.title}
-                  </option>
-                ))}
-              </select>
-              <select aria-label="Change" value={step.change} onChange={(event) => onChange({ ...step, change: event.target.value as typeof step.change })}>
-                <option value="update">Update a record</option>
-                <option value="action">Run a record's action</option>
-                <option value="create">Create a record</option>
-              </select>
-            </div>
-            {text("Record type", step.entity, (entity) => onChange({ ...step, entity }), "e.g. task")}
-            {step.change === "action" && text("Action", step.action, (action) => onChange({ ...step, action }), "e.g. close")}
-            {step.change !== "create" && text("Which record", step.recordId, (recordId) => onChange({ ...step, recordId }), "{{ id }}")}
-            <ValuesEditor values={step.values ?? {}} onChange={(values) => onChange({ ...step, values })} />
-          </>
-        )}
-
-        {step.kind === "message" && (
-          <>
-            <div className="dash-reach__add">
-              <select aria-label="Agent" value={step.agentId} onChange={(event) => onChange({ ...step, agentId: event.target.value })}>
-                <option value="">Pick an agent</option>
-                {agents.map((agent) => (
-                  <option key={agent.id} value={agent.id}>
-                    {agent.name}
-                  </option>
-                ))}
-              </select>
-              <select aria-label="Channel" value={step.channel} onChange={(event) => onChange({ ...step, channel: event.target.value as typeof step.channel })}>
-                {MESSAGE_CHANNELS.map((one) => (
-                  <option key={one} value={one}>
-                    {one === "text" ? "Text" : one === "call" ? "Call" : "Email"}
-                  </option>
-                ))}
-              </select>
-            </div>
-            {text("To", step.to, (to) => onChange({ ...step, to }), "{{ contact.phone }}")}
-            {text("What it is for", step.purpose, (purpose) => onChange({ ...step, purpose }), "e.g. Let them know it was received", true)}
-            <span className="dash-hint">The agent writes the words with its own reply prompt. Texts, calls and email arrive with Communications; until then the run notes what it would have sent.</span>
-          </>
-        )}
-
-        {step.kind === "think" && (
-          <>
-            {text("What to think through", step.prompt, (prompt) => onChange({ ...step, prompt }), "e.g. Raise the priority of anything that looks urgent.", true)}
-            <span className="dash-hint">Runs once a run, over every matched record, on the Workflow steps model. It can propose changes, add calendar entries and write notes. No agent's reply prompt is used.</span>
-            {step.mode === "auto" && (
-              <span className="dash-hint dash-tool__warn" role="alert">
-                On auto, the changes it decides on are made without anyone reviewing them first.
-              </span>
-            )}
-          </>
-        )}
-
-        {step.kind === "note" && text("Note", step.text, (value) => onChange({ ...step, text: value }), "e.g. {{ count }} orders were overdue")}
-      </div>
-    </div>
-  );
-};
-
-const PreviewTable = ({ preview, steps }: { preview: WorkflowPreview; steps: readonly WorkflowStep[] }): JSX.Element => {
-  if (preview.problem) return <p className="dash-callout dash-callout--bad">{preview.problem}</p>;
-  if (preview.seeding) return <p className="dash-hint">Its first check will only take note of the {preview.read} records there now. After that, new ones start it.</p>;
-  const label = (id: string) => {
-    const step = steps.find((one) => one.id === id);
-    return step ? WORKFLOW_STEP_INFO[step.kind].label : id;
-  };
-  return (
-    <div className="dash-workflow-preview" data-testid="workflow-preview">
-      <p className="dash-hint">
-        {preview.matched} of {preview.read} record{preview.read === 1 ? "" : "s"} would be acted on{preview.complete ? "" : " (not every record was reached)"}.
-      </p>
-      {preview.rows.length > 0 && (
-        <table className="dash-workflow-preview__table">
-          <thead>
-            <tr>
-              <th>Record</th>
-              {preview.rows[0]!.steps.map((one) => (
-                <th key={one.step}>{label(one.step)}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {preview.rows.map((row) => (
-              <tr key={row.key}>
-                <td title={JSON.stringify(row.fields)}>{row.key}</td>
-                {row.steps.map((one) => (
-                  <td key={one.step} data-mode={one.runs ? one.mode : "skip"}>
-                    {one.runs ? (one.mode === "auto" ? "Auto" : "Approve") : "—"}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </div>
-  );
-};
 
 export const WorkflowEditor = ({
   workflow,
   agents,
+  workflows,
   connections,
+  templates,
   onSaved,
   onCancel,
+  onTemplatesChanged,
 }: {
   /** Absent: a new workflow. */
   workflow: WorkflowSpec | null;
   agents: readonly AgentSpec[];
+  workflows: readonly WorkflowSpec[];
   connections: readonly ConnectionSummary[];
+  templates: readonly WorkflowTemplate[];
   onSaved: (saved: WorkflowSpec) => void;
   onCancel: () => void;
+  onTemplatesChanged: () => void;
 }): JSX.Element => {
   const [draft, setDraft] = useState<WorkflowInput>(() => fromSpec(workflow));
+  const [selected, setSelected] = useState<string | null>(TRIGGER_NODE);
   const [entities, setEntities] = useState<Entities>({});
-  const [kind, setKind] = useState<WorkflowStepKind>("propose_change");
+  const [adding, setAdding] = useState("outreach.text");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [check, setCheck] = useState<WorkflowCheck | null>(null);
   const [preview, setPreview] = useState<WorkflowPreview | null>(null);
-  const [previewing, setPreviewing] = useState(false);
-  const [matchCount, setMatchCount] = useState<string | null>(null);
+  const [inserting, setInserting] = useState<{ template: WorkflowTemplate; values: Record<string, string> } | null>(null);
+  const [templateName, setTemplateName] = useState("");
+
+  const nodes = draft.nodes ?? [];
+  const edges = draft.edges ?? [];
+  const set = (patch: Partial<WorkflowInput>) => setDraft((held) => ({ ...held, ...patch }));
+  const isApi = draft.trigger.kind === "record_created" || draft.trigger.kind === "record_changed";
+  const readsConnection = isApi ? (draft.trigger as { connection: string }).connection : draft.source?.connection;
 
   const loadEntities = useCallback((connection: string) => {
+    if (!connection) return;
     setEntities((held) => {
       if (held[connection]) return held;
       void api
@@ -494,45 +85,79 @@ export const WorkflowEditor = ({
       return { ...held, [connection]: [] };
     });
   }, []);
-
   useEffect(() => {
-    const trigger = draft.trigger;
-    if (trigger.kind === "record_created" || trigger.kind === "record_changed") loadEntities(trigger.connection);
-    if (draft.source?.connection) loadEntities(draft.source.connection);
-    // Once, for what the workflow arrived with.
-  }, []);
+    if (readsConnection) loadEntities(readsConnection);
+  }, [readsConnection, loadEntities]);
 
-  const set = (patch: Partial<WorkflowInput>) => setDraft((held) => ({ ...held, ...patch }));
-  const steps = draft.steps ?? [];
-  const isApi = draft.trigger.kind === "record_created" || draft.trigger.kind === "record_changed";
-  const reads = isApi ? true : Boolean(draft.source?.connection);
-
-  /* The live match count: a dry run a moment after the criteria or the source stop changing. */
+  /* The sentence and the questions, checked a moment after an edit. */
   const sequence = useRef(0);
-  const criteriaKey = JSON.stringify([draft.criteria ?? "", draft.source ?? null, draft.trigger]);
+  const draftKey = JSON.stringify(toInput({ ...draft, name: draft.name.trim() || "Draft" }));
   useEffect(() => {
-    if (!reads) {
-      setMatchCount(null);
-      return;
-    }
     const mine = ++sequence.current;
     const timer = setTimeout(() => {
       void api
-        .previewWorkflow(workflow?.id ?? "new", toInput({ ...draft, name: draft.name.trim() || "Draft", steps: [] }))
-        .then((result) => {
-          if (mine !== sequence.current) return;
-          setMatchCount(
-            result.problem
-              ? result.problem
-              : result.seeding
-                ? `${result.read} records there now; the first check only takes note of them.`
-                : `${result.matched} of ${result.read} records match.`,
-          );
-        })
-        .catch((cause: unknown) => mine === sequence.current && setMatchCount(errorText(cause)));
-    }, 700);
+        .checkWorkflow(workflow?.id ?? "new", toInput({ ...draft, name: draft.name.trim() || "Draft" }))
+        .then((result) => mine === sequence.current && setCheck(result))
+        .catch(() => undefined);
+    }, 600);
     return () => clearTimeout(timer);
-  }, [criteriaKey, reads]);
+  }, [draftKey]);
+
+  const problemsByStep = useMemo(() => {
+    const out: Record<string, string[]> = {};
+    for (const one of check?.problems ?? []) if (one.step) out[one.step] = [...(out[one.step] ?? []), one.message];
+    for (const one of check?.questions ?? []) if (one.step && one.kind === "missing") out[one.step] = [...(out[one.step] ?? []), one.question];
+    return out;
+  }, [check]);
+
+  /* Delete removes the selected step or arrow, unless a field has the keyboard. */
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (event.key !== "Delete" || !selected || selected === TRIGGER_NODE) return;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
+      if (nodes.some((one) => one.id === selected)) setDraft((held) => ({ ...held, ...removeNode(held, selected) }));
+      else set({ edges: edges.filter((edge) => edge.id !== selected) });
+      setSelected(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  /** Below the selected step (or the lowest one), joined to it by its first free way out. */
+  const placeAndJoin = (added: WorkflowNode[], newEdges: WorkflowInput["edges"] = [], entry?: string) => {
+    const anchor = nodes.find((one) => one.id === selected) ?? nodes.reduce<WorkflowNode | undefined>((low, one) => (!low || one.position.y > low.position.y ? one : low), undefined);
+    const from = anchor?.id ?? (selected === TRIGGER_NODE || nodes.length === 0 ? TRIGGER_NODE : undefined);
+    let nextEdges = [...edges, ...(newEdges ?? [])];
+    const first = entry ?? added[0]?.id;
+    if (from && first) {
+      const free = from === TRIGGER_NODE ? (edges.some((edge) => edge.from === TRIGGER_NODE) ? undefined : "next") : nodeOutcomes(anchor!).find((outcome) => !edges.some((edge) => edge.from === from && edge.outcome === outcome));
+      if (free) nextEdges = connect(nextEdges, from, free, first);
+    }
+    set({ nodes: [...nodes, ...added], edges: nextEdges });
+    setSelected(first ?? null);
+  };
+
+  const addStep = () => {
+    const anchor = nodes.find((one) => one.id === selected);
+    const lowest = Math.max(0, ...nodes.map((one) => one.position.y));
+    const position = anchor ? { x: anchor.position.x, y: anchor.position.y + NODE_H + 64 } : { x: 360, y: nodes.length === 0 ? NODE_H + 112 : lowest + NODE_H + 64 };
+    placeAndJoin([blankNode(adding, nodes.map((one) => one.id), position, agents[0]?.id)]);
+  };
+
+  const insertTemplate = async (template: WorkflowTemplate, values: Record<string, string>) => {
+    setError(null);
+    try {
+      const anchor = nodes.find((one) => one.id === selected);
+      const at = anchor ? { x: anchor.position.x, y: anchor.position.y + NODE_H + 64 } : { x: 360, y: Math.max(NODE_H + 112, ...nodes.map((one) => one.position.y + NODE_H + 64)) };
+      const result = await api.insertTemplate(template.id, values, at);
+      placeAndJoin(result.nodes ?? [], result.edges, result.entry);
+      setInserting(null);
+      setNotice(`Inserted "${template.name}" (version ${template.version}).`);
+    } catch (cause) {
+      setError(errorText(cause));
+    }
+  };
 
   const save = async (): Promise<void> => {
     setBusy(true);
@@ -546,65 +171,71 @@ export const WorkflowEditor = ({
     }
   };
 
-  const runPreview = async (): Promise<void> => {
-    setPreviewing(true);
-    setError(null);
+  const saveTemplate = async (kind: "step" | "workflow", steps?: string[]) => {
+    if (!workflow) {
+      setError("Save the workflow first: a template is made from what is saved.");
+      return;
+    }
+    if (!templateName.trim()) {
+      setError("Give the template a name.");
+      return;
+    }
     try {
-      setPreview(await api.previewWorkflow(workflow?.id ?? "new", toInput({ ...draft, name: draft.name.trim() || "Draft" })));
+      const saved = await api.saveTemplate({ workflow: workflow.id, kind, name: templateName.trim(), ...(steps ? { steps } : {}) });
+      setNotice(`Saved template "${saved.name}" (version ${saved.version}${saved.blanks.length ? `, asks for ${saved.blanks.map((one) => one.name).join(", ")}` : ""}).`);
+      setTemplateName("");
+      onTemplatesChanged();
     } catch (cause) {
       setError(errorText(cause));
-    } finally {
-      setPreviewing(false);
     }
   };
 
-  const setStep = (index: number, next: WorkflowStep) => set({ steps: steps.map((one, at) => (at === index ? next : one)) });
-  const moveStep = (index: number, by: -1 | 1) => {
-    const to = index + by;
-    if (to < 0 || to >= steps.length) return;
-    const next = [...steps];
-    [next[index], next[to]] = [next[to]!, next[index]!];
-    set({ steps: next });
-  };
-  const source: WorkflowSource | undefined = draft.source;
+  const selectedNode = nodes.find((one) => one.id === selected);
+  const selectedEdge = edges.find((edge) => edge.id === selected);
+  const names = { connection: (id: string) => connections.find((one) => one.id === id)?.title ?? id };
 
-  return (
-    <form
-      className="dash-agent-editor dash-workflow-editor"
-      data-testid="workflow-editor"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void save();
-      }}
-    >
-      <div className="dash-field">
-        <label htmlFor="workflow-name">Name</label>
-        <input id="workflow-name" value={draft.name} maxLength={80} onChange={(event) => set({ name: event.target.value })} placeholder="New requests" />
-      </div>
-      <div className="dash-field">
-        <label htmlFor="workflow-description">What it does</label>
-        <input
-          id="workflow-description"
-          value={draft.description ?? ""}
-          maxLength={1000}
-          onChange={(event) => set({ description: event.target.value })}
-          placeholder="Shown to agents that can start it, and in the list."
-        />
-      </div>
-
-      <h4 className="dash-workflow-editor__heading">When it starts</h4>
+  const workflowPanel = (
+    <div className="dash-step-panel" data-testid="workflow-settings">
+      <label className="dash-workflow-field">
+        <span className="dash-workflow-field__label">Name</span>
+        <input className="dash-tool__when" aria-label="Workflow name" value={draft.name} maxLength={80} onChange={(event) => set({ name: event.target.value })} placeholder="New work orders" />
+      </label>
+      <label className="dash-workflow-field">
+        <span className="dash-workflow-field__label">What it does</span>
+        <input className="dash-tool__when" aria-label="What it does" value={draft.description ?? ""} onChange={(event) => set({ description: event.target.value })} placeholder="Shown to agents that can start it" />
+      </label>
+      <h5 className="dash-workflow-editor__heading">When it starts</h5>
       <TriggerEditor trigger={draft.trigger} onChange={(trigger) => set({ trigger })} connections={connections} entities={entities} loadEntities={loadEntities} />
-
+      {isApi && (
+        <div className="dash-reach__add">
+          <input
+            className="dash-tool__when dash-workflow__short"
+            type="number"
+            min={1}
+            aria-label="Cases per record"
+            placeholder="Cases per record"
+            value={draft.triggerLimits?.maxPerRecord ?? ""}
+            onChange={(event) => set({ triggerLimits: { ...draft.triggerLimits, ...(event.target.value ? { maxPerRecord: Number(event.target.value) } : { maxPerRecord: undefined }) } })}
+          />
+          <input
+            className="dash-tool__when dash-workflow__short"
+            aria-label="Cooldown"
+            placeholder="Cooldown, e.g. 1d"
+            value={draft.triggerLimits?.cooldown ?? ""}
+            onChange={(event) => set({ triggerLimits: { ...draft.triggerLimits, cooldown: event.target.value || undefined } })}
+          />
+        </div>
+      )}
       {!isApi && (
         <>
-          <h4 className="dash-workflow-editor__heading">What it reads</h4>
+          <h5 className="dash-workflow-editor__heading">What it reads</h5>
           <RecordPicker
-            connection={source?.connection ?? ""}
-            record={source?.record ?? ""}
+            connection={draft.source?.connection ?? ""}
+            record={draft.source?.record ?? ""}
             connections={connections}
             entities={entities}
             loadEntities={loadEntities}
-            allowNone="Nothing: run its steps once"
+            allowNone="Nothing: one case each time it starts"
             onChange={(where) => {
               if (!where.connection) {
                 const { source: _source, ...rest } = draft;
@@ -614,84 +245,243 @@ export const WorkflowEditor = ({
           />
         </>
       )}
-
-      {reads && (
-        <>
-          <h4 className="dash-workflow-editor__heading">Which records matter</h4>
-          <input
-            className="dash-tool__when"
-            aria-label="Criteria"
-            placeholder='All of them, or e.g. status == "open" && owner == null'
-            value={draft.criteria ?? ""}
-            onChange={(event) => set({ criteria: event.target.value })}
-            data-testid="workflow-criteria"
-          />
-          {matchCount && (
-            <span className="dash-hint" data-testid="workflow-match-count">
-              {matchCount}
-            </span>
-          )}
-          {!isApi && (
-            <label className="dash-hint">
-              <select aria-label="How often a record is acted on" value={draft.once ?? "per-row"} onChange={(event) => set({ once: event.target.value as "per-row" | "per-run" })}>
-                <option value="per-row">Act on each record once</option>
-                <option value="per-run">Act on every match, every run</option>
-              </select>
-            </label>
-          )}
-        </>
+      {(isApi || draft.source) && (
+        <label className="dash-workflow-field">
+          <span className="dash-workflow-field__label">Only records where</span>
+          <input className="dash-tool__when" aria-label="Criteria" placeholder='All, or e.g. status == "open"' value={draft.criteria ?? ""} onChange={(event) => set({ criteria: event.target.value })} />
+        </label>
       )}
+      <label className="dash-workflow-field">
+        <span className="dash-workflow-field__label">Trial cases</span>
+        <input className="dash-tool__when dash-workflow__short" type="number" min={0} max={100} aria-label="Trial cases" value={draft.trial ?? 0} onChange={(event) => set({ trial: Math.max(0, Number(event.target.value) || 0) })} />
+      </label>
+      <span className="dash-hint">While above zero, every step that leaves Dash asks for approval. It counts down as cases finish.</span>
+      <label className="dash-workflow-field">
+        <span className="dash-workflow-field__label">Guardrails</span>
+        <textarea className="dash-tool__deny" rows={3} aria-label="Guardrails" placeholder="Never promise a repair date. Stop and ask if they mention a lawyer." value={draft.guardrails ?? ""} onChange={(event) => set({ guardrails: event.target.value })} />
+      </label>
+      <span className="dash-hint">Read by Think steps, and by agents writing Outreach for this workflow.</span>
+      <div className="dash-reach__add">
+        <label className="dash-hint">
+          Visits per step{" "}
+          <input className="dash-tool__when dash-workflow__tiny" type="number" min={1} value={draft.limits?.visitsPerStep ?? 10} onChange={(event) => set({ limits: { stepsPerCase: draft.limits?.stepsPerCase ?? 200, visitsPerStep: Number(event.target.value) || 10 } })} />
+        </label>
+        <label className="dash-hint">
+          Steps per case{" "}
+          <input className="dash-tool__when dash-workflow__tiny" type="number" min={1} value={draft.limits?.stepsPerCase ?? 200} onChange={(event) => set({ limits: { visitsPerStep: draft.limits?.visitsPerStep ?? 10, stepsPerCase: Number(event.target.value) || 200 } })} />
+        </label>
+      </div>
+      <h5 className="dash-workflow-editor__heading">Save as a template</h5>
+      <div className="dash-reach__add">
+        <input className="dash-tool__when" aria-label="Template name" placeholder="Template name" value={templateName} onChange={(event) => setTemplateName(event.target.value)} />
+        <Button size="sm" onClick={() => void saveTemplate("workflow")}>
+          Save whole workflow
+        </Button>
+      </div>
+    </div>
+  );
 
-      <h4 className="dash-workflow-editor__heading">Steps</h4>
-      <div className="dash-tools" data-testid="workflow-steps">
-        {steps.length === 0 && <p className="dash-hint">No steps yet. Each step that reaches outside Dash is set to Auto or Approve.</p>}
-        {steps.map((step, index) => (
-          <StepCard
-            key={step.id}
-            step={step}
-            agents={agents}
-            connections={connections}
-            onChange={(next) => setStep(index, next)}
-            onRemove={() => set({ steps: steps.filter((_, at) => at !== index) })}
-            onMove={(by) => moveStep(index, by)}
-          />
-        ))}
-        <div className="dash-reach__add">
-          <select aria-label="Step" value={kind} onChange={(event) => setKind(event.target.value as WorkflowStepKind)}>
-            {WORKFLOW_STEP_KINDS.map((one) => (
-              <option key={one} value={one}>
-                {WORKFLOW_STEP_INFO[one].label}
-              </option>
+  return (
+    <div className="dash-builder" data-testid="workflow-editor">
+      <div className="dash-builder__bar">
+        <strong className="dash-builder__title">{draft.name || "New workflow"}</strong>
+        <span className="dash-row">
+          <select aria-label="Step to add" value={adding} onChange={(event) => setAdding(event.target.value)} data-testid="step-picker">
+            {ACTION_BASES.map((base) => (
+              <optgroup key={base} label={BASE_INFO[base].label}>
+                {variantsOf(base).map((variant) => (
+                  <option key={variant.id} value={variant.id} disabled={!variant.available}>
+                    {variant.label}
+                    {variant.available ? "" : " (coming)"}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
-          <Button
-            size="sm"
-            disabled={steps.length >= 30}
-            onClick={() => set({ steps: [...steps, blankStep(kind, steps.map((one) => one.id), agents[0]?.id ?? "")] })}
-            testId="workflow-step-add"
-          >
+          <Button size="sm" onClick={addStep} testId="step-add">
             Add step
           </Button>
-        </div>
+          {templates.length > 0 && (
+            <select
+              aria-label="Insert a template"
+              value=""
+              onChange={(event) => {
+                const template = templates.find((one) => one.id === event.target.value);
+                if (!template) return;
+                if (template.blanks.length === 0) void insertTemplate(template, {});
+                else setInserting({ template, values: Object.fromEntries(template.blanks.map((one) => [one.name, one.default ?? ""])) });
+              }}
+            >
+              <option value="">Insert a template…</option>
+              {templates
+                .filter((one) => one.kind !== "workflow")
+                .map((one) => (
+                  <option key={one.id} value={one.id}>
+                    {one.name} (v{one.version})
+                  </option>
+                ))}
+            </select>
+          )}
+          <Button size="sm" tone="ghost" onClick={() => set({ nodes: autoLayout(nodes, edges) })}>
+            Tidy
+          </Button>
+          <Button size="sm" onClick={() => void api.previewWorkflow(workflow?.id ?? "new", toInput({ ...draft, name: draft.name.trim() || "Draft" })).then(setPreview, (cause: unknown) => setError(errorText(cause)))} testId="workflow-preview-run">
+            Preview
+          </Button>
+          <Button size="sm" tone="primary" busy={busy} disabled={draft.name.trim() === ""} onClick={() => void save()} testId="workflow-save">
+            {workflow ? "Save" : "Create"}
+          </Button>
+          <Button size="sm" tone="ghost" onClick={onCancel}>
+            Close
+          </Button>
+        </span>
       </div>
 
-      {preview && <PreviewTable preview={preview} steps={steps} />}
-
+      {check && (
+        <div className="dash-builder__check" data-testid="workflow-check">
+          <p className="dash-builder__sentence">{check.sentence}</p>
+          {check.questions.length > 0 && (
+            <ul className="dash-builder__questions">
+              {check.questions.map((one, index) => (
+                <li key={index} data-kind={one.kind}>
+                  {one.step ? (
+                    <button type="button" className="dash-overview__link" onClick={() => setSelected(one.step!)}>
+                      {one.question}
+                    </button>
+                  ) : (
+                    one.question
+                  )}
+                  {one.default ? <span className="dash-hint"> ({one.default})</span> : null}
+                </li>
+              ))}
+            </ul>
+          )}
+          {check.problems.filter((one) => !one.step).map((one) => (
+            <p key={one.message} className="dash-hint dash-tool__warn">
+              {one.message}
+            </p>
+          ))}
+        </div>
+      )}
+      {inserting && (
+        <div className="dash-callout" data-testid="template-blanks">
+          <strong>{inserting.template.name}</strong> asks for:
+          {inserting.template.blanks.map((blank) => (
+            <label key={blank.name} className="dash-workflow-field">
+              <span className="dash-workflow-field__label">{blank.label || blank.name}</span>
+              <input className="dash-tool__when" value={inserting.values[blank.name] ?? ""} onChange={(event) => setInserting({ ...inserting, values: { ...inserting.values, [blank.name]: event.target.value } })} />
+            </label>
+          ))}
+          <div className="dash-row">
+            <Button size="sm" tone="primary" onClick={() => void insertTemplate(inserting.template, inserting.values)}>
+              Insert
+            </Button>
+            <Button size="sm" onClick={() => setInserting(null)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
       {error && (
         <p className="dash-callout dash-callout--bad" role="alert" data-testid="workflow-error">
           {error}
         </p>
       )}
-      <div className="dash-agent-editor__actions">
-        <Button type="submit" tone="primary" busy={busy} disabled={draft.name.trim() === ""} testId="workflow-save">
-          {workflow ? "Save changes" : "Create workflow"}
-        </Button>
-        <Button onClick={() => void runPreview()} busy={previewing} testId="workflow-preview-run">
-          Preview
-        </Button>
-        <Button onClick={onCancel}>Cancel</Button>
+      {notice && <p className="dash-callout">{notice}</p>}
+
+      <div className="dash-builder__body">
+        <Canvas
+          nodes={nodes}
+          edges={edges}
+          triggerLabel={describeTrigger(draft.trigger, names)}
+          trial={(draft.trial ?? 0) > 0}
+          selected={selected}
+          problems={problemsByStep}
+          onSelect={setSelected}
+          onMove={(id, position) => set({ nodes: nodes.map((one) => (one.id === id ? { ...one, position } : one)) })}
+          onConnect={(from, outcome, to) => set({ edges: connect(edges, from, outcome, to) })}
+        />
+        <aside className="dash-builder__panel">
+          {selectedNode ? (
+            <>
+              <StepPanel
+                key={selectedNode.id}
+                node={selectedNode}
+                nodes={nodes}
+                trial={(draft.trial ?? 0) > 0}
+                problems={problemsByStep[selectedNode.id] ?? []}
+                connections={connections}
+                entities={entities}
+                loadEntities={loadEntities}
+                agents={agents}
+                workflows={workflows.filter((one) => one.id !== workflow?.id && !one.source && one.trigger.kind !== "record_created" && one.trigger.kind !== "record_changed")}
+                defaultConnection={readsConnection}
+                onChange={(next) => set({ nodes: nodes.map((one) => (one.id === next.id ? next : one)) })}
+                onRemove={() => {
+                  setDraft((held) => ({ ...held, ...removeNode(held, selectedNode.id) }));
+                  setSelected(null);
+                }}
+              />
+              <div className="dash-reach__add">
+                <input className="dash-tool__when" aria-label="Template name" placeholder="Template name" value={templateName} onChange={(event) => setTemplateName(event.target.value)} />
+                <Button size="sm" onClick={() => void saveTemplate("step", [selectedNode.id])} testId="step-save-template">
+                  Save step as template
+                </Button>
+              </div>
+            </>
+          ) : selectedEdge ? (
+            <div className="dash-step-panel" data-testid="edge-panel">
+              <p>
+                From <strong>{selectedEdge.from === TRIGGER_NODE ? "the trigger" : (nodes.find((one) => one.id === selectedEdge.from)?.name ?? selectedEdge.from)}</strong> when{" "}
+                <strong>{outcomeLabel(selectedEdge.outcome)}</strong>, to <strong>{nodes.find((one) => one.id === selectedEdge.to)?.name ?? selectedEdge.to}</strong>.
+              </p>
+              <Button
+                size="sm"
+                tone="ghost"
+                onClick={() => {
+                  set({ edges: edges.filter((edge) => edge.id !== selectedEdge.id) });
+                  setSelected(null);
+                }}
+              >
+                Remove arrow
+              </Button>
+            </div>
+          ) : (
+            workflowPanel
+          )}
+        </aside>
       </div>
-      <span className="dash-hint">Saving makes you the person it runs as: its automatic steps use your permission.</span>
-    </form>
+
+      {preview && (
+        <div className="dash-workflow-preview" data-testid="workflow-preview">
+          {preview.problem ? (
+            <p className="dash-callout dash-callout--bad">{preview.problem}</p>
+          ) : preview.seeding ? (
+            <p className="dash-hint">Its first look will only take note of the {preview.read} records there now. After that, new ones start it.</p>
+          ) : (
+            <>
+              <p className="dash-hint">
+                {preview.matched} of {preview.read} records would open a case{preview.complete ? "" : " (not every record was reached)"}.
+              </p>
+              <ul className="dash-workflow-preview__paths">
+                {preview.rows.map((row) => (
+                  <li key={row.key}>
+                    <strong>{row.key || "The case"}</strong>:{" "}
+                    {row.path.map((step, index) => (
+                      <span key={`${step.node}-${index}`} data-mode={step.skipped ? "skip" : step.mode}>
+                        {index > 0 ? " → " : ""}
+                        {step.name}
+                        {step.skipped ? " (skipped)" : step.mode === "approve" ? " (approve)" : ""}
+                        {step.stops ? `, then ${step.stops}` : ""}
+                      </span>
+                    ))}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
+    </div>
   );
 };

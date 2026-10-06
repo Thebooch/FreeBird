@@ -1,7 +1,9 @@
 import { AgentChip, Badge, ErrorState } from "@freebirdai/dash-components";
 import type { AgentSpec, WorkflowSpec } from "@freebirdai/dash-spec";
 import { useEffect, useMemo, useState } from "react";
+import type { Task } from "@freebirdai/dash-spec";
 import { api, type AgentOverview } from "../../api";
+import { TaskCard } from "../workflows/TaskCard.jsx";
 import type { Route } from "../../route.js";
 import { NO_FILTER, byDay, keepActive, keepCompleted, taskLabel, tasksIn, type OverviewFilter } from "./filter.js";
 
@@ -21,6 +23,7 @@ const REFRESH_MS = 15_000;
 
 const STATE: Readonly<Record<AgentOverview["active"][number]["state"], { label: string; tone: "accent" | "warn" | "neutral" | "danger" }>> = {
   running: { label: "Running", tone: "accent" },
+  waiting: { label: "Waiting", tone: "accent" },
   waiting_approval: { label: "Needs approval", tone: "warn" },
   paused: { label: "Paused", tone: "danger" },
   waiting_schedule: { label: "Scheduled", tone: "neutral" },
@@ -42,14 +45,17 @@ export const OverviewSection = ({ onNavigate }: { readonly onNavigate: (route: R
   const [workflows, setWorkflows] = useState<WorkflowSpec[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<OverviewFilter>(NO_FILTER);
+  const [tasksById, setTasksById] = useState<Map<string, Task>>(new Map());
+  const [open, setOpen] = useState<string | null>(null);
   const [token, setToken] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([api.overview(), api.agents(true), api.workflows()])
-      .then(([next, agentList, workflowList]) => {
+    void Promise.all([api.overview(), api.agents(true), api.workflows(), api.tasks({ limit: 300 })])
+      .then(([next, agentList, workflowList, taskList]) => {
         if (cancelled) return;
         setOverview(next);
+        setTasksById(new Map(taskList.map((task) => [task.id, task])));
         setAgents(agentList);
         setWorkflows(workflowList);
         setError(null);
@@ -146,6 +152,20 @@ export const OverviewSection = ({ onNavigate }: { readonly onNavigate: (route: R
                     {item.nextAt ? ` · next ${time(item.nextAt)}` : ""}
                   </span>
                   {item.since && <span className="dash-hint">Since {time(item.since)}</span>}
+                  {item.cases.length > 0 && (
+                    <ul className="dash-overview__cases">
+                      {item.cases.slice(0, 6).map((one) => (
+                        <li key={one.id}>
+                          <span>{one.rowKey ? `Record ${one.rowKey}` : "Case"}</span>
+                          <span className="dash-hint">
+                            {one.status === "running" ? "running" : `at ${one.step ?? "a step"}, waiting for ${one.waitingFor ?? "something"}`}
+                            {one.deadline ? ` until ${time(one.deadline)}` : ""}
+                          </span>
+                        </li>
+                      ))}
+                      {item.cases.length > 6 ? <li className="dash-hint">and {item.cases.length - 6} more</li> : null}
+                    </ul>
+                  )}
                 </div>
               </li>
             ))}
@@ -168,10 +188,14 @@ export const OverviewSection = ({ onNavigate }: { readonly onNavigate: (route: R
                 <h3 className="dash-workflow-editor__heading">{group.day}</h3>
                 <ul className="dash-overview__timeline">
                   {group.items.map((item) => (
-                    <li key={item.id} className="dash-overview__done">
+                    <li key={item.id} className="dash-overview__done" data-open={open === item.id}>
                       <span className="dash-overview__time">{time(item.at, false)}</span>
                       <span className="dash-overview__what">
-                        <span className="dash-overview__task">{taskLabel(item.task)}</span> {item.title}
+                        <span className="dash-overview__task">{taskLabel(item.task)}</span>{" "}
+                        <button type="button" className="dash-overview__link" onClick={() => setOpen(open === item.id ? null : item.id)} data-testid={`overview-task-${item.id}`}>
+                          {item.title}
+                        </button>
+                        {item.status === "reversed" ? <span className="dash-hint"> (reversed)</span> : null}
                         <span className="dash-hint">
                           {item.workflowName ? (
                             <>
@@ -184,6 +208,11 @@ export const OverviewSection = ({ onNavigate }: { readonly onNavigate: (route: R
                         </span>
                       </span>
                       {item.agent && chip(item.agent)}
+                      {open === item.id && tasksById.get(item.id) && (
+                        <ul className="dash-overview__detail">
+                          <TaskCard task={tasksById.get(item.id)!} agent={item.agent ? agentById.get(item.agent) : undefined} onChanged={() => setToken((n) => n + 1)} />
+                        </ul>
+                      )}
                     </li>
                   ))}
                 </ul>

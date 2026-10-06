@@ -1,4 +1,4 @@
-import { describeTrigger, isWatchedTrigger, nodeName, type AgentSpec, type Task, type WorkflowCase, type WorkflowSpec } from "@freebirdai/dash-spec";
+import { describeTrigger, isWatchedTrigger, nodeName, type AgentSpec, type Task, type WorkflowCase } from "@freebirdai/dash-spec";
 import type { WorkflowEnv } from "./env.js";
 import { nextDue } from "./schedule.js";
 
