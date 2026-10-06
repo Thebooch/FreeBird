@@ -9,6 +9,8 @@ import {
   entityLinkViews,
   type EntitySpec,
   type EvidenceLevel,
+  type OpSpec,
+  type ResolvedParams,
   fieldLexicon,
   opUsesRange,
   evidenceRank,
@@ -37,7 +39,9 @@ import { type CredentialMetaStore, MemoryCredentialMetaStore } from "./auth/cred
 import { OAuthRetryAdapter, RateLimitWaitAdapter } from "./auth/retry-adapter.js";
 import { coolingMessage, retryAfterSeconds } from "./cache/cooldown.js";
 import { ConnectionGate, Priority } from "./cache/gate.js";
-import { QueryCache } from "./cache/queryCache.js";
+import { clampMaxAge, QueryCache, type QueryOutcome } from "./cache/queryCache.js";
+import { MemoryShapeStore, type ShapeStore } from "./drift/store.js";
+import { DriftWatch } from "./drift/watch.js";
 import type { CacheStore } from "./cache/store.js";
 import { analyseConnection, type AnalyseOptions, fromReport, type SampleFn, toReport, withVerifiedParams } from "./capabilities.js";
 import type { CatalogStore } from "./catalog.js";
@@ -55,7 +59,7 @@ import { type JobStore, MemoryJobStore } from "./jobs/store.js";
 import { DEFAULT_EVERY_MS, LastSeen } from "./keeper/keeper.js";
 import { decideAll } from "./keeper/rhythm.js";
 import { openMcpClient } from "./mcp/client.js";
-import { buildQueryRequest } from "./query.js";
+import { buildQueryRequest, type QueryRequest } from "./query.js";
 import { withAddedReads, withEntryResources, withObservedFields } from "./integrate/observed.js";
 import { describeMissingRecords } from "./map.js";
 import { RhythmStore } from "./rhythm-store.js";
@@ -174,6 +178,44 @@ export interface EngineOptions {
   readonly autoReadWrites?: boolean | undefined;
   /** An API's write endpoints were just read. */
   readonly onWritesChanged?: (() => void) | undefined;
+  /** The shape each endpoint was accepted in, and any change seen since. Absent means in memory. */
+  readonly shapes?: ShapeStore | undefined;
+  /**
+   * Whether anything the host saved reads these fields of an endpoint. A
+   * change nothing reads is taken as the new shape. Absent means every change
+   * is reported and the endpoint checked again.
+   */
+  readonly readsFields?: ((connection: string, op: string, fields: readonly string[]) => boolean) | undefined;
+}
+
+/** One read through the engine: what to read, and how old an answer may be. */
+export interface EngineReadInput {
+  readonly connection: ConnectionSpec;
+  readonly op: OpSpec;
+  /** Inputs, by name: path segments and query values. */
+  readonly params?: Readonly<Record<string, string | number | boolean>>;
+  /** The window, and the filters with path inputs folded in. */
+  readonly resolved: ResolvedParams;
+  /** `view` serves what is held at any age; `refresh` asks the API when it is older than `maxAgeMs`. */
+  readonly mode?: "view" | "refresh";
+  /** How old an answer may be, in milliseconds. Clamped. */
+  readonly maxAgeMs: number;
+  /** How long an answer counts as fresh for its label, where the host keeps it warm. */
+  readonly freshForMs?: number;
+  readonly priority?: Priority;
+  /** The request as spelled, before it is sent: Dash records what was viewed from it. */
+  readonly onRequest?: (request: QueryRequest) => void;
+}
+
+/** What a read through the engine hands back. */
+export interface EngineReadResult extends QueryRequest {
+  readonly outcome: QueryOutcome;
+  /** The answer's meta, with the engine's continuation replaced by how far a background read has got. */
+  readonly meta: Omit<QueryOutcome["meta"], "continuation">;
+  /** The rest of the answer being read in the background, and how far it has got; null when there is none. */
+  readonly reading: LongReadStatus | null;
+  /** A change open on this endpoint since it was accepted, in words; null when there is none. */
+  readonly changed: string | null;
 }
 
 /**
@@ -986,6 +1028,103 @@ export const createEngine = (options: EngineOptions) => {
   };
   const integration: IntegrationRunner = createIntegrationRunner({ ...integrationDeps, queue: checkQueue });
 
+  /*
+   * Each fresh answer, held against the shape its endpoint was accepted in.
+   * A change is said on every read of that endpoint and the endpoint is
+   * checked again by itself; nothing is repaired behind anybody's back.
+   */
+  const drift = new DriftWatch({
+    shapes: options.shapes ?? new MemoryShapeStore(),
+    now: () => Date.now(),
+    recheck: (connection, ops) => integration.recheck(connection, ops),
+    ...(options.readsFields ? { readsFields: options.readsFields } : {}),
+    log: (line) => log.info(line),
+  });
+  /** Kept out of the way of the read it describes: a shape that cannot be kept costs nothing shown. */
+  const watchShape = (connection: ConnectionSpec, op: OpSpec, body: unknown): void => {
+    void drift
+      .observe(connection, op, body)
+      .catch((error: unknown) => log.warn(`the shape of ${connection.id}/${op.id} could not be checked: ${String(error)}`));
+  };
+
+  /**
+   * One read, the way every reader of an endpoint reads it.
+   *
+   * The request is spelled once (`buildQueryRequest`), so it lands on the key
+   * every other reader writes. A key whose whole answer was read in the
+   * background is refreshed the same way, never by a capped read that would
+   * put a partial answer back over the whole one. A fresh answer that stopped
+   * at its own limit with more to read is carried on in the background from
+   * where it stopped, and a fresh answer is held against its accepted shape.
+   */
+  const read = async (input: EngineReadInput): Promise<EngineReadResult> => {
+    const { connection, op } = input;
+    registry.addConnection(connection);
+    refreshQueryIdentity(connection);
+    const request = buildQueryRequest({ connection: connection.id, op, params: { ...input.params }, resolved: input.resolved });
+    input.onRequest?.(request);
+    const { key, overrides, resolved } = request;
+    const maxAgeMs = clampMaxAge(input.maxAgeMs);
+    const mode = input.mode ?? "refresh";
+
+    const heldAt = queries.storedAt(key);
+    const owned =
+      mode !== "view" &&
+      heldAt !== null &&
+      Date.now() - heldAt > maxAgeMs &&
+      (await longReads.owns(key).catch(() => false));
+    if (owned)
+      void longReads
+        .refresh({ key, connection, op, overrides, resolved })
+        .catch((error: unknown) => log.warn(`a long read could not be refreshed: ${String(error)}`));
+    const outcome = await queries.read({
+      key,
+      connection: connection.id,
+      mode: owned ? "view" : mode,
+      maxAgeMs,
+      ...(input.freshForMs !== undefined ? { freshForMs: input.freshForMs } : {}),
+      ...(input.priority !== undefined ? { priority: input.priority } : {}),
+      fetcher: (validators) =>
+        registry.fetch(connection.id, op.id, overrides, {
+          params: resolved,
+          now: Date.now(),
+          resolveSecret: secretFor,
+          ...(validators ? { validators } : {}),
+        }),
+    });
+
+    if (outcome.outcome === "miss") watchShape(connection, op, outcome.body);
+    /* Stopped at its own limit with more to read: the rest is read in the background, from there. */
+    if (outcome.outcome === "miss" && outcome.meta.continuation)
+      await longReads
+        .carryOn({ key, connection, op, overrides, resolved, first: outcome })
+        .catch((error: unknown) => log.warn(`a long read could not be carried on: ${String(error)}`));
+    const reading = await longReads.status(key).catch(() => null);
+    const changed = await drift.noteFor(connection, op.id).catch(() => null);
+    return { key, overrides, resolved, outcome, meta: withReadingOn(outcome.meta, reading), reading, changed };
+  };
+
+  /**
+   * Until the background read of this key, if there is one, has finished:
+   * what a caller that wants the whole answer now waits for.
+   */
+  const settled = async (key: string, timeoutMs = 120_000): Promise<LongReadStatus | null> => {
+    const finished = (status: LongReadStatus | null) =>
+      !status || status.state === "done" || status.state === "blocked" || status.state === "cancelled";
+    const until = Date.now() + timeoutMs;
+    for (;;) {
+      const status = await longReads.status(key).catch(() => null);
+      if (finished(status) || Date.now() >= until) return status;
+      longReads.kick();
+      await longReads.idle();
+      const after = await longReads.status(key).catch(() => null);
+      if (finished(after) || Date.now() >= until) return after;
+      /* Waiting its turn, or out a rate limit: give it a moment rather than spinning. */
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  };
+
+
   return {
     store,
     keys,
@@ -1020,6 +1159,10 @@ export const createEngine = (options: EngineOptions) => {
     fetchDocument,
     integrationDeps,
     integration,
+    drift,
+    watchShape,
+    read,
+    settled,
     describing,
     describeRecords,
     keepObserved,

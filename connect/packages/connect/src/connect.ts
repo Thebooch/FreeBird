@@ -9,6 +9,7 @@ import {
   type EntitySpec,
   getOp,
   type OpSpec,
+  type ReadCompletion,
   resolveRange,
 } from "@freebirdai/connect-spec";
 import { AdapterError, type HttpFetch } from "./adapters/index.js";
@@ -119,6 +120,15 @@ export interface ReadRequest {
   readonly fresh?: number | string;
   /** The time window, for endpoints that read one. Default the last 30 days. */
   readonly range?: "1h" | "24h" | "7d" | "30d" | "90d" | "12mo" | "ytd";
+  /**
+   * When the answer is longer than one read takes, the rest is read in the
+   * background. `true` (the default) waits for it and returns every record;
+   * `false` returns what the first read got, with `progress` saying how far
+   * the rest has got. Read again later for the whole answer.
+   */
+  readonly wait?: boolean;
+  /** The longest `wait` waits, in milliseconds. Default two minutes. */
+  readonly waitMs?: number;
 }
 
 export interface ReadResult {
@@ -130,6 +140,23 @@ export interface ReadResult {
   readonly ageMs: number;
   /** What the reader should know: pages not read, a read carried on, a change in shape. */
   readonly warnings: readonly string[];
+  /** Whether these are all the records: every page read, nothing still being read. */
+  readonly complete: boolean;
+  /** How the read ended, as the adapter judged it: traversed to its end, partial, or unknown. */
+  readonly completion?: ReadCompletion | undefined;
+  /** Pages read for this answer. */
+  readonly pages: number;
+  /** How many records the API says there are, where it says. */
+  readonly reportedTotal?: number | undefined;
+  /** The rest of the answer, being read in the background: how far it has got. Null when there is none. */
+  readonly progress: {
+    readonly state: string;
+    readonly read: number;
+    readonly of?: number | undefined;
+    readonly error?: string | undefined;
+  } | null;
+  /** A change in the endpoint's response since it was accepted, in words; null when there is none. */
+  readonly changed: string | null;
 }
 
 export type ConnectEvent =
@@ -194,6 +221,7 @@ export const createConnect = (options: ConnectOptions = {}) => {
     cache: options.cache,
     evidence: stores.evidence,
     seenValues: stores.seenValues,
+    shapes: stores.shapes,
     rhythms: local.rhythms,
     sandbox: options.sandbox ?? local.sandbox,
     policy: {
@@ -248,33 +276,37 @@ export const createConnect = (options: ConnectOptions = {}) => {
     const connection = need(id);
     const op = opFor(connection, request);
     engine.seen.touch(id, Date.now());
-    engine.registry.addConnection(connection);
-    engine.refreshQueryIdentity(connection);
-    const { key, overrides, resolved } = buildQueryRequest({
-      connection: id,
+    const asked = {
+      connection,
       op,
       params: { ...request.params },
       resolved: { range: resolveRange({ preset: request.range ?? "30d", now: Date.now() }), filters: {} },
-    });
+      maxAgeMs: freshness(request.fresh),
+      ...(priority !== undefined ? { priority } : {}),
+    };
     try {
-      const outcome = await engine.queries.read({
-        key,
-        connection: id,
-        mode: "refresh",
-        maxAgeMs: freshness(request.fresh),
-        ...(priority !== undefined ? { priority } : {}),
-        fetcher: (validators) =>
-          engine.registry.fetch(id, op.id, overrides, {
-            params: resolved,
-            now: Date.now(),
-            resolveSecret: engine.secretFor,
-            ...(validators ? { validators } : {}),
-          }),
-      });
+      /* The engine's read: the same one Dash's tiles go through. */
+      let answer = await engine.read({ ...asked, mode: "refresh" });
+      const unfinished = (status: typeof answer.reading) => status !== null && status.state !== "done" && status.state !== "cancelled";
+      if ((request.wait ?? true) && unfinished(answer.reading)) {
+        /* The rest is being read in the background: wait for it, then take the whole answer as now held. */
+        await engine.settled(answer.key, request.waitMs);
+        answer = await engine.read({ ...asked, mode: "view" });
+      }
+      const { outcome, meta, reading, changed } = answer;
       const filter = Object.entries(request.filter ?? {});
       const rows = rowsOf(outcome.body, op.rowsPath).filter((row) =>
         filter.every(([field, wanted]) => (row as Record<string, unknown> | null)?.[field] === wanted),
       );
+      const progress = reading
+        ? {
+            state: reading.state,
+            read: reading.read,
+            ...(reading.of !== undefined ? { of: reading.of } : {}),
+            ...(reading.error ? { error: reading.error } : {}),
+          }
+        : null;
+      const complete = !unfinished(reading) && (reading?.state === "done" || (!meta.truncated && meta.completion?.state !== "partial"));
       emit({ type: "read", connection: id, op: op.id, rows: rows.length, cache: outcome.outcome });
       return {
         rows,
@@ -282,7 +314,13 @@ export const createConnect = (options: ConnectOptions = {}) => {
         op: op.id,
         cache: outcome.outcome,
         ageMs: Number.isFinite(outcome.ageMs) ? outcome.ageMs : 0,
-        warnings: outcome.meta.warnings,
+        warnings: changed ? [...meta.warnings, changed] : meta.warnings,
+        complete,
+        ...(meta.completion ? { completion: meta.completion } : {}),
+        pages: meta.pages,
+        ...(meta.reportedTotal !== undefined ? { reportedTotal: meta.reportedTotal } : {}),
+        progress,
+        changed,
       };
     } catch (error) {
       const message = error instanceof AdapterError ? (error.userMessage ?? error.message) : String(error);

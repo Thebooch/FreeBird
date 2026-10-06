@@ -55,7 +55,7 @@ const { rows } = await connect.read(api.id, { op: "listInvoices", params: { stat
 
 ## Pitfalls
 
-- **Private addresses are refused.** Every request goes through an SSRF guard; `localhost` and private ranges fail. Allow specific ones with `configureEgress(allowlistEgress("10.0.0.5,api.internal"))` from `@freebirdai/connect/safe-fetch`.
+- **Private addresses are refused.** Every request goes through an SSRF guard; `localhost` and private ranges fail. Allow specific ones with `configureEgress(allowlistEgress("10.0.0.5,api.internal"))` from `@freebirdai/connect`.
 - **No model, no record types.** `read({ record })` fails until `integrate` ran with an `llm`. Read by `op` instead.
 - **Connector code needs a sandbox.** An API the engine can only read with generated code needs `sandbox: new QuickJsSandbox()` from `@freebirdai/connect-sandbox`; without it that code is refused, and the check says so.
 - **Memory by default.** Connections, cache and the journal are lost on restart unless you pass `store` and `stores` (see `@freebirdai/connect-postgres`). Keys persist under `dir`.

@@ -94,3 +94,5 @@ export type { FetchDocument } from "./writes/read-writes.js";
 export { WriteError, WriteService, describeFields } from "./writes/service.js";
 export type { CommitResult } from "./writes/service.js";
 export type { PolicyDecision, WriteActor, WritePermission, WritePolicy, WriteScope } from "./writes/policy.js";
+export { DriftWatch, type DriftWatchDeps } from "./drift/watch.js";
+export type { EngineReadInput, EngineReadResult } from "./engine.js";

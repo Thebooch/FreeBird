@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { HttpFetch } from "./adapters/index.js";
-import { type ConnectEvent, createConnect, freshness } from "./connect.js";
+import { connectionSchema, getOp, resolveRange } from "@freebirdai/connect-spec";
+import { type ConnectEvent, createConnect, freshness, MemoryConnectionStore } from "./connect.js";
 
 /**
  * The engine on its own: no Dash, no server, no database. An API is added
@@ -148,5 +149,72 @@ describe("freshness", () => {
     expect(freshness("1h")).toBe(3_600_000);
     expect(freshness(250)).toBe(250);
     expect(() => freshness("soon")).toThrow();
+  });
+});
+
+describe("a read longer than one read takes", () => {
+  /* Three pages of one record each; one page per foreground read. */
+  const pages = [[{ id: "a" }], [{ id: "b" }], [{ id: "c" }]];
+  const paged: HttpFetch = async (url) => {
+    const page = Number(new URL(url).searchParams.get("page") ?? 1);
+    return {
+      status: 200,
+      text: JSON.stringify({ data: pages[page - 1] ?? [] }),
+      url,
+      header: (name) => (name.toLowerCase() === "content-type" ? "application/json" : null),
+    };
+  };
+  const ledger = connectionSchema.parse({
+    id: "ledger",
+    title: "Ledger",
+    kind: "rest",
+    baseUrl: "https://api.ledger.test",
+    ops: [
+      {
+        id: "payments",
+        title: "Payments",
+        path: "/payments",
+        rowsPath: "$.data",
+        pagination: { kind: "page", param: "page", startsAt: 1 },
+        paginationChecked: true,
+        maxPages: 1,
+      },
+    ],
+  });
+  const withLedger = () => {
+    const store = new MemoryConnectionStore();
+    store.putConnection(ledger);
+    return createConnect({ dir, store, http: paged, autoIntegrate: false });
+  };
+
+  it("waits for the rest, read in the background, and returns every record", async () => {
+    const connect = withLedger();
+    const result = await connect.read("ledger", { op: "payments" });
+    expect(result.rows).toEqual([{ id: "a" }, { id: "b" }, { id: "c" }]);
+    expect(result.complete).toBe(true);
+    expect(result.progress).toBeNull();
+    connect.stop();
+  });
+
+  it("returns what the first read got without waiting, and says the rest is being read", async () => {
+    const connect = withLedger();
+    const first = await connect.read("ledger", { op: "payments", wait: false });
+    expect(first.rows).toEqual([{ id: "a" }]);
+    expect(first.complete).toBe(false);
+    expect(first.progress).toMatchObject({ read: 1 });
+    expect(first.warnings.join(" ")).toMatch(/read|reading/i);
+    /* The same key `read` wrote: wait for the background read of it to finish. */
+    const held = await connect.engine.read({
+      connection: ledger,
+      op: getOp(ledger, "payments")!,
+      resolved: { range: resolveRange({ preset: "30d", now: Date.now() }), filters: {} },
+      mode: "view",
+      maxAgeMs: 300_000,
+    });
+    await connect.engine.settled(held.key);
+    const later = await connect.read("ledger", { op: "payments", wait: false });
+    expect(later.rows).toEqual([{ id: "a" }, { id: "b" }, { id: "c" }]);
+    expect(later.complete).toBe(true);
+    connect.stop();
   });
 });

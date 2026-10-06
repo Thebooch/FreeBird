@@ -186,7 +186,7 @@ import {
 import { LOOK_UP_WIDGET_TOOL, lookUpWidget, lookUpWidgetSchema } from "./chat/lookUpWidget.js";
 import { type SpecRepository } from "./store.js";
 import { GrantStore, approveWidget, dashboardApprovals, widgetGrantSubject } from "./grants.js";
-import { DriftWatch } from "./drift/watch.js";
+import { savedReads } from "./drift/watch.js";
 import { MemorySnapshotStore, type SnapshotStore } from "./history/store.js";
 import { dayOf, numbersFrom } from "./history/record.js";
 import {
@@ -638,6 +638,9 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     /* A field whose reading changed: Dash rebuilds the widgets that read it. */
     onReadingsChanged: (connection, changed, wrapped) => recompileReadings(connection, changed, wrapped),
     autoReadWrites: options.autoReadWrites,
+    shapes: options.shapes,
+    /* A change in an endpoint's shape is a warning only where a saved board reads what changed. */
+    readsFields: (connection, op, fields) => savedReads(store.listDashboards(), connection, op, fields),
     onWritesChanged: () => onWritesChanged(),
     integration: {
       /* The endpoints Dash's boards read, so a check settles those first. */
@@ -676,6 +679,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     observeConnection,
     relatedFor,
     linksFor,
+    drift,
+    watchShape,
   } = engine;
   /* Once the server is up: whatever was being read when it last stopped is carried on. */
   app.addHook("onReady", async () => engine.resume());
@@ -695,24 +700,6 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   const viewed = new ViewedRequests();
   /** Number tiles' values, day by day. See `BuildServerOptions.snapshots`. */
   const snapshots: SnapshotStore = options.snapshots ?? new MemorySnapshotStore();
-  /*
-   * Each fresh answer, held against the shape its endpoint was accepted in.
-   * A change is said on the tiles that read it and the connection is checked
-   * again by itself; nothing is repaired into a saved widget. See `drift/`.
-   */
-  const drift = new DriftWatch({
-    shapes: options.shapes ?? new MemoryShapeStore(),
-    now: () => Date.now(),
-    dashboards: () => store.listDashboards(),
-    recheck: (connection, ops) => integration.recheck(connection, ops),
-    log: (line) => app.log.info(line),
-  });
-  /** Kept out of the way of the read it describes: a shape that cannot be kept costs nothing shown. */
-  const watchShape = (connection: ConnectionSpec, op: OpSpec, body: unknown): void => {
-    void drift
-      .observe(connection, op, body)
-      .catch((error: unknown) => app.log.warn(`the shape of ${connection.id}/${op.id} could not be checked: ${String(error)}`));
-  };
   const historyDays = options.historyDays ?? DEFAULT_HISTORY_DAYS;
   /** A connection's seen values by record type, for the brief. Never a reason a brief is not written. */
   const seenFor = async (
@@ -1784,19 +1771,16 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       store,
       options,
       registry,
+      read: engine.read,
       queries,
-      longReads,
       eachReads,
       eachPlan,
       everyMsForOp,
       refreshQueryIdentity,
-      secretFor,
       seen,
-      withReadingOn,
       drift,
       viewed,
       previews,
-      watchShape,
     }),
   );
 

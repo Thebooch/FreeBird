@@ -14,3 +14,5 @@ export { createEngine, nodeHttp, type Engine, type EngineOptions } from "./engin
 export type { WriteIntent, WriteReview } from "./writes/pending.js";
 export type { WriteActor, WritePermission, WritePolicy, WriteScope } from "./writes/policy.js";
 export type { CommitResult } from "./writes/service.js";
+/* Which private addresses a connection may reach, for an API on your own network. */
+export { allowlistEgress, configureEgress } from "./safe-fetch.js";

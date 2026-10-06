@@ -5,7 +5,8 @@ import { isChangedNote, isIncompleteNote } from "@freebirdai/connect/adapters";
 import { connectionSchema, dashboardSchema, getOp, type DashboardSpec } from "@freebirdai/dash-spec";
 import { afterEach, describe, expect, it } from "vitest";
 import { driftBetween, driftNote, likelyRenames, MemoryShapeStore, shapeOf } from "@freebirdai/connect/host";
-import { DriftWatch, savedReads } from "./watch.js";
+import { DriftWatch } from "@freebirdai/connect/host";
+import { savedReads } from "./watch.js";
 import { openDashDb } from "../platform/db.js";
 import { DbShapeStore } from "@freebirdai/connect-postgres";
 
@@ -107,8 +108,8 @@ describe("holding fresh answers against the accepted shape", () => {
     const watch = new DriftWatch({
       shapes: new MemoryShapeStore(),
       now: () => NOW,
-      dashboards: () => dashboards,
-      recheck: (one, ops) => rechecked.push(`${one.id}/${ops.join(",")}`),
+      readsFields: (one, op, fields) => savedReads(dashboards, one, op, fields),
+      recheck: (one: { id: string }, ops: readonly string[]) => rechecked.push(`${one.id}/${ops.join(",")}`),
     });
     return { watch, rechecked };
   };

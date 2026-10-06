@@ -15,7 +15,6 @@ import { SetupPreviews } from "../concierge/preview.js";
 import { fingerprintConnection } from "@freebirdai/dash-spec";
 import { ViewedRequests, paramShape } from "../keeper/viewed.js";
 import { type SpecRepository } from "../store.js";
-import { DriftWatch } from "../drift/watch.js";
 import type { BuildServerOptions } from "../server.js";
 import type { Engine } from "@freebirdai/connect";
 
@@ -80,23 +79,20 @@ export interface QueryRouteDeps {
   /** Whether the keeper runs, which decides what reads as stale. */
   readonly options: Pick<BuildServerOptions, "keeper">;
   readonly registry: Engine["registry"];
+  /** The engine's read: the one every reader of an endpoint goes through. */
+  readonly read: Engine["read"];
   readonly queries: Engine["queries"];
-  readonly longReads: Engine["longReads"];
   readonly eachReads: Engine["eachReads"];
   readonly eachPlan: Engine["eachPlan"];
   readonly everyMsForOp: Engine["everyMsForOp"];
   readonly refreshQueryIdentity: Engine["refreshQueryIdentity"];
-  readonly secretFor: Engine["secretFor"];
   readonly seen: Engine["seen"];
-  readonly withReadingOn: Engine["withReadingOn"];
-  /** What changed on an endpoint since it was accepted, said on every tile. */
-  readonly drift: DriftWatch;
+  /** What changed on an endpoint since it was accepted. */
+  readonly drift: Engine["drift"];
   /** What boards asked for, so the keeper refreshes exactly that. */
   readonly viewed: ViewedRequests;
   /** Receipts for what a tile was shown. */
   readonly previews: SetupPreviews;
-  /** A fresh answer, held against the shape its endpoint was accepted in. */
-  readonly watchShape: (connection: ConnectionSpec, op: OpSpec, body: unknown) => void;
 }
 
 export const queryRoutes =
@@ -106,19 +102,16 @@ export const queryRoutes =
       store,
       options,
       registry,
+      read,
       queries,
-      longReads,
       eachReads,
       eachPlan,
       everyMsForOp,
       refreshQueryIdentity,
-      secretFor,
       seen,
-      withReadingOn,
       drift,
       viewed,
       previews,
-      watchShape,
     } = deps;
 
     /** What has changed on a connection's endpoints since they were checked, in words. */
@@ -152,85 +145,37 @@ export const queryRoutes =
       if (!resolvedOp) return reply.status(404).send({ error: `no operation "${op}"` });
       registry.addConnection(spec);
 
-      /*
-       * One spelling of the request, shared with the chat harness, the keeper
-       * and onboarding's checks — every one of them has to land on the key this
-       * writes. See `buildQueryRequest`.
-       */
-      refreshQueryIdentity(spec);
-      const { key, overrides, resolved } = buildQueryRequest({
-        connection,
-        op: resolvedOp,
-        params,
-        resolved: { range: resolveRequestedRange(range, Date.now()), filters },
-      });
-      /* What was asked, so the keeper refreshes exactly this and not a guess. */
-      viewed.record(
-        { key, connection, op, overrides, resolved, shape: paramShape(params) },
-        Date.now(),
-      );
-
       try {
         /*
-         * A key whose whole answer was read in the background is refreshed the
-         * same way — its first stretch read, the rest carried on — never by a
-         * capped read that would put a partial answer back over the whole one.
+         * The engine's read: one spelling of the request, a background read's
+         * own refresh, the cache, carrying a capped read on, and the shape
+         * watch. What is Dash's is said around it: what was viewed, so the
+         * keeper refreshes exactly this, and the tile's receipt.
          */
-        const heldAt = queries.storedAt(key);
-        const owned =
-          mode !== "view" &&
-          heldAt !== null &&
-          Date.now() - heldAt > clampMaxAge(parsed.data.maxAgeMs) &&
-          (await longReads.owns(key).catch(() => false));
-        if (owned)
-          void longReads
-            .refresh({ key, connection: spec, op: resolvedOp, overrides, resolved })
-            .catch((error: unknown) =>
-              app.log.warn(`a long read could not be refreshed: ${String(error)}`),
-            );
-        const outcome = await queries.read({
-          key,
-          connection,
-          mode: owned ? "view" : mode,
+        const answer = await read({
+          connection: spec,
+          op: resolvedOp,
+          params,
+          resolved: { range: resolveRequestedRange(range, Date.now()), filters },
+          mode,
           maxAgeMs: clampMaxAge(parsed.data.maxAgeMs),
           /*
            * Old is measured against how often this endpoint is refreshed, not
-           * only against what the widget asked for. A daily endpoint read at
-           * noon is not stale; labelling it so on every tile would teach people
-           * to ignore the label. Only a label — a view serves what it holds
-           * either way — and only while the keeper is running, since without
-           * it nothing refreshes on that cadence.
+           * only against what the widget asked for — and only while the keeper
+           * is running, since without it nothing refreshes on that cadence.
            */
-          ...(options.keeper === true
-            ? { freshForMs: Math.round(1.5 * everyMsForOp(connection, op)) }
-            : {}),
-          fetcher: (validators) =>
-            registry.fetch(connection, op, overrides, {
-              params: resolved,
-              now: Date.now(),
-              resolveSecret: secretFor,
-              ...(validators ? { validators } : {}),
-            }),
+          ...(options.keeper === true ? { freshForMs: Math.round(1.5 * everyMsForOp(connection, op)) } : {}),
+          onRequest: ({ key, overrides, resolved }) =>
+            viewed.record({ key, connection, op, overrides, resolved, shape: paramShape(params) }, Date.now()),
         });
-
-        if (outcome.outcome === "miss") watchShape(spec, resolvedOp, outcome.body);
-        /* Stopped at its own limit with more to read: the rest is read in the background, from there. */
-        if (outcome.outcome === "miss" && outcome.meta.continuation)
-          await longReads
-            .carryOn({ key, connection: spec, op: resolvedOp, overrides, resolved, first: outcome })
-            .catch((error: unknown) =>
-              app.log.warn(`a long read could not be carried on: ${String(error)}`),
-            );
-        const reading = await longReads.status(key).catch(() => null);
-        const told = withReadingOn(outcome.meta, reading);
-        /* A change open on this endpoint is said on every tile that reads it, however old the copy. */
-        const changed = await drift.noteFor(spec, op).catch(() => null);
+        const { outcome, meta, changed } = answer;
         return {
           body: outcome.body,
           meta: {
-            ...told,
-            ...(changed ? { warnings: [...told.warnings, changed] } : {}),
-            receipt: previews.record(key, spec, op, resolved, overrides),
+            ...meta,
+            /* A change open on this endpoint is said on every tile that reads it, however old the copy. */
+            ...(changed ? { warnings: [...meta.warnings, changed] } : {}),
+            receipt: previews.record(answer.key, spec, op, answer.resolved, answer.overrides),
             cache: outcome.outcome,
             ageMs: Number.isFinite(outcome.ageMs) ? outcome.ageMs : 0,
             ...(outcome.staleReason ? { staleReason: outcome.staleReason } : {}),
