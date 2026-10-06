@@ -1,17 +1,23 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { HttpFetch } from "@freebirdai/dash-adapters";
+import type { HttpFetch } from "@freebirdai/connect/adapters";
 import { fakeLlm, proposalSchema } from "@freebirdai/dash-agent";
 import { capabilityReportSchema, connectionSchema, getOp } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CatalogStore, connectionFromCatalog } from "./catalog.js";
+import {
+  assertAllowedHost,
+  assertPublicHttpUrl,
+  CatalogStore,
+  connectionFromCatalog,
+  isPrivateIp,
+  KeyStore,
+  LocalAesVault,
+} from "@freebirdai/connect/host";
 import { toJsonSchema } from "./llm.js";
-import { assertAllowedHost, assertPublicHttpUrl, isPrivateIp } from "./safe-fetch.js";
 import { buildPartRegistry } from "./parts.js";
 import { buildServer } from "./server.js";
 import { SpecStore } from "./store.js";
-import { KeyStore, LocalAesVault } from "./vault.js";
 
 let dir: string;
 let store: SpecStore;

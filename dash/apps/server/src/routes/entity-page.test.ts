@@ -3,10 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connectionSchema } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CatalogStore } from "../catalog.js";
+import { CatalogStore, KeyStore, LocalAesVault } from "@freebirdai/connect/host";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
-import { KeyStore, LocalAesVault } from "../vault.js";
 
 /**
  * One record type's page, over HTTP, from stored knowledge alone.

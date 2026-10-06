@@ -5,8 +5,8 @@ import {
   categoriesFromProposal,
   categoriseApi,
   categoryId,
-} from "./categories.js";
-import { fakeLlm } from "./llm.js";
+} from "@freebirdai/connect/agent";
+import { fakeLlm } from "@freebirdai/connect/agent";
 
 const candidate = (input: Partial<BriefCandidate> & { entity: string }): BriefCandidate => ({
   connection: "acme",

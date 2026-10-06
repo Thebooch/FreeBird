@@ -1,4 +1,4 @@
-import { parseExpr, parsePath } from "@freebirdai/dash-expr";
+import { parseExpr, parsePath } from "@freebirdai/expr";
 import type { Coercion, SemanticType, WidgetSpec } from "@freebirdai/dash-spec";
 import { COERCION_SEMANTICS, hasTokens, parseAggregation } from "@freebirdai/dash-spec";
 import type {

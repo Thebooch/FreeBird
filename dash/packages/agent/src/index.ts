@@ -93,9 +93,9 @@ export type {
   StepEntry,
   StepOption,
 } from "./concierge/steps.js";
-export { inferShape, schemaDrifted } from "./infer.js";
-export type { FieldFormat, FieldInfo, InferredShape, JsonKind } from "./infer.js";
-export { fakeLlm } from "./llm.js";
+export { inferShape, schemaDrifted } from "@freebirdai/connect/agent";
+export type { FieldFormat, FieldInfo, InferredShape, JsonKind } from "@freebirdai/connect/agent";
+export { fakeLlm } from "@freebirdai/connect/agent";
 export type {
   LlmAdapter,
   LlmGenerateOptions,
@@ -104,11 +104,11 @@ export type {
   LlmTokenUsage,
   LlmTool,
   RecordedCall,
-} from "./llm.js";
+} from "@freebirdai/connect/agent";
 export { mapProposal } from "./map.js";
 export type { MappedProposal } from "./map.js";
-export { MAP_SYSTEM_PROMPT, buildMapPrompt, mapApi, pruneAmbiguousRelations } from "./apimap.js";
-export type { MapInput, MapProposal, MapResult } from "./apimap.js";
+export { MAP_SYSTEM_PROMPT, buildMapPrompt, mapApi, pruneAmbiguousRelations } from "@freebirdai/connect/agent";
+export type { MapInput, MapProposal, MapResult } from "@freebirdai/connect/agent";
 export {
   ENTITY_SYSTEM_PROMPT,
   acceptEntityLabel,
@@ -118,16 +118,16 @@ export {
   entityProposalSchema,
   fieldsOfResource,
   scopeOf,
-} from "./entities.js";
-export type { EntityInput, EntityProposal, EntityResult } from "./entities.js";
+} from "@freebirdai/connect/agent";
+export type { EntityInput, EntityProposal, EntityResult } from "@freebirdai/connect/agent";
 export {
   REFERENCE_SYSTEM_PROMPT,
   buildReferencePrompt,
   classifyReferences,
   referenceCandidates,
   referenceProposalSchema,
-} from "./references.js";
-export type { ReferenceCandidate, ReferenceInput, ReferenceResult } from "./references.js";
+} from "@freebirdai/connect/agent";
+export type { ReferenceCandidate, ReferenceInput, ReferenceResult } from "@freebirdai/connect/agent";
 
 export {
   BRIEF_SYSTEM_PROMPT,
@@ -169,8 +169,8 @@ export {
   categoriseApi,
   categoryFingerprint,
   categoryId,
-} from "./categories.js";
-export type { CategoryInput, CategoryProposal, CategoryResult } from "./categories.js";
+} from "@freebirdai/connect/agent";
+export type { CategoryInput, CategoryProposal, CategoryResult } from "@freebirdai/connect/agent";
 export {
   STARTER_SYSTEM_PROMPT,
   buildStarterPrompt,
@@ -191,19 +191,19 @@ export {
   buildRhythmPrompt,
   classifyRhythm,
   rhythmFromProposal,
-} from "./rhythm.js";
-export type { RhythmProposal, RhythmResult } from "./rhythm.js";
-export { UNTRUSTED_METADATA, callTool } from "./retry.js";
-export { VIEWS_SYSTEM_PROMPT, chooseViews } from "./views.js";
-export type { ViewProposal, ViewsInput, ViewsResult } from "./views.js";
+} from "@freebirdai/connect/agent";
+export type { RhythmProposal, RhythmResult } from "@freebirdai/connect/agent";
+export { UNTRUSTED_METADATA, callTool } from "@freebirdai/connect/agent";
+export { VIEWS_SYSTEM_PROMPT, chooseViews } from "@freebirdai/connect/agent";
+export type { ViewProposal, ViewsInput, ViewsResult } from "@freebirdai/connect/agent";
 export type { AuthoredWidget } from "./authoring.js";
 export { SYSTEM_PROMPT, buildUserPrompt, proposalSchema, proposeWidgetTool } from "./tool.js";
 export type { Proposal } from "./tool.js";
 
 export { draftPatchSchema } from "./concierge/patch.js";
-export { buildMatchPrompt, matchFieldsSchema, matchFieldsTool, matchWriteFields } from "./writes.js";
-export type { MatchFieldsInput, MatchFieldsProposal, MatchFieldsResult } from "./writes.js";
-export { buildRepairPrompt, proposeRepair, repairProposalSchema, repairTool } from "./repair.js";
-export type { RepairInput, RepairProposal } from "./repair.js";
-export { HOOKS, buildConnectorPrompt, connectorProposalSchema, connectorTool, proposeConnector } from "./connector.js";
-export type { ConnectorInput, ConnectorProposal } from "./connector.js";
+export { buildMatchPrompt, matchFieldsSchema, matchFieldsTool, matchWriteFields } from "@freebirdai/connect/agent";
+export type { MatchFieldsInput, MatchFieldsProposal, MatchFieldsResult } from "@freebirdai/connect/agent";
+export { buildRepairPrompt, proposeRepair, repairProposalSchema, repairTool } from "@freebirdai/connect/agent";
+export type { RepairInput, RepairProposal } from "@freebirdai/connect/agent";
+export { HOOKS, buildConnectorPrompt, connectorProposalSchema, connectorTool, proposeConnector } from "@freebirdai/connect/agent";
+export type { ConnectorInput, ConnectorProposal } from "@freebirdai/connect/agent";

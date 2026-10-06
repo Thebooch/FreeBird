@@ -1,12 +1,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { HttpFetch } from "@freebirdai/dash-adapters";
+import type { HttpFetch } from "@freebirdai/connect/adapters";
 import { connectionSchema, dashboardSchema } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
-import { KeyStore, LocalAesVault } from "../vault.js";
+import { KeyStore, LocalAesVault } from "@freebirdai/connect/host";
 
 /*
  * An API that renames a field after a board was built on it:

@@ -5,6 +5,8 @@ export default defineConfig({
     include: [
       "guide/packages/**/*.test.ts",
       "guide/packages/**/*.test.tsx",
+      "shared/packages/**/*.test.ts",
+      "connect/packages/**/*.test.ts",
       "dash/packages/**/*.test.ts",
       "dash/packages/**/*.test.tsx",
       "dash/apps/**/src/**/*.test.ts",

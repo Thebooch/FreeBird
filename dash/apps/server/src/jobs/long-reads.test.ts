@@ -1,16 +1,16 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AdapterError, RestAdapter, type FetchResult, type HttpFetch } from "@freebirdai/dash-adapters";
+import { AdapterError, type FetchResult, type HttpFetch, RestAdapter } from "@freebirdai/connect/adapters";
 import { connectionSchema, getOp, resolveRange, type ConnectionSpec } from "@freebirdai/dash-spec";
 import { sql } from "kysely";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { openDashDb } from "../platform/db.js";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
-import { KeyStore, LocalAesVault } from "../vault.js";
-import { LongReads, longReadId, type LongReadDeps } from "./long-reads.js";
-import { DbJobStore, MemoryJobStore, type JobStore } from "./store.js";
+import { KeyStore, LocalAesVault, longReadId, LongReads, MemoryJobStore } from "@freebirdai/connect/host";
+import type { JobStore, LongReadDeps } from "@freebirdai/connect/host";
+import { openDashDb } from "../platform/db.js";
+import { DbJobStore } from "@freebirdai/connect-postgres";
 
 /*
  * A read past a tile's own limits, carried on in the background from where it
@@ -124,8 +124,8 @@ describe("a read carried on past a tile's limits", () => {
 
       /* Nothing readable at rest: no record, no address, no key. */
       const raw = JSON.stringify([
-        (await sql`SELECT record FROM dash_jobs`.execute(db.kysely)).rows,
-        (await sql`SELECT rows FROM dash_job_rows`.execute(db.kysely)).rows,
+        (await sql`SELECT record FROM connect_jobs`.execute(db.kysely)).rows,
+        (await sql`SELECT rows FROM connect_job_rows`.execute(db.kysely)).rows,
       ]);
       expect(raw).not.toContain("pay_");
       expect(raw).not.toContain("api.ledger.test");
@@ -138,7 +138,7 @@ describe("a read carried on past a tile's limits", () => {
       await after.reads.idle();
       expect(ids(after.answers.get("k2"))).toEqual(PAYMENTS.map((one) => one.id));
       expect(sent.slice(asked).map((url) => new URL(url).searchParams.get("page"))[0]).toBe("11");
-      expect((await sql`SELECT rows FROM dash_job_rows`.execute(db.kysely)).rows).toEqual([]);
+      expect((await sql`SELECT rows FROM connect_job_rows`.execute(db.kysely)).rows).toEqual([]);
     } finally {
       await db.close();
     }

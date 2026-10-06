@@ -1,30 +1,21 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  AdapterRegistry,
   AdapterError,
-  DependentAdapter,
-  INCOMPLETE,
-  McpAdapter,
-  RestAdapter,
-  isIncompleteNote,
-  type FetchResult,
   type HttpFetch,
-} from "@freebirdai/dash-adapters";
+  isIncompleteNote,
+} from "@freebirdai/connect/adapters";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
 import type {
   Arrangement,
   ConciergeContext,
   ConciergeDraft,
   DraftPatch,
-  InferredShape,
 } from "@freebirdai/dash-agent";
 import {
   briefCandidates,
   resolveCandidate,
-  inferShape,
   patchFromBrief,
   widgetId,
   writeBrief,
@@ -34,7 +25,6 @@ import type {
   OpSpec,
   DashboardSpec,
   EntityLinkView,
-  EntitySpec,
   Principal,
   RangePreset,
   WriteTarget,
@@ -44,12 +34,8 @@ import type {
   WidgetBrief,
 } from "@freebirdai/dash-spec";
 import {
-  catalogEntrySchema,
-  authTokenRefs,
   connectionKeyRefs,
-  connectionNeedsAddress,
   connectionNeedsAuthSetup,
-  connectionSchema,
   dashboardSchema,
   defaultGrainFor,
   findNarrowing,
@@ -58,32 +44,50 @@ import {
   readsRangeOf,
   widgetSources,
   isStale,
-  opDefSchema,
   onboardingSchema,
-  opUsesRange,
-  isSingletonOp,
-  pathParamNames,
   principalSchema,
   resolveRange,
-  resolveServerUrl,
-  resourceSchema,
   statusTone,
-  evidenceRank,
-  type EvidenceLevel,
 } from "@freebirdai/dash-spec";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
 import { createFreeBirdPlugin } from "@freebirdai/server/fastify";
 import {
-  type AnalyseOptions,
-  type SampleFn,
-  analyseConnection,
-  analyseStructure,
-  estimateEnumeration,
-  fromReport,
-  toReport,
-  withVerifiedParams,
-} from "./capabilities.js";
+  BlockedUrlError,
+  buildQueryRequest,
+  CatalogStore,
+  createEngine,
+  describeFields,
+  fetchPublicDocument,
+  Keeper,
+  KeyStore,
+  MemoryShapeStore,
+  nodeHttp,
+  nullJournal,
+  Priority,
+  refreshCatalogConnection,
+  registryIndex,
+  RhythmStore,
+  seenByRecordType,
+  waitPhrase,
+} from "@freebirdai/connect/host";
+import type {
+  CacheStore,
+  ConnectorSandbox,
+  ConnectorTokenStore,
+  CredentialMetaStore,
+  DocsRenderer,
+  EvidenceStore,
+  FetchDocument,
+  JobStore,
+  LeaseLock,
+  OAuthAppRegistry,
+  SearchProvider,
+  SecretRepository,
+  SeenValueStore,
+  ShapeStore,
+  WriteJournal,
+} from "@freebirdai/connect/host";
 import type { ChatDb } from "./chat/db.js";
 import { resolveChatLlm } from "./chat/llm-bridge.js";
 import { LOOK_UP_TOOL, lookUpEndpoint, lookUpSchema } from "./chat/concierge-actions.js";
@@ -100,10 +104,6 @@ import {
   keepPlacement,
   type DraftStore,
 } from "./concierge/store.js";
-import { CatalogStore, connectionFromCatalog, refreshCatalogConnection } from "./catalog.js";
-import { AUTO_INDEX_PAGES, discover, readIndex, type DocsRenderer } from "./discovery/index.js";
-import { RENDERER_DOWNLOAD_MB, type RendererStatus } from "./discovery/render/tooling.js";
-import type { SearchProvider } from "./discovery/search.js";
 import {
   type ModelChoices,
   availableProviders,
@@ -128,20 +128,12 @@ import {
   providerFor,
 } from "./models.js";
 import { RATES_AS_OF } from "./pricing.js";
-import { BlockedUrlError, fetchPublicDocument, guardedFetch } from "./safe-fetch.js";
 import type { PartRegistry } from "@freebirdai/dash-parts";
 import { partsRoutes } from "./routes/parts.js";
 import { installIdentity } from "./identity/context.js";
 import { ownerPolicy, type Policy } from "./identity/policy.js";
 import { installRouteGuard } from "./identity/guard.js";
-import type { LeaseLock } from "./platform/lease.js";
 import { LOCAL_USER_ID, LOCAL_WORKSPACE_ID, localOwner, type IdentityResolver } from "./identity/resolver.js";
-import { nullJournal, type WriteJournal } from "./writes/journal.js";
-import { JournalingAdapter, readEventFor } from "./writes/read-journal.js";
-import { Discovered, catalogForBrowser, preservedWrites } from "./writes/catalog-writes.js";
-import { WriteEndpointReader, type FetchDocument } from "./writes/read-writes.js";
-import { WriteService, describeFields } from "./writes/service.js";
-import { allowedWritesView, writeRoutes } from "./routes/writes.js";
 import { conciergeRoutes } from "./routes/concierge.js";
 import { SetupPreviews } from "./concierge/preview.js";
 import { contextForConnection } from "@freebirdai/dash-agent";
@@ -152,40 +144,20 @@ import {
   compileBrief,
   entityById,
   entityGraph,
-  observeEntity,
   parseDashboard,
-  readingsDiffer,
   rerootBrief,
   recompileWidget,
-  entityLinkViews,
   entityPageView,
-  fieldLexicon,
   fieldGroupSchema,
   fieldPathSchema,
-  fingerprintConnection,
-  recipeFor,
   widgetBriefSchema,
 } from "@freebirdai/dash-spec";
-import { describeMissingRecords, mapRoutes, mergeDescribedEntities } from "./routes/map.js";
-import { withAddedReads, withEntryResources, withObservedFields } from "./integrate/observed.js";
 import { onboardingRoutes } from "./routes/onboarding.js";
-import { refreshOutdatedConnectDetails } from "./discovery/connect-details.js";
 import { allocateDashboardId } from "./onboarding/materialise.js";
-import { DEFAULT_EVERY_MS, Keeper, LastSeen } from "./keeper/keeper.js";
-import { decideAll, opsOfResource } from "./keeper/rhythm.js";
-import { RhythmStore } from "./rhythm-store.js";
 import { warmTargets } from "./keeper/targets.js";
-import { ViewedRequests, paramShape } from "./keeper/viewed.js";
-import { VERIFY_BUDGET_DEFAULT, VERIFY_BUDGET_MAX, verifyRecords } from "./routes/verify.js";
+import { ViewedRequests } from "./keeper/viewed.js";
 import type { Settings, SettingsStore } from "./settings.js";
-import { QueryCache, clampMaxAge } from "./cache/queryCache.js";
-import { extractRows, parsePath } from "@freebirdai/dash-expr";
-import { catalogEntryToVerify, validationCandidates } from "./verified.js";
-import { buildQueryRequest, resolveRequestedRange } from "./query.js";
-import { EACH_KEEP_MS, EACH_MAX, EachReads, eachKey, type EachReader, type EachRequest } from "./fanout/each.js";
-import { LongReads, type LongReadStatus } from "./jobs/long-reads.js";
-import { CheckQueue } from "./jobs/check-queue.js";
-import { MemoryJobStore, type JobStore } from "./jobs/store.js";
+import { extractRows, parsePath } from "@freebirdai/expr";
 import { ANSWER_TOOL, answerFromData } from "./context/tool.js";
 import { bindingFor, bindingsFor } from "./tools/bindings.js";
 import { READ_TOOL, READ_TOOL_NAME, readRecords, readToolSchema } from "./tools/read.js";
@@ -212,36 +184,27 @@ import {
   parseView,
 } from "./context/onscreen.js";
 import { LOOK_UP_WIDGET_TOOL, lookUpWidget, lookUpWidgetSchema } from "./chat/lookUpWidget.js";
-import type { CacheStore } from "./cache/store.js";
-import { coolingMessage, retryAfterSeconds, waitPhrase } from "./cache/cooldown.js";
-import { ConnectionGate, Priority } from "./cache/gate.js";
-import { SpecStore, type SpecRepository } from "./store.js";
+import { type SpecRepository } from "./store.js";
 import { GrantStore, approveWidget, dashboardApprovals, widgetGrantSubject } from "./grants.js";
-import { KeyStore, type SecretRepository } from "./vault.js";
-import { MemoryEvidenceStore, type EvidenceStore } from "./evidence/store.js";
-import { CredentialBroker, vaultApps, type OAuthAppRegistry } from "./auth/broker.js";
-import { MemoryCredentialMetaStore, type CredentialMetaStore } from "./auth/credential-meta.js";
-import { MemorySeenValueStore, type SeenValueStore } from "./values/store.js";
-import { MemoryShapeStore, type ShapeStore } from "./drift/store.js";
-import { DriftWatch } from "./drift/watch.js";
-import { openMcpClient } from "./mcp/client.js";
-import { registryIndex } from "./registry/registry.js";
+import { savedReads } from "./drift/watch.js";
 import { MemorySnapshotStore, type SnapshotStore } from "./history/store.js";
 import { dayOf, numbersFrom } from "./history/record.js";
-import { seenByRecordType } from "./integrate/values.js";
-import { OAuthRetryAdapter, RateLimitWaitAdapter } from "./auth/retry-adapter.js";
-import { ConnectorAdapter } from "./connector/adapter.js";
-import type { ConnectorTokenStore } from "./connector/host.js";
-import { QuickJsSandbox, type ConnectorSandbox } from "./connector/sandbox.js";
-import { VaultConnectorTokens } from "./connector/tokens.js";
-import { oauthRoutes } from "./routes/oauth.js";
-import { createIntegrationRunner, integrateRoutes, type IntegrateRouteDeps } from "./routes/integrate.js";
+import {
+  connectionRoutes,
+  discoverRoutes,
+  integrateRoutes,
+  keyRoutes,
+  mapRoutes,
+  oauthRoutes,
+  allowedWritesView,
+  writeRoutes,
+} from "@freebirdai/connect-server/fastify";
+import { queryRoutes } from "./routes/query.js";
+import { QuickJsSandbox } from "@freebirdai/connect-sandbox";
 
 /** Whether the browser for drawn documentation is here, and fetching it once agreed. See `RendererTooling`. */
-export interface RendererSetup {
-  status(): RendererStatus;
-  install(): RendererStatus;
-}
+import type { RendererSetup } from "@freebirdai/connect/host";
+export type { RendererSetup };
 
 export interface BuildServerOptions {
   readonly store: SpecRepository;
@@ -571,87 +534,8 @@ export const CHAT_SYSTEM_PROMPT = [
   "Never invent an id. Keep answers short and concrete.",
 ].join("\n");
 
-/**
- * The real transport, wrapped in the SSRF guard and the host allowlist.
- *
- * Exported so a driver script reads through exactly the transport the server
- * does. A second, unguarded copy in a script is how an SSRF guard stops being
- * true of every path that reaches an API.
- */
-export const nodeHttp: HttpFetch = async (url, init, allowedHost) => {
-  const result = await guardedFetch(url, init, allowedHost);
-  return {
-    status: result.status,
-    text: result.text,
-    url: result.url,
-    header: (name) => result.headers.get(name),
-  };
-};
-
-const rangeSchema = z.object({
-  preset: z.enum(["1h", "24h", "7d", "30d", "90d", "12mo", "ytd", "custom"]).default("30d"),
-  grain: z.enum(["1h", "1d", "1w", "1mo", "1y"]).optional(),
-  start: z.number().optional(),
-  end: z.number().optional(),
-  /** Every record, whatever its dates: the API is asked without date bounds. */
-  all: z.boolean().optional(),
-});
-
-const querySchema = z.object({
-  connection: z.string().min(1),
-  op: z.string().min(1),
-  params: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
-  range: rangeSchema.default({ preset: "30d" }),
-  filters: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
-  /**
-   * How old an answer this caller will accept, in milliseconds.
-   *
-   * Stated per request rather than configured server-side, because one
-   * endpoint is read by several widgets that legitimately disagree about how
-   * current they need to be. Zero means revalidate, which is what an explicit
-   * Refresh sends. Clamped before use.
-   */
-  maxAgeMs: z.number().optional(),
-  /**
-   * Whether somebody is looking, or somebody asked.
-   *
-   * `view` is what a board sends while it is being read: serve what is held,
-   * at any age, and never call the API. `refresh` is what the Refresh buttons
-   * send. See `QueryCache.read`.
-   *
-   * Defaults to `refresh`, so an older browser, a script, or anything else
-   * that does not know about this keeps exactly the behaviour it had.
-   */
-  mode: z.enum(["view", "refresh"]).default("refresh"),
-});
-
-/** Every record's related records, past the ones a tile reads itself. See `EachReads`. */
-const eachSchema = z.object({
-  connection: z.string().min(1),
-  op: z.string().min(1),
-  /** What every read sends, whatever the record. */
-  params: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
-  /** The input each record's value goes into. */
-  input: z.string().min(1).max(120),
-  /** Each record's value, once each. */
-  values: z.array(z.union([z.string(), z.number(), z.boolean()])).min(1).max(EACH_MAX),
-  range: rangeSchema.default({ preset: "30d" }),
-  filters: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
-});
-
-/**
- * A pacing number from the environment, or the default.
- *
- * Non-numeric and negative values fall back rather than throwing: a typo in a
- * deployment's environment should not stop the server, and every value here
- * has a sane answer without it. Zero is legal and means "no limit".
- */
-const pacingEnv = (name: string, fallback: number): number => {
-  const raw = process.env[name];
-  if (raw === undefined) return fallback;
-  const value = Number(raw);
-  return Number.isFinite(value) && value >= 0 ? value : fallback;
-};
+/** The real transport, behind the SSRF guard: the engine's, re-exported for driver scripts. */
+export { nodeHttp };
 
 export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   const { store, keys } = options;
@@ -724,398 +608,98 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     return reply.status(403).send({ error: "This connection has not been shared with you." });
   });
   const journal = options.journal ?? nullJournal;
-  /** Write endpoints discovery read, held until their entry is adopted. */
-  const discovered = new Discovered();
 
-  /* One transport for reads and writes, so both go through the same SSRF guard and host pin. */
   /*
-   * Every secret a request sends is asked of the broker: the vault's value
-   * for a static key, a live token for OAuth — fetched, renewed and retried
-   * without anybody's help. See `auth/broker.ts`.
+   * The integration engine: the credential broker, the adapter chain behind
+   * the SSRF guard and the journal, one gate and cooldown per connection, the
+   * response cache, long reads and per-record reads, the write service and
+   * the integration loop. Dash serves it; see `@freebirdai/connect/engine`.
    */
-  const broker = new CredentialBroker({
-    vault: keys,
-    meta: options.credentialMeta ?? new MemoryCredentialMetaStore(),
-    apps: options.oauthApps ?? vaultApps(keys),
-    http: options.http ?? nodeHttp,
-    getConnection: (id) => store.getConnection(id),
-    listConnections: () => store.listConnections(),
-    now: Date.now,
-    log: (message) => app.log.warn(message),
-  });
-  const secretFor = broker.resolve;
-  const rest = new RestAdapter(options.http ?? nodeHttp);
-  /*
-   * Connector code — for an API a connection cannot describe in data — runs
-   * in the sandbox, under its authority, with its session tokens in the vault.
-   * See `connector/`.
-   */
-  const connectors = {
+  const engine = createEngine({
+    store,
+    keys,
+    catalog: options.catalog,
+    http: options.http,
+    credentialMeta: options.credentialMeta,
+    oauthApps: options.oauthApps,
+    journal,
+    jobs: options.jobs,
+    cache: options.cache,
+    evidence: options.evidence,
+    seenValues: options.seenValues,
+    rhythms: options.rhythms,
     sandbox: options.connectorSandbox ?? new QuickJsSandbox(),
-    tokens:
-      options.connectorTokens ??
-      new VaultConnectorTokens(keys, options.credentialMeta ?? new MemoryCredentialMetaStore()),
-  };
-  const reader = new ConnectorAdapter(options.http ?? nodeHttp, {
-    ...connectors,
-    onLog: (connection, line) => app.log.debug(`connector ${connection.id}: ${line}`),
-    /* The API's endpoints that change things, as its catalog entry knows them: never sent by connector code. */
-    writes: (connection) =>
-      (connection.catalog ? (options.catalog?.get(connection.catalog)?.writes ?? []) : []).map((write) => ({
-        method: write.method,
-        path: write.path,
-      })),
-  });
-  /*
-   * Reads go through the journal first: a read sent with POST on the
-   * documentation's word is recorded each time it is sent. Reads go through
-   * the connector adapter, which is REST exactly for a connection with no
-   * connector. Writes use `rest` directly, through the write service, which
-   * journals them itself.
-   */
-  /*
-   * An MCP server's read-only tools, called over the same guarded transport
-   * and with the same broker as any other read, and journalled: a tool call
-   * is a read on the server's word, not the protocol's. See `mcp/`.
-   */
-  const mcp = new McpAdapter((connection) =>
-    openMcpClient(connection, { http: options.http ?? nodeHttp, resolveSecret: (keyRef) => secretFor(keyRef) }),
-  );
-  const registry = new AdapterRegistry()
-    .register(
-      /* Outermost: an input another endpoint's records supply is read through the same chain as everything else. */
-      new DependentAdapter(
-        new JournalingAdapter(
-          new OAuthRetryAdapter(new RateLimitWaitAdapter(reader), broker),
-          journal,
-          (message) => app.log.warn(message),
+    connectorTokens: options.connectorTokens,
+    policy,
+    llm: (task) => resolveLlm(task),
+    fetchDocument: options.fetchDocument,
+    autoIntegrate: options.autoIntegrate,
+    log: { info: (line) => app.log.info(line), warn: (line) => app.log.warn(line), debug: (line) => app.log.debug(line) },
+    /* A field whose reading changed: Dash rebuilds the widgets that read it. */
+    onReadingsChanged: (connection, changed, wrapped) => recompileReadings(connection, changed, wrapped),
+    autoReadWrites: options.autoReadWrites,
+    shapes: options.shapes,
+    /* A change in an endpoint's shape is a warning only where a saved board reads what changed. */
+    readsFields: (connection, op, fields) => savedReads(store.listDashboards(), connection, op, fields),
+    onWritesChanged: () => onWritesChanged(),
+    integration: {
+      /* The endpoints Dash's boards read, so a check settles those first. */
+      usedOps: (connection) => [
+        ...new Set(
+          store
+            .listDashboards()
+            .flatMap((board) => board.widgets.flatMap((widget) => widgetSources(widget)))
+            .filter((source) => source.connection === connection && !source.fanOut)
+            .map((source) => source.op),
         ),
-      ),
-    )
-    .register(new JournalingAdapter(mcp, journal, (message) => app.log.warn(message)));
-
-  /**
-   * Everything a widget reads goes through here.
-   *
-   * Deliberately not inside `AdapterRegistry.fetch`: sampling must be fresh by
-   * definition, and enumeration already has its own three-tier cache. Wrapping
-   * the registry would have quietly cached both.
-   *
-   * Memory-only by default. A response cache holds a customer's own records,
-   * and keeping them in a process that forgets everything when it stops is
-   * what makes "we read your API, we do not keep it" true for a self-hoster.
-   * `options.cache` is how a hosted deployment supplies something shared.
-   */
-  /**
-   * How hard this server is willing to lean on somebody else's API.
-   *
-   * The defaults are deliberately modest. Nothing limited concurrency before,
-   * so opening a board fired every widget at once — each up to `maxPages`
-   * requests, plus a fan-out of up to a hundred more — and the rate limit that
-   * came back was one this server had provoked. Three at a time with a fifth
-   * of a second between starts is slower on an idle API and dramatically
-   * better on a metered one, because a refusal costs the whole board.
-   *
-   * Environment-overridable so a deployment with a generous quota is not stuck
-   * with a limit chosen for a strict one.
-   */
-  const gate = new ConnectionGate({
-    maxConcurrent: pacingEnv("DASH_MAX_CONCURRENCY", 3),
-    minGapMs: pacingEnv("DASH_MIN_GAP_MS", 200),
+      ],
+    },
   });
-
-  const queries = new QueryCache({
-    gate,
-    ...(options.cache ? { store: options.cache } : {}),
-  });
-
-  /*
-   * Who is actually looking. Read by the keeper, which refuses to spend
-   * somebody's rate limit on a connection nobody has opened in a quarter of
-   * an hour. See `LastSeen`.
-   */
-  const seen = new LastSeen();
+  const {
+    broker,
+    secretFor,
+    registry,
+    queries,
+    seen,
+    jobs,
+    eachReads,
+    eachPlan,
+    everyMsForOp,
+    upstream,
+    longReads,
+    withReadingOn,
+    refreshQueryIdentity,
+    writes,
+    seenValues: seenValueStore,
+    integrationDeps,
+    integration,
+    discovered,
+    enumerated,
+    enumerate,
+    observeConnection,
+    relatedFor,
+    linksFor,
+    drift,
+    watchShape,
+  } = engine;
+  /* Once the server is up: whatever was being read when it last stopped is carried on. */
+  app.addHook("onReady", async () => engine.resume());
+  app.addHook("onClose", async () => engine.stop());
 
   /*
    * Catalog ids whose record types are being described right now. Written by
    * the describing route, read by the map state and by onboarding — see
    * `MapRouteDeps.describing`.
    */
-  const describing = new Set<string>();
+  const describing = engine.describing;
 
   /*
    * What boards have actually asked for. The keeper refreshes these rather
    * than its own reconstruction of them — see `ViewedRequests`.
    */
   const viewed = new ViewedRequests();
-  /*
-   * Work that outlives a request — a read carried on, every record's related
-   * records — kept so a restart carries it on. See `jobs/`.
-   */
-  const jobs: JobStore = options.jobs ?? new MemoryJobStore();
-  /** Which endpoints are due a check, kept in the job store. See `CheckQueue`. */
-  const checkQueue = new CheckQueue({ store: jobs, now: () => Date.now() });
-  /** Tiles' reads of every record's related records, kept in the job store while they run. See `EachReads`. */
-  const eachReads = new EachReads({
-    store: jobs,
-    /* Defined below, with the reads it needs: only ever called after. */
-    reader: (request) => eachPlan(request)?.read ?? null,
-    log: (line) => app.log.info(line),
-  });
-
-  /**
-   * How often each endpoint is asked again, per connection.
-   *
-   * The personal half: the cadences and anything this account moved. The
-   * shared half — how often new records of each kind actually appear — is on
-   * the catalog entry, written by the onboarding pass that reads the API. See
-   * `keeper/rhythm.ts` for how the two meet.
-   *
-   * Absent means a directory of this server's own: shared across runs, a
-   * cadence one test ticked would leak into the next.
-   */
-  const rhythms =
-    options.rhythms ?? new RhythmStore(mkdtempSync(join(tmpdir(), "dash-rhythm-")));
-
-  /** Everything needed to place one of a connection's endpoints in a tier. */
-  const rhythmFor = (connection: ConnectionSpec) => {
-    const entry = connection.catalog ? options.catalog?.get(connection.catalog) : undefined;
-    return {
-      connection,
-      ...(entry?.rhythm ? { api: entry.rhythm } : {}),
-      entities: entry?.entities ?? [],
-      personal: rhythms.get(connection.id),
-    };
-  };
-
-  /*
-   * Tier decisions, remembered for a few seconds.
-   *
-   * Asked once per target on every tick and again for every row of the status
-   * panel, and each answer reads the rhythm file and the catalog entry from
-   * disk — on a synced folder, slow enough to notice. A cadence somebody just
-   * moved is at most this stale, and `forgetTiers` clears it outright.
-   */
-  const TIER_MEMO_MS = 5_000;
-  let tierMemo = { at: 0, byConnection: new Map<string, Map<string, number>>() };
-  const forgetTiers = (): void => {
-    tierMemo = { at: 0, byConnection: new Map() };
-  };
-
-  /**
-   * How often one endpoint is asked again.
-   *
-   * The tier its records were placed in, or the fast one where nothing has an
-   * opinion — a wrong "slow" shows day-old numbers with total confidence while
-   * a wrong "fast" costs a few paced requests. A widget that asked for a
-   * shorter `refresh.every` gets it: that is a stated wish, and the keeper is
-   * the only thing left that asks the API on a schedule.
-   */
-  const everyMsForOp = (connection: string, op: string, widgetEveryMs?: number): number => {
-    const now = Date.now();
-    if (now - tierMemo.at > TIER_MEMO_MS) tierMemo = { at: now, byConnection: new Map() };
-    let ops = tierMemo.byConnection.get(connection);
-    if (!ops) {
-      ops = new Map();
-      const spec = store.getConnection(connection);
-      if (spec) {
-        for (const decision of decideAll({ ...rhythmFor(spec), ops: spec.ops.map((one) => one.id) })) {
-          ops.set(decision.op, decision.everyMs);
-        }
-      }
-      tierMemo.byConnection.set(connection, ops);
-    }
-    const tier = ops.get(op) ?? DEFAULT_EVERY_MS;
-    return widgetEveryMs !== undefined ? Math.min(tier, widgetEveryMs) : tier;
-  };
-
-  /**
-   * Every upstream call that is not a widget query.
-   *
-   * Verify, validate, sample, enumerate and the narrowing pass all called
-   * `registry.fetch` directly, so none of them checked the cooldown, fed it,
-   * or waited their turn. A verify run could therefore provoke a 429 that went
-   * on to empty every tile on the board, and a connection that had just asked
-   * us to stop could still be enumerated at full speed.
-   *
-   * Not routed through `queries.read`: these must not be cached. Sampling is
-   * fresh by definition and enumeration keeps its own three-tier cache. What
-   * they share with a widget query is the *connection*, which is what a rate
-   * limit is a property of — so they share the gate and the breaker, and
-   * nothing else.
-   */
-  const upstream = async <T>(
-    connection: string,
-    run: () => Promise<T>,
-    priority: Priority = Priority.Background,
-  ): Promise<T> => {
-    const cooling = queries.cooldown.check(connection, Date.now());
-    if (cooling)
-      throw new AdapterError(`cooling down for ${connection}`, {
-        status: cooling.status,
-        userMessage: coolingMessage(cooling, Date.now()),
-        retryAfter: retryAfterSeconds(cooling.until, Date.now()),
-      });
-
-    return gate.run(connection, priority, async () => {
-      try {
-        const result = await run();
-        queries.cooldown.succeeded(connection);
-        return result;
-      } catch (error) {
-        if (error instanceof AdapterError && error.status === 429) {
-          queries.accounting.refused(connection);
-          queries.cooldown.refused({
-            connection,
-            status: 429,
-            retryAfter: error.retryAfter,
-            reason: error.userMessage,
-            now: Date.now(),
-          });
-        }
-        throw error;
-      }
-    });
-  };
-
-  /*
-   * Reads too long for a tile's own limits, carried on in the background from
-   * where they stopped, behind every board's own reads, and handed to the
-   * cache whole when they reach their end. See `LongReads`.
-   */
-  const longReads = new LongReads({
-    store: jobs,
-    getConnection: (id) => store.getConnection(id),
-    read: (connection, op, overrides, ctx) => {
-      registry.addConnection(connection);
-      const adapter = registry.adapterFor(connection.kind);
-      if (!adapter) throw new AdapterError(`no adapter registered for kind "${connection.kind}"`, { status: 501 });
-      return upstream(connection.id, () => adapter.fetch(connection, op, overrides, { ...ctx, resolveSecret: secretFor }), Priority.Background);
-    },
-    answer: async (key, _connection, result) => queries.put(key, result),
-    now: () => Date.now(),
-    log: (line) => app.log.info(line),
-  });
-
-  /*
-   * A per-record read's requests, spelled exactly as the tile spells them —
-   * so one already held is not asked again — and how to read one of them.
-   * Null when the connection is gone or its configuration changed since.
-   */
-  const eachPlan = (request: EachRequest): { readonly keys: string[]; readonly read: EachReader } | null => {
-    const spec = store.getConnection(request.connection);
-    const resolvedOp = spec ? getOp(spec, request.op) : undefined;
-    if (!spec || !resolvedOp || fingerprintConnection(spec) !== request.configVersion) return null;
-    registry.addConnection(spec);
-    refreshQueryIdentity(spec);
-    const reads = request.values.map((value) =>
-      buildQueryRequest({
-        connection: request.connection,
-        op: resolvedOp,
-        params: { ...request.params, [request.input]: value },
-        resolved: request.window,
-      }),
-    );
-    return {
-      keys: reads.map((read) => read.key),
-      read: async (index, signal) => {
-        const { key, overrides, resolved } = reads[index]!;
-        const fetcher = () =>
-          registry.fetch(request.connection, request.op, overrides, {
-            params: resolved,
-            now: Date.now(),
-            resolveSecret: secretFor,
-            signal,
-          });
-        /* Already held — the tile's own first twenty-five, say: served as held. */
-        const answer =
-          queries.storedAt(key) !== null
-            ? await queries.read({
-                key,
-                connection: request.connection,
-                mode: "view",
-                maxAgeMs: EACH_KEEP_MS,
-                fetcher,
-                priority: Priority.Background,
-              })
-            : await upstream(request.connection, fetcher, Priority.Background);
-        const said = answer.meta.warnings.filter(isIncompleteNote);
-        return {
-          body: answer.body,
-          notes:
-            answer.meta.truncated && said.length === 0
-              ? ["Not every page was read, so what is shown may exclude additional records."]
-              : said,
-        };
-      },
-    };
-  };
-  /* Once the server is up: whatever was being read when it last stopped is carried on. */
-  app.addHook("onReady", async () => {
-    void longReads.resume().catch((error: unknown) => app.log.warn(`long reads could not resume: ${String(error)}`));
-    void eachReads.resume().catch((error: unknown) => app.log.warn(`per-record reads could not resume: ${String(error)}`));
-    void checkQueue.resume().catch((error: unknown) => app.log.warn(`checks waiting their turn could not resume: ${String(error)}`));
-  });
-  app.addHook("onClose", async () => longReads.stop());
-
-  /*
-   * What a tile is told of its read: a continuation is the server's own, never
-   * the browser's, and a read being carried on says how far it has got in
-   * place of the note that it stopped.
-   */
-  const withReadingOn = <M extends FetchResult["meta"]>(meta: M, reading: LongReadStatus | null): Omit<M, "continuation"> => {
-    const { continuation: _continuation, ...rest } = meta;
-    if (!reading) return rest;
-    const stopped = (warning: string) => /^Only the first \d+ page\(s\) were read/.test(warning) || warning === INCOMPLETE.connectorStopped;
-    return {
-      ...rest,
-      warnings: [...meta.warnings.filter((warning) => !stopped(warning)), INCOMPLETE.readingOn(reading.read, reading.of)],
-      readingOn: { read: reading.read, ...(reading.of !== undefined ? { of: reading.of } : {}) },
-    };
-  };
-
-  /*
-   * The only thing that changes a connected account. Built here, beside
-   * `upstream`, because a change waits in the same gate as every read — just
-   * at the front of it — and answers to the same cooldown.
-   */
-  const writes = new WriteService({
-    store,
-    catalog: options.catalog,
-    // Read through the broker, so a change to an OAuth account sends a current token.
-    keys: { get: secretFor },
-    registry,
-    rest,
-    queries,
-    seen,
-    policy,
-    journal,
-    upstream,
-  });
-  /** What has been observed about reading each endpoint. See `BuildServerOptions.evidence`. */
-  const evidence: EvidenceStore = options.evidence ?? new MemoryEvidenceStore();
-  /** What each connection's records were seen to hold. See `BuildServerOptions.seenValues`. */
-  const seenValueStore: SeenValueStore = options.seenValues ?? new MemorySeenValueStore();
   /** Number tiles' values, day by day. See `BuildServerOptions.snapshots`. */
   const snapshots: SnapshotStore = options.snapshots ?? new MemorySnapshotStore();
-  /*
-   * Each fresh answer, held against the shape its endpoint was accepted in.
-   * A change is said on the tiles that read it and the connection is checked
-   * again by itself; nothing is repaired into a saved widget. See `drift/`.
-   */
-  const drift = new DriftWatch({
-    shapes: options.shapes ?? new MemoryShapeStore(),
-    now: () => Date.now(),
-    dashboards: () => store.listDashboards(),
-    recheck: (connection, ops) => integration.recheck(connection, ops),
-    log: (line) => app.log.info(line),
-  });
-  /** Kept out of the way of the read it describes: a shape that cannot be kept costs nothing shown. */
-  const watchShape = (connection: ConnectionSpec, op: OpSpec, body: unknown): void => {
-    void drift
-      .observe(connection, op, body)
-      .catch((error: unknown) => app.log.warn(`the shape of ${connection.id}/${op.id} could not be checked: ${String(error)}`));
-  };
   const historyDays = options.historyDays ?? DEFAULT_HISTORY_DAYS;
   /** A connection's seen values by record type, for the brief. Never a reason a brief is not written. */
   const seenFor = async (
@@ -1130,12 +714,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     }
   };
   /** A published document — an API's specification — for reading its write endpoints. */
-  const readDocument: FetchDocument =
-    options.fetchDocument ??
-    (async (url) => {
-      const response = await fetchPublicDocument(url);
-      return { status: response.status, text: response.text, url: response.url };
-    });
+  const readDocument: FetchDocument = engine.fetchDocument;
 
   /*
    * The integration loop: read what matters on a new connection, repair what
@@ -1145,138 +724,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * and cooldown as every other reader of the connection; a check that
    * started by itself waits behind boards. See `routes/integrate.ts`.
    */
-  /**
-   * What a check's reads showed, onto the shared catalog entry: fields for
-   * endpoints the documentation declared none for — names and kinds, never
-   * values — and reads it added. The record types that can now be described
-   * are described next, by themselves; the promise settles once they are.
-   */
-  const keepObserved = async (
-    connection: ConnectionSpec,
-    observed: Parameters<NonNullable<IntegrateRouteDeps["recordObserved"]>>[1],
-    added: Parameters<NonNullable<IntegrateRouteDeps["recordObserved"]>>[2],
-  ): Promise<void> => {
-    const entries = options.catalog;
-    const entry = connection.catalog ? entries?.get(connection.catalog) : undefined;
-    if (!entries || !entry) return;
-    /* Reads written from a GraphQL schema first, so their records are what is described. */
-    const read = withAddedReads(entry, added);
-    const next = withObservedFields(read ?? entry, observed) ?? read;
-    if (!next) return;
-    entries.put(next);
-    /* A collection a read showed, carried by every connection made from this entry. */
-    for (const one of store.listConnections()) {
-      if (one.catalog !== entry.id) continue;
-      const grown = withEntryResources(one, next);
-      if (grown !== one) {
-        store.putConnection(grown);
-        registry.addConnection(grown);
-      }
-    }
-    await describeMissingRecords(
-      {
-        catalog: entries,
-        llm: (task) => resolveLlm(task),
-        describing,
-        onDescribed: (catalogId) => {
-          for (const one of store.listConnections()) if (one.catalog === catalogId) observeConnection(one.id);
-        },
-      },
-      entry.id,
-    );
-  };
-  const integrationDeps: IntegrateRouteDeps = {
-    getConnection: (id) => store.getConnection(id),
-    saveConnection: (next, changed) => {
-      store.putConnection(next);
-      if (changed) queries.invalidate(next.id);
-      registry.addConnection(next);
-    },
-    catalogEntry: (id) => options.catalog?.get(id),
-    hasSecret: (keyRef) => keys.has(keyRef),
-    resolveSecret: secretFor,
-    refresh: (connection) => broker.refresh(connection),
-    http: options.http ?? nodeHttp,
-    fetchDocument: readDocument,
-    llm: () => resolveLlm("repair"),
-    connectorLlm: () => resolveLlm("connector"),
-    evidence,
-    around: (connection, background) => (run) =>
-      upstream(connection, run, background ? Priority.Background : Priority.Interactive),
-    /* A read the check sends on the documentation's word is journalled like a board's. */
-    onRead: (connection, op, outcome) => {
-      const event = readEventFor(connection, op, "check", outcome, Date.now());
-      if (event)
-        Promise.resolve(journal.recordRead?.(event)).catch((error: unknown) =>
-          app.log.warn(`a check's read could not be journalled: ${String(error)}`),
-        );
-    },
-    auto: options.autoIntegrate ?? false,
-    log: (message) => app.log.info(message),
-    connectors,
-    /*
-     * What the check's reads showed, onto the shared catalog entry: fields for
-     * endpoints the documentation declared none for — names and kinds, never
-     * values. The record types that can now be described are described next,
-     * by themselves, like the check itself: nobody presses anything.
-     */
-    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    usedOps: (connection) => [
-      ...new Set(
-        store
-          .listDashboards()
-          .flatMap((board) => board.widgets.flatMap((widget) => widgetSources(widget)))
-          .filter((source) => source.connection === connection && !source.fanOut)
-          .map((source) => source.op),
-      ),
-    ],
-    recordValues: async (connection, values) => {
-      for (const [op, seen] of Object.entries(values)) await seenValueStore.put(connection.id, op, seen);
-    },
-    /*
-     * What the check established, kept on the API's entry: when, against which
-     * version, and the rung each endpoint reached. Rungs only — a count is one
-     * account's, and an entry is every account's.
-     */
-    recordCheck: (connection, report) => {
-      const entries = options.catalog;
-      const entry = entries && connection.catalog ? entries.get(connection.catalog) : null;
-      if (!entries || !entry || report.evidence.length === 0) return;
-      const ops: Record<string, EvidenceLevel> = {};
-      for (const one of report.evidence) {
-        const held = ops[one.op];
-        if (!held || evidenceRank(one.level) > evidenceRank(held)) ops[one.op] = one.level;
-      }
-      const at = new Date().toISOString();
-      entries.put({
-        ...entry,
-        ...(report.outcome === "ready" ? { verifiedAt: at } : {}),
-        evidence: { at, ...(entry.version !== undefined ? { version: entry.version } : {}), outcome: report.outcome === "ready" ? "ready" : "partial", ops },
-      });
-    },
-    recordObserved: (connection, observed, added) => {
-      void keepObserved(connection, observed, added).catch((error: unknown) =>
-        app.log.warn(`describing ${connection.catalog ?? connection.id} after its check failed: ${error instanceof Error ? error.message : String(error)}`),
-      );
-    },
-    /* What a search for a request's records found, described before the brief that asked is written again. */
-    recordFound: (connection, observed, added) => keepObserved(connection, observed, added),
-  };
-  const integration = createIntegrationRunner({ ...integrationDeps, queue: checkQueue });
-  /** Read a connection's write endpoints if its entry never has had them read. Set below, once the reader exists. */
-  let readWritesFor: (connection: ConnectionSpec) => void = () => {};
   const previews = new SetupPreviews(queries.store, (id) => store.getConnection(id));
-  const queryVersions = new Map(
-    store.listConnections().map((connection) => [connection.id, fingerprintConnection(connection)]),
-  );
-  const refreshQueryIdentity = (connection: ConnectionSpec) => {
-    const current = fingerprintConnection(connection);
-    if (queryVersions.get(connection.id) !== current) {
-      queries.invalidate(connection.id);
-      queryVersions.set(connection.id, current);
-    }
-  };
-
   // Normalise the static and resolved forms to one shape at the edge, so no
   // route has to care which kind it was given.
   /*
@@ -1303,40 +751,6 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * connection write without ever overwriting anyone's work.
    */
   /**
-   * The last enumeration of a connection, kept briefly.
-   *
-   * Enumerating is by far the most request-hungry thing here — dozens of real
-   * calls against someone else's API — and both `/capabilities` and
-   * `/suggestions` need the same answer. Without this, opening the drawer
-   * twice doubles the load on an API that may well start refusing: a 403 where
-   * an empty list used to be, which then makes everything look broken.
-   *
-   * Deliberately in memory and short-lived. It is an observation about a
-   * moment, not a fact worth persisting, and `refresh` forces a fresh look.
-   */
-  const enumerated = new Map<
-    string,
-    {
-      at: number;
-      value: Awaited<ReturnType<typeof analyseConnection>>;
-      shapes: Record<string, InferredShape>;
-    }
-  >();
-  const ENUMERATION_TTL = 5 * 60_000;
-
-  /**
-   * What the last account read saw, endpoint by endpoint, values included.
-   *
-   * Held only until the record types can be told what their fields really
-   * hold (see `observeConnection`): a read often finishes before the record
-   * types are described, and the values it saw are the evidence. In memory
-   * and short-lived, like the enumeration beside it — they are a customer's
-   * data, and only the conclusions drawn from them are ever written down.
-   */
-  const sampledShapes = new Map<string, { at: number; byOp: Map<string, InferredShape> }>();
-  const SAMPLES_TTL = 30 * 60_000;
-
-  /**
    * The second-opinion pass, on whatever `suggest` routes to.
    *
    * This used to hardcode a cheap model here, because reviewing a resource map
@@ -1351,129 +765,6 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * reaches the network.
    */
   const llmForReview = (): LlmAdapter | null => resolveLlm("suggest");
-
-  /**
-   * One real request against one endpoint, shaped for the analyser.
-   *
-   * Extracted because enumeration is no longer the only caller: verifying a
-   * proposed relationship reads a single child collection the same way, and
-   * two implementations of "call an endpoint and describe what came back"
-   * would drift on exactly the details that matter — how inputs are split, how
-   * an empty 200 is classified.
-   */
-  const sampleFor =
-    (
-      connection: ReturnType<SpecStore["getConnection"]> & object,
-      onShape?: (opId: string, shape: InferredShape) => void,
-    ): SampleFn =>
-    async (opId, inputs) => {
-      const op = getOp(connection, opId);
-      if (!op) return { kind: "failed", message: `no endpoint named "${opId}"` };
-
-      /*
-       * A caller's inputs are a flat bag; the endpoint knows which of them are
-       * path segments and which are query values. Splitting here rather than
-       * guessing is the same rule `/api/query` follows — a path token resolved
-       * from the wrong bag interpolates to nothing and produces a 404 that
-       * reads like a bad credential.
-       */
-      const declared = new Set(pathParamNames(op.path));
-      const filters: Record<string, string | number | boolean> = {};
-      const query: Record<string, string | number | boolean> = {};
-      for (const [name, value] of Object.entries(
-        (inputs ?? {}) as Record<string, string | number | boolean>,
-      )) {
-        if (declared.has(name)) filters[name] = value;
-        else query[name] = value;
-      }
-
-      const result = await upstream(connection.id, () =>
-        registry.fetch(connection.id, op.id, query, {
-          params: { range: resolveRange({ preset: "30d", now: Date.now() }), filters },
-          now: Date.now(),
-          resolveSecret: secretFor,
-        }),
-      );
-      const shape = inferShape(result.body, op.rowsPath ? { rowsPath: op.rowsPath } : {});
-      // A 200 with nothing in it is a fact about the account, not a failure.
-      if (shape.fields.length === 0) return { kind: "empty" };
-      onShape?.(op.id, shape);
-      return { kind: "rows", fields: shape.fields, rowCount: shape.rowCount };
-    };
-
-  /**
-   * Enumerate a connection, reusing a recent pass unless told not to.
-   *
-   * Three tiers, cheapest first: the in-process cache, then the report on disk,
-   * then real requests. The disk tier is what makes a restart free — the report
-   * describes the same endpoints (`isStale` proves it) so re-spending the
-   * budget to learn what we already wrote down would be pure waste.
-   */
-  const enumerate = async (
-    connection: ReturnType<SpecStore["getConnection"]> & object,
-    refresh: boolean,
-    budget: AnalyseOptions = {},
-  ) => {
-    const cached = enumerated.get(connection.id);
-    const currentReport = store.getReport(connection.id);
-    if (
-      !refresh &&
-      cached &&
-      currentReport &&
-      !isStale(currentReport, connection) &&
-      Date.now() - cached.at < ENUMERATION_TTL
-    )
-      return cached;
-
-    if (!refresh) {
-      const stored = store.getReport(connection.id);
-      if (stored && !isStale(stored, connection)) {
-        const { value, shapes } = fromReport(stored);
-        /*
-         * A report is data written by an earlier version of this code, so it
-         * is normalised on the way in rather than trusted. The case that
-         * forced it: a relation carrying a filter parameter the endpoint never
-         * declared, which no later pass would rewrite — the model can see the
-         * link already and correctly declines to propose it again.
-         */
-        const restored = {
-          at: Date.now(),
-          shapes,
-          value: {
-            ...value,
-            resources: withVerifiedParams(value.resources, connection.ops),
-          },
-        };
-        enumerated.set(connection.id, restored);
-        return restored;
-      }
-    }
-
-    const shapes: Record<string, InferredShape> = {};
-    const byOpShape = new Map<string, InferredShape>();
-
-    const value = await analyseConnection(
-      connection,
-      sampleFor(connection, (opId, shape) => byOpShape.set(opId, shape)),
-      budget,
-    );
-    sampledShapes.set(connection.id, { at: Date.now(), byOp: byOpShape });
-    observeConnection(connection.id);
-
-    // Re-key the shapes from op id onto resource id, which is what the
-    // suggestion engine reasons in.
-    for (const resource of value.resources) {
-      const shape = resource.listOp ? byOpShape.get(resource.listOp) : undefined;
-      if (shape) shapes[resource.id] = shape;
-    }
-
-    const entry = { at: Date.now(), value, shapes };
-    enumerated.set(connection.id, entry);
-    // Write it down so the next process — or the next drawer opening after a
-    // restart — costs nothing.
-    store.putReport(toReport(connection, value, shapes));
-    return entry;
-  };
 
   /**
    * Create a board from a title, slugified and de-duplicated.
@@ -2039,165 +1330,6 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       getOp(connection, op)?.rowsPath;
 
   /**
-   * The rest of an API, for a brief that names two record types.
-   *
-   * The catalog's record types with *this connection's* endpoints, which is
-   * the same pairing a record page is built from and for the same reason: the
-   * catalog describes the whole API, a connection may hold a subset of it, and
-   * a join naming an endpoint this connection does not carry is one nothing
-   * here could ever fetch.
-   */
-  const relatedFor = (
-    connection: NonNullable<ReturnType<SpecStore["getConnection"]>>,
-    entities: readonly EntitySpec[],
-  ) => ({
-    entities,
-    resources: connection.resources,
-    ops: connection.ops.map((op) => ({ id: op.id, path: op.path, params: op.params })),
-  });
-
-  /**
-   * Which of a connection's fields point at other records.
-   *
-   * Extracted because two callers need the same answer: the public connection
-   * the browser reads, and the keeper deciding which reference lists are worth
-   * warming. Derived on every call rather than stored — it is a property of
-   * the API, read off the catalog, so re-describing one is live everywhere at
-   * once.
-   */
-  const linksFor = (
-    connection: NonNullable<ReturnType<SpecStore["getConnection"]>>,
-  ): readonly EntityLinkView[] => {
-    const entities = connection.catalog
-      ? (options.catalog?.get(connection.catalog)?.entities ?? [])
-      : [];
-    if (entities.length === 0) return [];
-    return entityLinkViews({
-      entities,
-      resources: connection.resources,
-      ops: connection.ops.map((op) => ({ id: op.id, path: op.path, params: op.params })),
-    });
-  };
-
-  const publicConnection = (connection: ReturnType<SpecStore["getConnection"]>) => {
-    if (!connection) return null;
-    const refs = connectionKeyRefs(connection);
-    // `authRequired` with no auth style chosen yet is not "ready" — the key
-    // exists somewhere, we just have not been told where it goes.
-    const hasKey = !connectionNeedsAuthSetup(connection) && refs.every((ref) => keys.has(ref));
-    /*
-     * What this API's fields are called, derived rather than stored.
-     *
-     * Read off the described record types on every request, so there is one
-     * copy to correct and re-describing an API is live for every connection to
-     * it at once. It used to be written by a model pass of its own, run inside
-     * every mapping and costing a call per batch of field names — for a worse
-     * answer than the describing pass already gives, since one map keyed by
-     * bare field name has to give `Title` a single meaning for the whole API.
-     *
-     * This is the fallback, not the answer: a widget that knows its record
-     * type gets that record type's own words (`EntityLinkView.labels`), which
-     * outrank these. This serves the places holding a field name and nothing
-     * else.
-     *
-     * Empty for a connection to an API nobody has described, which every
-     * renderer already handles by falling back to the mechanical label.
-     */
-    const labels = connection.catalog
-      ? fieldLexicon(options.catalog?.get(connection.catalog)?.entities ?? [])
-      : {};
-    /*
-     * Which of this API's fields point at other records, resolved the same way
-     * and for the same reason — a property of the API, kept once on the
-     * catalog entry rather than copied onto every connection to it.
-     *
-     * Deliberately the *links* and not the record types. A browser needs to
-     * know that a column holds a vendor's id, what a vendor is called, and
-     * which endpoint returns one; it does not need the twelve hundred field
-     * descriptions that make the artifact worth sharing, and on a real API
-     * that difference is tens of kilobytes against well over a megabyte on a
-     * payload read at every page load.
-     *
-     * The ops come from the *connection* rather than the catalog: a reach plan
-     * that names an endpoint this connection does not carry is a link nothing
-     * here could follow.
-     */
-    const entities = connection.catalog
-      ? (options.catalog?.get(connection.catalog)?.entities ?? [])
-      : [];
-    const entityLinks = linksFor(connection);
-    /*
-     * Which of this connection's endpoints actually read the time range.
-     *
-     * Published rather than re-derived in the browser, because the browser and
-     * this server must build the *same* cache key and `queryKey`'s own
-     * docblock says what two spellings of a key cost. Cheap: it reads the op's
-     * own query and the dialect, with no resolution and no parse.
-     */
-    const rangeOps = connection.ops
-      .filter((op) => opUsesRange(connection, op))
-      .map((op) => op.id);
-
-    return { ...connection, hasKey, labels, entityLinks, rangeOps };
-  };
-
-  app.get("/api/connections", async (request) => {
-    const listed = store.listConnections();
-    const readable = await Promise.all(listed.map((connection) => mayRead(request.principal, connection.id)));
-    return listed.filter((_, index) => readable[index]).map((connection) => publicConnection(connection));
-  });
-
-  app.get<{ Params: { id: string } }>("/api/connections/:id", async (request, reply) => {
-    const connection = store.getConnection(request.params.id);
-    if (!connection) return reply.status(404).send({ error: "no such connection" });
-    return publicConnection(connection);
-  });
-
-  /**
-   * The record types this connection has, for choosing between.
-   *
-   * A hundred plain nouns with a sentence each, which is what the manual
-   * builder offers instead of two hundred endpoints titled "Retrieve all X".
-   * Deliberately light: what each record type *contains* is a second request,
-   * made only for the one somebody picked.
-   */
-  app.get<{ Params: { id: string } }>("/api/connections/:id/entities", async (request, reply) => {
-    const connection = store.getConnection(request.params.id);
-    if (!connection) return reply.status(404).send({ error: "no such connection" });
-
-    const entities = connection.catalog
-      ? (options.catalog?.get(connection.catalog)?.entities ?? [])
-      : [];
-
-    /*
-     * The endpoints *this connection* carries, which is not the same as the
-     * ones the API has. A connection may hold a subset, and a resource keeps
-     * declaring its list endpoint either way — so asking the resource alone
-     * would advertise a record type nothing here could fetch.
-     */
-    const carried = new Set(connection.ops.map((op) => op.id));
-
-    return entities.map((entity) => {
-      const resource = connection.resources.find((one) => one.id === entity.resource);
-      return {
-        entity: entity.id,
-        name: entity.name,
-        kind: entity.kind,
-        ...(entity.description ? { description: entity.description } : {}),
-        /** Whether somebody would start a widget from these, or only reach them. */
-        starting: recipeFor(entity.kind).starting,
-        /**
-         * Whether anything here lists them.
-         *
-         * A record type nothing lists cannot be a widget however well
-         * described it is, and offering it would be offering a dead end.
-         */
-        listable: Boolean(resource?.listOp && carried.has(resource.listOp)),
-      };
-    });
-  });
-
-  /**
    * A brief somebody assembled by hand, compiled.
    *
    * The same compiler the described path uses, which is the point: a widget
@@ -2402,298 +1534,6 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   );
 
   /**
-   * A field name that reads as somebody else's identity.
-   *
-   * `userId`, `album_id`, `postIds`, `id` — and deliberately not `valid` or
-   * `hybrid`, which is the whole reason this is not `/id$/i`. Two spellings
-   * rather than one clever pattern, because the two are genuinely different
-   * conventions and a reader should be able to see which one matched.
-   */
-  const looksLikeAnId = (path: string): boolean => {
-    const last = path.split(".").pop() ?? "";
-    return /[a-z0-9]Ids?$/.test(last) || /(?:^|_)ids?$/i.test(last);
-  };
-
-  /**
-   * Every link between this API's record types, and what it would take to
-   * correct one.
-   *
-   * Read from the record types themselves rather than from the endpoint-level
-   * relations: those are two different models, and this is the one that
-   * decides what a widget is built from. The reach travels with each link
-   * because "points at Users" and "points at Users and can be opened" are
-   * different facts, and only the second makes a name appear in a cell.
-   */
-  app.get<{ Params: { id: string } }>(
-    "/api/connections/:id/references",
-    async (request, reply) => {
-      const connection = store.getConnection(request.params.id);
-      if (!connection) return reply.status(404).send({ error: "no such connection" });
-      const entities = connection.catalog
-        ? (options.catalog?.get(connection.catalog)?.entities ?? [])
-        : [];
-      if (entities.length === 0) return { described: false, entities: [], links: [] };
-
-      const graph = entityGraph(relatedFor(connection, entities));
-      const nameOf = (id: string): string =>
-        entityById(entities, id)?.name.many ?? id;
-
-      return {
-        described: true,
-        /** Every record type, so a correction can name a different one. */
-        entities: entities.map((entity) => ({ id: entity.id, title: entity.name.many })),
-        links: entities.flatMap((entity) =>
-          graph.referencesOf(entity.id).map((reference) => ({
-            entity: entity.id,
-            from: entity.name.many,
-            field: reference.field,
-            label: reference.label ?? reference.field,
-            target: reference.target,
-            to: nameOf(reference.target),
-            /*
-             * `free` means the row already carries the name, so nothing is
-             * fetched. A null reach is a link nothing can open — worth saying,
-             * because it looks identical in a widget until it is clicked.
-             */
-            cost: reference.cost,
-            openable: reference.reach !== null,
-            verified: reference.verified,
-          })),
-        ),
-        /**
-         * Fields that look like a link and are not recorded as one.
-         *
-         * Listed for two reasons, and the second is the one that forced it:
-         * the describe pass misses links, and — since saying "not a link" is
-         * an answer here — a field corrected that way would otherwise vanish
-         * from the only screen that could put it back. A name ending in `Id`
-         * is the whole test, which is deliberately weak: this is a list of
-         * things to look at, not a claim that any of them point anywhere.
-         */
-        candidates: entities.flatMap((entity) =>
-          entity.fields
-            .filter(
-              (field) =>
-                !field.reference &&
-                field.path !== entity.identity?.field &&
-                looksLikeAnId(field.path),
-            )
-            .slice(0, 12)
-            .map((field) => ({
-              entity: entity.id,
-              from: entity.name.many,
-              field: field.path,
-              label: field.label ?? field.path,
-            })),
-        ),
-        /** Links the record types record and nothing here could execute. */
-        unreachable: graph.unreachable,
-      };
-    },
-  );
-
-  /**
-   * Correct where one of a record's fields points.
-   *
-   * The links that decide widgets are the ones on the record types, and until
-   * now they were the only ones nobody could correct: the editor in
-   * Connections → Manage edits `resource.relations`, an endpoint-level model
-   * that a described API no longer consults. A link you can see being wrong
-   * and cannot fix is worse than one that is merely missing.
-   *
-   * One field at a time, `PUT` because the reference is replaced whole, and
-   * `null` removes it — which is the honest answer for a field that resembles
-   * a link and is not one. What is written here is what the describing pass
-   * wrote, in the same place, so everything downstream — the brief compiler,
-   * record pages, the reference cells — reads the correction with no second
-   * path to keep in step.
-   */
-  app.put<{ Params: { id: string; entity: string }; Body: unknown }>(
-    "/api/connections/:id/entities/:entity/reference",
-    async (request, reply) => {
-      const parsed = z
-        .object({
-          field: fieldPathSchema,
-          /** The record type it points at, or null to say it points at none. */
-          target: z.string().min(1).max(64).nullable(),
-        })
-        .safeParse(request.body ?? {});
-      if (!parsed.success) {
-        return reply.status(400).send({ error: "invalid reference", detail: parsed.error.issues });
-      }
-
-      const connection = store.getConnection(request.params.id);
-      if (!connection) return reply.status(404).send({ error: "no such connection" });
-      const entry = connection.catalog ? options.catalog?.get(connection.catalog) : undefined;
-      const entity = entry?.entities?.find((one) => one.id === request.params.entity);
-      if (!entry || !entity) return reply.status(404).send({ error: "no such record type" });
-
-      const field = entity.fields.find((one) => one.path === parsed.data.field);
-      if (!field) {
-        return reply.status(400).send({
-          error: `${entity.name.many} have no field called ${parsed.data.field}.`,
-        });
-      }
-      /*
-       * A target off the roster is refused rather than stored. A reference
-       * naming a record type nothing describes resolves to nothing, and every
-       * reader of it would report a link that simply never opens.
-       */
-      const target = parsed.data.target
-        ? entityById(entry.entities ?? [], parsed.data.target)
-        : null;
-      if (parsed.data.target && !target) {
-        return reply.status(400).send({
-          error: `There is no record type here called "${parsed.data.target}".`,
-        });
-      }
-
-      const saved = options.catalog!.put({
-        ...entry,
-        entities: (entry.entities ?? []).map((one) =>
-          one.id === entity.id
-            ? {
-                ...one,
-                fields: one.fields.map((each) =>
-                  each.path !== field.path
-                    ? each
-                    : target
-                      ? {
-                          ...each,
-                          reference: {
-                            ...(each.reference ?? { holds: "scalar" as const, embedded: [] }),
-                            entity: target.id,
-                            /*
-                             * A correction is somebody saying so, which is not
-                             * the same as a request having resolved there.
-                             * Clearing this puts the link back in the queue the
-                             * check pass works through, rather than letting a
-                             * new target inherit the old one's proof.
-                             */
-                            verified: false,
-                          },
-                        }
-                      : { ...each, reference: undefined },
-                ),
-              }
-            : one,
-        ),
-      });
-
-      const after = saved.entities?.find((one) => one.id === entity.id);
-      return {
-        field: field.path,
-        reference: after?.fields.find((one) => one.path === field.path)?.reference ?? null,
-      };
-    },
-  );
-
-  /**
-   * Check what has been described against the real account.
-   *
-   * The one thing in this whole layer that spends somebody's API quota, which
-   * is why it is a request somebody makes rather than something that happens
-   * on its own. Two claims cannot be settled by re-reading a specification:
-   * that a field identifies a record, and that a field pointing at another
-   * record type really resolves there. Both are settled by asking.
-   *
-   * Budgeted, and the budget is the point: a real API has a hundred record
-   * types and as many links again, so an unbounded check is hundreds of
-   * requests against an account that rate-limits.
-   */
-  app.post<{ Params: { id: string }; Body: unknown }>(
-    "/api/connections/:id/verify",
-    async (request, reply) => {
-      const parsed = z
-        .object({ budget: z.number().int().min(1).max(VERIFY_BUDGET_MAX).optional() })
-        .safeParse(request.body ?? {});
-      if (!parsed.success) {
-        return reply.status(400).send({ error: "invalid budget", detail: parsed.error.issues });
-      }
-
-      const connection = store.getConnection(request.params.id);
-      if (!connection) return reply.status(404).send({ error: "no such connection" });
-
-      const entry = connection.catalog ? options.catalog?.get(connection.catalog) : undefined;
-      const entities = entry?.entities ?? [];
-      if (entities.length === 0) {
-        return reply.status(409).send({
-          error: "This API's records have not been described yet, so there is nothing to check.",
-        });
-      }
-      registry.addConnection(connection);
-
-      const carried = new Set(connection.ops.map((op) => op.id));
-      const result = await verifyRecords({
-        entities,
-        resources: connection.resources,
-        carried,
-        rowsPathOf: (op) => getOp(connection, op)?.rowsPath,
-        budget: parsed.data.budget ?? VERIFY_BUDGET_DEFAULT,
-        ops: connection.ops,
-        now: new Date().toISOString(),
-        read: async (op, params) => {
-          try {
-            /*
-             * The id goes in as a filter rather than as an override: a by-id
-             * endpoint carries it in its *path*, and a path token reads the
-             * filters, while an override would only ever become a query
-             * parameter the endpoint never asked for.
-             */
-            const fetched = await upstream(connection.id, () =>
-              registry.fetch(connection.id, op, {}, {
-                params: {
-                  range: resolveRange({ preset: "30d", now: Date.now() }),
-                  filters: params,
-                },
-                now: Date.now(),
-                resolveSecret: secretFor,
-              }),
-            );
-            return { ok: true, body: fetched.body };
-          } catch (error) {
-            /*
-             * A refusal is an outcome here, not a failure: the run records how
-             * far it got and stops. Only the status matters — what is being
-             * decided is whether to keep asking.
-             */
-            return {
-              ok: false,
-              body: null,
-              ...(error instanceof AdapterError ? { status: error.status } : {}),
-            };
-          }
-        },
-      });
-
-      /*
-       * Merged rather than written over, and through the same rule a
-       * re-description uses: evidence gathered here is carried onto whatever
-       * the catalog holds *now*, so a describe run that finished while this
-       * was in flight keeps its newer prose, and evidence about a claim that
-       * has since changed lapses instead of vouching for something else.
-       */
-      if (entry && options.catalog) {
-        const current = options.catalog.get(entry.id) ?? entry;
-        options.catalog.put({
-          ...current,
-          entities: mergeDescribedEntities(result.entities, current.entities ?? []),
-          entitiesVerifiedAt: new Date().toISOString(),
-        });
-      }
-
-      return {
-        checked: result.checked,
-        identitiesConfirmed: result.identitiesConfirmed,
-        referencesResolved: result.referencesResolved,
-        requests: result.spent,
-        stopped: result.stopped,
-        notes: result.notes,
-      };
-    },
-  );
-
-  /**
    * A request for a widget, answered from the record types.
    *
    * The entity-first path: one model call names the records and says what the
@@ -2868,351 +1708,46 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     },
   );
 
-  app.put<{ Params: { id: string }; Body: unknown }>(
-    "/api/connections/:id",
-    async (request, reply) => {
-      /*
-       * Setup progress is the server's to keep. A client saving a connection
-       * from its own form does not send it, and must not wipe it by omission.
-       */
-      const existing = store.getConnection(request.params.id);
-      const body = request.body as Record<string, unknown>;
-      const parsed = connectionSchema.safeParse({
-        ...(existing?.onboarding && !("onboarding" in body)
-          ? { onboarding: existing.onboarding }
-          : {}),
-        ...body,
-        id: request.params.id,
-      });
-      if (!parsed.success) {
-        return reply.status(400).send({ error: "invalid connection", detail: parsed.error.issues });
-      }
-      /* A kind nothing on this server reads is refused when saved, not when a board first asks. */
-      if (!registry.adapterFor(parsed.data.kind)) {
-        return reply.status(400).send({ error: `Nothing on this server reads a "${parsed.data.kind}" connection.` });
-      }
-      store.putConnection(parsed.data);
-      queries.invalidate(parsed.data.id);
-      ensureBoardFor(parsed.data);
-      registry.addConnection(parsed.data);
-      return publicConnection(parsed.data);
-    },
-  );
+  void app.register(keyRoutes({ store, keys, broker, queries, integration }));
 
-  app.put<{ Params: { id: string }; Body: { key?: string; keys?: Record<string, unknown> } }>(
-    "/api/connections/:id/key",
-    async (request, reply) => {
-      const connection = store.getConnection(request.params.id);
-      if (!connection) return reply.status(404).send({ error: "no such connection" });
-      if (connectionKeyRefs(connection).length === 0) {
-        return reply.status(400).send({ error: "this connection does not use a key" });
-      }
-      const refs = connectionKeyRefs(connection);
-
-      // Multi-part auth sends { keys: { <keyRef>: value } }; the single-secret
-      // styles keep the original { key } shape so nothing existing breaks.
-      const supplied: Record<string, string> = {};
-      if (request.body?.keys && typeof request.body.keys === "object") {
-        for (const [ref, value] of Object.entries(request.body.keys)) {
-          if (typeof value === "string" && value.trim()) supplied[ref] = value.trim();
-        }
-      } else if (typeof request.body?.key === "string" && request.body.key.trim()) {
-        // Only unambiguous when there is exactly one secret to set.
-        if (refs.length > 1) {
-          return reply.status(400).send({
-            error: `${connection.title} needs ${refs.length} separate values — send { keys: { … } }, not a single key.`,
-          });
-        }
-        supplied[refs[0]!] = request.body.key.trim();
-      }
-
-      const missing = refs.filter((ref) => !supplied[ref] && !keys.has(ref));
-      if (Object.keys(supplied).length === 0 || missing.length > 0) {
-        return reply.status(400).send({
-          error:
-            missing.length > 0
-              ? `still missing a value for: ${missing.join(", ")}`
-              : "a key is required",
-        });
-      }
-
-      for (const [ref, value] of Object.entries(supplied)) {
-        if (refs.includes(ref)) keys.set(ref, value);
-      }
-      const keyed = { ...connection, credentialsRevision: (connection.credentialsRevision ?? 0) + 1 };
-      /* A new app's values: tokens obtained with the old ones are not theirs. */
-      await broker.forget(connection);
-      store.putConnection(keyed);
-      queries.invalidate(connection.id);
-      // The key is all a person should have to give: the rest is checked by itself.
-      integration.whenReady(keyed);
-      // Echo only the fact that it worked. Never the key, not even truncated.
-      return { ok: true, hasKey: true };
-    },
-  );
-
-  app.delete<{ Params: { id: string } }>("/api/connections/:id/key", async (request, reply) => {
-    const connection = store.getConnection(request.params.id);
-    if (!connection) return reply.status(404).send({ error: "no such connection" });
-    for (const ref of connectionKeyRefs(connection)) keys.delete(ref);
-    store.putConnection({
-      ...connection,
-      credentialsRevision: (connection.credentialsRevision ?? 0) + 1,
-    });
-    queries.invalidate(connection.id);
-    return { ok: true, hasKey: false };
-  });
-
-  /**
-   * Say where this connection's API lives.
-   *
-   * Two ways in, because there are two kinds of API. One whose address has a
-   * per-account blank — `https://{account}.example.com/api/manager` — takes
-   * `values` for the blanks and is filled in here, where the template and its
-   * rules are. One whose documentation never said, or said wrongly, takes the
-   * whole `baseUrl`, and the template, if any, no longer applies.
-   *
-   * A new address is a different account, so it is treated like a new key:
-   * cached rows are dropped and the revision moves, so nothing fetched from
-   * the old address is shown as if it came from this one.
+  /*
+   * The engine's connection and catalog routes (connect-server), with what is
+   * Dash's own: who may see a connection, the board each one gets, marking a
+   * connection that is about to be onboarded, and the keeper's warm set.
    */
-  app.put<{ Params: { id: string }; Body: unknown }>(
-    "/api/connections/:id/address",
-    async (request, reply) => {
-      const connection = store.getConnection(request.params.id);
-      if (!connection) return reply.status(404).send({ error: "no such connection" });
-      const parsed = z
-        .object({
-          values: z.record(z.string(), z.string().max(200)).optional(),
-          baseUrl: z.string().max(500).optional(),
-          /* The API is on a private network this server's operator allows (`EgressPolicy`). */
-          privateNetwork: z.boolean().optional(),
-        })
-        .safeParse(request.body);
-      if (!parsed.success || (!parsed.data.values && !parsed.data.baseUrl)) {
-        return reply.status(400).send({ error: "Give the address, or the values for its blanks." });
-      }
-
-      let baseUrl: string;
-      let server = connection.server;
-      if (parsed.data.baseUrl !== undefined) {
-        let url: URL;
-        try {
-          url = new URL(parsed.data.baseUrl.trim());
-        } catch {
-          return reply.status(400).send({ error: "That is not a web address." });
-        }
-        if (url.protocol !== "https:" && url.protocol !== "http:") {
-          return reply.status(400).send({ error: "The address has to start with https:// or http://." });
-        }
-        if (url.username || url.password) {
-          return reply
-            .status(400)
-            .send({ error: "Leave credentials out of the address; they go in the key step." });
-        }
-        baseUrl = url.toString().replace(/\/+$/, "");
-        server = undefined;
-      } else {
-        if (!connection.server) {
-          return reply.status(400).send({ error: "This connection's address has no blanks to fill." });
-        }
-        const values = Object.fromEntries(
-          Object.entries(parsed.data.values ?? {}).map(([name, value]) => [name, value.trim()]),
-        );
-        const resolved = resolveServerUrl(connection.server, values);
-        if (!resolved.url) {
-          const label = (name: string) =>
-            connection.server?.variables.find((one) => one.name === name)?.label ?? name;
-          return reply.status(400).send({
-            error:
-              resolved.missing.length > 0
-                ? `Fill in ${resolved.missing.map(label).join(", ")}.`
-                : `${resolved.invalid.map(label).join(", ")} can only contain letters, numbers, dots, dashes and underscores${
-                    resolved.invalid.some((name) => connection.server?.variables.find((one) => one.name === name)?.options)
-                      ? ", and must be one of the values offered"
-                      : ""
-                  }.`,
-            missing: resolved.missing,
-            invalid: resolved.invalid,
-          });
-        }
-        baseUrl = resolved.url;
-        server = { ...connection.server, values };
-      }
-
-      const { server: _previous, addressPending: _pending, privateNetwork: wasPrivate, ...rest } = connection;
-      const privateNetwork = parsed.data.privateNetwork ?? wasPrivate ?? false;
-      const next = connectionSchema.parse({
-        ...rest,
-        baseUrl,
-        ...(server ? { server } : {}),
-        ...(privateNetwork ? { privateNetwork: true } : {}),
-        credentialsRevision:
-          baseUrl === connection.baseUrl
-            ? connection.credentialsRevision
-            : (connection.credentialsRevision ?? 0) + 1,
-      });
-      store.putConnection(next);
-      queries.invalidate(next.id);
-      registry.addConnection(next);
-      integration.whenReady(next);
-      return publicConnection(next);
-    },
-  );
-
-  /**
-   * Fire the connection's declared validation op and report pass/fail fast.
-   *
-   * A non-technical user cannot tell "wrong key" from "wrong scope" from
-   * "their service is down" without this, and a vague failure at this step is
-   * where onboarding dies.
-   */
-  app.post<{ Params: { id: string } }>("/api/connections/:id/validate", async (request, reply) => {
-    const connection = store.getConnection(request.params.id);
-    if (!connection) return reply.status(404).send({ error: "no such connection" });
-    // Pick up connections written straight to disk, not just ones PUT through
-    // the API — otherwise the very first thing a self-hoster does (drop a JSON
-    // file in connections/, then validate it) fails until the server restarts.
-    registry.addConnection(connection);
-
-    const candidates = validationCandidates(connection);
-    if (candidates.length === 0) {
-      return reply.status(400).send({ error: "this connection has no operations to test" });
-    }
-
-    const params: ResolvedParams = {
-      range: resolveRange({ preset: "24h", now: Date.now() }),
-      filters: {},
-    };
-
-    /*
-     * Try candidates until one answers, rather than concluding on the first
-     * refusal.
-     *
-     * A 403 still means the key works — that reading has not changed — but it
-     * says nothing about `rowsPath`, `pagination` or `timeFilter`, and those
-     * are what `verified` claims. Stopping there left an entry whose importer
-     * happened to pick an unlicensed module permanently unprovable. So a
-     * refusal moves to the next endpoint and only the last one gets to decide.
-     */
-    const forbidden: string[] = [];
-    /** Endpoint-specific failures that were not refusals. */
-    const refused: string[] = [];
-    let lastError: AdapterError | null = null;
-
-    for (const opId of candidates) {
-      try {
-        const result = await upstream(connection.id, () =>
-          registry.fetch(
-            connection.id,
-            opId,
-            {},
-            {
-              params,
-              now: Date.now(),
-              resolveSecret: secretFor,
-            },
-          ),
-        );
-
-        const summary = Array.isArray(result.body)
-          ? `${result.body.length} item(s)`
-          : typeof result.body === "object" && result.body !== null
-            ? `${Object.keys(result.body).length} field(s)`
-            : "a value";
-
-        /*
-         * This, and only this, is what verifies a catalog entry: a live
-         * response with rows where the dialect said they would be.
-         */
-        let verified = false;
-        if (catalog && connection.catalog) {
-          const entryId = catalogEntryToVerify({
-            connection,
-            op: getOp(connection, opId),
-            body: result.body,
-            entry: catalog.get(connection.catalog),
-          });
-          if (entryId) {
-            const entry = catalog.get(entryId);
-            if (entry) catalog.put({ ...entry, verified: true });
-            verified = true;
-          }
-        }
-
-        /*
-         * Adopt the endpoint that actually worked.
-         *
-         * Without this the connection keeps the choice that just failed, and
-         * every future validate pays the same refusals again before arriving
-         * back here. Recorded rather than silent — the response names it.
-         */
-        const adopted = verified && connection.validateOpId !== opId;
-        if (adopted) store.putConnection({ ...connection, validateOpId: opId });
-
-        return {
-          ok: true,
-          message: `${connection.title} responded with ${summary}.`,
-          pages: result.meta.pages,
-          truncated: result.meta.truncated,
-          verified,
-          validatedOpId: opId,
-          ...(forbidden.length > 0 ? { forbidden } : {}),
-          // Endpoints that broke on the way here are worth surfacing even on
-          // success: nothing else in the product will mention them.
-          ...(refused.length > 0 ? { failed: refused } : {}),
-          ...(adopted ? { adoptedValidateOpId: opId } : {}),
-        };
-      } catch (error) {
-        const adapterError = error instanceof AdapterError ? error : null;
-        /*
-         * A 401 is the only failure that is about the *connection* rather than
-         * the endpoint: the credential is wrong, so every candidate would fail
-         * identically and trying them proves nothing.
-         *
-         * Everything else — 403, 404, 422, even a 500 — is this endpoint's
-         * problem. One real API demonstrated why that distinction matters: three
-         * refusals and a 422 stood between the importer's choice and the
-         * endpoint that actually works, and stopping at any of them left the
-         * dialect unprovable. The candidate cap is what keeps trying safe.
-         */
-        if (adapterError?.status === 401) {
-          lastError = adapterError;
-          break;
-        }
-        if (adapterError?.status === 403) forbidden.push(opId);
-        else refused.push(opId);
-        lastError = adapterError;
-        continue;
-      }
-    }
-
-    /*
-     * Nothing answered with data. When every failure was a refusal the key is
-     * still proven, so this stays a pass — the same reading as before, now
-     * reached only after the alternatives are exhausted.
-     */
-    if (lastError?.status === 401) {
+  void app.register(
+    connectionRoutes(engine, {
+      mayRead: (request, connection) => mayRead(request.principal, connection),
+      onSaved: (connection) => ensureBoardFor(connection),
       /*
-       * The adapter's own wording, not a phrase invented here: a missing key
-       * and a rejected key are different diagnoses, and only the layer that
-       * tried to build the request knows which one happened.
+       * Take the board `ensureBoardFor` made, but only if it is still empty.
+       *
+       * Removing a connection otherwise leaves a tab that can never load
+       * anything — and because the next import of the same API gets a `-2`
+       * suffix, the litter is what the nav opens on. An empty auto-created board
+       * is safe to drop; one with widgets on it is the user's work and stays,
+       * even though those widgets will not resolve.
        */
-      return reply.status(401).send({
-        ok: false,
-        error:
-          lastError.userMessage ??
-          `${connection.title} rejected the key. It may be wrong, expired, or revoked.`,
-      });
-    }
-    return reply.status(lastError?.status ?? 502).send({
-      ok: false,
-      ...(forbidden.length > 0 ? { forbidden } : {}),
-      ...(refused.length > 0 ? { failed: refused } : {}),
-      tried: candidates.length,
-      error: lastError?.userMessage ?? "That connection could not be reached.",
-    });
-  });
+      onDeleted: (connection) => {
+        const board = store.getDashboard(connection);
+        if (board && board.widgets.length === 0) store.deleteDashboard(connection);
+      },
+      /*
+       * The wizard sets `onboarding`: the connection is about to be offered a
+       * set of starting boards, so it does not get an empty one first. Absent
+       * for a script or an older client, which keep the empty board.
+       */
+      fromCatalog: (made, body) =>
+        body.onboarding === true ? { ...made, onboarding: onboardingSchema.parse({ status: "pending" }) } : made,
+      /* Read from the warm set as it stands now, not from what the keeper last took stock of. */
+      warmOps: (connection) =>
+        keeper
+          .currentTargets()
+          .filter((target) => target.connection === connection)
+          .map((target) => target.op),
+      shapes: drift,
+    }),
+  );
 
   // ── query ───────────────────────────────────────────────────────────────
   /*
@@ -3231,511 +1766,22 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     });
   }
 
-  /** What has changed on a connection's endpoints since they were checked, in words. */
-  app.get<{ Params: { id: string } }>("/api/connections/:id/drift", async (request, reply) => {
-    const connection = store.getConnection(request.params.id);
-    if (!connection) return reply.status(404).send({ error: "no such connection" });
-    try {
-      return { changes: await drift.open(connection) };
-    } catch (error) {
-      return reply.status(503).send({ error: `What has changed could not be read: ${error instanceof Error ? error.message : String(error)}` });
-    }
-  });
-
-  app.post<{ Body: unknown }>("/api/query", async (request, reply) => {
-    const parsed = querySchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.status(400).send({ error: "invalid query", detail: parsed.error.issues });
-    }
-    const { connection, op, params, range, filters, mode } = parsed.data;
-    /* Somebody is there. Recorded before anything can fail, because a refused
-     * read is still evidence that a board is open. */
-    seen.touch(connection, Date.now());
-
-    const spec = store.getConnection(connection);
-    if (!spec) return reply.status(404).send({ error: `no connection "${connection}"` });
-    const resolvedOp = getOp(spec, op);
-    if (!resolvedOp) return reply.status(404).send({ error: `no operation "${op}"` });
-    registry.addConnection(spec);
-
-    /*
-     * One spelling of the request, shared with the chat harness, the keeper
-     * and onboarding's checks — every one of them has to land on the key this
-     * writes. See `buildQueryRequest`.
-     */
-    refreshQueryIdentity(spec);
-    const { key, overrides, resolved } = buildQueryRequest({
-      connection,
-      op: resolvedOp,
-      params,
-      resolved: { range: resolveRequestedRange(range, Date.now()), filters },
-    });
-    /* What was asked, so the keeper refreshes exactly this and not a guess. */
-    viewed.record(
-      { key, connection, op, overrides, resolved, shape: paramShape(params) },
-      Date.now(),
-    );
-
-    try {
-      /*
-       * A key whose whole answer was read in the background is refreshed the
-       * same way — its first stretch read, the rest carried on — never by a
-       * capped read that would put a partial answer back over the whole one.
-       */
-      const heldAt = queries.storedAt(key);
-      const owned =
-        mode !== "view" &&
-        heldAt !== null &&
-        Date.now() - heldAt > clampMaxAge(parsed.data.maxAgeMs) &&
-        (await longReads.owns(key).catch(() => false));
-      if (owned)
-        void longReads
-          .refresh({ key, connection: spec, op: resolvedOp, overrides, resolved })
-          .catch((error: unknown) => app.log.warn(`a long read could not be refreshed: ${String(error)}`));
-      const outcome = await queries.read({
-        key,
-        connection,
-        mode: owned ? "view" : mode,
-        maxAgeMs: clampMaxAge(parsed.data.maxAgeMs),
-        /*
-         * Old is measured against how often this endpoint is refreshed, not
-         * only against what the widget asked for. A daily endpoint read at
-         * noon is not stale; labelling it so on every tile would teach people
-         * to ignore the label. Only a label — a view serves what it holds
-         * either way — and only while the keeper is running, since without
-         * it nothing refreshes on that cadence.
-         */
-        ...(options.keeper === true
-          ? { freshForMs: Math.round(1.5 * everyMsForOp(connection, op)) }
-          : {}),
-        fetcher: (validators) =>
-          registry.fetch(connection, op, overrides, {
-            params: resolved,
-            now: Date.now(),
-            resolveSecret: secretFor,
-            ...(validators ? { validators } : {}),
-          }),
-      });
-
-      if (outcome.outcome === "miss") watchShape(spec, resolvedOp, outcome.body);
-      /* Stopped at its own limit with more to read: the rest is read in the background, from there. */
-      if (outcome.outcome === "miss" && outcome.meta.continuation)
-        await longReads
-          .carryOn({ key, connection: spec, op: resolvedOp, overrides, resolved, first: outcome })
-          .catch((error: unknown) => app.log.warn(`a long read could not be carried on: ${String(error)}`));
-      const reading = await longReads.status(key).catch(() => null);
-      const told = withReadingOn(outcome.meta, reading);
-      /* A change open on this endpoint is said on every tile that reads it, however old the copy. */
-      const changed = await drift.noteFor(spec, op).catch(() => null);
-      return {
-        body: outcome.body,
-        meta: {
-          ...told,
-          ...(changed ? { warnings: [...told.warnings, changed] } : {}),
-          receipt: previews.record(key, spec, op, resolved, overrides),
-          cache: outcome.outcome,
-          ageMs: Number.isFinite(outcome.ageMs) ? outcome.ageMs : 0,
-          ...(outcome.staleReason ? { staleReason: outcome.staleReason } : {}),
-        },
-      };
-    } catch (error) {
-      // The cache re-throws the adapter's own error, which is already phrased
-      // for a person; the generic handler below would flatten it to a 500.
-      if (error instanceof AdapterError) {
-        /*
-         * `retryAfter` both ways: as the standard header, and in the body
-         * because the browser reads this through `fetch` and the tile needs
-         * the number to count down with. Sending only the header would leave
-         * the retry button enabled during a wait it cannot win.
-         */
-        /*
-         * Nothing there yet, which for a record that exists at most once
-         * under its parent is a normal state rather than a failure: a unit
-         * with no listing answers 404. Said as an empty answer so the tile
-         * reads "none" instead of an error, and the page offers to add one.
-         */
-        if (error.upstreamStatus === 404 && isSingletonOp(spec.resources, op)) {
-          return {
-            // No rows, rather than one empty one: a count of these is zero.
-            body: [],
-            meta: {
-              url: "",
-              status: 404,
-              fetchedAt: Date.now(),
-              durationMs: 0,
-              pages: 0,
-              truncated: false,
-              warnings: [],
-              absent: true,
-              cache: "miss",
-              ageMs: 0,
-            },
-          };
-        }
-        if (error.retryAfter) reply.header("retry-after", error.retryAfter);
-        return reply.status(error.status === 429 ? 429 : 502).send({
-          error: error.message,
-          userMessage: error.userMessage,
-          ...(error.upstreamStatus !== undefined ? { upstreamStatus: error.upstreamStatus } : {}),
-          /*
-           * The upstream's status, separately from ours.
-           *
-           * The HTTP status above is about *this* request: everything but a
-           * rate limit becomes 502, because a 401 from the browser to its own
-           * origin would mean something else entirely. But that flattening
-           * also lost the distinction the tile needs — a 401, a 403 and a
-           * generic failure are three different sentences and only one of them
-           * is worth a Retry button. `describeFailure` has always had that copy
-           * and could never reach it, so a permission error offered a retry
-           * that could not possibly succeed.
-           */
-          status: error.status,
-          ...(error.retryAfter ? { retryAfter: error.retryAfter } : {}),
-        });
-      }
-      throw error;
-    }
-  });
-
-  /*
-   * The rest of a tile's per-record reads, read here in the background.
-   *
-   * A tile reads the first twenty-five records' related records itself and
-   * says the rest are missing; this reads every one it names, behind every
-   * board's own reads, and answers "reading" until it has them all. Each read
-   * is the request the tile would have sent — the same spelling, so one
-   * already held is not asked again — and one not held is read without being
-   * stored, so two hundred of them cannot push a board's reads out of the
-   * cache. See `EachReads`.
-   */
-  app.post<{ Body: unknown }>("/api/query/each", async (request, reply) => {
-    const parsed = eachSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.status(400).send({ error: "invalid query", detail: parsed.error.issues });
-    }
-    const { connection, op, params, input, values, range, filters } = parsed.data;
-    seen.touch(connection, Date.now());
-    const spec = store.getConnection(connection);
-    if (!spec) return reply.status(404).send({ error: `no connection "${connection}"` });
-    const resolvedOp = getOp(spec, op);
-    if (!resolvedOp) return reply.status(404).send({ error: `no operation "${op}"` });
-    registry.addConnection(spec);
-    refreshQueryIdentity(spec);
-
-    const asked: EachRequest = {
-      connection,
-      op,
-      params,
-      input,
-      values,
-      window: { range: resolveRequestedRange(range, Date.now()), filters },
-      configVersion: fingerprintConnection(spec),
-    };
-    const plan = eachPlan(asked);
-    if (!plan) return reply.status(404).send({ error: `no operation "${op}"` });
-    return eachReads.ask({
-      key: eachKey(connection, plan.keys),
-      connection,
-      count: plan.keys.length,
-      read: plan.read,
-      request: asked,
-    });
-  });
-
-  // ── endpoints on an existing connection ─────────────────────────────────
-  //
-  // Connecting an API once and then wanting a second endpoint from it is the
-  // normal case, not an edge case — without these a user is back to editing
-  // JSON the moment the wizard finishes.
-  const withKeyFlag = (connection: ReturnType<SpecStore["getConnection"]>) => {
-    if (!connection) return null;
-    const refs = connectionKeyRefs(connection);
-    // `authRequired` with no auth style chosen yet is not "ready" — the key
-    // exists somewhere, we just have not been told where it goes.
-    const hasKey = !connectionNeedsAuthSetup(connection) && refs.every((ref) => keys.has(ref));
-    return { ...connection, hasKey };
-  };
-
-  app.post<{ Params: { id: string }; Body: unknown }>(
-    "/api/connections/:id/ops",
-    async (request, reply) => {
-      const connection = store.getConnection(request.params.id);
-      if (!connection) return reply.status(404).send({ error: "no such connection" });
-
-      const parsed = opDefSchema.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.status(400).send({
-          error: "invalid endpoint",
-          detail: parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`),
-        });
-      }
-
-      // Upsert, so the same route both adds a new endpoint and edits one.
-      const ops = connection.ops.filter((op) => op.id !== parsed.data.id);
-      const next = connectionSchema.parse({
-        ...connection,
-        ops: [...ops, parsed.data],
-        validateOpId: connection.validateOpId ?? parsed.data.id,
-      });
-      store.putConnection(next);
-      queries.invalidate(next.id);
-      ensureBoardFor(next);
-      registry.addConnection(next);
-      return withKeyFlag(next);
-    },
-  );
-
-  app.delete<{ Params: { id: string; opId: string } }>(
-    "/api/connections/:id/ops/:opId",
-    async (request, reply) => {
-      const connection = store.getConnection(request.params.id);
-      if (!connection) return reply.status(404).send({ error: "no such connection" });
-
-      const ops = connection.ops.filter((op) => op.id !== request.params.opId);
-      if (ops.length === connection.ops.length) {
-        return reply.status(404).send({ error: "no such endpoint" });
-      }
-      const next = connectionSchema.parse({
-        ...connection,
-        ops,
-        validateOpId: ops.some((op) => op.id === connection.validateOpId)
-          ? connection.validateOpId
-          : ops[0]?.id,
-      });
-      store.putConnection(next);
-      queries.invalidate(next.id);
-      ensureBoardFor(next);
-      registry.addConnection(next);
-      return withKeyFlag(next);
-    },
-  );
-
-  /** Endpoints this connection's catalog entry offers that it isn't using. */
-  app.get<{ Params: { id: string } }>(
-    "/api/connections/:id/available-ops",
-    async (request, reply) => {
-      const connection = store.getConnection(request.params.id);
-      if (!connection) return reply.status(404).send({ error: "no such connection" });
-      if (!connection.catalog || !options.catalog) return [];
-
-      const entry = options.catalog.get(connection.catalog);
-      if (!entry) return [];
-      const taken = new Set(connection.ops.map((op) => op.id));
-      return entry.ops.filter((op) => !taken.has(op.id));
-    },
-  );
-
-  app.delete<{ Params: { id: string } }>("/api/connections/:id", async (request) => {
-    const connection = store.getConnection(request.params.id);
-    // Take the secret with it — an orphaned credential in the vault is a
-    // liability nobody remembers is there.
-    if (connection) {
-      for (const ref of [...connectionKeyRefs(connection), ...authTokenRefs(connection.auth)]) keys.delete(ref);
-      void broker.forget(connection).catch(() => undefined);
-    }
-    store.deleteConnection(request.params.id);
-    // What was observed about it describes a connection that no longer exists.
-    // Never left to reject unhandled: a damaged database must not take the process down.
-    evidence.forget(request.params.id).catch((error: unknown) =>
-      app.log.warn(`evidence for ${request.params.id} could not be removed: ${String(error)}`),
-    );
-    // What its records held is that account's, and goes with it.
-    seenValueStore.forget(request.params.id).catch((error: unknown) =>
-      app.log.warn(`the values ${request.params.id}'s records held could not be removed: ${String(error)}`),
-    );
-    drift.forget(request.params.id).catch((error: unknown) =>
-      app.log.warn(`the shapes ${request.params.id}'s endpoints were accepted in could not be removed: ${String(error)}`),
-    );
-    // Its reads under way, the records they held, and its checks waiting their turn.
-    jobs.forget(request.params.id).catch((error: unknown) =>
-      app.log.warn(`the work ${request.params.id} had under way could not be removed: ${String(error)}`),
-    );
-    // The report describes an API this instance can no longer reach, and
-    // leaving it behind would let a same-named connection inherit a stale one.
-    store.deleteReport(request.params.id);
-    enumerated.delete(request.params.id);
-
-    /*
-     * Take the board `ensureBoardFor` made, but only if it is still empty.
-     *
-     * Removing a connection otherwise leaves a tab that can never load
-     * anything — and because the next import of the same API gets a `-2`
-     * suffix, the litter is what the nav opens on. An empty auto-created board
-     * is safe to drop; one with widgets on it is the user's work and stays,
-     * even though those widgets will not resolve.
-     */
-    const board = store.getDashboard(request.params.id);
-    if (board && board.widgets.length === 0) store.deleteDashboard(request.params.id);
-    return { ok: true };
-  });
-
-  /**
-   * Fetch one endpoint and describe what came back.
-   *
-   * This is what makes onboarding trustworthy: before anything is saved the
-   * user sees real rows from their own account, not a green tick.
-   */
-  /*
-   * What this connection can do, worked out from its own endpoints.
-   *
-   * Proposes and persists nothing: the report is offered, and a separate call
-   * accepts it. Everything derivable is derived — the only thing a person is
-   * ever asked for is a credential, because that is the one thing inspection
-   * cannot produce.
-   *
-   * A POST because it samples: enumerating a connection makes real requests
-   * against the upstream API, which a GET should not do.
-   */
-  /**
-   * What reading this connection will cost, before a single request is made.
-   *
-   * A GET because it makes none: everything here is read off the endpoints. It
-   * exists so the question "may we do this?" can be asked with a real number
-   * attached rather than as a vague warning.
-   */
-  app.get<{ Params: { id: string }; Querystring: { deep?: string } }>(
-    "/api/connections/:id/enumeration-plan",
-    async (request, reply) => {
-      const connection = store.getConnection(request.params.id);
-      if (!connection) return reply.status(404).send({ error: "no such connection" });
-
-      const deep = request.query?.deep === "true";
-      const budget: AnalyseOptions = deep ? { maxSamples: 60, maxChildSamples: 40 } : {};
-      const stored = store.getReport(connection.id);
-
-      return {
-        ...estimateEnumeration(connection, budget),
-        /** A matching report means this costs nothing at all right now. */
-        alreadyRead: stored !== null && !isStale(stored, connection),
-        stale: stored !== null && isStale(stored, connection),
-        lastRead: stored?.generatedAt ?? null,
-        previousOutcome: stored?.outcome ?? null,
-      };
-    },
-  );
-
-  app.post<{ Params: { id: string }; Body: { refresh?: boolean; deep?: boolean } }>(
-    "/api/connections/:id/capabilities",
-    async (request, reply) => {
-      const connection = store.getConnection(request.params.id);
-      if (!connection) return reply.status(404).send({ error: "no such connection" });
-      registry.addConnection(connection);
-
-      const budget: AnalyseOptions = request.body?.deep
-        ? { maxSamples: 60, maxChildSamples: 40 }
-        : {};
-      const { value } = await enumerate(connection, request.body?.refresh === true, budget);
-      return value;
-    },
-  );
-
-  /**
-   * What this connection believes about how its records relate — for free.
-   *
-   * Deliberately a GET that never enumerates: this is the screen someone opens
-   * to check or correct a link, and opening it must not spend requests on
-   * their API. It reads the stored report when there is a current one and
-   * falls back to what the endpoints alone declare, so it is useful before
-   * anything has been read as well as after.
-   *
-   * The whole resource array comes back, not just the relations, because
-   * editing writes through `PUT /resources` which takes the graph entire.
-   */
-  app.get<{ Params: { id: string } }>("/api/connections/:id/relations", async (request, reply) => {
-    const connection = store.getConnection(request.params.id);
-    if (!connection) return reply.status(404).send({ error: "no such connection" });
-
-    const report = store.getReport(connection.id);
-    const current = report !== null && !isStale(report, connection);
-    const resources = current
-      ? withVerifiedParams(fromReport(report).value.resources, connection.ops)
-      : analyseStructure(connection).resources;
-
-    return {
-      connection: connection.id,
-      resources,
-      /** Column names per resource, so a link field is picked rather than typed. */
-      fieldsByResource: Object.fromEntries(
-        Object.entries(report?.shapes ?? {}).map(([id, shape]) => [
-          id,
-          shape.fields.map((field) => field.name),
-        ]),
-      ),
-      source: current ? "report" : report ? "stale" : "endpoints",
-      lastRead: report?.generatedAt ?? null,
-    };
-  });
-
-  /** Accept a capabilities proposal. This is the approval step. */
-  app.put<{ Params: { id: string }; Body: unknown }>(
-    "/api/connections/:id/resources",
-    async (request, reply) => {
-      const connection = store.getConnection(request.params.id);
-      if (!connection) return reply.status(404).send({ error: "no such connection" });
-
-      const parsed = z
-        .object({ resources: z.array(resourceSchema).max(200) })
-        .safeParse(request.body);
-      if (!parsed.success) {
-        return reply.status(400).send({ error: "invalid resources", detail: parsed.error.issues });
-      }
-
-      const next = { ...connection, resources: parsed.data.resources };
-      store.putConnection(next);
-      queries.invalidate(next.id);
-      ensureBoardFor(next);
-      registry.addConnection(next);
-      return publicConnection(next);
-    },
-  );
-
-  app.post<{ Params: { id: string }; Body: unknown }>(
-    "/api/connections/:id/sample",
-    async (request, reply) => {
-      const parsed = z.object({ op: z.string().min(1) }).safeParse(request.body);
-      if (!parsed.success) return reply.status(400).send({ error: "an op is required" });
-
-      const connection = store.getConnection(request.params.id);
-      if (!connection) return reply.status(404).send({ error: "no such connection" });
-      const op = getOp(connection, parsed.data.op);
-      if (!op) return reply.status(404).send({ error: "no such operation" });
-      registry.addConnection(connection);
-
-      const result = await upstream(connection.id, () =>
-        registry.fetch(
-          connection.id,
-          op.id,
-          {},
-          {
-            params: { range: resolveRange({ preset: "30d", now: Date.now() }), filters: {} },
-            now: Date.now(),
-            resolveSecret: secretFor,
-          },
-        ),
-      );
-
-      const shape = inferShape(result.body, op.rowsPath ? { rowsPath: op.rowsPath } : {});
-      const rows = Array.isArray(result.body)
-        ? result.body
-        : shape.rowsPath === "$"
-          ? [result.body]
-          : [];
-
-      return {
-        rowsPath: shape.rowsPath,
-        rowCount: shape.rowCount,
-        schemaHash: shape.schemaHash,
-        fields: shape.fields.map((field) => ({
-          name: field.name,
-          kinds: field.kinds,
-          format: field.format ?? null,
-          nullable: field.nullable,
-          samples: field.samples,
-        })),
-        meta: result.meta,
-        sample: rows.slice(0, 3),
-      };
-    },
+  void app.register(
+    queryRoutes({
+      store,
+      options,
+      registry,
+      read: engine.read,
+      queries,
+      eachReads,
+      eachPlan,
+      everyMsForOp,
+      refreshQueryIdentity,
+      seen,
+      drift,
+      viewed,
+      previews,
+    }),
   );
 
   // ── model selection ─────────────────────────────────────────────────────
@@ -4029,308 +2075,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     }),
   );
 
-  /**
-   * How often each of this connection's endpoints is asked again, and why.
-   *
-   * Free: the classification is on the catalog entry, the cadences are on
-   * disk, and the whole answer is a projection of the two. Ordered so the
-   * endpoints a board actually reads come first — those are the ones whose
-   * freshness anybody notices, and a list of two hundred is unreadable
-   * otherwise.
-   */
-  app.get<{ Params: { id: string } }>("/api/connections/:id/rhythm", async (request, reply) => {
-    const connection = store.getConnection(request.params.id);
-    if (!connection) return reply.status(404).send({ error: "no such connection" });
-
-    const personal = rhythms.get(connection.id);
-    /*
-     * Read from the warm set as it stands now, not from what the keeper has
-     * taken stock of: that only happens on a tick, and somebody arriving here
-     * seconds after building their boards would be told nothing is kept warm.
-     */
-    const warmed = new Set(
-      keeper
-        .currentTargets()
-        .filter((target) => target.connection === connection.id)
-        .map((target) => target.op),
-    );
-
-    const entities = connection.catalog
-      ? (options.catalog?.get(connection.catalog)?.entities ?? [])
-      : [];
-    const nameOf = new Map<string, string>();
-    for (const entity of entities) {
-      for (const op of opsOfResource(connection, entity.resource)) {
-        nameOf.set(op, entity.name.many);
-      }
-    }
-
-    const decided = decideAll({
-      ...rhythmFor(connection),
-      ops: connection.ops.map((op) => op.id),
-    });
-
-    return {
-      connection: connection.id,
-      title: connection.title,
-      tiers: personal.tiers,
-      at: personal.at ?? null,
-      /* Whether anybody has ever read this API for rhythm. Absent means every
-       * endpoint is sitting on the default rather than on a judgement. */
-      classified: Boolean(connection.catalog && options.catalog?.get(connection.catalog)?.rhythm),
-      endpoints: decided
-        .map((decision) => ({
-          ...decision,
-          title: connection.ops.find((op) => op.id === decision.op)?.title ?? decision.op,
-          records: nameOf.get(decision.op) ?? null,
-          /* On a board somebody opens, so its cadence is one they will feel. */
-          warmed: warmed.has(decision.op),
-        }))
-        .sort((a, b) => Number(b.warmed) - Number(a.warmed) || a.op.localeCompare(b.op)),
-    };
-  });
-
-  /**
-   * Move one endpoint to another cadence, or put it back.
-   *
-   * Stored as an override on *this* connection and nowhere else: the reading
-   * it disagrees with is shared with everybody who connects this API, and one
-   * person's preference has no business travelling with it.
-   */
-  app.put<{ Params: { id: string }; Body: unknown }>(
-    "/api/connections/:id/rhythm",
-    async (request, reply) => {
-      const parsed = z
-        .object({
-          /** Endpoint id → tier id, or null to go back to the classification. */
-          overrides: z.record(z.string().min(1), z.string().min(1).nullable()),
-        })
-        .safeParse(request.body);
-      if (!parsed.success) {
-        return reply.status(400).send({ error: "an endpoint and a cadence are needed" });
-      }
-
-      const connection = store.getConnection(request.params.id);
-      if (!connection) return reply.status(404).send({ error: "no such connection" });
-
-      const personal = rhythms.get(connection.id);
-      const known = new Set(personal.tiers.map((tier) => tier.id));
-      const refused: string[] = [];
-
-      let current = personal;
-      for (const [op, tier] of Object.entries(parsed.data.overrides)) {
-        if (!connection.ops.some((one) => one.id === op)) {
-          refused.push(`"${op}" is not an endpoint this connection carries.`);
-          continue;
-        }
-        if (tier !== null && !known.has(tier)) {
-          refused.push(`"${tier}" is not one of the cadences on offer.`);
-          continue;
-        }
-        current = rhythms.override(connection.id, op, tier);
-      }
-
-      /* Written even when nothing moved, so "answered" is recorded and the
-       * question is not asked again on the next visit. */
-      if (current === personal) current = rhythms.put(connection.id, personal);
-      /* A moved cadence applies at the keeper's next tick, not a few seconds on. */
-      forgetTiers();
-
-      return {
-        tiers: current.tiers,
-        overrides: current.overrides,
-        at: current.at ?? null,
-        notes: refused,
-      };
-    },
-  );
-
-  app.get("/api/catalog", async () => (catalog ? catalog.list().map(catalogForBrowser) : []));
-
-  app.get<{ Params: { id: string } }>("/api/catalog/:id", async (request, reply) => {
-    const entry = catalog?.get(request.params.id);
-    if (!entry) return reply.status(404).send({ error: "no such catalog entry" });
-    return catalogForBrowser(entry);
-  });
-
-  /** Store a locally-derived dialect in the overlay, above the repo seed. */
-  app.put<{ Params: { id: string }; Body: unknown }>("/api/catalog/:id", async (request, reply) => {
-    if (!catalog) return reply.status(501).send({ error: "no catalog configured" });
-    const { writeOpCount: _count, ...body } = request.body as Record<string, unknown>;
-    const parsed = catalogEntrySchema.safeParse({
-      ...body,
-      id: request.params.id,
-    });
-    if (!parsed.success) {
-      return reply.status(400).send({
-        error: "invalid catalog entry",
-        detail: parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`),
-      });
-    }
-    // The browser never holds a re-readable entry's writes, so a save from it keeps the server's.
-    const kept = preservedWrites(catalog.get(request.params.id), discovered.take(request.params.id));
-    return catalogForBrowser(catalog.put({ ...parsed.data, ...kept }));
-  });
-
-  /**
-   * Create a connection from a catalog entry — the fast path that turns
-   * "I want Stripe" into a working connection without anyone writing JSON.
-   */
-  app.post<{ Body: unknown }>("/api/connections/from-catalog", async (request, reply) => {
-    if (!catalog) return reply.status(501).send({ error: "no catalog configured" });
-    const parsed = z
-      .object({
-        catalogId: z.string().min(1),
-        id: z.string().min(1).optional(),
-        opIds: z.array(z.string()).optional(),
-        /*
-         * The wizard sets this: the connection is about to be offered a set
-         * of starting boards, so it does not get an empty one first. Absent
-         * for a script or an older client, which keep the empty board.
-         */
-        onboarding: z.boolean().optional(),
-      })
-      .safeParse(request.body);
-    if (!parsed.success) {
-      return reply.status(400).send({ error: "invalid request", detail: parsed.error.issues });
-    }
-
-    const stored = catalog.get(parsed.data.catalogId);
-    if (!stored) return reply.status(404).send({ error: "no such catalog entry" });
-    /*
-     * An entry written by an older importer is brought up to date on how to
-     * connect before a connection copies it — otherwise the connection would
-     * inherit whatever the old importer got wrong about the address or the
-     * login, and keep it. Only those parts; see `withConnectDetails`.
-     */
-    const { entry, refreshed } = await refreshOutdatedConnectDetails(stored, readDocument);
-    if (refreshed) catalog.put(entry);
-
-    /**
-     * Connecting the same API twice is legitimate — two Stripe accounts, two
-     * repos — so a repeat gets its own id rather than silently overwriting the
-     * first connection and taking its key with it.
-     */
-    let id = parsed.data.id ?? entry.id;
-    if (!parsed.data.id) {
-      let suffix = 2;
-      while (store.getConnection(id)) id = `${entry.id}-${suffix++}`;
-    }
-
-    const made = connectionFromCatalog(entry, {
-      id,
-      ...(parsed.data.opIds ? { opIds: parsed.data.opIds } : {}),
-    });
-    const connection: ConnectionSpec = parsed.data.onboarding
-      ? { ...made, onboarding: onboardingSchema.parse({ status: "pending" }) }
-      : made;
-    store.putConnection(connection);
-    ensureBoardFor(connection);
-    registry.addConnection(connection);
-    readWritesFor(connection);
-    // An API that needs no key can be checked straight away.
-    integration.whenReady(connection);
-
-    const refs = connectionKeyRefs(connection);
-    const ready = !connectionNeedsAuthSetup(connection) && refs.every((ref) => keys.has(ref));
-    return {
-      ...connection,
-      hasKey: ready,
-      needsKey: !ready,
-      /* Where the API lives still has to be said — see `connectionNeedsAddress`. */
-      needsAddress: connectionNeedsAddress(connection),
-    };
-  });
-
-  /**
-   * Walk the discovery ladder for a URL the user typed.
-   *
-   * Returns a *proposal* whatever rung answers. Nothing here is saved and
-   * nothing is marked verified — the oracle is the validate-and-sample step,
-   * because documentation lies and a live 200 does not.
-   */
-  app.post<{ Body: unknown }>("/api/discover", async (request, reply) => {
-    const parsed = z.object({ url: z.string().min(1) }).safeParse(request.body);
-    if (!parsed.success) return reply.status(400).send({ error: "a url is required" });
-
-    const result = await discover(parsed.data.url, {
-      fetchDocument: async (url) => {
-        const response = await fetchPublicDocument(url);
-        return { status: response.status, text: response.text, url: response.url };
-      },
-      catalog: options.catalog,
-      llm: resolveLlm("discover"),
-      search: resolveSearch(),
-      /* A small section is read by itself when nothing else answered; a large one is still offered. */
-      readIndexUpTo: AUTO_INDEX_PAGES,
-      ...(options.renderDocs ? { renderDocs: options.renderDocs } : {}),
-      http: options.http ?? nodeHttp,
-    });
-
-    if (result.entry) discovered.hold(result.entry);
-    return result.entry ? { ...result, entry: catalogForBrowser(result.entry) } : result;
-  });
-
-  /*
-   * The browser that reads documentation drawn by scripts: whether it is
-   * here, and the one-time download, started only when the person agrees.
-   * Under `/api/discover`, so only somebody who may add connections starts it.
-   */
-  app.get("/api/discover/renderer", async (): Promise<RendererStatus> =>
-    options.rendererSetup?.status() ?? {
-      state: options.renderDocs ? "ready" : "off",
-      consented: true,
-      downloadMb: RENDERER_DOWNLOAD_MB,
-    },
-  );
-  app.post("/api/discover/renderer", async (_request, reply) => {
-    if (!options.rendererSetup) return reply.status(404).send({ error: "Nothing here downloads a browser." });
-    return options.rendererSetup.install();
-  });
-
-  /**
-   * Read every documented page in a section and merge what they declare.
-   *
-   * Separate from `/api/discover` on purpose: one request per page against
-   * somebody else's documentation site is not something to do speculatively.
-   * The discovery result reports the page count and the time it would take,
-   * and this runs only once a person has seen those numbers and asked.
-   */
-  app.post<{ Body: unknown }>("/api/discover/read-index", async (request, reply) => {
-    const parsed = z.object({ url: z.string().min(1) }).safeParse(request.body);
-    if (!parsed.success) return reply.status(400).send({ error: "a url is required" });
-
-    const result = await readIndex(parsed.data.url, {
-      fetchDocument: async (url) => {
-        const response = await fetchPublicDocument(url);
-        return { status: response.status, text: response.text, url: response.url };
-      },
-      catalog: options.catalog,
-    });
-    if (result.entry) discovered.hold(result.entry);
-    return result.entry ? { ...result, entry: catalogForBrowser(result.entry) } : result;
-  });
-
-  /*
-   * There is no `/api/agent/propose`.
-   *
-   * It backed a drawer that took an endpoint and had a model propose a binding
-   * from a live sample. The concierge does the same job from the capability
-   * report — no extra request, and a conversation instead of a one-shot — so
-   * the drawer and this route went together. `proposeWidget` stays exported
-   * from `@freebirdai/dash-agent` for anyone building on the package.
-   */
-
-  /**
-   * What each connection has cost, and what the cache saved.
-   *
-   * Counts only — never what was read — so it carries none of the customer's
-   * data and none of the retention questions that come with it.
-   */
-  app.get("/api/cost", async () => ({
-    connections: queries.accounting.all(),
-    cache: queries.store.stats(),
-  }));
+  void app.register(discoverRoutes({ options, discovered, resolveLlm, resolveSearch }));
 
   // ── dashboards ──────────────────────────────────────────────────────────
   app.get("/api/dashboards", async () =>
@@ -4519,51 +2264,6 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         : {}),
       ...(record.hide ? { hide: record.hide.map(to) } : {}),
     };
-  };
-
-  /**
-   * Tell a connection's record types what their fields really hold.
-   *
-   * From the last account read, while its values are still held: flags the
-   * docs call boolean and the API sends as 0/1, numbers declared as text. Runs
-   * when a read lands and again when the record types are described, because
-   * either can finish first. Widgets reading a field whose reading changed are
-   * rebuilt so a filter on a flag compares what the API actually sends.
-   */
-  const observeConnection = (connectionId: string): void => {
-    const connection = store.getConnection(connectionId);
-    const held = sampledShapes.get(connectionId);
-    if (!connection?.catalog || !held || !options.catalog) return;
-    if (Date.now() - held.at > SAMPLES_TTL) {
-      sampledShapes.delete(connectionId);
-      return;
-    }
-    const entry = options.catalog.get(connection.catalog);
-    if (!entry?.entities?.length) return;
-
-    const at = new Date(held.at).toISOString();
-    const resources = connection.resources.length > 0 ? connection.resources : (entry.resources ?? []);
-    const changed = new Set<string>();
-    const wrapped = new Map<string, string>();
-    let touched = false;
-    const entities = entry.entities.map((entity) => {
-      const found = resources.find((one) => one.id === entity.resource);
-      // The list where it was read, else the record's own endpoint.
-      const shape =
-        (found?.listOp ? held.byOp.get(found.listOp) : undefined) ??
-        (found?.detailOp ? held.byOp.get(found.detailOp) : undefined);
-      if (!shape) return entity;
-      const observed = observeEntity(entity, shape.fields, at);
-      if (observed === entity) return entity;
-      const { wrapped: wrapper, ...next } = observed;
-      touched = true;
-      if (wrapper) wrapped.set(entity.id, wrapper);
-      if (wrapper || readingsDiffer(entity, next)) changed.add(entity.id);
-      return next;
-    });
-    if (!touched) return;
-    options.catalog.put({ ...entry, entities });
-    if (changed.size > 0) recompileReadings(connection.id, changed, wrapped);
   };
 
   app.get<{ Params: { id: string; widgetId: string } }>(
@@ -4840,6 +2540,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   let onWritesChanged: () => void = () => {};
   void app.register(
     writeRoutes({
+      actor: (request) => request.principal ?? null,
       service: writes,
       store,
       catalog: options.catalog,
@@ -4852,36 +2553,6 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       onWritesChanged: () => onWritesChanged(),
     }),
   );
-
-  /*
-   * Every connection can change what its API lets it change — nothing to
-   * switch on — so an entry whose write endpoints were never read has them
-   * read: when a connection is added from it, and once at startup for any
-   * added before writes existed. That is a read of the API's published
-   * specification, never of the account.
-   */
-  const writeReader =
-    options.autoReadWrites === true && catalog
-      ? new WriteEndpointReader({
-          catalog,
-          fetchDocument: readDocument,
-          onRead: (entryId, result) => {
-            app.log.info(`read ${result.writes} write endpoint(s) for ${entryId}`);
-            onWritesChanged();
-          },
-          onFailed: (entryId, error) =>
-            app.log.warn(`could not read the write endpoints for ${entryId}: ${error instanceof Error ? error.message : String(error)}`),
-        })
-      : undefined;
-  readWritesFor = (connection) => {
-    if (connection.catalog) void writeReader?.ensure(connection.catalog);
-  };
-  if (writeReader) {
-    app.addHook("onReady", async () => {
-      for (const connection of store.listConnections()) readWritesFor(connection);
-    });
-    app.addHook("onClose", async () => writeReader.close());
-  }
 
   /* ── chat ───────────────────────────────────────────────────────────── */
 

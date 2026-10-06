@@ -1,4 +1,4 @@
-import { isIncompleteNote, type FetchMeta } from "@freebirdai/dash-adapters";
+import { isIncompleteNote, type FetchMeta } from "@freebirdai/connect/adapters";
 
 /**
  * Every reason what a widget draws is not all of it, one sentence each.

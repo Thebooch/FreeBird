@@ -3,7 +3,12 @@
   "changelog": "@changesets/cli/changelog",
   "commit": false,
   "fixed": [],
-  "linked": [["@freebirdai/*", "create-freebird"]],
+  "linked": [
+    [
+      "@freebirdai/*",
+      "create-freebird"
+    ]
+  ],
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
@@ -11,6 +16,9 @@
     "freebird-next-starter",
     "freebird-vite-express",
     "freebird-static-embed-example",
-    "freebird-docs"
+    "freebird-docs",
+    "freebird-connect-node-example",
+    "freebird-connect-express-example",
+    "@freebirdai/connect-bench"
   ]
 }

@@ -1,7 +1,7 @@
 ---
 "@freebirdai/dash-spec": minor
 "@freebirdai/dash-agent": minor
-"@freebirdai/dash-adapters": minor
+"@freebirdai/connect": minor
 "@freebirdai/dash-react": minor
 "@freebirdai/dash-server": minor
 "@freebirdai/dash-web": minor

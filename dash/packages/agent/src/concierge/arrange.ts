@@ -1,6 +1,6 @@
 import { pathSegments, singularNoun } from "@freebirdai/dash-spec";
 import { fieldsForRole } from "../bind.js";
-import type { InferredShape } from "../infer.js";
+import type { InferredShape } from "@freebirdai/connect/agent";
 import type { ConciergeDraft } from "./draft.js";
 import { isRoleStep, partView, partsOf, withPart } from "./draft.js";
 import { contextForConnection, fieldPool, type ConciergeContext } from "./steps.js";

@@ -5,12 +5,11 @@
  */
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { analysePage, endpointsNamed } from "../discovery/docs.js";
-import { AUTO_INDEX_PAGES, discover } from "../discovery/index.js";
+import { analysePage, AUTO_INDEX_PAGES, discover, endpointsNamed } from "@freebirdai/connect/host";
 import { loadEnvFile } from "../env.js";
 import { defaultModelId, llmForModel } from "../llm.js";
-import { PROVIDERS } from "./providers/index.js";
-import { benchTransport } from "./transport.js";
+import { PROVIDERS } from "@freebirdai/connect-bench";
+import { benchTransport } from "@freebirdai/connect-bench";
 
 loadEnvFile({ startDir: dirname(fileURLToPath(import.meta.url)) });
 const provider = PROVIDERS.find((one) => one.id === process.argv[2]);

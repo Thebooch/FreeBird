@@ -4,7 +4,7 @@ import { newDraft, partCount, partsOf } from "./concierge/draft.js";
 import { applyArrangement, feasibleArrangements, pairEndpoints } from "./concierge/arrange.js";
 import { emptyContext, type ConciergeContext } from "./concierge/steps.js";
 import { revise } from "./concierge/revise.js";
-import { inferShape } from "./infer.js";
+import { inferShape } from "@freebirdai/connect/agent";
 
 /**
  * Which ways two endpoints could be shown together, and what each costs.

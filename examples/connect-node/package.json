@@ -1,0 +1,20 @@
+{
+  "name": "freebird-connect-node-example",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Read an API from a plain Node script with @freebirdai/connect.",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@freebirdai/adapters-llm-anthropic": "workspace:*",
+    "@freebirdai/connect": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

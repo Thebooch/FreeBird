@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { baselineIntegrator, benchTooling, referenceIntegrator } from "./integrator.js";
-import { PROVIDERS } from "./providers/index.js";
+import { PROVIDERS } from "@freebirdai/connect-bench";
 import { runSuite } from "./run.js";
 
 /**

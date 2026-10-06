@@ -1,8 +1,9 @@
 import { z } from "zod";
+import { FACET_MAX_PER_WIDGET } from "@freebirdai/connect-spec";
 import type { BindingIssue, ColumnMeta } from "./contracts.js";
 import { fieldNameSchema } from "./pipeline.js";
-import { statusTone } from "./semantics.js";
-import type { StatusTone } from "./semantics.js";
+import { statusTone } from "@freebirdai/connect-spec";
+import type { StatusTone } from "@freebirdai/connect-spec";
 
 /**
  * A category a reader can filter one widget down to, with a count.
@@ -32,7 +33,7 @@ import type { StatusTone } from "./semantics.js";
 export const FACET_MAX_VALUES = 24;
 
 /** Three strips is already a lot of chrome above one widget. */
-export const FACET_MAX_PER_WIDGET = 3;
+export { FACET_MAX_PER_WIDGET };
 
 /**
  * What a value is called when there is not one.
@@ -51,7 +52,7 @@ export const FACET_EMPTY_KEY = "—";
  * and two implementations that disagreed would produce a tile that filters to
  * nothing while showing a count above zero.
  *
- * Stringifying is what makes that safe rather than sloppy. `@freebirdai/dash-expr`
+ * Stringifying is what makes that safe rather than sloppy. `@freebirdai/expr`
  * compares strictly on purpose, and a facet that matched `"1688"` against
  * `1688` by coercion would be the silent wrongness that rejects. Here neither
  * side is a value being compared against another value: both are put through

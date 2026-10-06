@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { answerBrief, briefOptions } from "./brief-options.js";
 import { compileBrief, type WidgetBrief } from "./brief.js";
-import { entityGraph } from "./entity-graph.js";
-import { entitySchema, type EntitySpec } from "./entity.js";
-import { resourceSchema } from "./resource.js";
+import { entityGraph } from "@freebirdai/connect-spec";
+import { entitySchema, type EntitySpec } from "@freebirdai/connect-spec";
+import { resourceSchema } from "@freebirdai/connect-spec";
 
 /**
  * What a widget could be changed to, and changing it.

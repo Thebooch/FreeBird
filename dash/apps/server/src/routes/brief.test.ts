@@ -4,11 +4,9 @@ import { join } from "node:path";
 import { fakeLlm } from "@freebirdai/dash-agent";
 import { connectionSchema, dashboardSchema } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CatalogStore } from "../catalog.js";
+import { CatalogStore, KeyStore, LocalAesVault, MemorySeenValueStore } from "@freebirdai/connect/host";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
-import { MemorySeenValueStore } from "../values/store.js";
-import { KeyStore, LocalAesVault } from "../vault.js";
 
 /**
  * A request for a widget, over HTTP, answered from the record types.

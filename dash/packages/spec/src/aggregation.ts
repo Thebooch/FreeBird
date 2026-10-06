@@ -1,4 +1,4 @@
-import type { Aggregation } from "./semantics.js";
+import type { Aggregation } from "@freebirdai/connect-spec";
 
 export interface ParsedAggregation {
   readonly fn: Aggregation;

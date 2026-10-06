@@ -1,20 +1,23 @@
 import {
   AdapterError,
   DependentAdapter,
-  RestAdapter,
-  isIncompleteNote,
   type FetchMeta,
   type FetchResult,
+  isIncompleteNote,
+  RestAdapter,
   type SourceAdapter,
-} from "@freebirdai/dash-adapters";
-import { OAuthRetryAdapter, RateLimitWaitAdapter } from "../auth/retry-adapter.js";
-import { ConnectorAdapter } from "../connector/adapter.js";
-import { LongReads } from "../jobs/long-reads.js";
-import { MemoryJobStore } from "../jobs/store.js";
-import { benchConnectors } from "./connectors.js";
+} from "@freebirdai/connect/adapters";
+import {
+  ConnectorAdapter,
+  LongReads,
+  MemoryJobStore,
+  OAuthRetryAdapter,
+  RateLimitWaitAdapter,
+} from "@freebirdai/connect/host";
+import { benchConnectors } from "@freebirdai/connect-bench";
 import { executeWidget } from "@freebirdai/dash-runtime";
 import { getOp, paramsForWidget, resolveRange, type ConnectionSpec, type OpSpec, type ResolvedParams } from "@freebirdai/dash-spec";
-import type { BenchTransport } from "./transport.js";
+import type { BenchTransport } from "@freebirdai/connect-bench";
 import type {
   Completeness,
   IntegrationOutcome,

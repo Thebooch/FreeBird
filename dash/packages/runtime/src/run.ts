@@ -1,4 +1,4 @@
-import type { ExprAst, Grain } from "@freebirdai/dash-expr";
+import type { ExprAst, Grain } from "@freebirdai/expr";
 import {
   advanceBucket,
   evalExpr,
@@ -8,7 +8,7 @@ import {
   toEpochMs,
   toNumber,
   truncateToBucket,
-} from "@freebirdai/dash-expr";
+} from "@freebirdai/expr";
 import type { Aggregation, GroupStep, PipelineStep, ResolvedParams } from "@freebirdai/dash-spec";
 import {
   ALL_ROWS,

@@ -10,9 +10,8 @@ import {
   resourceSchema,
 } from "@freebirdai/dash-spec";
 import { buildServer } from "./server.js";
-import { CatalogStore } from "./catalog.js";
+import { CatalogStore, KeyStore, LocalAesVault } from "@freebirdai/connect/host";
 import { SpecStore } from "./store.js";
-import { KeyStore, LocalAesVault } from "./vault.js";
 
 /**
  * Changing a widget that is already on a board.

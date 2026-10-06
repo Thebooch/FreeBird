@@ -12,29 +12,39 @@ import {
   type Evidence,
 } from "@freebirdai/dash-spec";
 import { afterEach, describe, expect, it } from "vitest";
-import { json } from "../bench/seed.js";
-import { billhub } from "../bench/providers/billhub.js";
-import { casebook } from "../bench/providers/casebook.js";
-import { keyring } from "../bench/providers/keyring.js";
-import { ledgerly } from "../bench/providers/ledgerly.js";
-import { multicur } from "../bench/providers/multicur.js";
-import { rentroll } from "../bench/providers/rentroll.js";
-import { taskpad } from "../bench/providers/taskpad.js";
-import { benchTransport } from "../bench/transport.js";
+import { json } from "@freebirdai/connect-bench";
+import { billhub } from "@freebirdai/connect-bench/providers/billhub";
+import { casebook } from "@freebirdai/connect-bench/providers/casebook";
+import { keyring } from "@freebirdai/connect-bench/providers/keyring";
+import { ledgerly } from "@freebirdai/connect-bench/providers/ledgerly";
+import { multicur } from "@freebirdai/connect-bench/providers/multicur";
+import { rentroll } from "@freebirdai/connect-bench/providers/rentroll";
+import { taskpad } from "@freebirdai/connect-bench/providers/taskpad";
+import { benchTransport } from "@freebirdai/connect-bench";
 import type { BenchRequest, MockProvider } from "../bench/types.js";
-import { CatalogStore, connectionFromCatalog } from "../catalog.js";
-import { discover } from "../discovery/index.js";
-import { probePagination } from "../discovery/probe-pagination.js";
-import { DbEvidenceStore, EVIDENCE_PER_OP, MemoryEvidenceStore } from "../evidence/store.js";
-import { openDashDb } from "../platform/db.js";
-import { integrationTargets, samplingTargets } from "../routes/integrate.js";
-import { MemorySeenValueStore } from "../values/store.js";
+import {
+  applyPatch,
+  budgetOf,
+  CatalogStore,
+  connectionFromCatalog,
+  discover,
+  EVIDENCE_PER_OP,
+  integrate,
+  integrationTargets,
+  KeyStore,
+  LocalAesVault,
+  MemoryEvidenceStore,
+  MemorySeenValueStore,
+  probePagination,
+  sameSite,
+  samplingTargets,
+  siteOf,
+  tryRead,
+} from "@freebirdai/connect/host";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
-import { KeyStore, LocalAesVault } from "../vault.js";
-import { integrate } from "./agent.js";
-import { applyPatch, sameSite, siteOf } from "./patch.js";
-import { budgetOf, tryRead } from "./read.js";
+import { DbEvidenceStore } from "@freebirdai/connect-postgres";
+import { openDashDb } from "../platform/db.js";
 
 /**
  * The integration loop, against the benchmark's dev-set providers.

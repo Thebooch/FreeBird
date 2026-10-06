@@ -1,6 +1,6 @@
 import type { DraftPatch, ProposalResult } from "@freebirdai/dash-agent";
 import { isEmptyShape, rolesForShape } from "@freebirdai/dash-spec";
-import { renameExprFields } from "@freebirdai/dash-expr";
+import { renameExprFields } from "@freebirdai/expr";
 
 /** Both primary and additional widgets cross the same lossless boundary. */
 export const proposalPatch = (proposal: ProposalResult): DraftPatch => {

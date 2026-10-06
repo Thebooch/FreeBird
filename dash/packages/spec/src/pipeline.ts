@@ -1,9 +1,9 @@
-import { parseExpr, parsePath } from "@freebirdai/dash-expr";
+import { parseExpr, parsePath } from "@freebirdai/expr";
 import { z } from "zod";
 import { parseAggregation } from "./aggregation.js";
-import { coercionSchema } from "./coercion.js";
-import { grainSchema } from "./params.js";
-import { semanticTypeSchema } from "./semantics.js";
+import { coercionSchema } from "@freebirdai/connect-spec";
+import { grainSchema } from "@freebirdai/connect-spec";
+import { semanticTypeSchema } from "@freebirdai/connect-spec";
 
 /**
  * A column name the pipeline can produce.

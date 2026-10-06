@@ -1,19 +1,22 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { HttpFetch } from "@freebirdai/dash-adapters";
+import type { HttpFetch } from "@freebirdai/connect/adapters";
 import { connectionSchema } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CatalogStore } from "../catalog.js";
+import {
+  CatalogStore,
+  KeyStore,
+  LastSeen,
+  LocalAesVault,
+  MemoryJournal,
+  QueryCache,
+  WriteService,
+} from "@freebirdai/connect/host";
 import type { Policy } from "../identity/policy.js";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
-import { KeyStore, LocalAesVault } from "../vault.js";
-import { MemoryJournal } from "./journal.js";
-import { WriteService } from "./service.js";
-import { AdapterRegistry, RestAdapter } from "@freebirdai/dash-adapters";
-import { QueryCache } from "../cache/queryCache.js";
-import { LastSeen } from "../keeper/keeper.js";
+import { AdapterRegistry, RestAdapter } from "@freebirdai/connect/adapters";
 import { ownerPolicy } from "../identity/policy.js";
 
 /**

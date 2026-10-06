@@ -1,4 +1,4 @@
-import { AdapterRegistry, InlineAdapter } from "@freebirdai/dash-adapters";
+import { AdapterRegistry, InlineAdapter } from "@freebirdai/connect/adapters";
 import { connectionSchema, dashboardSchema, widgetSchema } from "@freebirdai/dash-spec";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";

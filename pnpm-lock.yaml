@@ -43,6 +43,209 @@ importers:
         specifier: ^2.1.6
         version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
 
+  connect/packages/actions:
+    dependencies:
+      '@freebirdai/connect':
+        specifier: workspace:*
+        version: link:../connect
+      '@freebirdai/core':
+        specifier: workspace:*
+        version: link:../../../guide/packages/core
+    devDependencies:
+      '@freebirdai/connect-spec':
+        specifier: workspace:*
+        version: link:../spec
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.19.17
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.6
+        version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+
+  connect/packages/bench:
+    dependencies:
+      '@freebirdai/connect':
+        specifier: workspace:*
+        version: link:../connect
+      '@freebirdai/connect-sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
+      '@freebirdai/connect-spec':
+        specifier: workspace:*
+        version: link:../spec
+    devDependencies:
+      '@freebirdai/connect-postgres':
+        specifier: workspace:*
+        version: link:../postgres
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.19.17
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.6
+        version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+
+  connect/packages/browser:
+    dependencies:
+      '@freebirdai/connect':
+        specifier: workspace:*
+        version: link:../connect
+      playwright-core:
+        specifier: 1.63.0
+        version: 1.63.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.19.17
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.6
+        version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
+
+  connect/packages/connect:
+    dependencies:
+      '@freebirdai/connect-spec':
+        specifier: workspace:*
+        version: link:../spec
+      '@freebirdai/contracts':
+        specifier: workspace:*
+        version: link:../../../shared/packages/contracts
+      '@freebirdai/expr':
+        specifier: workspace:*
+        version: link:../../../shared/packages/expr
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.19.17
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.6
+        version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+
+  connect/packages/postgres:
+    dependencies:
+      '@electric-sql/pglite':
+        specifier: ^0.5.4
+        version: 0.5.5
+      '@freebirdai/adapters-db-postgres':
+        specifier: workspace:*
+        version: link:../../../guide/packages/adapters-db-postgres
+      '@freebirdai/connect':
+        specifier: workspace:*
+        version: link:../connect
+      '@freebirdai/connect-spec':
+        specifier: workspace:*
+        version: link:../spec
+      kysely:
+        specifier: ^0.27.4
+        version: 0.27.6
+    devDependencies:
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.19.17
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.6
+        version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
+
+  connect/packages/sandbox:
+    dependencies:
+      '@freebirdai/connect':
+        specifier: workspace:*
+        version: link:../connect
+      '@freebirdai/connect-spec':
+        specifier: workspace:*
+        version: link:../spec
+      '@jitl/quickjs-wasmfile-release-sync':
+        specifier: 0.32.0
+        version: 0.32.0
+      quickjs-emscripten-core:
+        specifier: 0.32.0
+        version: 0.32.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.19.17
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.6
+        version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
+
+  connect/packages/server:
+    dependencies:
+      '@freebirdai/connect':
+        specifier: workspace:*
+        version: link:../connect
+      '@freebirdai/connect-spec':
+        specifier: workspace:*
+        version: link:../spec
+    devDependencies:
+      '@types/express':
+        specifier: ^5.0.0
+        version: 5.0.6
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.19.17
+      express:
+        specifier: ^4.21.1
+        version: 4.22.1
+      fastify:
+        specifier: ^5.1.0
+        version: 5.8.5
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.6
+        version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+
+  connect/packages/spec:
+    dependencies:
+      '@freebirdai/expr':
+        specifier: workspace:*
+        version: link:../../../shared/packages/expr
+    devDependencies:
+      tsup:
+        specifier: ^8.3.5
+        version: 8.5.1(jiti@1.21.7)(postcss@8.5.10)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.9.0)
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.6
+        version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+
   dash/apps/server:
     dependencies:
       '@electric-sql/pglite':
@@ -51,18 +254,30 @@ importers:
       '@freebirdai/adapters-db-postgres':
         specifier: workspace:*
         version: link:../../../guide/packages/adapters-db-postgres
+      '@freebirdai/connect':
+        specifier: workspace:*
+        version: link:../../../connect/packages/connect
+      '@freebirdai/connect-bench':
+        specifier: workspace:*
+        version: link:../../../connect/packages/bench
+      '@freebirdai/connect-browser':
+        specifier: workspace:*
+        version: link:../../../connect/packages/browser
+      '@freebirdai/connect-postgres':
+        specifier: workspace:*
+        version: link:../../../connect/packages/postgres
+      '@freebirdai/connect-sandbox':
+        specifier: workspace:*
+        version: link:../../../connect/packages/sandbox
+      '@freebirdai/connect-server':
+        specifier: workspace:*
+        version: link:../../../connect/packages/server
       '@freebirdai/core':
         specifier: workspace:*
         version: link:../../../guide/packages/core
-      '@freebirdai/dash-adapters':
-        specifier: workspace:*
-        version: link:../../packages/adapters
       '@freebirdai/dash-agent':
         specifier: workspace:*
         version: link:../../packages/agent
-      '@freebirdai/dash-expr':
-        specifier: workspace:*
-        version: link:../../packages/expr
       '@freebirdai/dash-parts':
         specifier: workspace:*
         version: link:../../packages/parts
@@ -72,6 +287,9 @@ importers:
       '@freebirdai/dash-spec':
         specifier: workspace:*
         version: link:../../packages/spec
+      '@freebirdai/expr':
+        specifier: workspace:*
+        version: link:../../../shared/packages/expr
       '@freebirdai/server':
         specifier: workspace:*
         version: link:../../../guide/packages/server
@@ -112,15 +330,15 @@ importers:
 
   dash/apps/web:
     dependencies:
+      '@freebirdai/connect':
+        specifier: workspace:*
+        version: link:../../../connect/packages/connect
       '@freebirdai/core':
         specifier: workspace:*
         version: link:../../../guide/packages/core
       '@freebirdai/core-state':
         specifier: workspace:*
         version: link:../../../guide/packages/core-state
-      '@freebirdai/dash-adapters':
-        specifier: workspace:*
-        version: link:../../packages/adapters
       '@freebirdai/dash-agent':
         specifier: workspace:*
         version: link:../../packages/agent
@@ -168,39 +386,23 @@ importers:
         specifier: ^5.4.11
         version: 5.4.21(@types/node@22.19.17)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
 
-  dash/packages/adapters:
-    dependencies:
-      '@freebirdai/dash-expr':
-        specifier: workspace:*
-        version: link:../expr
-      '@freebirdai/dash-spec':
-        specifier: workspace:*
-        version: link:../spec
-    devDependencies:
-      tsup:
-        specifier: ^8.3.5
-        version: 8.5.1(jiti@1.21.7)(postcss@8.5.10)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.9.0)
-      typescript:
-        specifier: ^5.7.2
-        version: 5.9.3
-      vitest:
-        specifier: ^2.1.6
-        version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
-      zod:
-        specifier: ^3.23.8
-        version: 3.25.76
-
   dash/packages/agent:
     dependencies:
-      '@freebirdai/dash-expr':
+      '@freebirdai/connect':
         specifier: workspace:*
-        version: link:../expr
+        version: link:../../../connect/packages/connect
+      '@freebirdai/connect-spec':
+        specifier: workspace:*
+        version: link:../../../connect/packages/spec
       '@freebirdai/dash-runtime':
         specifier: workspace:*
         version: link:../runtime
       '@freebirdai/dash-spec':
         specifier: workspace:*
         version: link:../spec
+      '@freebirdai/expr':
+        specifier: workspace:*
+        version: link:../../../shared/packages/expr
     devDependencies:
       tsup:
         specifier: ^8.3.5
@@ -249,18 +451,6 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
 
-  dash/packages/expr:
-    devDependencies:
-      tsup:
-        specifier: ^8.3.5
-        version: 8.5.1(jiti@1.21.7)(postcss@8.5.10)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.9.0)
-      typescript:
-        specifier: ^5.7.2
-        version: 5.9.3
-      vitest:
-        specifier: ^2.1.6
-        version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
-
   dash/packages/parts:
     devDependencies:
       tsup:
@@ -275,9 +465,9 @@ importers:
 
   dash/packages/react:
     dependencies:
-      '@freebirdai/dash-adapters':
+      '@freebirdai/connect':
         specifier: workspace:*
-        version: link:../adapters
+        version: link:../../../connect/packages/connect
       '@freebirdai/dash-components':
         specifier: workspace:*
         version: link:../components
@@ -318,12 +508,12 @@ importers:
 
   dash/packages/runtime:
     dependencies:
-      '@freebirdai/dash-expr':
-        specifier: workspace:*
-        version: link:../expr
       '@freebirdai/dash-spec':
         specifier: workspace:*
         version: link:../spec
+      '@freebirdai/expr':
+        specifier: workspace:*
+        version: link:../../../shared/packages/expr
     devDependencies:
       tsup:
         specifier: ^8.3.5
@@ -340,9 +530,12 @@ importers:
 
   dash/packages/spec:
     dependencies:
-      '@freebirdai/dash-expr':
+      '@freebirdai/connect-spec':
         specifier: workspace:*
-        version: link:../expr
+        version: link:../../../connect/packages/spec
+      '@freebirdai/expr':
+        specifier: workspace:*
+        version: link:../../../shared/packages/expr
     devDependencies:
       tsup:
         specifier: ^8.3.5
@@ -390,6 +583,65 @@ importers:
       '@docusaurus/types':
         specifier: ^3.6.3
         version: 3.10.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  examples/connect-express:
+    dependencies:
+      '@freebirdai/adapters-llm-anthropic':
+        specifier: workspace:*
+        version: link:../../guide/packages/adapters-llm-anthropic
+      '@freebirdai/connect':
+        specifier: workspace:*
+        version: link:../../connect/packages/connect
+      '@freebirdai/connect-actions':
+        specifier: workspace:*
+        version: link:../../connect/packages/actions
+      '@freebirdai/connect-server':
+        specifier: workspace:*
+        version: link:../../connect/packages/server
+      '@freebirdai/core':
+        specifier: workspace:*
+        version: link:../../guide/packages/core
+      '@freebirdai/server':
+        specifier: workspace:*
+        version: link:../../guide/packages/server
+      express:
+        specifier: ^4.21.1
+        version: 4.22.1
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+    devDependencies:
+      '@types/express':
+        specifier: ^5.0.0
+        version: 5.0.6
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.19.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.21.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  examples/connect-node:
+    dependencies:
+      '@freebirdai/adapters-llm-anthropic':
+        specifier: workspace:*
+        version: link:../../guide/packages/adapters-llm-anthropic
+      '@freebirdai/connect':
+        specifier: workspace:*
+        version: link:../../connect/packages/connect
+    devDependencies:
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.19.17
+      tsx:
+        specifier: ^4.19.2
+        version: 4.21.0
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
@@ -720,6 +972,9 @@ importers:
 
   guide/packages/core:
     dependencies:
+      '@freebirdai/contracts':
+        specifier: workspace:*
+        version: link:../../../shared/packages/contracts
       nanoid:
         specifier: ^5.0.9
         version: 5.1.9
@@ -987,6 +1242,33 @@ importers:
       vue:
         specifier: ^3.5.0
         version: 3.5.33(typescript@5.9.3)
+
+  shared/packages/contracts:
+    devDependencies:
+      tsup:
+        specifier: ^8.3.5
+        version: 8.5.1(jiti@1.21.7)(postcss@8.5.10)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.9.0)
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.6
+        version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+
+  shared/packages/expr:
+    devDependencies:
+      tsup:
+        specifier: ^8.3.5
+        version: 8.5.1(jiti@1.21.7)(postcss@8.5.10)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.9.0)
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.6
+        version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
 
 packages:
 

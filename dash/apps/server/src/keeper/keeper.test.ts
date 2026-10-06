@@ -1,10 +1,16 @@
 import type { ConnectionSpec, DashboardSpec, EntityLinkView } from "@freebirdai/dash-spec";
 import { connectionSchema, dashboardSchema, getOp, resolveRange } from "@freebirdai/dash-spec";
-import { AdapterError } from "@freebirdai/dash-adapters";
+import { AdapterError } from "@freebirdai/connect/adapters";
 import { describe, expect, it } from "vitest";
-import { QueryCache } from "../cache/queryCache.js";
-import { buildQueryRequest } from "../query.js";
-import { FAILURE_BACKOFF_MS, Keeper, LastSeen, retryAfterMs, type RefreshOutcome } from "./keeper.js";
+import {
+  buildQueryRequest,
+  FAILURE_BACKOFF_MS,
+  Keeper,
+  LastSeen,
+  QueryCache,
+  retryAfterMs,
+} from "@freebirdai/connect/host";
+import type { RefreshOutcome } from "@freebirdai/connect/host";
 import { WIDGET_EVERY_FLOOR_MS, boardParams, warmTargets, type WarmTarget } from "./targets.js";
 import { ViewedRequests, paramShape, type ViewedRequest } from "./viewed.js";
 

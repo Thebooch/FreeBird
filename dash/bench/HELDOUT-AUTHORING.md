@@ -6,7 +6,7 @@ This file is the brief for that session.
 
 ## What to write
 
-A new file, `apps/server/src/bench/providers/heldout-<yyyy-mm-dd>.ts`, with **5–8 mock providers**, registered in `providers/index.ts` with `split: "heldout"`. Each is a small in-process API — documentation, seeded data, answer keys — shaped like a real business SaaS API.
+A new file, `connect/packages/bench/src/providers/heldout-<yyyy-mm-dd>.ts`, with **5–8 mock providers**, registered in `providers/index.ts` with `split: "heldout"`. Each is a small in-process API — documentation, seeded data, answer keys — shaped like a real business SaaS API.
 
 Draw the patterns from real APIs you know. Real APIs are awkward in specific ways, and those are what to reproduce. Examples of the kind of thing, not a list to copy:
 - query languages in a parameter;
@@ -36,14 +36,14 @@ Each provider (`MockProvider` in `bench/types.ts`) needs:
 - `docsUrl` and a `handle(request)` that serves the documentation and the API from the provider's own hosts (`*.bench.test`).
 - `credentials` and `credentialLabels`: what a person would paste, with the names the provider's settings page uses.
 - At least one objective. It needs a plain-language `request`, and an `answer` computed from the seed by reference code in the same file. That means filtering and summing the seed, never calling anything in Dash. It also needs a `tolerance`, the `records` the collection holds, and a `scripted` choice (the endpoint path and the measure a correct integrator would pick).
-- Deterministic data: `random(seed)` from `bench/seed.ts`, and `reset()` for any state.
+- Deterministic data: `random(seed)` from `connect/packages/bench/src/seed.ts`, and `reset()` for any state.
 - A `reference` connection where Dash's connection format can express it — a hand-written configuration that reaches the answer, to prove the key. Read `packages/spec/src/connection.ts`, `primitives.ts` and `connector.ts` for the format. Where no configuration can reach the data, leave `reference` out and say so in a comment. Connector code in a reference imports only `connectorHash` from `connector/adapter.ts`.
 
 ## What not to read
 
 - `apps/server/src/integrate/` — the loop, its repairs and its model prompts;
 - `apps/server/src/discovery/` — the importers;
-- the internals of `apps/server/src/connector/` (beyond `connectorHash`);
+- the internals of `connect/packages/connect/src/connector/` (beyond `connectorHash`);
 - `packages/agent/`;
 - `bench/results/` — what the loop has passed and failed;
 - the existing held-out and dev providers' designs, beyond one file for the format (`providers/heldout-ledgerline-quotient.ts`).

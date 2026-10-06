@@ -8,7 +8,7 @@ import {
   resolveCandidate,
   writeBrief,
 } from "./brief.js";
-import { fakeLlm } from "./llm.js";
+import { fakeLlm } from "@freebirdai/connect/agent";
 
 /**
  * Turning a request into a brief, over record types rather than endpoints.

@@ -2,15 +2,13 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { drawnhub } from "../../bench/providers/drawnhub.js";
-import { benchTransport } from "../../bench/transport.js";
+import { drawnhub } from "@freebirdai/connect-bench/providers/drawnhub";
+import { benchTransport } from "@freebirdai/connect-bench";
 import { benchTooling } from "../../bench/integrator.js";
 import { buildServer } from "../../server.js";
 import { SpecStore } from "../../store.js";
-import { KeyStore, LocalAesVault } from "../../vault.js";
-import { discover } from "../index.js";
-import { BrowserDocsRenderer } from "./browser.js";
-import { RendererTooling, type PlaywrightLike } from "./tooling.js";
+import { discover, KeyStore, LocalAesVault } from "@freebirdai/connect/host";
+import { BrowserDocsRenderer, type PlaywrightLike, RendererTooling } from "@freebirdai/connect-browser";
 
 /*
  * Playwright's own Chromium, for documentation drawn by scripts: fetched

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CategorySpec, EntitySpec, ResourceSpec } from "@freebirdai/dash-spec";
 import { categorySchema, entitySchema, resourceSchema } from "@freebirdai/dash-spec";
 import type { BriefCandidate } from "./brief.js";
-import { fakeLlm } from "./llm.js";
+import { fakeLlm } from "@freebirdai/connect/agent";
 import {
   buildStarterPrompt,
   composeStarters,

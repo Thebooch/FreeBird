@@ -8,7 +8,7 @@ import {
   composeCategory,
   inferShape,
 } from "@freebirdai/dash-agent";
-import { AdapterError } from "@freebirdai/dash-adapters";
+import { AdapterError } from "@freebirdai/connect/adapters";
 import { compilePlan, executeWidget, runPipeline } from "@freebirdai/dash-runtime";
 import type {
   CatalogEntry,
@@ -33,12 +33,14 @@ import {
   interpolateValue,
   boardInputs,
   onboardingChoicesSchema,
+  onboardingOf,
   onboardingSchema,
   opDefSchema,
+  startersOf,
   widgetSources,
 } from "@freebirdai/dash-spec";
-import type { CatalogStore } from "../catalog.js";
-import { hasRhythm, mergeApiRhythm } from "../keeper/rhythm.js";
+import { hasRhythm, mergeApiRhythm } from "@freebirdai/connect/host";
+import type { CatalogStore } from "@freebirdai/connect/host";
 import { boardParams } from "../keeper/targets.js";
 import { allocateDashboardId, buildCategory, packBoards, type Built } from "./materialise.js";
 
@@ -242,7 +244,7 @@ export const offersFor = (input: {
       const resource = byId.get(id)?.resource ?? id;
       return sum + (counts[resource] ?? 0);
     }, 0);
-    const buildable = category.starters.filter((starter) =>
+    const buildable = startersOf(category).filter((starter) =>
       mine.includes(starter.brief.entity),
     );
     const unavailable =
@@ -361,7 +363,7 @@ export class OnboardingService {
   }
 
   private setupOf(connection: ConnectionSpec): OnboardingSpec {
-    return connection.onboarding ?? NOT_STARTED;
+    return onboardingOf(connection) ?? NOT_STARTED;
   }
 
   /** Write the connection's setup, over the latest copy of the connection. */
@@ -592,7 +594,7 @@ export class OnboardingService {
 
       /* 2. The next part not yet composed. */
       const pending = (entry.categories ?? []).find((category) => category.status === "pending");
-      if (pending) return compose(pending);
+      if (pending) return compose({ ...pending, starters: startersOf(pending) });
 
       /* 3. How often each record type gains rows. */
       if (!state.rhythm) {
@@ -617,7 +619,7 @@ export class OnboardingService {
 
       /* 4. A part that failed last time. */
       const failed = (entry.categories ?? []).find((category) => category.status === "failed");
-      if (failed) return compose(failed);
+      if (failed) return compose({ ...failed, starters: startersOf(failed) });
 
       return none;
     });

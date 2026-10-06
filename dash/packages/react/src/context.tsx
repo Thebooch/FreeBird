@@ -1,4 +1,4 @@
-import type { AdapterRegistry } from "@freebirdai/dash-adapters";
+import type { AdapterRegistry } from "@freebirdai/connect/adapters";
 import type {
   DashboardSpec,
   EntityLinkView,

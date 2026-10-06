@@ -4,10 +4,9 @@ import { join } from "node:path";
 import { fakeLlm } from "@freebirdai/dash-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { connectionSchema } from "@freebirdai/dash-spec";
-import { CatalogStore } from "../catalog.js";
+import { CatalogStore, KeyStore, LocalAesVault } from "@freebirdai/connect/host";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
-import { KeyStore, LocalAesVault } from "../vault.js";
 
 /**
  * Describing an API's records, over HTTP, with no model and no network.

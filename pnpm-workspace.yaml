@@ -1,9 +1,14 @@
 packages:
   - "guide/packages/*"
+  # Shared by every product: the expression language and the contracts they agree on.
+  - "shared/packages/*"
   - "examples/*"
   - "docs"
   # FreeBird Dash — declarative dashboard binding runtime, developed in lockstep
   # with @freebirdai/core. Kept in-tree so core changes and their Dash consumers
   # land in one commit instead of via a file: override on a sibling checkout.
+  # FreeBird Connect — the integration engine, being split out of Dash so it
+  # can be used on its own. Dash depends on it.
+  - "connect/packages/*"
   - "dash/packages/*"
   - "dash/apps/*"

@@ -44,6 +44,11 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: "category",
+      label: "Connect",
+      items: ["connect/overview"],
+    },
+    {
+      type: "category",
       label: "Tooling",
       items: [
         "tooling/manifest-and-codegen",

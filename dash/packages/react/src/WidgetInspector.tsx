@@ -1,6 +1,6 @@
 import { formatValue, widgetSources } from "@freebirdai/dash-spec";
 import { Fragment, useEffect, useMemo } from "react";
-import type { FetchMeta } from "@freebirdai/dash-adapters";
+import type { FetchMeta } from "@freebirdai/connect/adapters";
 import type { WidgetData } from "./useWidgetData.js";
 
 const truncate = (value: unknown, limit = 4_000): string => {

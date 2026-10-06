@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { CATEGORY_VERSION, catalogEntrySchema, connectionSchema } from "@freebirdai/connect-spec";
 import {
-  CATEGORY_VERSION,
   categorySchema,
+  onboardingOf,
   onboardingSchema,
   starterSchema,
 } from "./category.js";
-import { catalogEntrySchema } from "./dialect.js";
-import { connectionSchema } from "./connection.js";
 import { contractFor } from "./contracts.js";
 import { solveLayout } from "./layout.js";
 
@@ -126,9 +125,10 @@ describe("connectionSchema", () => {
         at: "2026-09-21T00:00:00.000Z",
       },
     });
-    expect(parsed.onboarding?.status).toBe("complete");
-    expect(parsed.onboarding?.choices?.categories).toEqual(["leasing", "maintenance"]);
-    expect(parsed.onboarding?.dashboards).toHaveLength(2);
+    const onboarding = onboardingOf(parsed);
+    expect(onboarding?.status).toBe("complete");
+    expect(onboarding?.choices?.categories).toEqual(["leasing", "maintenance"]);
+    expect(onboarding?.dashboards).toHaveLength(2);
   });
 
   /* The first version recorded only a finished setup, as `chose`/`boards`. */

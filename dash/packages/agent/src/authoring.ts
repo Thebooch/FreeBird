@@ -1,6 +1,6 @@
 import type { HighlightSpec, ResourceSpec, WidgetSpec } from "@freebirdai/dash-spec";
 import { isFieldNoise, parseWidget } from "@freebirdai/dash-spec";
-import type { FieldInfo, InferredShape } from "./infer.js";
+import type { FieldInfo, InferredShape } from "@freebirdai/connect/agent";
 import type { Ambiguity } from "./propose.js";
 
 /**

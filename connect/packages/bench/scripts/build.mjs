@@ -1,0 +1,13 @@
+// Compiles with tsc so the output mirrors src/, then copies the recorded
+// public-API snapshots the real split reads from beside the code.
+import { execFileSync } from "node:child_process";
+import { cpSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+rmSync(join(root, "dist"), { recursive: true, force: true });
+const tsc = createRequire(import.meta.url).resolve("typescript/bin/tsc");
+execFileSync(process.execPath, [tsc, "-p", join(root, "tsconfig.build.json")], { stdio: "inherit" });
+cpSync(join(root, "src", "real", "snapshots"), join(root, "dist", "real", "snapshots"), { recursive: true });

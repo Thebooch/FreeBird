@@ -13,7 +13,9 @@ Dash builds on Guide's foundation — it uses `@freebirdai/core` for the compone
 
 ```
 guide/packages/   20 packages   @freebirdai/core, react, vue, angular, server, embed, …
-dash/packages/     8 packages   @freebirdai/dash-spec, dash-runtime, dash-react, …
+shared/packages/   2 packages   @freebirdai/expr, contracts (shared by every product)
+connect/packages/  7 packages   @freebirdai/connect, connect-spec, connect-server, connect-actions, connect-postgres, connect-sandbox, connect-browser
+dash/packages/     6 packages   @freebirdai/dash-spec, dash-runtime, dash-react, …
 dash/apps/         2 apps       the Dash server and dashboard (private, not published)
 examples/                       reference apps for Guide
 docs/                           the documentation site
@@ -146,10 +148,17 @@ An LLM writes that spec once, at authoring time — then the runtime executes it
 
 | Package | Purpose |
 |---|---|
+| [`@freebirdai/expr`](./shared/packages/expr) | Shared: the safe path + expression language, hand-rolled to an AST, no `eval` |
+| [`@freebirdai/contracts`](./shared/packages/contracts) | Shared: the LLM adapter contract and the approval digest guide, Connect and Dash agree on |
+| [`@freebirdai/connect`](./connect/packages/connect) | The integration engine: discovery, sign-in, mapping, reads, freshness and reviewed writes, plus the REST/MCP source adapters. Being split out of Dash |
+| [`@freebirdai/connect-server`](./connect/packages/server) | Optional: the engine's HTTP routes for Fastify, Express and Next.js |
+| [`@freebirdai/connect-actions`](./connect/packages/actions) | Optional: connect, read and change APIs from a FreeBird guide chat |
+| [`@freebirdai/connect-postgres`](./connect/packages/postgres) | Optional: Postgres / embedded PGlite stores for the engine's evidence, jobs, journal, shapes and leases |
+| [`@freebirdai/connect-sandbox`](./connect/packages/sandbox) | Optional: runs generated connector code in QuickJS (WebAssembly), one worker per run |
+| [`@freebirdai/connect-browser`](./connect/packages/browser) | Optional: reads API docs that are drawn in the browser, via headless Chromium |
+| [`@freebirdai/connect-spec`](./connect/packages/spec) | The connection side of the spec: connections, connectors, catalog entries, record types, evidence, rhythm and writes. Re-exported by `dash-spec` |
 | [`@freebirdai/dash-spec`](./dash/packages/spec) | Versioned schemas, semantic type registry, and the component role contracts every other package agrees on |
 | [`@freebirdai/dash-runtime`](./dash/packages/runtime) | Pure isomorphic pipeline executor: API payload → renderable rows |
-| [`@freebirdai/dash-expr`](./dash/packages/expr) | Safe path + expression language, hand-rolled to an AST, no `eval` |
-| [`@freebirdai/dash-adapters`](./dash/packages/adapters) | Source adapters — the boundary between the runtime and wherever the data lives (inline / REST / MCP) |
 | [`@freebirdai/dash-components`](./dash/packages/components) | Role-contract-driven React widgets with a validated, colorblind-safe palette |
 | [`@freebirdai/dash-react`](./dash/packages/react) | Shared params, deduplicating query cache, widget states, provenance inspector, and the grid |
 | [`@freebirdai/dash-parts`](./dash/packages/parts) | Part registry: layered resolution of swappable units, storing only what you customise |

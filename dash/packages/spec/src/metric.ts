@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { idSchema } from "./primitives.js";
+import { idSchema } from "@freebirdai/connect-spec";
 
 /**
  * What a number means, stated.

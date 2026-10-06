@@ -18,7 +18,7 @@ import {
   widgetShapeSchema,
 } from "@freebirdai/dash-spec";
 import { facetFields } from "./concierge/facets.js";
-import type { InferredShape } from "./infer.js";
+import type { InferredShape } from "@freebirdai/connect/agent";
 import type { Proposal } from "./tool.js";
 
 /** What a plain row count produces, and what the value role then binds to. */

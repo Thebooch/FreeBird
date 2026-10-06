@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { compileBrief, type WidgetBrief } from "./brief.js";
-import { entitySchema, type EntitySpec } from "./entity.js";
-import { resourceSchema, type ResourceSpec } from "./resource.js";
+import { entitySchema, type EntitySpec } from "@freebirdai/connect-spec";
+import { resourceSchema, type ResourceSpec } from "@freebirdai/connect-spec";
 import { parseDashboard } from "./dashboard.js";
 
 /**

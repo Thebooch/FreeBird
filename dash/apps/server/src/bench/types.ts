@@ -1,146 +1,27 @@
-import type { HttpFetch } from "@freebirdai/dash-adapters";
+import type { HttpFetch } from "@freebirdai/connect/adapters";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
 import type { ConnectionSpec, WidgetSpec } from "@freebirdai/dash-spec";
-import type { CredentialBroker } from "../auth/broker.js";
+import type { CredentialBroker } from "@freebirdai/connect/host";
+import type {
+  BenchRequest,
+  BenchResponse,
+  IntegrationEnv,
+  MockProvider,
+  Objective,
+  ScenarioInput,
+  ScriptedChoice,
+  Split,
+} from "@freebirdai/connect-bench";
+
+export type { BenchRequest, BenchResponse, IntegrationEnv, MockProvider, Objective, ScenarioInput, ScriptedChoice, Split };
 
 /**
- * The onboarding benchmark's vocabulary. See `dash/bench/PROTOCOL.md`: that
- * document is the contract, and these types are its shape.
+ * The onboarding benchmark's run: what an integrator is given, what it hands
+ * back, and how it is scored. The scenarios themselves — the mock APIs, their
+ * answer keys and the public APIs — are the engine's test bed, in
+ * `@freebirdai/connect-bench`.
  */
 
-/** `real`: public APIs reached over the network, run by hand. See `providers/real.ts`. */
-export type Split = "dev" | "heldout" | "real";
-
-export interface BenchRequest {
-  readonly method: string;
-  readonly url: URL;
-  readonly headers: Readonly<Record<string, string>>;
-  readonly body?: string | undefined;
-}
-
-export interface BenchResponse {
-  readonly status: number;
-  readonly headers?: Readonly<Record<string, string>>;
-  /** A string is sent as-is; anything else as JSON. */
-  readonly body: unknown;
-}
-
-/** The endpoint and measure a correct integrator would choose. CI only; never shown to a model. */
-export interface ScriptedChoice {
-  /** Matched against a connection op's path, ignoring `{{param.x}}` blanks. */
-  readonly path: string;
-  readonly measure: {
-    readonly agg: "count" | "sum";
-    readonly field?: string;
-    /** A runtime filter expression over the record, e.g. `status == "open"`. */
-    readonly where?: string;
-  };
-}
-
-export interface Objective {
-  readonly id: string;
-  /** What the person asks for, in their words. */
-  readonly request: string;
-  /**
-   * The correct number, computed from the seed by reference code in the
-   * provider's own file — never by the pipeline being measured.
-   */
-  readonly answer: number;
-  /** Absolute. Zero for a count. */
-  readonly tolerance: number;
-  /** How many records the collection the objective reads really holds. */
-  readonly records: number;
-  readonly scripted: ScriptedChoice;
-}
-
-export interface MockProvider {
-  readonly id: string;
-  readonly split: Split;
-  /** Why this provider is in the corpus: the pattern it exercises. */
-  readonly pattern: string;
-  /** Every host it answers for — its API and its docs. */
-  readonly hosts: readonly string[];
-  /** Where a person would start: the documentation URL they paste. */
-  readonly docsUrl: string;
-  /** What the person pastes, in the order they are asked. */
-  readonly credentials: readonly string[];
-  /**
-   * What the provider's settings page calls each credential, beside it. A
-   * person reads these to paste each value into the field asking for it;
-   * absent, values are pasted in the order asked.
-   */
-  readonly credentialLabels?: readonly string[];
-  readonly objectives: readonly Objective[];
-  /**
-   * Scripted model answers for the discovery rungs that need one, keyed by
-   * tool name. CI only; a live run uses a real model instead.
-   */
-  readonly scriptedModel?: Readonly<Record<string, unknown>>;
-  /**
-   * Deterministic: the same requests, in the same order after `reset`, get
-   * the same answers. A provider with state (an export being prepared) keeps
-   * it only between resets.
-   */
-  handle(request: BenchRequest): BenchResponse;
-  /** Forget any state, before each scenario. */
-  reset?(): void;
-  /** Reached over the network rather than in-process: a real API. */
-  readonly live?: boolean;
-  /**
-   * Its documentation is drawn by scripts, so reading it needs Playwright's
-   * Chromium: skipped, and said, where none is installed. The benchmark never
-   * downloads one.
-   */
-  readonly needs?: "browser";
-  /**
-   * Whether the data behind the answer keys is still what the API holds: null
-   * when it is, the reason when not. A stale key is reported, never scored.
-   */
-  readonly freshness?: (http: HttpFetch) => Promise<string | null>;
-  /**
-   * How a developer who read the docs would configure it, by hand.
-   *
-   * Never shown to an integrator. It exists to prove the answer keys: the
-   * reference connection plus the scripted choice must reach every answer,
-   * or the key — not the integrator — is wrong. Absent where no connection
-   * Dash can express reaches the data yet.
-   */
-  readonly reference?: {
-    readonly connection: Readonly<Record<string, unknown>>;
-    readonly secrets: Readonly<Record<string, string>>;
-  };
-  /**
-   * The address of the person's own account, for an API where each account
-   * lives at its own address — what they would type when asked. Absent, the
-   * reference connection's address is theirs.
-   */
-  readonly accountAddress?: string;
-}
-
-/** What an integrator is allowed to see of a scenario. The answer is not in it. */
-export interface ScenarioInput {
-  readonly provider: string;
-  readonly docsUrl: string;
-  readonly credentials: readonly string[];
-  /** See `MockProvider.credentialLabels`. */
-  readonly credentialLabels?: readonly string[];
-  /** What the person types when asked which address their account is at. See `MockProvider.accountAddress`. */
-  readonly accountAddress?: string;
-  readonly objective: {
-    readonly id: string;
-    readonly request: string;
-    /** Present only in scripted mode. */
-    readonly scripted?: ScriptedChoice;
-  };
-}
-
-export interface IntegrationEnv {
-  /** Reaches only the benchmark's providers; nothing else is on the network. */
-  readonly http: HttpFetch;
-  readonly fetchDocument: (url: string) => Promise<{ status: number; text: string; url: string }>;
-  readonly llm: LlmAdapter | null;
-  readonly now: number;
-}
 
 export type InterventionKind = "technical" | "intent" | "consent" | "account";
 

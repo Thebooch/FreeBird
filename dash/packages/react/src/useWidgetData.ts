@@ -1,4 +1,4 @@
-import { isChangedNote, type FetchMeta } from "@freebirdai/dash-adapters";
+import { isChangedNote, type FetchMeta } from "@freebirdai/connect/adapters";
 import { incompleteNotes } from "./incomplete.js";
 import type {
   BindingValidation,

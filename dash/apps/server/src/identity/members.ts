@@ -1,7 +1,7 @@
 import { inviteSchema, memberSchema, workspaceSchema, type Invite, type Member, type Workspace } from "@freebirdai/dash-spec";
 import { sql } from "kysely";
-import type { DashDb } from "../platform/db.js";
 import type { MembershipStore } from "./membership.js";
+import type { DashDb } from "../platform/db.js";
 
 /**
  * Workspaces, members and invitations: the `MembershipStore`

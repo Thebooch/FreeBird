@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { aggregationSchema } from "./semantics.js";
-import { grainSchema } from "./params.js";
+import { aggregationSchema } from "@freebirdai/connect-spec";
+import { grainSchema } from "@freebirdai/connect-spec";
 import { validateExpressionSource, type PipelineStep } from "./pipeline.js";
 
 /**

@@ -1,20 +1,21 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { HttpFetch } from "@freebirdai/dash-adapters";
+import type { HttpFetch } from "@freebirdai/connect/adapters";
 import { catalogEntrySchema, connectionSchema } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CatalogStore } from "./catalog.js";
-import { buildServer } from "./server.js";
-import { SpecStore } from "./store.js";
-import { KeyStore, LocalAesVault } from "./vault.js";
 import {
-  MAX_VALIDATION_CANDIDATES,
   catalogEntryToVerify,
+  CatalogStore,
+  KeyStore,
+  LocalAesVault,
+  MAX_VALIDATION_CANDIDATES,
   rowsFromBody,
   usableRows,
   validationCandidates,
-} from "./verified.js";
+} from "@freebirdai/connect/host";
+import { buildServer } from "./server.js";
+import { SpecStore } from "./store.js";
 
 // ---------------------------------------------------------------------------
 // The rule, in isolation

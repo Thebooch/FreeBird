@@ -1,4 +1,4 @@
-import { INCOMPLETE, emptyMeta, type FetchMeta } from "@freebirdai/dash-adapters";
+import { INCOMPLETE, emptyMeta, type FetchMeta } from "@freebirdai/connect/adapters";
 import { describe, expect, it } from "vitest";
 import { incompleteNotes } from "./incomplete.js";
 

@@ -1,6 +1,7 @@
 import { z } from "zod";
-import type { SemanticType, ValueType } from "./semantics.js";
-import { valueTypeSchema } from "./semantics.js";
+import { componentIdSchema, type ComponentId } from "@freebirdai/connect-spec";
+import type { SemanticType, ValueType } from "@freebirdai/connect-spec";
+import { valueTypeSchema } from "@freebirdai/connect-spec";
 
 /**
  * Components are defined by the data contract they require, not by what they
@@ -12,23 +13,7 @@ import { valueTypeSchema } from "./semantics.js";
  * `@freebirdai/dash-components` so the runtime, the server and the authoring agent can
  * all reason about them without pulling in React.
  */
-/**
- * A component id is an open name, not a closed list.
- *
- * It was an enum, which made the eight shipped components the only ones that
- * could ever exist — a spec naming a custom renderer would not parse, so no
- * amount of registry work downstream could have made one usable. Validation is
- * now shape-only; whether a name resolves to something renderable is a
- * question for the registry, and an unknown one produces a clear binding error
- * rather than a parse failure a user cannot act on.
- */
-export const componentIdSchema = z
-  .string()
-  .min(1)
-  .max(64)
-  .regex(/^[a-zA-Z][a-zA-Z0-9_-]*$/, "component ids must start with a letter and be [a-zA-Z0-9_-]");
-
-export type ComponentId = string;
+export { componentIdSchema, type ComponentId };
 
 /** The ids that ship with the product. */
 export type BuiltinComponentId =

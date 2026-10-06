@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseAggregation } from "./aggregation.js";
-import { connectionSchema, getOp } from "./connection.js";
+import { connectionSchema, getOp } from "@freebirdai/connect-spec";
 import { COMPONENT_CONTRACTS, type ColumnMeta, validateBinding } from "./contracts.js";
 import {
   anchorCell,
@@ -18,7 +18,7 @@ import {
   interpolatePath,
   parseTokens,
   resolveRange,
-} from "./params.js";
+} from "@freebirdai/connect-spec";
 import { pipelineSchema } from "./pipeline.js";
 
 describe("parseAggregation", () => {

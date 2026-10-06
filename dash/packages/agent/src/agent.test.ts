@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { inferShape, schemaDrifted } from "./infer.js";
-import { fakeLlm } from "./llm.js";
+import { inferShape, schemaDrifted } from "@freebirdai/connect/agent";
+import { fakeLlm } from "@freebirdai/connect/agent";
 import { mapProposal } from "./map.js";
 import { proposeWidget } from "./propose.js";
 import { SYSTEM_PROMPT, proposalSchema } from "./tool.js";

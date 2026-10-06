@@ -1,15 +1,18 @@
 import { connectionSchema, type ConnectionSpec } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
-import { ledgerly } from "../bench/providers/ledgerly.js";
-import { json } from "../bench/seed.js";
-import { benchTransport } from "../bench/transport.js";
+import { ledgerly } from "@freebirdai/connect-bench/providers/ledgerly";
+import { json } from "@freebirdai/connect-bench";
+import { benchTransport } from "@freebirdai/connect-bench";
 import type { MockProvider } from "../bench/types.js";
-import { MemoryEvidenceStore } from "../evidence/store.js";
+import {
+  CheckQueue,
+  createIntegrationRunner,
+  LocalAesVault,
+  MemoryEvidenceStore,
+  MemoryJobStore,
+} from "@freebirdai/connect/host";
 import { openDashDb } from "../platform/db.js";
-import { createIntegrationRunner } from "../routes/integrate.js";
-import { LocalAesVault } from "../vault.js";
-import { CheckQueue } from "./check-queue.js";
-import { DbJobStore, MemoryJobStore } from "./store.js";
+import { DbJobStore } from "@freebirdai/connect-postgres";
 
 /*
  * Which endpoints a check reads next, kept in the job store: settled only

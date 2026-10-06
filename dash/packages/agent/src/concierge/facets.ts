@@ -5,7 +5,7 @@ import {
   guessSemantic,
   looksLikeIdentifier,
 } from "@freebirdai/dash-spec";
-import type { FieldInfo } from "../infer.js";
+import type { FieldInfo } from "@freebirdai/connect/agent";
 
 /**
  * Whether a widget should be built with a filter strip, and over which fields.

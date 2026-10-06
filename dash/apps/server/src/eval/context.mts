@@ -30,18 +30,16 @@ import type {
   ResolvedParams,
 } from "@freebirdai/dash-spec";
 import { getOp, queryKey, resolveRange } from "@freebirdai/dash-spec";
-import { AdapterRegistry, RestAdapter } from "@freebirdai/dash-adapters";
-import { extractRows, parsePath } from "@freebirdai/dash-expr";
+import { AdapterRegistry, RestAdapter } from "@freebirdai/connect/adapters";
+import { extractRows, parsePath } from "@freebirdai/expr";
 import { buildChatRegistry } from "../chat/registry.js";
 import { workspaceHandles } from "../chat/handles.js";
 import { buildConciergeContext } from "../concierge/context.js";
 import { nodeHttp } from "../server.js";
-import { QueryCache } from "../cache/queryCache.js";
-import { splitOpInputs } from "../query.js";
+import { KeyStore, LocalAesVault, QueryCache, splitOpInputs } from "@freebirdai/connect/host";
 import { answerFromData } from "../context/tool.js";
 import { buildCandidates } from "../context/candidates.js";
 import { MemoryFocusStore } from "../context/focus.js";
-import { KeyStore, LocalAesVault } from "../vault.js";
 import { loadEnvFile } from "../env.js";
 import { llmForModel, llmSpend } from "../llm.js";
 import { TIER_MODELS } from "../models.js";

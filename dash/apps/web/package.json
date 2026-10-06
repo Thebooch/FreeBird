@@ -12,7 +12,7 @@
   "dependencies": {
     "@freebirdai/core": "workspace:*",
     "@freebirdai/core-state": "workspace:*",
-    "@freebirdai/dash-adapters": "workspace:*",
+    "@freebirdai/connect": "workspace:*",
     "@freebirdai/dash-agent": "workspace:*",
     "@freebirdai/dash-components": "workspace:*",
     "@freebirdai/dash-react": "workspace:*",

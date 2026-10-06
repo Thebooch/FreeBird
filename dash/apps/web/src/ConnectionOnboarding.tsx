@@ -1,4 +1,4 @@
-import { AdapterRegistry, ProxyAdapter } from "@freebirdai/dash-adapters";
+import { AdapterRegistry, ProxyAdapter } from "@freebirdai/connect/adapters";
 import { Dashboard } from "@freebirdai/dash-react";
 import type { EntityLinkView, FieldLabels } from "@freebirdai/dash-spec";
 import { useEffect, useMemo, useRef, useState } from "react";

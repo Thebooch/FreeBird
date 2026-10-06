@@ -25,7 +25,7 @@ import {
   requiredInputs,
 } from "@freebirdai/dash-spec";
 import type { ChildLink, RelationGraph } from "@freebirdai/dash-spec";
-import { estimateEnumeration, findFilterParam } from "../capabilities.js";
+import { estimateEnumeration, findFilterParam } from "@freebirdai/connect/host";
 
 /**
  * What the concierge is allowed to ask about, assembled from what is on disk.

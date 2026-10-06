@@ -13,22 +13,27 @@ import {
   type ConnectionSpec,
   type WidgetSpec,
 } from "@freebirdai/dash-spec";
-import { connectionFromCatalog } from "../catalog.js";
-import { AUTO_INDEX_PAGES, discover } from "../discovery/index.js";
-import { integrate } from "../integrate/agent.js";
-import { DependentAdapter, RestAdapter } from "@freebirdai/dash-adapters";
+import {
+  AUTO_INDEX_PAGES,
+  connectionFromCatalog,
+  ConnectorAdapter,
+  discover,
+  integrate,
+  integrationTargets,
+  OAuthRetryAdapter,
+  RateLimitWaitAdapter,
+  samplingTargets,
+  seekRecords,
+  withAddedReads,
+  withEntryResources,
+  withObservedFields,
+} from "@freebirdai/connect/host";
+import type { SeenSet } from "@freebirdai/connect/host";
+import { DependentAdapter, RestAdapter } from "@freebirdai/connect/adapters";
 import { getOp, paramsForWidget, resolveRange } from "@freebirdai/dash-spec";
-import { OAuthRetryAdapter, RateLimitWaitAdapter } from "../auth/retry-adapter.js";
-import { ConnectorAdapter } from "../connector/adapter.js";
-import { withAddedReads, withEntryResources, withObservedFields } from "../integrate/observed.js";
-import { seekRecords } from "../integrate/seek.js";
-import type { SeenSet } from "../integrate/values.js";
-import { integrationTargets, samplingTargets } from "../routes/integrate.js";
-import { BrowserDocsRenderer } from "../discovery/render/browser.js";
-import { RendererTooling } from "../discovery/render/tooling.js";
 import { chooseByBrief, observeFirstRead } from "./brief-choice.js";
-import { benchConnectors } from "./connectors.js";
-import { benchCredentials, signInAsThePerson } from "./oauth.js";
+import { benchConnectors } from "@freebirdai/connect-bench";
+import { benchCredentials, signInAsThePerson } from "@freebirdai/connect-bench";
 import type {
   IntegrationEnv,
   IntegrationOutcome,
@@ -38,6 +43,7 @@ import type {
   ScenarioInput,
   ScriptedChoice,
 } from "./types.js";
+import { BrowserDocsRenderer, RendererTooling } from "@freebirdai/connect-browser";
 
 /**
  * The widget a scripted choice describes: one number over one endpoint.

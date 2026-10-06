@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { HttpFetch } from "@freebirdai/dash-adapters";
+import type { HttpFetch } from "@freebirdai/connect/adapters";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
 import { fakeLlm } from "@freebirdai/dash-agent";
 import type { CatalogEntry, ConnectionSpec } from "@freebirdai/dash-spec";
@@ -10,13 +10,13 @@ import {
   catalogEntrySchema,
   connectionSchema,
   dashboardSchema,
+  onboardingOf,
 } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CatalogStore } from "../catalog.js";
+import { CatalogStore, KeyStore, LocalAesVault } from "@freebirdai/connect/host";
 import { currentFingerprint } from "../onboarding/service.js";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
-import { KeyStore, LocalAesVault } from "../vault.js";
 import { categoryState, offersFor } from "./onboarding.js";
 
 /**
@@ -821,7 +821,7 @@ describe("somewhere to land", () => {
     const app = makeApp();
     const { onboarding: _dropped, ...rest } = store.getConnection("acme")!;
     await app.inject({ method: "PUT", url: "/api/connections/acme", payload: rest });
-    expect(store.getConnection("acme")?.onboarding?.status).toBe("skipped");
+    expect(onboardingOf(store.getConnection("acme")!)?.status).toBe("skipped");
     await app.close();
   });
 });

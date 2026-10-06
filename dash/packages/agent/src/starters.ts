@@ -17,8 +17,8 @@ import {
 import type { GraphOp } from "@freebirdai/dash-spec";
 import { z } from "zod";
 import { briefFromParts, type BriefCandidate } from "./brief.js";
-import type { LlmAdapter, LlmTool } from "./llm.js";
-import { UNTRUSTED_METADATA, callTool } from "./retry.js";
+import type { LlmAdapter, LlmTool } from "@freebirdai/connect/agent";
+import { UNTRUSTED_METADATA, callTool } from "@freebirdai/connect/agent";
 
 /**
  * What one part of an API should open with.

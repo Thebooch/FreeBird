@@ -1,39 +1,38 @@
 import { join, resolve } from "node:path";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
-import { CatalogStore } from "../catalog.js";
-import { httpRegistry, syncRegistry } from "../registry/registry.js";
+import {
+  allowlistEgress,
+  CatalogStore,
+  configureEgress,
+  fetchPublicDocument,
+  httpRegistry,
+  KeyStore,
+  LocalAesVault,
+  RhythmStore,
+  scopedEvidence,
+  searchFromEnv,
+  syncRegistry,
+} from "@freebirdai/connect/host";
+import type { EvidenceStore, SearchProvider } from "@freebirdai/connect/host";
 import { bindAllowed } from "../identity/guard.js";
 import { DbMembershipStore, MemoryMembershipStore } from "../identity/members.js";
 import { oidcJwtResolver } from "../identity/oidc.js";
 import { rolePolicy } from "../identity/policy.js";
-import { DbLeaseLock } from "./lease.js";
-import { allowlistEgress, configureEgress, fetchPublicDocument } from "../safe-fetch.js";
 import { openChatDb } from "../chat/db.js";
-import { DbEvidenceStore, scopedEvidence, type EvidenceStore } from "../evidence/store.js";
-import { openDashDb } from "./db.js";
-import { DbWriteJournal } from "../writes/journal-db.js";
-import { DbCredentialMetaStore } from "../auth/credential-meta.js";
-import { DbSeenValueStore } from "../values/store.js";
-import { DbShapeStore } from "../drift/store.js";
-import { DbJobStore } from "../jobs/store.js";
 import { LOCAL_WORKSPACE_ID, type IdentityResolver } from "../identity/resolver.js";
 import { isWorkspaceId } from "./workspaces.js";
-import { BrowserDocsRenderer } from "../discovery/render/browser.js";
-import { RendererTooling, type RendererMode } from "../discovery/render/tooling.js";
 import { DbSnapshotStore } from "../history/store.js";
-import type { SearchProvider } from "../discovery/search.js";
-import { searchFromEnv } from "../discovery/search.js";
 import { defaultModelId, llmForModel, modelForTask } from "../llm.js";
-import { isTask, providerFor } from "../models.js";
+import { TIER_MODELS, isTask, providerFor } from "../models.js";
 import { buildPartRegistry } from "../parts.js";
 import type { BuildServerOptions } from "../server.js";
 import { NarrowingStore } from "../narrowings.js";
-import { RhythmStore } from "../rhythm-store.js";
 import { SettingsStore } from "../settings.js";
 import { SpecStore } from "../store.js";
 import { GrantStore } from "../grants.js";
-import { KeyStore, LocalAesVault } from "../vault.js";
-
+import { createDbStores } from "@freebirdai/connect-postgres";
+import { openDashDb } from "./db.js";
+import { BrowserDocsRenderer, type RendererMode, RendererTooling } from "@freebirdai/connect-browser";
 
 /**
  * Everything the server plugs in, built for one machine.
@@ -166,7 +165,7 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
   // not leave the web search beside it quietly going through Anthropic.
   const search = (): SearchProvider | null => {
     const provider = providerFor(modelFor("discover") ?? "");
-    return searchFromEnv(provider ?? undefined);
+    return searchFromEnv(provider ?? undefined, { openai: TIER_MODELS.openai.fast });
   };
 
   /*
@@ -231,7 +230,7 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
   let dashDb: Awaited<ReturnType<typeof openDashDb>> | undefined;
   try {
     dashDb = await openDashDb({ dataDir: dashDir });
-    evidence = new DbEvidenceStore(dashDb);
+    evidence = createDbStores(dashDb, { cipher: vault }).evidence;
   } catch (cause) {
     const reason = cause instanceof Error ? cause.message : String(cause);
     console.error(
@@ -319,12 +318,24 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     },
   });
 
+  /*
+   * One workspace's engine stores over Dash's database. Leases only when the
+   * database is shared: several servers on it keep one keeper per connection
+   * among them, and one server needs no lease at all.
+   */
+  const dbStores = (workspace?: string) => {
+    if (!dashDb) return {};
+    const { evidence: _evidence, leases, ...stores } = createDbStores(dashDb, {
+      cipher: vault,
+      ...(workspace ? { workspace } : {}),
+    });
+    return { ...stores, ...(process.env.DATABASE_URL ? { leases } : {}) };
+  };
+
   const platform: DashPlatform = {
     ...(identity && memberships ? { identity, policy: rolePolicy(memberships) } : {}),
     /* Its rows under `local`, as they always were, whatever the workspace is called. */
     workspace: { id: defaultWorkspace, key: LOCAL_WORKSPACE_ID },
-    /* Several servers on one shared database: one keeper per connection among them. */
-    ...(dashDb && process.env.DATABASE_URL ? { leases: new DbLeaseLock(dashDb) } : {}),
     // The keeper: see `keeper/keeper.ts`. On here, off in tests.
     keeper: true,
     // Every connection can change records; one whose write endpoints were never
@@ -344,14 +355,13 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     search,
     chat,
     ...(evidence ? { evidence } : {}),
-    // Every change, and every read that might not be one, kept in Dash's database.
-    ...(dashDb ? { journal: new DbWriteJournal(dashDb) } : {}),
-    // When each OAuth token expires, so it is renewed before it does.
-    ...(dashDb ? { credentialMeta: new DbCredentialMetaStore(dashDb) } : {}),
-    ...(dashDb ? { seenValues: new DbSeenValueStore(dashDb) } : {}),
-    ...(dashDb ? { shapes: new DbShapeStore(dashDb) } : {}),
-    // Reads carried on past a tile's limits, their records sealed with the vault's key until they finish.
-    ...(dashDb ? { jobs: new DbJobStore(dashDb, vault) } : {}),
+    /*
+     * The engine's relational state in Dash's database: every change and every
+     * read that might not be one, when each OAuth token expires, seen values,
+     * accepted shapes, and reads carried on past a tile's limits (their records
+     * sealed with the vault's key until they finish).
+     */
+    ...dbStores(),
     ...(rendererMode !== "off" ? { renderDocs, rendererSetup: rendererTooling } : {}),
     ...(dashDb ? { snapshots: new DbSnapshotStore(dashDb) } : {}),
     logger: true,
@@ -376,17 +386,8 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
       rhythms: new RhythmStore(join(stateAt, "rhythm")),
       catalog: new CatalogStore(seedDir, join(stateAt, "catalog"), registryUrl ? registryDir : undefined),
       ...(evidence ? { evidence: scopedEvidence(evidence, workspace) } : {}),
-      ...(dashDb
-        ? {
-            journal: new DbWriteJournal(dashDb, workspace),
-            credentialMeta: new DbCredentialMetaStore(dashDb, workspace),
-            seenValues: new DbSeenValueStore(dashDb, workspace),
-            shapes: new DbShapeStore(dashDb, workspace),
-            jobs: new DbJobStore(dashDb, vault, workspace),
-            snapshots: new DbSnapshotStore(dashDb, workspace),
-          }
-        : {}),
-      ...(dashDb && process.env.DATABASE_URL ? { leases: new DbLeaseLock(dashDb, workspace) } : {}),
+      ...dbStores(workspace),
+      ...(dashDb ? { snapshots: new DbSnapshotStore(dashDb, workspace) } : {}),
     };
   };
 

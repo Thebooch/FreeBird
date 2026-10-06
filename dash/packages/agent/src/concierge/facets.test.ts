@@ -1,6 +1,6 @@
 import { COMPONENT_CONTRACTS, FACET_MAX_PER_WIDGET, FACET_MAX_VALUES } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
-import type { FieldInfo } from "../infer.js";
+import type { FieldInfo } from "@freebirdai/connect/agent";
 import { facetFields } from "./facets.js";
 
 const field = (input: Partial<FieldInfo> & { name: string }): FieldInfo => ({

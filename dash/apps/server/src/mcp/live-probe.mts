@@ -6,8 +6,7 @@
  */
 import { connectionSchema } from "@freebirdai/dash-spec";
 import { nodeHttp } from "../server.js";
-import { openMcpClient } from "./client.js";
-import { toolOps } from "./discover.js";
+import { openMcpClient, toolOps } from "@freebirdai/connect/host";
 
 const url = process.argv[2];
 if (!url) throw new Error("usage: live-probe.mts <mcp server url>");

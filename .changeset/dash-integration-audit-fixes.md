@@ -1,6 +1,6 @@
 ---
 "@freebirdai/dash-spec": patch
-"@freebirdai/dash-adapters": patch
+"@freebirdai/connect": patch
 "@freebirdai/dash-server": patch
 ---
 

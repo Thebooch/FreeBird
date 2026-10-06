@@ -1,6 +1,6 @@
 import { authKeyRefs, connectionKeyRef } from "@freebirdai/dash-spec";
 import type { SpecRepository } from "./store.js";
-import type { SecretRepository } from "./vault.js";
+import type { SecretRepository } from "@freebirdai/connect/host";
 
 /** Old catalog imports shared multipart secret names. Ambiguous ownership requires re-entry. */
 export const migrateCredentialRefs = (store: SpecRepository, keys: SecretRepository): void => {

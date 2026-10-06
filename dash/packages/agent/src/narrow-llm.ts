@@ -1,6 +1,6 @@
 import { z } from "zod";
-import type { FieldInfo } from "./infer.js";
-import type { LlmAdapter, LlmTool } from "./llm.js";
+import type { FieldInfo } from "@freebirdai/connect/agent";
+import type { LlmAdapter, LlmTool } from "@freebirdai/connect/agent";
 import type { FieldValue } from "./narrow.js";
 
 /**
