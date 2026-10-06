@@ -455,8 +455,13 @@ export const createConnect = (options: ConnectOptions = {}) => {
 
     /** Changes to a connected account, always in two steps: see what will change, then say yes. */
     writes: {
-      prepare: (intent: WriteIntent, actor: WriteActor = OWNER): Promise<WriteReview> =>
-        engine.writes.prepare(actor, intent),
+      /**
+       * `sessionId` is a conversation's: asked again in the same one with the
+       * same intent, the review already made comes back, without reading the
+       * record again.
+       */
+      prepare: (intent: WriteIntent, actor: WriteActor = OWNER, options: { readonly sessionId?: string } = {}): Promise<WriteReview> =>
+        engine.writes.prepare(actor, intent, options.sessionId ? { via: "chat", sessionId: options.sessionId } : { via: "form" }),
       commit: async (review: Pick<WriteReview, "pendingId" | "digest">, actor: WriteActor = OWNER): Promise<CommitResult> => {
         const result = await engine.writes.commit(actor, review.pendingId, review.digest);
         emit({ type: "write", connection: result.connection, entity: result.entity, kind: result.kind });

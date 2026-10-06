@@ -1,0 +1,65 @@
+{
+  "name": "@freebirdai/connect-actions",
+  "version": "0.1.0",
+  "description": "FreeBird Connect add-on: connect, read and change any API from a FreeBird guide chat.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Thebooch/FreeBird.git",
+    "directory": "connect/packages/actions"
+  },
+  "homepage": "https://github.com/Thebooch/FreeBird/tree/main/connect/packages/actions#readme",
+  "bugs": {
+    "url": "https://github.com/Thebooch/FreeBird/issues"
+  },
+  "keywords": [
+    "freebird",
+    "api",
+    "integration",
+    "chat",
+    "actions"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "AGENTS.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "tsc -p tsconfig.build.json --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@freebirdai/connect": "workspace:*"
+  },
+  "peerDependencies": {
+    "@freebirdai/core": "workspace:*",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@freebirdai/connect-spec": "workspace:*",
+    "@freebirdai/core": "workspace:*",
+    "@types/node": "^22.9.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.6",
+    "zod": "^3.23.8"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

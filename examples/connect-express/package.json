@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Serve @freebirdai/connect over HTTP from a small Express app.",
+  "description": "Serve @freebirdai/connect over HTTP, and a FreeBird chat that reads and changes connected APIs, from a small Express app.",
   "scripts": {
     "start": "tsx src/server.ts",
     "typecheck": "tsc --noEmit"
@@ -11,8 +11,12 @@
   "dependencies": {
     "@freebirdai/adapters-llm-anthropic": "workspace:*",
     "@freebirdai/connect": "workspace:*",
+    "@freebirdai/connect-actions": "workspace:*",
     "@freebirdai/connect-server": "workspace:*",
-    "express": "^4.21.1"
+    "@freebirdai/core": "workspace:*",
+    "@freebirdai/server": "workspace:*",
+    "express": "^4.21.1",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",

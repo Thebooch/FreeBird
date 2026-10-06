@@ -86,6 +86,7 @@ Everything heavy is a separate package:
 | [`@freebirdai/connect-sandbox`](../sandbox) | `QuickJsSandbox`: runs the connector code the engine writes for an API a declaration cannot describe. |
 | [`@freebirdai/connect-browser`](../browser) | `BrowserDocsRenderer`: reads documentation that only appears once a browser runs it. |
 | [`@freebirdai/connect-server`](../server) | The HTTP routes, for Fastify, Express and Next.js. |
+| [`@freebirdai/connect-actions`](../actions) | Connect, read and change APIs from a FreeBird guide chat. |
 
 ## Events
 

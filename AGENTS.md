@@ -51,6 +51,7 @@ projects.
 | Declarative site manifest → registries | `@freebirdai/manifest`, `@freebirdai/codegen` | [`guide/packages/manifest/AGENTS.md`](guide/packages/manifest/AGENTS.md), [`guide/packages/codegen/AGENTS.md`](guide/packages/codegen/AGENTS.md) |
 | Scaffolding + drift checks (CLI) | `create-freebird` | [`guide/packages/create-freebird/AGENTS.md`](guide/packages/create-freebird/AGENTS.md) |
 | Connecting to any third-party API (discovery, reads, reviewed writes) | `@freebirdai/connect` (+ `connect-server`, `-postgres`, `-sandbox`, `-browser`) | [`connect/packages/connect/AGENTS.md`](connect/packages/connect/AGENTS.md) |
+| Third-party APIs from a guide chat | `@freebirdai/connect-actions` | [`connect/packages/actions/AGENTS.md`](connect/packages/actions/AGENTS.md) |
 | Exposing components/actions to external agents | `@freebirdai/mcp` | [`guide/packages/mcp/AGENTS.md`](guide/packages/mcp/AGENTS.md) |
 | DB / LLM / email adapters | `@freebirdai/adapters-*` | package READMEs (`guide/packages/adapters-*/README.md`) |
 

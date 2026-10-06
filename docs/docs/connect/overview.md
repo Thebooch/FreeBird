@@ -36,6 +36,7 @@ const { rows } = await connect.read(api.id, { op: "getProviders", fresh: "5m" })
 | `@freebirdai/connect-postgres` | Postgres or embedded PGlite stores. |
 | `@freebirdai/connect-sandbox` | Runs generated connector code in QuickJS. |
 | `@freebirdai/connect-browser` | Reads documentation drawn in a browser. |
+| `@freebirdai/connect-actions` | Connect, read and change APIs from a FreeBird guide chat. |
 
 ## Reads
 
@@ -71,7 +72,23 @@ app.use("/connect", express.json(), connectRouter(connect));
 
 `connectFastify` and `connectRouteHandlers` (Next.js) serve the same routes.
 
+## From a FreeBird chat
+
+`@freebirdai/connect-actions` gives a guide chat the same engine: two tools
+the model reads with during the turn, and actions for adding an API, checking
+it and changing a record.
+
+```ts
+const kit = createConnectKit(connect, { authorize: (actor, intent) => mayChange(actor, intent) });
+registry.register(kit.component);
+createFreeBirdRouter({ db, llm, registry, extraTools: kit.tools, executeExtraTool: kit.executeTool });
+```
+
+A change is confirmed on a card that shows the engine's own review, field by
+field, and only that reviewed change is sent. Keys are never typed into the
+chat; the site collects them in its own form.
+
 ## Examples
 
 - `examples/connect-node`: a plain Node script.
-- `examples/connect-express`: the routes on Express.
+- `examples/connect-express`: the routes on Express, and a chat that uses them.

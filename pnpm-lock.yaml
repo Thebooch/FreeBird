@@ -43,6 +43,31 @@ importers:
         specifier: ^2.1.6
         version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
 
+  connect/packages/actions:
+    dependencies:
+      '@freebirdai/connect':
+        specifier: workspace:*
+        version: link:../connect
+    devDependencies:
+      '@freebirdai/connect-spec':
+        specifier: workspace:*
+        version: link:../spec
+      '@freebirdai/core':
+        specifier: workspace:*
+        version: link:../../../guide/packages/core
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.19.17
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.6
+        version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+
   connect/packages/bench:
     dependencies:
       '@freebirdai/connect':
@@ -582,12 +607,24 @@ importers:
       '@freebirdai/connect':
         specifier: workspace:*
         version: link:../../connect/packages/connect
+      '@freebirdai/connect-actions':
+        specifier: workspace:*
+        version: link:../../connect/packages/actions
       '@freebirdai/connect-server':
         specifier: workspace:*
         version: link:../../connect/packages/server
+      '@freebirdai/core':
+        specifier: workspace:*
+        version: link:../../guide/packages/core
+      '@freebirdai/server':
+        specifier: workspace:*
+        version: link:../../guide/packages/server
       express:
         specifier: ^4.21.1
         version: 4.22.1
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
     devDependencies:
       '@types/express':
         specifier: ^5.0.0
