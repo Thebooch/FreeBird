@@ -181,11 +181,18 @@ describe("health reports whether chat exists", () => {
   });
 });
 
+describe("Comms", () => {
+  it("has an address of its own, and round-trips", () => {
+    expect(parseRoute("#/comms")).toEqual({ kind: "comms" });
+    expect(routeToHash({ kind: "comms" })).toBe("#/comms");
+  });
+});
+
 describe("the Agent side", () => {
   it("reads a section, and an item within it", () => {
     expect(parseRoute("#/agent/workflows")).toEqual({ kind: "agent", section: "workflows" });
     expect(parseRoute("#/agent/agents/scout")).toEqual({ kind: "agent", section: "agents", id: "scout" });
-    expect(parseRoute("#/agent/communications")).toEqual({ kind: "agent", section: "communications" });
+    expect(parseRoute("#/agent/communications")).toEqual({ kind: "agent", section: "agents" });
   });
 
   it("lands on Agents for a section it does not have, and on Agents for a bare #/agent", () => {

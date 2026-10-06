@@ -27,7 +27,13 @@ export interface NavTab {
 }
 
 /** Which half of the app the bar is for: the user's own boards, or the agent's fixed sections. */
-export type NavMode = "tabs" | "agent";
+export type NavMode = "dash" | "comms" | "agent";
+
+const MODES: ReadonlyArray<{ readonly id: NavMode; readonly label: string }> = [
+  { id: "dash", label: "Dash" },
+  { id: "comms", label: "Comms" },
+  { id: "agent", label: "Agent" },
+];
 
 export interface TopNavProps {
   /** The Agent | Tabs switch. Absent hides it, and the bar is exactly what it was. */
@@ -127,7 +133,7 @@ const EditableTab = ({
 };
 
 export const TopNav = ({
-  mode = "tabs",
+  mode = "dash",
   onModeChange,
   sections = [],
   activeSection = null,
@@ -150,6 +156,8 @@ export const TopNav = ({
   onToggleTheme,
 }: TopNavProps): JSX.Element => {
   const agentMode = mode === "agent";
+  /* Boards belong to Dash alone: Comms and Agent have fixed content. */
+  const boardless = mode !== "dash";
   const [editing, setEditing] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   /*
@@ -206,35 +214,34 @@ export const TopNav = ({
     <header className="dash-nav">
       <span className="dash-nav__brand">
         <span className="dash-nav__mark" aria-hidden="true" />
-        FreeBird&nbsp;Dash
+        FreeBird
+        {onModeChange && (
+          <span className="dash-nav__switch" role="group" aria-label="Switch between Dash, Comms and the agent">
+            {MODES.map((one) => (
+              <button
+                key={one.id}
+                type="button"
+                className="dash-nav__seg"
+                aria-pressed={mode === one.id}
+                data-active={mode === one.id}
+                data-testid={`nav-mode-${one.id}`}
+                onClick={() => mode !== one.id && onModeChange(one.id)}
+              >
+                {one.label}
+              </button>
+            ))}
+          </span>
+        )}
       </span>
-
-      {onModeChange && (
-        <div className="dash-nav__switch" role="group" aria-label="Switch between the agent and your tabs">
-          {(["agent", "tabs"] as const).map((one) => (
-            <button
-              key={one}
-              type="button"
-              className="dash-nav__seg"
-              aria-pressed={mode === one}
-              data-active={mode === one}
-              data-testid={`nav-mode-${one}`}
-              onClick={() => mode !== one && onModeChange(one)}
-            >
-              {one === "agent" ? "Agent" : "Tabs"}
-            </button>
-          ))}
-        </div>
-      )}
 
       <div
         className="dash-nav__rail"
         ref={railRef}
         role="tablist"
-        aria-label={agentMode ? "Agent sections" : "Dashboards"}
+        aria-label={agentMode ? "Agent sections" : boardless ? "Communications" : "Dashboards"}
       >
-        {agentMode ? (
-          sections.map((section) => (
+        {boardless ? (
+          (agentMode ? sections : []).map((section) => (
             <button
               key={section.id}
               type="button"
@@ -271,7 +278,7 @@ export const TopNav = ({
           ))
         )}
 
-        {!agentMode && (
+        {!boardless && (
           <button
             type="button"
             className="dash-nav__add"
@@ -284,7 +291,7 @@ export const TopNav = ({
       </div>
 
       <div className="dash-nav__actions">
-        {!agentMode && tabs.length > 0 && (
+        {!boardless && tabs.length > 0 && (
           <button
             type="button"
             className="dash-nav__icon"
@@ -331,7 +338,7 @@ export const TopNav = ({
                 role="menuitem"
                 className="dash-nav__item"
                 onClick={pick(onAddWidget)}
-                disabled={addWidgetDisabled || agentMode}
+                disabled={addWidgetDisabled || boardless}
                 data-testid="add-widget"
               >
                 ✚ Add a widget
@@ -342,7 +349,7 @@ export const TopNav = ({
                 className="dash-nav__item"
                 data-on={layoutEditing}
                 onClick={pick(() => onToggleLayoutEditing(!layoutEditing))}
-                disabled={layoutEditingDisabled || agentMode}
+                disabled={layoutEditingDisabled || boardless}
                 title={
                   layoutEditing
                     ? "Stop rearranging (Esc)"

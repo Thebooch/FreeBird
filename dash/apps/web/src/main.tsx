@@ -32,6 +32,7 @@ import { createLayoutSaver, withLayoutCells } from "./layoutSave.js";
 import { createPendingMessage } from "./pendingMessage.js";
 import { recordTargetFor } from "./recordRoute.js";
 import { AGENT_NAV_SECTIONS, AgentShell } from "./agent/AgentShell.jsx";
+import { CommsShell } from "./comms/CommsShell.jsx";
 import {
   BOARD_ROUTE,
   DEFAULT_AGENT_SECTION,
@@ -397,7 +398,7 @@ const App = (): JSX.Element => {
    */
   useEffect(() => {
     const named =
-      route.kind === "entity" ? route.from?.dashboardId : route.kind === "agent" ? undefined : route.dashboardId;
+      route.kind === "entity" ? route.from?.dashboardId : route.kind === "agent" || route.kind === "comms" ? undefined : route.dashboardId;
     if (named && named !== dashboardId) setDashboardId(named);
   }, [route, dashboardId]);
 
@@ -1205,12 +1206,14 @@ const App = (): JSX.Element => {
 
   const nav = (
     <TopNav
-      mode={route.kind === "agent" ? "agent" : "tabs"}
+      mode={route.kind === "agent" ? "agent" : route.kind === "comms" ? "comms" : "dash"}
       onModeChange={(next) =>
         navigate(
           next === "agent"
             ? { kind: "agent", section: lastSection.current }
-            : { kind: "board", dashboardId },
+            : next === "comms"
+              ? { kind: "comms" }
+              : { kind: "board", dashboardId },
         )
       }
       sections={AGENT_NAV_SECTIONS}
@@ -1246,6 +1249,23 @@ const App = (): JSX.Element => {
    * still on hand: the overlays are the same ones, so the chat is available in
    * both modes.
    */
+  if (route.kind === "comms") {
+    return (
+      <div
+        className="dash-shell"
+        data-chat={chatOpen ? "open" : "closed"}
+        data-building={building ? "true" : "false"}
+      >
+        <div className="dash-root">
+          <DashStyleSheet tokens={themeTokens} />
+          {nav}
+          <CommsShell />
+          {overlays}
+        </div>
+      </div>
+    );
+  }
+
   if (route.kind === "agent") {
     return (
       <div

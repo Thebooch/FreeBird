@@ -8,7 +8,7 @@ import { AgentsSection } from "./AgentsSection.jsx";
  * Which section shows is decided by the route (`#/agent/<section>`), so a
  * reload lands where you were and Back steps through them. A section that is
  * not built yet shows what will live there, so the slot already exists when
- * the step that fills it arrives — workflows, calendar and communications each
+ * the step that fills it arrives — workflows and calendar each
  * drop their view in here.
  */
 
@@ -16,7 +16,6 @@ export const SECTION_TITLES: Readonly<Record<AgentSection, string>> = {
   workflows: "Workflows",
   agents: "Agents",
   calendar: "Calendar",
-  communications: "Communications",
 };
 
 export const AGENT_NAV_SECTIONS = AGENT_SECTIONS.map((id) => ({ id, title: SECTION_TITLES[id] }));
@@ -30,10 +29,6 @@ const COMING: Readonly<Partial<Record<AgentSection, { glyph: string; body: strin
   calendar: {
     glyph: "▦",
     body: "What your agents have scheduled and done, each entry in the colour of the agent that made it.",
-  },
-  communications: {
-    glyph: "✉",
-    body: "Email and messages your agents have read, drafted and sent on your behalf.",
   },
 };
 

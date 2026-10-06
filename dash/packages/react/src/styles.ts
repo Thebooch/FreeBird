@@ -370,6 +370,7 @@ export const DASH_REACT_STYLES = `
   font-size: var(--dash-text-md); font-weight: var(--dash-weight-semi);
   letter-spacing: -0.02em; color: var(--nav-ink);
   padding-right: 18px; border-right: 1px solid var(--nav-line);
+  /* The switch lives inside this segment, beside the name. */
 }
 .dash-nav__mark {
   width: 20px; height: 20px; border-radius: var(--dash-radius-xs); flex: none;
@@ -381,7 +382,7 @@ export const DASH_REACT_STYLES = `
 
 /* The Agent | Tabs switch: two segments in one ring, the active one lit. */
 .dash-nav__switch {
-  display: inline-flex; flex: none; padding: 2px; gap: 2px;
+  margin-left: 4px; display: inline-flex; flex: none; padding: 2px; gap: 2px;
   border: 1px solid var(--nav-line); border-radius: var(--dash-radius-pill);
   background: var(--nav-fill);
 }
@@ -583,7 +584,6 @@ export const DASH_REACT_STYLES = `
 @media (max-width: 900px) {
   .dash-nav { flex-wrap: wrap; gap: var(--dash-space-2); }
   .dash-nav__rail { order: 3; width: 100%; }
-  .dash-nav__switch { order: 1; }
   .dash-nav__switch { order: 1; }
   /*
    * The action group takes a row of its own and wraps inside it.
