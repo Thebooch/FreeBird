@@ -21,6 +21,7 @@ import { rolePolicy } from "../identity/policy.js";
 import { openChatDb } from "../chat/db.js";
 import { LOCAL_WORKSPACE_ID, type IdentityResolver } from "../identity/resolver.js";
 import { isWorkspaceId } from "./workspaces.js";
+import { DbAgentStore } from "../agents/store.js";
 import { DbSnapshotStore } from "../history/store.js";
 import { defaultModelId, llmForModel, modelForTask } from "../llm.js";
 import { TIER_MODELS, isTask, providerFor } from "../models.js";
@@ -363,7 +364,7 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
      */
     ...dbStores(),
     ...(rendererMode !== "off" ? { renderDocs, rendererSetup: rendererTooling } : {}),
-    ...(dashDb ? { snapshots: new DbSnapshotStore(dashDb) } : {}),
+    ...(dashDb ? { snapshots: new DbSnapshotStore(dashDb), agents: new DbAgentStore(dashDb) } : {}),
     logger: true,
   };
   /*
@@ -387,7 +388,7 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
       catalog: new CatalogStore(seedDir, join(stateAt, "catalog"), registryUrl ? registryDir : undefined),
       ...(evidence ? { evidence: scopedEvidence(evidence, workspace) } : {}),
       ...dbStores(workspace),
-      ...(dashDb ? { snapshots: new DbSnapshotStore(dashDb, workspace) } : {}),
+      ...(dashDb ? { snapshots: new DbSnapshotStore(dashDb, workspace), agents: new DbAgentStore(dashDb, workspace) } : {}),
     };
   };
 

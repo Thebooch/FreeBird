@@ -16,6 +16,13 @@ apps/
   web/         Vite React :5400  the dashboard product
 ```
 
+## Agents
+
+- Spec: `packages/spec/src/agent.ts` (`agentSchema`, colour is an index into `--dash-series-N`, reach in `access.ts`'s own words). Permission: `agents.manage` (owner, admin).
+- Server: `apps/server/src/agents/` (`AgentStore`, `AgentService` — one place for the routes and the chat to share), `routes/agents.ts`, chat actions in `chat/agent-actions.ts`. Table `dash_agents` in `platform/db.ts`.
+- Web: `#/agent/<section>[/<id>]` in `apps/web/src/route.ts`; `agent/AgentShell.tsx` picks the section; the shared `AgentChip` is in `packages/components/src/ui/`.
+- Anything later steps label with an owner should store `{ kind: "agent" | "member"; id }`, not a bare agent id. Approval vs automatic belongs to the workflow action, not the agent.
+
 ## Conventions
 
 Mirrors the FreeBird monorepo: `"type": "module"`, tsup ESM builds, zod ^3 as a peer, vitest, per-package `tsc --noEmit`, `workspace:*` internal deps. Packages should be foldable into the OSS FreeBird monorepo later without rework.

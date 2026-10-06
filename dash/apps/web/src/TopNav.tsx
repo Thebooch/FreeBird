@@ -26,7 +26,17 @@ export interface NavTab {
   readonly title: string;
 }
 
+/** Which half of the app the bar is for: the user's own boards, or the agent's fixed sections. */
+export type NavMode = "tabs" | "agent";
+
 export interface TopNavProps {
+  /** The Agent | Tabs switch. Absent hides it, and the bar is exactly what it was. */
+  readonly mode?: NavMode;
+  readonly onModeChange?: (mode: NavMode) => void;
+  /** The fixed sections the bar shows in Agent mode: no adding, renaming or removing. */
+  readonly sections?: readonly NavTab[];
+  readonly activeSection?: string | null;
+  readonly onSelectSection?: (id: string) => void;
   readonly tabs: readonly NavTab[];
   readonly activeId: string | null;
   readonly onSelect: (id: string) => void;
@@ -117,6 +127,11 @@ const EditableTab = ({
 };
 
 export const TopNav = ({
+  mode = "tabs",
+  onModeChange,
+  sections = [],
+  activeSection = null,
+  onSelectSection,
   tabs,
   activeId,
   onSelect,
@@ -134,6 +149,7 @@ export const TopNav = ({
   theme,
   onToggleTheme,
 }: TopNavProps): JSX.Element => {
+  const agentMode = mode === "agent";
   const [editing, setEditing] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   /*
@@ -193,8 +209,46 @@ export const TopNav = ({
         FreeBird&nbsp;Dash
       </span>
 
-      <div className="dash-nav__rail" ref={railRef} role="tablist" aria-label="Dashboards">
-        {tabs.length === 0 ? (
+      {onModeChange && (
+        <div className="dash-nav__switch" role="group" aria-label="Switch between the agent and your tabs">
+          {(["agent", "tabs"] as const).map((one) => (
+            <button
+              key={one}
+              type="button"
+              className="dash-nav__seg"
+              aria-pressed={mode === one}
+              data-active={mode === one}
+              data-testid={`nav-mode-${one}`}
+              onClick={() => mode !== one && onModeChange(one)}
+            >
+              {one === "agent" ? "Agent" : "Tabs"}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div
+        className="dash-nav__rail"
+        ref={railRef}
+        role="tablist"
+        aria-label={agentMode ? "Agent sections" : "Dashboards"}
+      >
+        {agentMode ? (
+          sections.map((section) => (
+            <button
+              key={section.id}
+              type="button"
+              role="tab"
+              aria-selected={section.id === activeSection}
+              className="dash-nav__tab"
+              data-active={section.id === activeSection}
+              data-testid={`nav-section-${section.id}`}
+              onClick={() => onSelectSection?.(section.id)}
+            >
+              {section.title}
+            </button>
+          ))
+        ) : tabs.length === 0 ? (
           <span className="dash-nav__hint">No dashboards yet</span>
         ) : editing ? (
           tabs.map((tab) => (
@@ -217,18 +271,20 @@ export const TopNav = ({
           ))
         )}
 
-        <button
-          type="button"
-          className="dash-nav__add"
-          onClick={onCreate}
-          data-testid="nav-new-tab"
-        >
-          ＋ New tab
-        </button>
+        {!agentMode && (
+          <button
+            type="button"
+            className="dash-nav__add"
+            onClick={onCreate}
+            data-testid="nav-new-tab"
+          >
+            ＋ New tab
+          </button>
+        )}
       </div>
 
       <div className="dash-nav__actions">
-        {tabs.length > 0 && (
+        {!agentMode && tabs.length > 0 && (
           <button
             type="button"
             className="dash-nav__icon"
@@ -275,7 +331,7 @@ export const TopNav = ({
                 role="menuitem"
                 className="dash-nav__item"
                 onClick={pick(onAddWidget)}
-                disabled={addWidgetDisabled}
+                disabled={addWidgetDisabled || agentMode}
                 data-testid="add-widget"
               >
                 ✚ Add a widget
@@ -286,7 +342,7 @@ export const TopNav = ({
                 className="dash-nav__item"
                 data-on={layoutEditing}
                 onClick={pick(() => onToggleLayoutEditing(!layoutEditing))}
-                disabled={layoutEditingDisabled}
+                disabled={layoutEditingDisabled || agentMode}
                 title={
                   layoutEditing
                     ? "Stop rearranging (Esc)"

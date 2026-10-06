@@ -130,6 +130,9 @@ import {
 import { RATES_AS_OF } from "./pricing.js";
 import type { PartRegistry } from "@freebirdai/dash-parts";
 import { partsRoutes } from "./routes/parts.js";
+import { agentRoutes } from "./routes/agents.js";
+import { AgentService } from "./agents/service.js";
+import { MemoryAgentStore, type AgentStore } from "./agents/store.js";
 import { installIdentity } from "./identity/context.js";
 import { ownerPolicy, type Policy } from "./identity/policy.js";
 import { installRouteGuard } from "./identity/guard.js";
@@ -351,6 +354,11 @@ export interface BuildServerOptions {
    * in this process only; the real entry point keeps them in Dash's database.
    */
   readonly snapshots?: SnapshotStore;
+  /**
+   * Where this workspace's agents are kept (`agents/store.ts`). Absent means in
+   * this process only; the real entry point keeps them in Dash's database.
+   */
+  readonly agents?: AgentStore;
   /**
    * The shape each endpoint was accepted in, and any change seen since
    * (`drift/`). Memory unless supplied: tests and embedders get a store that
@@ -895,6 +903,12 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   // to: a function of its dependencies rather than a closure over one big
   // builder.
   void app.register(partsRoutes(options.parts));
+  const agents = new AgentService({
+    store: options.agents ?? new MemoryAgentStore(),
+    policy,
+    hasConnection: (id) => store.getConnection(id) !== null,
+  });
+  void app.register(agentRoutes(agents, policy));
 
   /*
    * Half-finished widget setups, one per board.
@@ -3187,6 +3201,13 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
            * registry is cached for a minute, and a principal captured when it
            * was built would outlive the request it came from.
            */
+          agents: {
+            roster: await agents.list(),
+            mayManage: async (principal) => (await policy.can(principal, "agents.manage", {})).ok,
+            create: (principal, input) => agents.create(principal, input),
+            update: (principal, id, input) => agents.update(principal, id, input),
+            archive: (id) => agents.setArchived(id, true),
+          },
           changes: {
             prepare: (principal, intent, sessionId) =>
               writes.prepare(principal, intent, { via: "chat", sessionId }),

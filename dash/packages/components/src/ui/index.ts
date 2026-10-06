@@ -9,6 +9,8 @@
 export { Button, IconButton } from "./Button.jsx";
 export type { ButtonProps, ButtonTone, ControlSize, IconButtonProps } from "./Button.jsx";
 
+export { AgentChip, agentColorVar } from "./AgentChip.jsx";
+
 export { Avatar, Badge, StatusPill } from "./Badge.jsx";
 export type { BadgeTone } from "./Badge.jsx";
 

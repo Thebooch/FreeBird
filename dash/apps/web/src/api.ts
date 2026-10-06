@@ -1,5 +1,7 @@
 import type { EachAnswer, EachRequest } from "@freebirdai/dash-react";
 import type {
+  AgentInput,
+  AgentSpec,
   ApiProfile,
   CatalogEntry,
   ConnectionSpec,
@@ -1112,6 +1114,28 @@ export const api = {
     }),
 
   connections: (): Promise<ConnectionSummary[]> => request("/api/connections"),
+
+  /** The record types a connection has, for choosing what an agent may touch. */
+  connectionEntities: (
+    connection: string,
+  ): Promise<Array<{ entity: string; name: string; kind?: string; description?: string }>> =>
+    request(`/api/connections/${encodeURIComponent(connection)}/entities`),
+
+  agents: (archived = false): Promise<AgentSpec[]> => request(`/api/agents${archived ? "?archived=1" : ""}`),
+
+  /** Make an agent (any id not in use) or change one (its own id). */
+  saveAgent: (id: string, input: AgentInput): Promise<AgentSpec> =>
+    request(`/api/agents/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    }),
+
+  archiveAgent: (id: string): Promise<AgentSpec> =>
+    request(`/api/agents/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  restoreAgent: (id: string): Promise<AgentSpec> =>
+    request(`/api/agents/${encodeURIComponent(id)}/restore`, { method: "POST" }),
 
   /**
    * Connect a catalog API. Marked for onboarding, so it opens with the boards

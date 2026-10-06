@@ -31,7 +31,16 @@ import { autoArrange, isTypingTarget } from "./editing.js";
 import { createLayoutSaver, withLayoutCells } from "./layoutSave.js";
 import { createPendingMessage } from "./pendingMessage.js";
 import { recordTargetFor } from "./recordRoute.js";
-import { BOARD_ROUTE, type Route, currentRoute, navigate, onRouteChange } from "./route.js";
+import { AGENT_NAV_SECTIONS, AgentShell } from "./agent/AgentShell.jsx";
+import {
+  BOARD_ROUTE,
+  DEFAULT_AGENT_SECTION,
+  type AgentSection,
+  type Route,
+  currentRoute,
+  navigate,
+  onRouteChange,
+} from "./route.js";
 import { TopNav } from "./TopNav.jsx";
 import { PresentationEditor } from "./PresentationEditor.jsx";
 import { RecordLayoutEditor } from "./RecordLayoutEditor.jsx";
@@ -387,9 +396,20 @@ const App = (): JSX.Element => {
    * whose row opened it, where a row did.
    */
   useEffect(() => {
-    const named = route.kind === "entity" ? route.from?.dashboardId : route.dashboardId;
+    const named =
+      route.kind === "entity" ? route.from?.dashboardId : route.kind === "agent" ? undefined : route.dashboardId;
     if (named && named !== dashboardId) setDashboardId(named);
   }, [route, dashboardId]);
+
+  /*
+   * The Agent | Tabs switch remembers where you were on each side, so flipping
+   * back lands on the same section — and the same board, which `dashboardId`
+   * already holds across any route that is not about another one.
+   */
+  const lastSection = useRef<AgentSection>(DEFAULT_AGENT_SECTION);
+  useEffect(() => {
+    if (route.kind === "agent") lastSection.current = route.section;
+  }, [route]);
 
   /** The record page being rearranged, and what makes the change show up. */
   const [editingLayout, setEditingLayout] = useState(false);
@@ -1185,6 +1205,17 @@ const App = (): JSX.Element => {
 
   const nav = (
     <TopNav
+      mode={route.kind === "agent" ? "agent" : "tabs"}
+      onModeChange={(next) =>
+        navigate(
+          next === "agent"
+            ? { kind: "agent", section: lastSection.current }
+            : { kind: "board", dashboardId },
+        )
+      }
+      sections={AGENT_NAV_SECTIONS}
+      activeSection={route.kind === "agent" ? route.section : null}
+      onSelectSection={(section) => navigate({ kind: "agent", section: section as AgentSection })}
       tabs={live.available}
       activeId={live.dashboard?.id ?? null}
       onSelect={(id) => navigate({ kind: "board", dashboardId: id })}
@@ -1209,6 +1240,28 @@ const App = (): JSX.Element => {
       onToggleTheme={toggleTheme}
     />
   );
+
+  /*
+   * The Agent side. Its own sections instead of boards, with the assistant
+   * still on hand: the overlays are the same ones, so the chat is available in
+   * both modes.
+   */
+  if (route.kind === "agent") {
+    return (
+      <div
+        className="dash-shell"
+        data-chat={chatOpen ? "open" : "closed"}
+        data-building={building ? "true" : "false"}
+      >
+        <div className="dash-root">
+          <DashStyleSheet tokens={themeTokens} />
+          {nav}
+          <AgentShell route={route} onNavigate={navigate} />
+          {overlays}
+        </div>
+      </div>
+    );
+  }
 
   /*
    * Nothing connected yet.

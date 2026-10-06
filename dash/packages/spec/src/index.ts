@@ -120,6 +120,19 @@ export {
 
 export type { Invite, Member, Permission, Principal, Role, Scope, Workspace } from "./access.js";
 
+export {
+  AGENT_COLORS,
+  AGENT_PERMISSIONS,
+  agentInputSchema,
+  agentReachSchema,
+  agentSchema,
+  dedupeReach,
+  describeScope,
+  summarizeReach,
+} from "./agent.js";
+
+export type { AgentInput, AgentReach, AgentSpec, ReachProblem } from "./agent.js";
+
 export { referenceIds, targetOfRow } from "./reference.js";
 
 export type { ReferenceRow } from "./reference.js";

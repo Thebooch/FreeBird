@@ -73,6 +73,10 @@ The API is `/api/connections/:id/onboarding`: `GET` reads where setup stands; `P
 
 **Keeping boards current.** A board being looked at reads what the server holds and never calls the API. The keeper refreshes, on each endpoint's cadence, the exact requests boards made — changed filters and picked ranges included — and warms new boards before anybody opens them, only while somebody is using the connection. A 401 or 403 stops a target until the connection's key changes; a 429 pauses the connection until the API allows it. Cadences are set per endpoint from how often its records arrive, and can be moved on the **Refresh** step. `GET /api/keeper` lists what is being kept warm and whether it is cached.
 
+## Agent and Tabs
+
+A switch at the left of the top bar flips between **Tabs** (your boards) and **Agent**. The Agent side has fixed sections: **Workflows**, **Agents**, **Calendar** and **Communications** (the others are placeholders until their steps land). In **Agents** you name an AI worker, pick its colour from the eight series hues, write its instructions, and say what it may touch — a record type on a connection, with read, create, update, delete and act as separate boxes. The reach is the most an agent can ever do; what it changes is still limited to what the person approving it may do, and nobody can give an agent more than they hold themselves. Making agents needs the `agents.manage` permission (owner and admin). The chat can do the same (`create_agent`, `update_agent`, `archive_agent`). Whether a change waits for approval is not an agent setting: each workflow action is set to approval or automatic on its own.
+
 ## Principles
 
 **The LLM runs at configuration time, never at render time.** The authoring agent reads sample payloads and emits a deterministic, versioned artifact. That artifact is compiled once and executed by boring code forever after. An LLM in the request path means nondeterministic dashboards, unbounded cost, and no way to debug why a number changed.

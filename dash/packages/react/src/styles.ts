@@ -379,6 +379,40 @@ export const DASH_REACT_STYLES = `
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.10), 0 2px 6px rgba(0, 0, 0, 0.4);
 }
 
+/* The Agent | Tabs switch: two segments in one ring, the active one lit. */
+.dash-nav__switch {
+  display: inline-flex; flex: none; padding: 2px; gap: 2px;
+  border: 1px solid var(--nav-line); border-radius: var(--dash-radius-pill);
+  background: var(--nav-fill);
+}
+.dash-nav__seg {
+  font: inherit; font-size: var(--dash-text-sm); font-weight: var(--dash-weight-medium);
+  border: 0; border-radius: var(--dash-radius-pill);
+  padding: var(--dash-space-1) var(--dash-space-3); min-height: 28px;
+  background: transparent; color: var(--nav-ink-dim); cursor: pointer;
+  transition: background var(--dash-dur-fast) var(--dash-ease), color var(--dash-dur-fast) var(--dash-ease);
+}
+.dash-nav__seg:hover { color: var(--nav-ink); }
+.dash-nav__seg[data-active="true"] { background: var(--nav-fill-active); color: #ffffff; font-weight: var(--dash-weight-semi); }
+.dash-nav__seg:focus-visible { outline: 2px solid var(--nav-mint); outline-offset: 1px; }
+
+/* The Agent | Tabs switch: two segments in one ring, the active one lit. */
+.dash-nav__switch {
+  display: inline-flex; flex: none; padding: 2px; gap: 2px;
+  border: 1px solid var(--nav-line); border-radius: var(--dash-radius-pill);
+  background: var(--nav-fill);
+}
+.dash-nav__seg {
+  font: inherit; font-size: var(--dash-text-sm); font-weight: var(--dash-weight-medium);
+  border: 0; border-radius: var(--dash-radius-pill);
+  padding: var(--dash-space-1) var(--dash-space-3); min-height: 28px;
+  background: transparent; color: var(--nav-ink-dim); cursor: pointer;
+  transition: background var(--dash-dur-fast) var(--dash-ease), color var(--dash-dur-fast) var(--dash-ease);
+}
+.dash-nav__seg:hover { color: var(--nav-ink); }
+.dash-nav__seg[data-active="true"] { background: var(--nav-fill-active); color: #ffffff; font-weight: var(--dash-weight-semi); }
+.dash-nav__seg:focus-visible { outline: 2px solid var(--nav-mint); outline-offset: 1px; }
+
 .dash-nav__rail {
   display: flex; align-items: center; gap: var(--dash-space-1);
   min-width: 0; flex: 1 1 auto;
@@ -549,6 +583,8 @@ export const DASH_REACT_STYLES = `
 @media (max-width: 900px) {
   .dash-nav { flex-wrap: wrap; gap: var(--dash-space-2); }
   .dash-nav__rail { order: 3; width: 100%; }
+  .dash-nav__switch { order: 1; }
+  .dash-nav__switch { order: 1; }
   /*
    * The action group takes a row of its own and wraps inside it.
    *
@@ -1439,4 +1475,62 @@ export const DASH_REACT_STYLES = `
 }
 .dash-sheet-panel__head { display: flex; align-items: center; gap: 8px; }
 .dash-sheet-panel__head h2 { margin: 0; font-size: var(--dash-text-lg, 1.1rem); flex: 1; }
+/* == agents ==============================================================
+ * The Agent side of the app: a list of agents beside the editor for one.
+ * An agent's colour is a series hue, so it reads on both surfaces.
+ */
+.dash-agent__inner { max-width: 1100px; margin: 0 auto; }
+.dash-agents { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); gap: var(--dash-space-4, 16px); align-items: start; }
+.dash-agents__list, .dash-agents__detail {
+  background: var(--dash-surface); border: 1px solid var(--dash-border);
+  border-radius: var(--dash-radius); padding: var(--dash-space-3, 12px);
+}
+.dash-agents__head, .dash-agents__subhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.dash-agents__title, .dash-agents__subtitle { margin: 0; font-size: var(--dash-text-md); font-weight: var(--dash-weight-semi); }
+.dash-agents__subtitle { margin-bottom: 8px; }
+.dash-agents__subhead .dash-agents__subtitle { margin-bottom: 0; }
+.dash-agents__rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.dash-agents__rows--archived { opacity: 0.7; }
+.dash-agents__toggle {
+  font: inherit; font-size: var(--dash-text-xs); color: var(--dash-muted);
+  background: none; border: 0; padding: 8px 2px 4px; cursor: pointer; text-align: left;
+}
+.dash-agents__toggle:hover { color: var(--dash-ink); }
+.dash-agent-row {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%;
+  font: inherit; text-align: left; cursor: pointer;
+  padding: 8px 10px; border: 1px solid transparent; border-radius: var(--dash-radius-sm);
+  background: transparent; color: var(--dash-ink);
+}
+.dash-agent-row:hover { background: var(--dash-wash); }
+.dash-agent-row[data-active="true"] { background: var(--dash-accent-wash); border-color: var(--dash-accent-line); }
+.dash-agent-row:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: -2px; }
+.dash-agent-row__reach { font-size: var(--dash-text-xs); color: var(--dash-muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.dash-swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.dash-swatch {
+  width: 26px; height: 26px; border-radius: 50%; cursor: pointer; padding: 0;
+  border: 2px solid transparent; box-shadow: 0 0 0 1px var(--dash-border);
+}
+.dash-swatch[data-active="true"] { border-color: var(--dash-surface); box-shadow: 0 0 0 2px var(--dash-ink); }
+.dash-swatch:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 2px; }
+
+.dash-reach { display: flex; flex-direction: column; gap: 8px; }
+.dash-reach__row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  padding: 8px 10px; border: 1px solid var(--dash-border); border-radius: var(--dash-radius-sm);
+}
+.dash-reach__where { flex: 1 1 200px; font-size: var(--dash-text-sm); min-width: 0; }
+.dash-reach__checks { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.dash-reach__check { display: inline-flex; align-items: center; gap: 4px; font-size: var(--dash-text-xs); color: var(--dash-ink-secondary); }
+.dash-reach__check input { width: auto; margin: 0; }
+.dash-reach__remove { border: 0; background: none; color: var(--dash-muted); cursor: pointer; font-size: var(--dash-text-xs); padding: 4px; }
+.dash-reach__remove:hover { color: var(--dash-critical); }
+.dash-reach__add { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.dash-reach__add select { width: auto; flex: 1 1 140px; }
+.dash-agent-editor__actions { display: flex; gap: 8px; margin-top: 8px; }
+
+@media (max-width: 760px) {
+  .dash-agents { grid-template-columns: minmax(0, 1fr); }
+}
 `;

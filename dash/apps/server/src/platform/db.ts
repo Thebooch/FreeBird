@@ -43,6 +43,13 @@ CREATE TABLE IF NOT EXISTS dash_members (
   PRIMARY KEY (workspace, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS dash_agents (
+  workspace TEXT NOT NULL,
+  id        TEXT NOT NULL,
+  record    JSONB NOT NULL,
+  PRIMARY KEY (workspace, id)
+);
+
 CREATE TABLE IF NOT EXISTS dash_invites (
   id         TEXT PRIMARY KEY,
   workspace  TEXT NOT NULL,

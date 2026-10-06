@@ -524,6 +524,13 @@ ${seriesVars(SERIES_LIGHT)}
 .dash-badge[data-tone="danger"] { color: var(--dash-critical); }
 .dash-badge[data-tone="accent"] { color: var(--dash-accent); background: var(--dash-accent-wash); }
 
+/* An agent: its series colour as a dot, then its name. */
+.dash-agent-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--dash-text-sm); color: var(--dash-ink); }
+.dash-agent-chip[data-size="sm"] { font-size: var(--dash-text-xs); gap: 5px; }
+.dash-agent-chip__dot { width: 10px; height: 10px; border-radius: 50%; flex: none; box-shadow: 0 0 0 1px var(--dash-border); }
+.dash-agent-chip[data-size="sm"] .dash-agent-chip__dot { width: 8px; height: 8px; }
+.dash-agent-chip__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .dash-avatar {
   display: inline-flex; align-items: center; justify-content: center; flex: none;
   width: 24px; height: 24px; border-radius: var(--dash-radius-pill);

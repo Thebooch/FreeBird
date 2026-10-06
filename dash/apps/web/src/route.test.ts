@@ -180,3 +180,27 @@ describe("health reports whether chat exists", () => {
     expect(({ ok: true } as { ok: boolean; chat?: boolean }).chat !== false).toBe(true);
   });
 });
+
+describe("the Agent side", () => {
+  it("reads a section, and an item within it", () => {
+    expect(parseRoute("#/agent/workflows")).toEqual({ kind: "agent", section: "workflows" });
+    expect(parseRoute("#/agent/agents/scout")).toEqual({ kind: "agent", section: "agents", id: "scout" });
+    expect(parseRoute("#/agent/communications")).toEqual({ kind: "agent", section: "communications" });
+  });
+
+  it("lands on Agents for a section it does not have, and on Agents for a bare #/agent", () => {
+    expect(parseRoute("#/agent")).toEqual({ kind: "agent", section: "agents" });
+    expect(parseRoute("#/agent/nonsense")).toEqual({ kind: "agent", section: "agents" });
+    expect(parseRoute("#/agent/nonsense/7")).toEqual({ kind: "agent", section: "agents", id: "7" });
+  });
+
+  it("round-trips, escaping an id that needs it", () => {
+    for (const route of [
+      { kind: "agent", section: "calendar" },
+      { kind: "agent", section: "agents", id: "lease scout/2" },
+    ] as const) {
+      expect(parseRoute(routeToHash(route))).toEqual(route);
+    }
+    expect(routeToHash({ kind: "agent", section: "agents", id: "a b" })).toBe("#/agent/agents/a%20b");
+  });
+});
