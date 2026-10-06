@@ -31,6 +31,15 @@ export type WriteReversal =
   /** Run the step that undoes this one. */
   | { readonly kind: "action"; readonly action: string };
 
+/** Where a change was asked for. */
+export type WriteVia = "form" | "chat" | "workflow" | "agent";
+
+/** Who a change was made in the name of, beside the person who is its actor. */
+export interface WriteOnBehalfOf {
+  readonly kind: "agent";
+  readonly id: string;
+}
+
 export interface WriteEventKey {
   readonly id?: string | undefined;
   readonly parents?: Readonly<Record<string, string>> | undefined;
@@ -41,8 +50,13 @@ export interface WriteEvent {
   /** ISO timestamp. */
   readonly at: string;
   readonly actor: { readonly userId: string; readonly workspaceId: string };
-  /** Where the change was asked for. */
-  readonly via: "form" | "chat";
+  /**
+   * Where the change was asked for: a form, the chat, a workflow (a step set
+   * to run on its own, or a proposal a person applied), or an agent's tool.
+   */
+  readonly via: WriteVia;
+  /** The agent the change was made in the name of, where there was one. The actor is still the person. */
+  readonly onBehalfOf?: WriteOnBehalfOf | undefined;
   readonly connection: string;
   readonly entity: string;
   readonly key?: WriteEventKey | undefined;

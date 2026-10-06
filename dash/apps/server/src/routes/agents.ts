@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
+import type { AgentSpec, AgentTool } from "@freebirdai/dash-spec";
 import { assistRequestSchema, draftAgentText } from "../agents/assist.js";
 import { AgentError, type AgentService } from "../agents/service.js";
 import { requirePermission } from "../identity/context.js";
@@ -17,6 +18,13 @@ export const agentRoutes = (
   policy: Policy,
   /** The model the Generate button drafts with; null when no AI key is set. */
   llm: () => LlmAdapter | null = () => null,
+  /**
+   * What an agent's tool does when a conversation uses it. Comms calls this for
+   * each tool call; the route below lets a person try one. Absent: no tool is usable yet.
+   */
+  tools: {
+    readonly useTool?: (agent: AgentSpec, tool: AgentTool, inputs: Record<string, unknown>, conversation?: string) => Promise<unknown>;
+  } = {},
 ) =>
   async (app: FastifyInstance): Promise<void> => {
     const fail = (reply: FastifyReply, error: unknown) => {
@@ -83,6 +91,24 @@ export const agentRoutes = (
         return fail(reply, error);
       }
     });
+
+    /**
+     * Use one of an agent's tools, as a conversation would: `{ inputs, conversation }`.
+     * The tool's own mode decides what happens — auto does it, approve asks the
+     * team, deny declines. Only `run_workflow` tools do anything yet.
+     */
+    app.post<{ Params: { id: string; toolId: string }; Body: { inputs?: Record<string, unknown>; conversation?: string } | undefined }>(
+      "/api/agents/:id/tools/:toolId/use",
+      async (request, reply) => {
+        const principal = await requirePermission(policy, request, reply, "agents.manage");
+        if (!principal) return reply;
+        const agent = await service.get(request.params.id);
+        const tool = agent?.tools.find((one) => one.id === request.params.toolId);
+        if (!agent || !tool) return reply.status(404).send({ error: "There is no such tool on this agent." });
+        if (!tools.useTool || tool.kind !== "run_workflow") return reply.status(501).send({ error: "This kind of tool is used in conversations, which are not set up yet." });
+        return tools.useTool(agent, tool, request.body?.inputs ?? {}, request.body?.conversation);
+      },
+    );
 
     app.post<{ Params: { id: string } }>("/api/agents/:id/restore", async (request, reply) => {
       const principal = await requirePermission(policy, request, reply, "agents.manage");

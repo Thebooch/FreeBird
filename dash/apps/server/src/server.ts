@@ -57,6 +57,7 @@ import {
   buildQueryRequest,
   CatalogStore,
   createEngine,
+  createRecordReader,
   describeFields,
   fetchPublicDocument,
   Keeper,
@@ -131,6 +132,20 @@ import { RATES_AS_OF } from "./pricing.js";
 import type { PartRegistry } from "@freebirdai/dash-parts";
 import { partsRoutes } from "./routes/parts.js";
 import { agentRoutes } from "./routes/agents.js";
+import { workflowRoutes } from "./routes/workflows.js";
+import { ProposalService } from "./workflows/proposals.js";
+import { WorkflowRunner } from "./workflows/runner.js";
+import { WorkflowService } from "./workflows/service.js";
+import { startFromAgentTool, type Starter } from "./workflows/start.js";
+import {
+  MemoryCalendarStore,
+  MemoryProposalStore,
+  MemoryWorkflowStore,
+  type CalendarStore,
+  type ProposalStore,
+  type WorkflowStore,
+} from "./workflows/store.js";
+import type { WorkflowEnv } from "./workflows/env.js";
 import { AgentService } from "./agents/service.js";
 import { MemoryAgentStore, type AgentStore } from "./agents/store.js";
 import { installIdentity } from "./identity/context.js";
@@ -295,6 +310,12 @@ export interface BuildServerOptions {
    */
   readonly keeper?: boolean;
   /**
+   * Whether workflows start by themselves — on a schedule, or when an API's
+   * records appear or change (`workflows/runner.ts`). **Off unless asked**,
+   * for the keeper's reason. "Run now" and an agent's tool work either way.
+   */
+  readonly workflowRunner?: boolean;
+  /**
    * Where cached responses live. Omitted means in this process only, which
    * is the right default for a self-hoster and the wrong one for a fleet.
    */
@@ -359,6 +380,14 @@ export interface BuildServerOptions {
    * this process only; the real entry point keeps them in Dash's database.
    */
   readonly agents?: AgentStore;
+  /**
+   * Where this workspace's workflows, their runs and what each has acted on
+   * are kept; what waits for a person; and the calendar entries steps make
+   * (`workflows/store.ts`). Absent means in this process only.
+   */
+  readonly workflows?: WorkflowStore;
+  readonly proposals?: ProposalStore;
+  readonly calendar?: CalendarStore;
   /**
    * The shape each endpoint was accepted in, and any change seen since
    * (`drift/`). Memory unless supplied: tests and embedders get a store that
@@ -903,13 +932,75 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   // to: a function of its dependencies rather than a closure over one big
   // builder.
   void app.register(partsRoutes(options.parts));
+  const agentStore = options.agents ?? new MemoryAgentStore();
+  const workflowStore = options.workflows ?? new MemoryWorkflowStore();
   const agents = new AgentService({
-    store: options.agents ?? new MemoryAgentStore(),
+    store: agentStore,
     policy,
     hasConnection: (id) => store.getConnection(id) !== null,
     hasOp: (connection, op) => store.getConnection(connection)?.ops.some((one) => one.id === op) ?? false,
+    /* A tool that starts a workflow names one an agent can start. */
+    startableWorkflow: async (id) => (await workflowStore.get(id))?.trigger.kind === "agent",
   });
-  void app.register(agentRoutes(agents, policy, () => resolveLlm("agent")));
+
+  /*
+   * Workflows: a trigger and a path (`workflows/`). They read through the
+   * engine's single read at background priority, change records only through
+   * the write service's review, and never use an agent's reply prompt.
+   */
+  const catalogEntryOf = (connection: ConnectionSpec) => (connection.catalog ? (options.catalog?.get(connection.catalog) ?? undefined) : undefined);
+  const workflowEnv: WorkflowEnv = {
+    workspaceId: options.workspace?.id ?? LOCAL_WORKSPACE_ID,
+    store: workflowStore,
+    proposals: options.proposals ?? new MemoryProposalStore(),
+    calendar: options.calendar ?? new MemoryCalendarStore(),
+    agents: agentStore,
+    policy,
+    read: createRecordReader({ engine, store, entryOf: catalogEntryOf }),
+    writes: {
+      prepare: (principal, intent, how) => writes.prepare(principal, intent, how),
+      commit: (principal, pendingId, digest) => writes.commit(principal, pendingId, digest),
+      discard: (principal, pendingId) => writes.discard(principal, pendingId),
+    },
+    rowKeyField: (connectionId, record) => {
+      const connection = store.getConnection(connectionId);
+      const entities = connection ? (catalogEntryOf(connection)?.entities ?? []) : [];
+      const wanted = record.toLowerCase();
+      const entity =
+        entities.find((one) => one.id === record) ??
+        entities.find((one) => one.name.one.toLowerCase() === wanted || one.name.many.toLowerCase() === wanted);
+      return entity?.identity?.field;
+    },
+    connectionTitle: (id) => store.getConnection(id)?.title ?? id,
+    llm: () => resolveLlm("workflow"),
+    withBudget: async (run) => {
+      enterTurnBudget(turnCeilingUsd());
+      return run();
+    },
+    onEvent: (event) => app.log.info({ event }, event.type),
+    now: () => Date.now(),
+    newId: () => randomUUID(),
+  };
+  const workflowStarter: Starter = {
+    env: workflowEnv,
+    holder: `${process.pid}-${randomUUID()}`,
+    ...(options.leases ? { leases: options.leases } : {}),
+  };
+  const workflows = new WorkflowService({
+    store: workflowStore,
+    policy,
+    agents: { list: () => agentStore.list() },
+    hasConnection: (id) => store.getConnection(id) !== null,
+  });
+  const proposals = new ProposalService(workflowStarter);
+  void app.register(agentRoutes(agents, policy, () => resolveLlm("agent"), {
+    useTool: (agent, tool, inputs, conversation) =>
+      startFromAgentTool(workflowStarter, { agent, tool, inputs, ...(conversation ? { conversation } : {}) }),
+  }));
+  void app.register(workflowRoutes({ workflows, proposals, starter: workflowStarter, policy }));
+  const workflowRunner = new WorkflowRunner({ ...workflowStarter, log: { warn: (line) => app.log.warn(line) } });
+  if (options.workflowRunner === true) workflowRunner.start();
+  app.addHook("onClose", async () => workflowRunner.stop());
 
   /*
    * Half-finished widget setups, one per board.

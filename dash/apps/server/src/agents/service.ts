@@ -52,6 +52,8 @@ export interface AgentServiceDeps {
   readonly hasConnection: (id: string) => boolean;
   /** Whether a connection has a read endpoint with this id. Absent: any id on a known connection. */
   readonly hasOp?: (connection: string, op: string) => boolean;
+  /** Whether a workflow exists that an agent's tool can start: its trigger is `agent`. Absent: any id. */
+  readonly startableWorkflow?: (id: string) => Promise<boolean>;
   /** Whether anything else points at this agent; a referenced agent is archived, never removed. */
   readonly isReferenced?: (id: string) => Promise<boolean>;
   readonly now?: () => Date;
@@ -135,6 +137,24 @@ export class AgentService {
     return out;
   }
 
+  /** Workflow tools that start a workflow which is not there, or which an agent cannot start. */
+  async workflowProblems(tools: readonly AgentTool[]): Promise<ReachProblem[]> {
+    const startable = this.deps.startableWorkflow;
+    if (!startable) return [];
+    const out: ReachProblem[] = [];
+    for (const tool of tools) {
+      if (tool.kind !== "run_workflow" || !tool.workflow) continue;
+      if (!(await startable(tool.workflow))) {
+        out.push({
+          item: tool.id,
+          reason: "invalid",
+          message: `"${tool.label || tool.workflow}" starts a workflow that is not there, or that is not started by an agent. Pick one whose trigger is "When an agent is asked".`,
+        });
+      }
+    }
+    return out;
+  }
+
   /** Context rules that read an endpoint that is not there, or that the agent may not read. */
   contextProblems(knowledge: Pick<AgentKnowledge, "context">, reach: readonly AgentReach[] | null): ReachProblem[] {
     const out: ReachProblem[] = [];
@@ -173,7 +193,7 @@ export class AgentService {
       const unknown = reachProblems.some((one) => one.reason === "unknown-connection");
       throw new AgentError(reachProblems.map((one) => one.message).join(" "), unknown ? 400 : 403, reachProblems);
     }
-    const rest = [...this.toolProblems(tools, reach), ...this.contextProblems(knowledge, reach)];
+    const rest = [...this.toolProblems(tools, reach), ...this.contextProblems(knowledge, reach), ...(await this.workflowProblems(tools))];
     if (rest.length > 0) throw new AgentError(rest.map((one) => one.message).join(" "), 400, rest);
 
     return {

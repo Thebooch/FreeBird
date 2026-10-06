@@ -162,6 +162,67 @@ export { BASE_RESPONSE_PROMPT, composeResponsePrompt } from "./agent-prompt.js";
 
 export type { ComposeResponsePromptInput, FoundContext, ResponseChannel } from "./agent-prompt.js";
 
+export {
+  MESSAGE_CHANNELS,
+  PROPOSAL_STATUSES,
+  PROPOSE_CHANGES,
+  RUN_OUTCOMES,
+  RUN_STATUSES,
+  WORKFLOW_EVERY,
+  WORKFLOW_EVERY_MS,
+  WORKFLOW_ONCE,
+  WORKFLOW_RANGES,
+  WORKFLOW_STEP_INFO,
+  WORKFLOW_STEP_KINDS,
+  WORKFLOW_STEP_MODES,
+  calendarEventSchema,
+  changePermission,
+  cronSchema,
+  describeCron,
+  describeTrigger,
+  isApiTrigger,
+  isTimeZone,
+  isWatchedTrigger,
+  ownerRefSchema,
+  proposalSchema,
+  stepMode,
+  workflowEverySchema,
+  workflowInputDefSchema,
+  workflowInputSchema,
+  workflowReads,
+  workflowRunOutputSchema,
+  workflowRunSchema,
+  workflowSchema,
+  workflowSourceSchema,
+  workflowStartSchema,
+  workflowStepModeSchema,
+  workflowStepSchema,
+  workflowTriggerSchema,
+} from "./workflow.js";
+
+export type {
+  CalendarEvent,
+  OwnerRef,
+  Proposal,
+  ProposalStatus,
+  WorkflowEvery,
+  WorkflowInput,
+  WorkflowInputDef,
+  WorkflowRun,
+  WorkflowRunOutput,
+  WorkflowSource,
+  WorkflowSpec,
+  WorkflowStart,
+  WorkflowStep,
+  WorkflowStepInfo,
+  WorkflowStepKind,
+  WorkflowStepMode,
+  WorkflowTrigger,
+  WorkflowTriggerKind,
+} from "./workflow.js";
+
+export { passes, predicateProblem, renderText, renderValue, stepRow, templateProblem } from "./workflow-expr.js";
+
 export { referenceIds, targetOfRow } from "./reference.js";
 
 export type { ReferenceRow } from "./reference.js";

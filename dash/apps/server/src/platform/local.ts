@@ -22,6 +22,7 @@ import { openChatDb } from "../chat/db.js";
 import { LOCAL_WORKSPACE_ID, type IdentityResolver } from "../identity/resolver.js";
 import { isWorkspaceId } from "./workspaces.js";
 import { DbAgentStore } from "../agents/store.js";
+import { DbCalendarStore, DbProposalStore, DbWorkflowStore } from "../workflows/store.js";
 import { DbSnapshotStore } from "../history/store.js";
 import { defaultModelId, llmForModel, modelForTask } from "../llm.js";
 import { TIER_MODELS, isTask, providerFor } from "../models.js";
@@ -138,6 +139,13 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
   // Self-hosted: code parts come off the operator's own disk. A hosted build
   // sets `allowCode: false` and falls back to the shipped defaults instead.
   const parts = buildPartRegistry({ stateDir, projectDir: join(repoRoot, "parts") });
+
+  /** One workspace's workflows, their runs, what waits for a person, and calendar entries. */
+  const workflowStores = (db: NonNullable<typeof dashDb>, workspace?: string) => ({
+    workflows: new DbWorkflowStore(db, workspace),
+    proposals: new DbProposalStore(db, workspace),
+    calendar: new DbCalendarStore(db, workspace),
+  });
 
   /**
    * Which model runs one action: an env pin, an explicit choice, or the default
@@ -339,6 +347,8 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     workspace: { id: defaultWorkspace, key: LOCAL_WORKSPACE_ID },
     // The keeper: see `keeper/keeper.ts`. On here, off in tests.
     keeper: true,
+    // Workflows start by themselves on their schedules and API triggers. On here, off in tests.
+    workflowRunner: true,
     // Every connection can change records; one whose write endpoints were never
     // read has them read from its published specification. Off in tests.
     autoReadWrites: true,
@@ -364,7 +374,7 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
      */
     ...dbStores(),
     ...(rendererMode !== "off" ? { renderDocs, rendererSetup: rendererTooling } : {}),
-    ...(dashDb ? { snapshots: new DbSnapshotStore(dashDb), agents: new DbAgentStore(dashDb) } : {}),
+    ...(dashDb ? { snapshots: new DbSnapshotStore(dashDb), agents: new DbAgentStore(dashDb), ...workflowStores(dashDb) } : {}),
     logger: true,
   };
   /*
@@ -388,7 +398,7 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
       catalog: new CatalogStore(seedDir, join(stateAt, "catalog"), registryUrl ? registryDir : undefined),
       ...(evidence ? { evidence: scopedEvidence(evidence, workspace) } : {}),
       ...dbStores(workspace),
-      ...(dashDb ? { snapshots: new DbSnapshotStore(dashDb, workspace), agents: new DbAgentStore(dashDb, workspace) } : {}),
+      ...(dashDb ? { snapshots: new DbSnapshotStore(dashDb, workspace), agents: new DbAgentStore(dashDb, workspace), ...workflowStores(dashDb, workspace) } : {}),
     };
   };
 

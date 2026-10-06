@@ -31,8 +31,8 @@ export type Role = z.infer<typeof roleSchema>;
  *
  * `records.*` are changes to a connected account — the API's own data, which
  * is the part that matters most because it is not ours to lose. The rest are
- * changes to this product: boards, connections, who is in the workspace and
- * the agents it has.
+ * changes to this product: boards, connections, who is in the workspace, the
+ * agents it has and its workflows.
  */
 export const PERMISSIONS = [
   "records.read",
@@ -44,6 +44,7 @@ export const PERMISSIONS = [
   "connections.manage",
   "members.manage",
   "agents.manage",
+  "workflows.manage",
 ] as const;
 export const permissionSchema = z.enum(PERMISSIONS);
 export type Permission = z.infer<typeof permissionSchema>;
@@ -56,7 +57,7 @@ export type Permission = z.infer<typeof permissionSchema>;
 export const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
   owner: PERMISSIONS,
   admin: PERMISSIONS,
-  editor: ["records.read", "records.create", "records.update", "records.delete", "records.act", "boards.edit"],
+  editor: ["records.read", "records.create", "records.update", "records.delete", "records.act", "boards.edit", "workflows.manage"],
   viewer: ["records.read"],
 };
 

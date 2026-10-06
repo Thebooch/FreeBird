@@ -28,7 +28,7 @@ import type { ConnectionRepository } from "../connections.js";
 import type { SecretRepository } from "../vault.js";
 import type { WriteActor, WritePermission, WritePolicy } from "./policy.js";
 import { buildBody, currentValue, labelOf, settable, type FieldError } from "./body.js";
-import type { WriteEvent, WriteJournal, WriteReversal } from "./journal.js";
+import type { WriteEvent, WriteJournal, WriteOnBehalfOf, WriteReversal, WriteVia } from "./journal.js";
 import { PENDING_TTL_MS, PendingWrites, type PendingWrite, type WriteIntent, type WriteReview } from "./pending.js";
 
 /**
@@ -406,7 +406,7 @@ export class WriteService {
   async prepare(
     principal: WriteActor,
     intent: WriteIntent,
-    options: { readonly via: "form" | "chat"; readonly sessionId?: string } = { via: "form" },
+    options: { readonly via: WriteVia; readonly sessionId?: string; readonly onBehalfOf?: WriteOnBehalfOf } = { via: "form" },
   ): Promise<WriteReview> {
     const intentDigest = this.intentDigest(intent);
     if (options.via === "chat") {
@@ -418,7 +418,7 @@ export class WriteService {
     try {
       resolved = await this.resolve(principal, intent);
     } catch (error) {
-      if (error instanceof WriteError) this.refused(principal, intent, options.via, error);
+      if (error instanceof WriteError) this.refused(principal, intent, options.via, error, undefined, options.onBehalfOf);
       throw error;
     }
     const { connection, entity, target } = resolved;
@@ -526,6 +526,7 @@ export class WriteService {
       intentDigest,
       intent,
       via: options.via,
+      ...(options.onBehalfOf ? { onBehalfOf: options.onBehalfOf } : {}),
       target,
       params,
       body: built.body,
@@ -573,7 +574,7 @@ export class WriteService {
     try {
       resolved = await this.resolve(principal, pending.intent);
     } catch (error) {
-      if (error instanceof WriteError) this.refused(principal, pending.intent, pending.via, error, pending);
+      if (error instanceof WriteError) this.refused(principal, pending.intent, pending.via, error, pending, pending.onBehalfOf);
       throw error;
     }
     if (resolved.target.op !== pending.target.op) {
@@ -595,6 +596,7 @@ export class WriteService {
         const fresh = await this.prepare(principal, pending.intent, {
           via: pending.via,
           ...(pending.sessionId ? { sessionId: pending.sessionId } : {}),
+          ...(pending.onBehalfOf ? { onBehalfOf: pending.onBehalfOf } : {}),
         }).catch(() => undefined);
         this.record(principal, pending, resolved, { status: "refused", error: "changed since it was reviewed" });
         throw new WriteError(
@@ -800,6 +802,7 @@ export class WriteService {
       at: new Date(this.now()).toISOString(),
       actor: { userId: principal.userId, workspaceId: principal.workspaceId },
       via: pending.via,
+      ...(pending.onBehalfOf ? { onBehalfOf: pending.onBehalfOf } : {}),
       connection: resolved.connection.id,
       entity: resolved.entity.id,
       key,
@@ -824,9 +827,10 @@ export class WriteService {
   private refused(
     principal: WriteActor,
     intent: WriteIntent,
-    via: "form" | "chat",
+    via: WriteVia,
     error: WriteError,
     pending?: PendingWrite,
+    onBehalfOf?: WriteOnBehalfOf,
   ): void {
     if (error.code === "not-found") return;
     this.emit({
@@ -834,6 +838,7 @@ export class WriteService {
       at: new Date(this.now()).toISOString(),
       actor: { userId: principal.userId, workspaceId: principal.workspaceId },
       via,
+      ...(onBehalfOf ? { onBehalfOf } : {}),
       connection: intent.connection,
       entity: intent.entity,
       key: { ...(intent.id ? { id: intent.id } : {}), ...(intent.parents ? { parents: intent.parents } : {}) },

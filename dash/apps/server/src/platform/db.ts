@@ -55,6 +55,73 @@ CREATE TABLE IF NOT EXISTS dash_agent_shared (
   record    JSONB NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS dash_workflows (
+  workspace TEXT NOT NULL,
+  id        TEXT NOT NULL,
+  record    JSONB NOT NULL,
+  PRIMARY KEY (workspace, id)
+);
+
+CREATE TABLE IF NOT EXISTS dash_workflow_runs (
+  workspace    TEXT NOT NULL,
+  id           TEXT NOT NULL,
+  workflow     TEXT NOT NULL,
+  agent        TEXT,
+  trigger_kind TEXT NOT NULL,
+  started_at   TEXT NOT NULL,
+  finished_at  TEXT,
+  status       TEXT NOT NULL,
+  matched      INTEGER NOT NULL DEFAULT 0,
+  summary      TEXT NOT NULL DEFAULT '',
+  outputs      JSONB NOT NULL DEFAULT '[]'::jsonb,
+  error        TEXT,
+  record       JSONB NOT NULL,
+  PRIMARY KEY (workspace, id)
+);
+
+CREATE INDEX IF NOT EXISTS dash_workflow_runs_finished ON dash_workflow_runs (workspace, finished_at);
+CREATE INDEX IF NOT EXISTS dash_workflow_runs_workflow ON dash_workflow_runs (workspace, workflow, started_at);
+
+CREATE TABLE IF NOT EXISTS dash_workflow_fired (
+  workspace   TEXT NOT NULL,
+  workflow    TEXT NOT NULL,
+  row_key     TEXT NOT NULL,
+  fingerprint TEXT NOT NULL DEFAULT '',
+  fired_at    TEXT NOT NULL,
+  PRIMARY KEY (workspace, workflow, row_key)
+);
+
+CREATE TABLE IF NOT EXISTS dash_proposals (
+  workspace    TEXT NOT NULL,
+  id           TEXT NOT NULL,
+  kind         TEXT NOT NULL,
+  agent        TEXT,
+  workflow     TEXT,
+  run          TEXT,
+  conversation TEXT,
+  intent       JSONB NOT NULL,
+  reason       TEXT NOT NULL DEFAULT '',
+  status       TEXT NOT NULL,
+  created_at   TEXT NOT NULL,
+  decided_at   TEXT,
+  decided_by   TEXT,
+  journal_id   TEXT,
+  record       JSONB NOT NULL,
+  PRIMARY KEY (workspace, id)
+);
+
+CREATE INDEX IF NOT EXISTS dash_proposals_status ON dash_proposals (workspace, status, created_at);
+
+CREATE TABLE IF NOT EXISTS dash_calendar_events (
+  workspace TEXT NOT NULL,
+  id        TEXT NOT NULL,
+  at        TEXT NOT NULL,
+  record    JSONB NOT NULL,
+  PRIMARY KEY (workspace, id)
+);
+
+CREATE INDEX IF NOT EXISTS dash_calendar_events_at ON dash_calendar_events (workspace, at);
+
 CREATE TABLE IF NOT EXISTS dash_invites (
   id         TEXT PRIMARY KEY,
   workspace  TEXT NOT NULL,

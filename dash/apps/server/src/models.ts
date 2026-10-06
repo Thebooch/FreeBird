@@ -239,7 +239,8 @@ export type LlmTask =
   | "writes"
   | "repair"
   | "connector"
-  | "agent";
+  | "agent"
+  | "workflow";
 
 /**
  * Two tiers, not three.
@@ -348,6 +349,17 @@ export const TASKS: readonly TaskInfo[] = [
     label: "Drafting agent prompts",
     tier: "capable",
     note: "Structures an agent's role, instructions, personality or knowledge when you press Generate.",
+  },
+  {
+    /*
+     * A workflow's "think it through" step: one bounded turn over the rows a
+     * run matched, proposing changes, calendar entries and notes. Never an
+     * agent's reply prompt. Runs unattended, so it gets the careful model.
+     */
+    id: "workflow",
+    label: "Workflow steps",
+    tier: "capable",
+    note: "Thinks through a workflow's matched records when a step asks it to, and proposes what to do.",
   },
   {
     id: "record",
