@@ -1,5 +1,4 @@
-import { isWatchedTrigger, passes, type WorkflowSpec, type WorkflowStart } from "@freebirdai/dash-spec";
-import { readRecord } from "./actions.js";
+import { isWatchedTrigger, type WorkflowSpec, type WorkflowStart } from "@freebirdai/dash-spec";
 import { isDue } from "./schedule.js";
 import { StartError, startWorkflow, type Starter } from "./start.js";
 
@@ -8,8 +7,12 @@ import { StartError, startWorkflow, type Starter } from "./start.js";
  *
  * Every 30 seconds it:
  * 1. fires each enabled workflow whose schedule or API poll is due (under its lease);
- * 2. wakes every waiting case whose deadline has passed, down its time-out path;
- * 3. checks the records waiting cases watch, and wakes those whose condition now holds.
+ * 2. wakes every waiting case whose deadline has passed, down its time-out path
+ *    (or to try again, for a step set to retry);
+ * 3. hands on signals a busy case could not take when they arrived;
+ * 4. carries on cases a stopped call left running, from what they wrote down;
+ * 5. checks the records waiting cases watch, as each case may read them, and
+ *    wakes those whose condition now holds.
  *
  * A tick still going when the next comes round is not doubled. A workflow the
  * API asked to wait (429) is left until the wait is over. A watched record
@@ -61,22 +64,12 @@ export class WorkflowRunner {
 
   /** Waiting cases whose watched record now matches. */
   async watchRecords(): Promise<number> {
-    const { env, engine } = this.options;
-    let woken = 0;
-    for (const one of await env.cases.watchingRecords()) {
-      const match = one.waiting?.match as { connection?: string; entity?: string; id?: string; condition?: string } | undefined;
-      if (!match?.connection || !match.entity || !match.id) continue;
-      try {
-        const record = await readRecord(env, match.connection, match.entity, match.id);
-        if (record && (!match.condition || passes(match.condition, record, env.now()))) {
-          await engine.advance(one.id, { resume: { kind: "event", payload: { record } } });
-          woken++;
-        }
-      } catch (error) {
-        this.options.log?.warn(`case ${one.id} could not check its record: ${error instanceof Error ? error.message : String(error)}`);
-      }
+    try {
+      return await this.options.engine.pollRecords();
+    } catch (error) {
+      this.options.log?.warn(`waiting cases could not check their records: ${error instanceof Error ? error.message : String(error)}`);
+      return 0;
     }
-    return woken;
   }
 
   /** One pass. Exposed for tests, which drive the clock themselves. */
@@ -95,6 +88,8 @@ export class WorkflowRunner {
           }
         }
         await this.options.engine.timeouts();
+        await this.options.engine.deliverPending();
+        await this.options.engine.recover();
         await this.watchRecords();
       } catch (error) {
         this.options.log?.warn(`workflows could not be checked: ${error instanceof Error ? error.message : String(error)}`);

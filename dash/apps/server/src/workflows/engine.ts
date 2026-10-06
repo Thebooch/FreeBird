@@ -1,8 +1,12 @@
+import { createHash } from "node:crypto";
 import type { LeaseLock } from "@freebirdai/connect/host";
 import {
   FINAL_TASK_STATUSES,
+  MAX_CALL_DEPTH,
   actionVariant,
   caseScope,
+  definitionOf,
+  durationMs,
   firstNode,
   nextNode,
   nodeMode,
@@ -11,6 +15,8 @@ import {
   withDefaults,
   workflowReads,
   type AgentSpec,
+  type CaseAttempt,
+  type CaseWait,
   type Principal,
   type Task,
   type WorkflowCase,
@@ -20,6 +26,7 @@ import {
 } from "@freebirdai/dash-spec";
 import { EXECUTORS, RECORD_CHANGE_VARIANTS, intentFor, renderSettings, type ActionContext, type ActionResult, type Approval, type Resume } from "./actions.js";
 import { ParkWorkflow, type WorkflowEnv } from "./env.js";
+import { agentNamed, readRecordAs } from "./reads.js";
 import { RevisionConflict } from "./store.js";
 
 /**
@@ -29,24 +36,40 @@ import { RevisionConflict } from "./store.js";
  * an arrow, and the arrow names the next step; arrows may point back, so a
  * case counts its visits to each step and its steps in all, and stops when
  * either limit is reached. A step set to Approve (every outside step, in
- * trial) waits for a person; a Wait waits for its time or its event. A
- * waiting case is saved and the engine moves on; whatever wakes it — an
- * approval, an answer, a reply, a deadline — calls `advance` again.
+ * trial) waits for a person; a Wait waits for its time or its event.
  *
- * Every save carries the revision it read, so two servers (or a person and
- * the runner) never overwrite each other's progress; each case runs under its
- * own lease. Cancelling is sticky: no step starts once it is asked.
+ * **Nothing is done before it is written down.** A step's attempt — its
+ * operation id, the task it writes to — is saved on the case before the step
+ * starts, and marked `executing` just before it acts; its task records the
+ * outcome and outputs before the case moves on. A case found running with
+ * nobody working on it is recovered from what was written: a finished task
+ * moves it on without acting again; a step interrupted while acting runs
+ * again only if it cannot do the same thing twice, and otherwise asks a
+ * person whether it happened.
+ *
+ * **A case follows the workflow it opened on.** Its steps and arrows are
+ * frozen on the case; editing the workflow changes new cases only. An
+ * approval applies to the attempt it was made for and nothing else.
+ *
+ * Every save carries the revision it read; each call that works on a case
+ * holds its own lease on it, renewed at each step. Cancelling is sticky.
  */
 
 export interface EngineOptions {
   readonly env: WorkflowEnv;
   readonly leases?: LeaseLock | undefined;
-  /** This server, among any others. */
+  /** This server, among any others. Each call adds its own id to it. */
   readonly holder: string;
 }
 
-/** How long a case may hold its lease while it runs. */
+/** How long a case may hold its lease between steps. */
 export const CASE_LEASE_MS = 5 * 60_000;
+/** A running case untouched this long, with nobody holding it, was interrupted. */
+export const STALL_MS = CASE_LEASE_MS;
+/** How long a signal nobody has taken is kept for a case that starts waiting later. */
+export const SIGNAL_KEEP_MS = 7 * 86_400_000;
+/** The longest one retry waits. */
+const MAX_RETRY_DELAY_MS = 86_400_000;
 
 export class CaseBusy extends Error {
   constructor(readonly caseId: string) {
@@ -55,270 +78,428 @@ export class CaseBusy extends Error {
   }
 }
 
+/** What woke a case, or why it is being looked at. */
+export interface Wake {
+  readonly approved?: Approval;
+  readonly declined?: { readonly by: Principal };
+  /** A person says an interrupted send did happen: the case goes on without sending again. */
+  readonly settled?: { readonly by: Principal };
+  readonly resume?: Resume;
+  /** A retry's time came. */
+  readonly retry?: boolean;
+  /** Check the record a waiting case watches. */
+  readonly poll?: boolean;
+  /** The task a person acted on: the wake applies only if the case still waits on it. */
+  readonly task?: string | undefined;
+}
+
 const FINISHED = new Set(["done", "failed", "cancelled", "timed_out"]);
+const PERSON_WAITS = new Set(["approval", "uncertain"]);
+
+const shortHash = (text: string): string => createHash("sha1").update(text).digest("hex").slice(0, 16);
 
 export class WorkflowEngine {
+  /** Cases this process is working on now, so recovery never takes one from under itself. */
+  private readonly active = new Set<string>();
+
   constructor(private readonly options: EngineOptions) {}
 
   private get env(): WorkflowEnv {
     return this.options.env;
   }
 
-  private iso(): string {
-    return new Date(this.env.now()).toISOString();
+  private iso(ms = this.env.now()): string {
+    return new Date(ms).toISOString();
   }
 
   /* ── opening ─────────────────────────────────────────────────────── */
 
-  /** Open a case and run it as far as it goes. */
+  /**
+   * Open a case and run it as far as it goes. With `id`, opening is
+   * idempotent: a case already open under that id is returned as it is.
+   */
   async open(
     workflow: WorkflowSpec,
     seed: {
+      readonly id?: string | undefined;
       readonly row?: Record<string, unknown> | undefined;
       readonly rowKey?: string | undefined;
       readonly inputs?: Record<string, unknown> | undefined;
       readonly start: WorkflowStart;
       readonly run?: string | undefined;
       readonly actor?: Principal | null | undefined;
+      readonly chain?: readonly string[] | undefined;
     },
   ): Promise<WorkflowCase> {
     const at = this.iso();
     const actor = seed.actor ?? workflow.enabledBy;
-    const opened = await this.env.cases.put({
-      id: this.env.newId(),
-      workflow: workflow.id,
-      workflowName: workflow.name,
-      ...(seed.run ? { run: seed.run } : {}),
-      ...(seed.rowKey !== undefined ? { rowKey: seed.rowKey } : {}),
-      status: "running",
-      ...(firstNode(workflow) ? { at: firstNode(workflow) } : {}),
-      data: { row: seed.row ?? {}, input: seed.inputs ?? {}, steps: {}, vars: {} },
-      visits: {},
-      steps: 0,
-      revision: 0,
-      cancelRequested: false,
-      ...(seed.start.agentId ? { agent: seed.start.agentId } : {}),
-      ...(actor ? { actor } : {}),
-      start: seed.start,
-      trial: workflow.trial > 0,
-      startedAt: at,
-      updatedAt: at,
-    });
+    const first = firstNode(workflow);
+    let opened: WorkflowCase;
+    try {
+      opened = await this.env.cases.put({
+        id: seed.id ?? this.env.newId(),
+        workflow: workflow.id,
+        workflowName: workflow.name,
+        ...(seed.run ? { run: seed.run } : {}),
+        ...(seed.rowKey !== undefined ? { rowKey: seed.rowKey } : {}),
+        status: "running",
+        ...(first ? { at: first } : {}),
+        data: { row: seed.row ?? {}, input: seed.inputs ?? {}, steps: {}, vars: {} },
+        definition: definitionOf(workflow),
+        chain: [...(seed.chain ?? [])],
+        visits: {},
+        steps: 0,
+        revision: 0,
+        cancelRequested: false,
+        ...(seed.start.agentId ? { agent: seed.start.agentId } : {}),
+        ...(actor ? { actor } : {}),
+        start: seed.start,
+        trial: workflow.trial > 0,
+        startedAt: at,
+        updatedAt: at,
+      });
+    } catch (error) {
+      if (error instanceof RevisionConflict && seed.id) {
+        const held = await this.env.cases.get(seed.id);
+        if (held) return held;
+      }
+      throw error;
+    }
     return this.advance(opened.id);
   }
 
   /* ── running ─────────────────────────────────────────────────────── */
 
-  /**
-   * Run a case on from where it is. With `approved`, the step waiting for
-   * approval runs as that person; with `resume`, the waiting step hears what
-   * woke it.
-   */
-  async advance(caseId: string, how: { readonly approved?: Approval; readonly declined?: { readonly by: Principal }; readonly resume?: Resume } = {}): Promise<WorkflowCase> {
+  /** Take a case's lease for this call alone, run `work`, and let it go. */
+  private async leased<T>(caseId: string, work: (renew: () => Promise<void>) => Promise<T>): Promise<T> {
+    if (this.active.has(caseId)) throw new CaseBusy(caseId);
     const key = `case:${caseId}`;
-    const leased = this.options.leases ? await this.options.leases.acquire(key, this.options.holder, CASE_LEASE_MS) : true;
-    if (!leased) throw new CaseBusy(caseId);
+    /* Each call is its own holder: the same server calling twice does not get the lease twice. */
+    const holder = `${this.options.holder}:${this.env.newId()}`;
+    const leases = this.options.leases;
+    if (leases && !(await leases.acquire(key, holder, CASE_LEASE_MS))) throw new CaseBusy(caseId);
+    this.active.add(caseId);
+    const renew = async (): Promise<void> => {
+      if (leases && !(await leases.acquire(key, holder, CASE_LEASE_MS))) throw new CaseBusy(caseId);
+    };
     try {
-      return await this.walk(caseId, how);
+      return await work(renew);
     } finally {
-      await this.options.leases?.release(key, this.options.holder);
+      this.active.delete(caseId);
+      await leases?.release(key, holder);
     }
   }
 
-  private async walk(caseId: string, how: { approved?: Approval; declined?: { by: Principal }; resume?: Resume }): Promise<WorkflowCase> {
+  /**
+   * Run a case on from where it is. With `approved`, the step waiting for
+   * approval runs as that person; with `resume`, the waiting step hears what
+   * woke it; with nothing, a running case carries on (or is recovered).
+   */
+  advance(caseId: string, how: Wake = {}): Promise<WorkflowCase> {
+    return this.leased(caseId, (renew) => this.walk(caseId, how, renew));
+  }
+
+  private async walk(caseId: string, how: Wake, renew: () => Promise<void>): Promise<WorkflowCase> {
     let one = await this.env.cases.get(caseId);
     if (!one) throw new Error(`There is no case "${caseId}".`);
-    const workflow = await this.env.store.get(one.workflow);
-    if (!workflow) return this.finish(one, "failed", "Its workflow is gone.");
+    const live = await this.env.store.get(one.workflow);
+    if (!live) return this.finish(one, "failed", "Its workflow is gone.");
+    /* The graph the case opened on; the rest (its name, whether it is parked) as it is now. */
+    const { source: _source, rowKey: _rowKey, ...liveRest } = live;
+    const workflow: WorkflowSpec = { ...liveRest, ...one.definition };
 
     const save = async (next: WorkflowCase): Promise<WorkflowCase> => {
       one = await this.env.cases.put({ ...next, updatedAt: this.iso() }, one!.revision);
       return one;
     };
 
-    /* Woken: the step it was waiting on runs again with what woke it. */
-    let resuming: { node: string; task?: string | undefined; approved?: Approval; declined?: { by: Principal }; resume?: Resume } | null = null;
-    if (how.approved || how.declined || how.resume) {
+    /* ── what woke it ── */
+    let wake: Wake | null = null;
+    if (how.approved || how.declined || how.settled || how.resume || how.retry || how.poll) {
       if (one.status !== "waiting" || !one.waiting) return one;
-      resuming = { node: one.waiting.node, task: one.waiting.task, ...how };
+      const waiting = one.waiting;
+      if (how.task !== undefined && waiting.task !== how.task) {
+        await this.dismissStale(how.task, "This was for an earlier step of the case, and no longer applies.");
+        return one;
+      }
+      if ((how.approved || how.declined) && !PERSON_WAITS.has(waiting.kind)) return one;
+      if (how.settled && waiting.kind !== "uncertain") return one;
+      if (how.retry && waiting.kind !== "retry") return one;
+      let resume = how.resume;
+      if (how.poll) {
+        const heard = await this.pollRecord(one, workflow);
+        if (heard === "waiting") return one;
+        if (heard === "parked") return this.env.cases.get(caseId).then((held) => held ?? one!);
+        resume = { kind: "event", payload: { record: heard } };
+      } else if (resume?.kind === "event" && !resume.payload) {
+        /* A signal: taken by this case alone, or it was someone else's. */
+        const signal = await this.env.signals.take(waiting.key, one.id, one.startedAt);
+        if (!signal) return one;
+        resume = { kind: "event", payload: signal.payload };
+      }
+      if (resume?.kind === "timeout" && waiting.kind === "retry") {
+        wake = { retry: true };
+      } else {
+        wake = { ...how, ...(resume ? { resume } : {}) };
+      }
       const { waiting: _waiting, ...rest } = one;
-      one = await save({ ...rest, status: "running", at: resuming.node });
+      one = await save({ ...rest, status: "running", at: waiting.node });
     }
     if (one.status !== "running") return one;
 
     for (;;) {
+      await renew();
       if (one.cancelRequested) return this.finish(one, "cancelled", "Cancelled.");
       const node = workflow.nodes.find((each) => each.id === one!.at);
       if (!node) return this.finish(one, "done");
       const variant = actionVariant(node.action);
       const executor = EXECUTORS[node.action];
-      const isResume = resuming?.node === node.id;
 
-      if (!isResume) {
+      /* ── the attempt: written down before anything is done ── */
+      let attempt: CaseAttempt | undefined = one.attempt?.node === node.id ? one.attempt : undefined;
+      if (!attempt) {
+        wake = null;
         const visits = (one.visits[node.id] ?? 0) + 1;
         if (one.steps + 1 > workflow.limits.stepsPerCase) return this.finish(one, "failed", `Stopped after ${workflow.limits.stepsPerCase} steps: the limit for one case.`);
         if (visits > workflow.limits.visitsPerStep) return this.finish(one, "failed", `Stopped: "${nodeName(node)}" was reached ${workflow.limits.visitsPerStep} times, the limit for one step.`);
-        one = await save({ ...one, steps: one.steps + 1, visits: { ...one.visits, [node.id]: visits } });
+        attempt = { id: `${one.id}:${node.id}:${visits}`, node: node.id, task: this.env.newId(), tries: 1, executing: false, startedAt: this.iso() };
+        one = await save({ ...one, steps: one.steps + 1, visits: { ...one.visits, [node.id]: visits }, attempt });
+      }
+      const held = await this.env.tasks.get(attempt.task);
+
+      /* ── recovery: a step found part-way, with nothing waking it ── */
+      if (!wake && held) {
+        if (FINAL_TASK_STATUSES.includes(held.status) && held.outcome !== undefined) {
+          one = await this.applied(save, one, workflow, node, held);
+          if (one.status !== "running") return one;
+          continue;
+        }
+        if ((held.status === "waiting" || held.status === "waiting_approval") && held.wait) {
+          return save({ ...one, status: "waiting", waiting: held.wait, attempt: { ...attempt, executing: false } });
+        }
+        if (held.status === "running" && attempt.executing && variant?.interrupted === "review") {
+          return this.uncertain(save, one, attempt, { ...held, title: `Did it happen? ${held.title}` }, "Dash stopped while this was being done, so it may or may not have happened.");
+        }
       }
 
       const scope = caseScope(one);
       const now = this.env.now();
+      const { wait: _heldWait, ...heldRest } = held ?? ({} as Partial<Task>);
+      const base: Task = held ? (heldRest as Task) : this.newTask(workflow, one, node, attempt, { status: "running", title: nodeName(node), startedAt: this.iso() });
 
       /* Only when: otherwise skipped, and the case goes on. */
-      if (!isResume && node.when && !passes(node.when, scope, now)) {
-        await this.writeTask(this.newTask(workflow, one, node, { status: "skipped", title: `Skipped: ${nodeName(node)} (only when ${node.when})`, finishedAt: this.iso() }));
-        one = await this.moveOn(save, one, workflow, node, "next");
+      if (!wake && node.when && !passes(node.when, scope, now)) {
+        const skipped: Task = { ...base, status: "skipped", title: `Skipped: ${nodeName(node)} (only when ${node.when})`, outcome: "next", finishedAt: this.iso() };
+        await this.writeTask(skipped);
+        one = await this.applied(save, one, workflow, node, skipped);
         if (one.status !== "running") return one;
         continue;
       }
 
       if (!variant || !executor || !variant.available) {
-        const failedTask = this.newTask(workflow, one, node, { status: "failed", title: `${nodeName(node)} cannot run here yet.`, finishedAt: this.iso() });
+        const failedTask: Task = { ...base, status: "failed", title: `${nodeName(node)} cannot run here yet.`, error: `${nodeName(node)} cannot run here yet.`, outcome: "failed", finishedAt: this.iso() };
         await this.writeTask(failedTask);
-        one = await this.afterFailure(save, one, workflow, node, `${nodeName(node)} cannot run here yet.`);
+        one = await this.applied(save, one, workflow, node, failedTask);
         if (one.status !== "running") return one;
         continue;
       }
-
-      /* The task this step writes to: the one it was waiting on, or a new one. */
-      const held = isResume && resuming?.task ? await this.env.tasks.get(resuming.task) : null;
-      let task: Task = held ?? this.newTask(workflow, one, node, { status: "running", title: nodeName(node), startedAt: this.iso() });
 
       /* Settings: frozen when proposed, else filled in from the case now. */
       let settings: Record<string, unknown>;
       try {
-        settings = task.pending ? { ...task.pending } : renderSettings(variant, withDefaults(variant, node.settings), scope, now);
+        settings = base.pending ? { ...base.pending } : renderSettings(variant, withDefaults(variant, node.settings), scope, now);
       } catch (error) {
-        await this.writeTask({ ...task, status: "failed", error: String(error instanceof Error ? error.message : error), finishedAt: this.iso() });
-        one = await this.afterFailure(save, one, workflow, node, `${nodeName(node)}: its settings could not be filled in: ${error instanceof Error ? error.message : String(error)}`);
+        const message = `${nodeName(node)}: its settings could not be filled in: ${error instanceof Error ? error.message : String(error)}`;
+        const failedTask: Task = { ...base, status: "failed", error: message, outcome: "failed", finishedAt: this.iso() };
+        await this.writeTask(failedTask);
+        one = await this.applied(save, one, workflow, node, failedTask);
         if (one.status !== "running") return one;
         continue;
       }
 
-      /* Declined: the approval was refused. The case goes down `declined`, if there is such an arrow. */
-      if (isResume && resuming?.declined) {
-        await this.writeTask({ ...task, status: "dismissed", approvedBy: resuming.declined.by.userId, finishedAt: this.iso(), title: `Declined: ${task.title}` });
-        one = await this.moveOn(save, one, workflow, node, "declined");
-        resuming = null;
+      /* Declined: the case goes down `declined`, if there is such an arrow. */
+      if (wake?.declined) {
+        const dismissed: Task = { ...base, status: "dismissed", approvedBy: wake.declined.by.userId, title: `Declined: ${base.title}`, outcome: "declined", finishedAt: this.iso() };
+        await this.writeTask(dismissed);
+        wake = null;
+        one = await this.applied(save, one, workflow, node, dismissed);
+        if (one.status !== "running") return one;
+        continue;
+      }
+
+      /* A person says an interrupted send did happen: it is not sent again. */
+      if (wake?.settled) {
+        const settled: Task = { ...base, status: "done", uncertain: false, approvedBy: wake.settled.by.userId, title: base.title.replace(/^Did it happen\? /, ""), reason: "Marked as done: it had happened.", outcome: "next", finishedAt: this.iso() };
+        await this.writeTask(settled);
+        wake = null;
+        one = await this.applied(save, one, workflow, node, settled);
         if (one.status !== "running") return one;
         continue;
       }
 
       /* Approve: the step waits for a person, with its settings frozen as they will run. */
+      const approval: Approval | undefined = wake?.approved ?? (attempt.approvedBy && (wake?.retry || attempt.executing) ? { by: attempt.approvedBy } : undefined);
       const mode = nodeMode(node, one.trial);
-      if (mode === "approve" && !(isResume && resuming?.approved)) {
+      if (mode === "approve" && !approval) {
+        const wait: CaseWait = { node: node.id, kind: "approval", key: `task:${base.id}`, task: base.id };
         const proposed: Task = {
-          ...task,
+          ...base,
           status: "waiting_approval",
           title: this.proposalTitle(node, settings, workflow),
           pending: settings,
+          wait,
           reason: one.trial && node.mode === "auto" ? `In trial: "${workflow.name}" asks before every outside step for its first cases.` : `From "${workflow.name}"${one.rowKey ? ` for ${one.rowKey}` : ""}.`,
         };
         await this.writeTask(proposed);
         this.env.onEvent?.({ type: "task.waiting", task: proposed.id, workflow: workflow.id, agent: proposed.agent });
-        one = await save({ ...one, status: "waiting", waiting: { node: node.id, kind: "approval", key: `task:${proposed.id}`, task: proposed.id } });
-        return one;
+        return save({ ...one, status: "waiting", waiting: wait });
       }
+      if (approval && !attempt.approvedBy) attempt = { ...attempt, approvedBy: approval.by };
 
-      const agentId = text(settings["agentId"]) || node.agentId || one.agent;
-      const agent = agentId ? await this.env.agents.get(agentId) : null;
-      const ctx: ActionContext = {
-        env: this.env,
-        workflow,
-        case: one,
-        node,
-        variant,
-        settings,
-        scope,
-        actor: one.actor ?? workflow.enabledBy ?? null,
-        agent: agent ?? null,
-        ...(isResume && resuming?.approved ? { approved: resuming.approved } : {}),
-        ...(isResume && resuming?.resume ? { resume: resuming.resume } : {}),
-        task: { ...task, status: "running", ...(agent ? { agent: agent.id } : {}) },
-        startCase: (workflowId, inputs) => this.startChild(workflowId, inputs, one!),
-      };
-      resuming = null;
-
+      /* ── act ── */
       let result: ActionResult;
+      let agent: AgentSpec | null = null;
+      const resume = wake?.resume;
+      wake = null;
       try {
+        agent = await agentNamed(this.env, (typeof settings["agentId"] === "string" && settings["agentId"]) || node.agentId || one.agent);
+        const running: Task = { ...base, status: "running", tries: attempt.tries, ...(agent ? { agent: agent.id } : {}) };
+        await this.writeTask(running);
+        attempt = { ...attempt, executing: true };
+        one = await save({ ...one, attempt });
+        const parent = one;
+        const ctx: ActionContext = {
+          env: this.env,
+          workflow,
+          case: one,
+          node,
+          variant,
+          settings,
+          scope,
+          actor: one.actor ?? workflow.enabledBy ?? null,
+          agent,
+          attempt,
+          ...(approval ? { approved: approval } : {}),
+          ...(resume ? { resume } : {}),
+          task: running,
+          startCase: (workflowId, inputs, extra) => this.startChild(workflowId, inputs, parent, extra),
+        };
         result = await executor(ctx);
       } catch (error) {
         if (error instanceof ParkWorkflow) {
           await this.park(workflow, error.reason);
-          await this.writeTask({ ...task, status: "failed", error: error.reason, finishedAt: this.iso() });
+          await this.writeTask({ ...base, status: "failed", error: error.reason, outcome: "failed", finishedAt: this.iso() });
           return this.finish(one, "failed", `Paused: ${error.reason}`);
         }
-        if (error instanceof RevisionConflict) throw error;
+        if (error instanceof RevisionConflict || error instanceof CaseBusy) throw error;
         result = { kind: "failed", error: error instanceof Error ? error.message : String(error) };
       }
 
-      const approvedBy = ctx.approved ? { approvedBy: ctx.approved.by.userId } : {};
+      const task: Task = { ...base, ...(agent ? { agent: agent.id } : {}), ...(approval ? { approvedBy: approval.by.userId } : {}), tries: attempt.tries };
+
       if (result.kind === "wait") {
-        task = { ...task, ...result.task, ...approvedBy, ...(agent ? { agent: agent.id } : {}) };
-        await this.writeTask(task);
-        const outputs = result.outputs ? { ...result.outputs, task: task.id } : { task: task.id };
+        const wait: CaseWait = { ...result.wait, node: node.id, task: task.id };
+        const outputs = { ...(result.outputs ?? {}), task: task.id };
+        await this.writeTask({ ...task, ...result.task, wait });
         one = await save({
           ...one,
           status: "waiting",
-          waiting: { ...result.wait, node: node.id, task: task.id },
+          waiting: wait,
+          attempt: { ...attempt, executing: false },
           data: { ...one.data, steps: { ...one.data.steps, [node.id]: outputs } },
         });
+        /* Whatever it waits for may already have happened. */
+        if (!PERSON_WAITS.has(wait.kind) && wait.key !== "time") {
+          const signal = await this.env.signals.take(wait.key, one.id, one.startedAt);
+          if (signal) {
+            const { waiting: _waiting, ...rest } = one;
+            one = await save({ ...rest, status: "running" });
+            wake = { resume: { kind: "event", payload: signal.payload } };
+            continue;
+          }
+        }
         return one;
       }
 
       if (result.kind === "failed") {
-        await this.writeTask({ ...task, ...result.task, ...approvedBy, status: "failed", error: result.error, finishedAt: this.iso() });
-        one = await this.afterFailure(save, one, workflow, node, result.error);
+        if (result.uncertain) return this.uncertain(save, one, attempt, { ...task, ...result.task }, result.error);
+        const retry = node.retry;
+        if (result.retryable && retry && attempt.tries <= retry.times) {
+          const delay = Math.min((durationMs(retry.delay) ?? 60_000) * 2 ** (attempt.tries - 1), MAX_RETRY_DELAY_MS);
+          const retryAt = this.iso(this.env.now() + delay);
+          const wait: CaseWait = { node: node.id, kind: "retry", key: "time", deadline: retryAt, task: task.id };
+          await this.writeTask({ ...task, ...result.task, status: "waiting", error: result.error, retryAt, wait, title: `${nodeName(node)}: trying again (${attempt.tries} of ${retry.times})` });
+          return save({ ...one, status: "waiting", waiting: wait, attempt: { ...attempt, tries: attempt.tries + 1, executing: false } });
+        }
+        const failedTask: Task = { ...task, ...result.task, status: "failed", error: result.error, outcome: "failed", finishedAt: this.iso() };
+        await this.writeTask(failedTask);
+        one = await this.applied(save, one, workflow, node, failedTask);
         if (one.status !== "running") return one;
         continue;
       }
 
-      task = { ...task, ...result.task, ...approvedBy, ...(agent && !result.task.agent ? { agent: agent.id } : {}), finishedAt: this.iso() };
-      if (task.status === "running") task = { ...task, status: "done" };
-      await this.writeTask(task);
-      const { __vars, ...outputs } = (result.outputs ?? {}) as Record<string, unknown> & { __vars?: Record<string, unknown> };
-      one = await save({
-        ...one,
-        data: {
-          ...one.data,
-          steps: { ...one.data.steps, [node.id]: { ...outputs, task: task.id } },
-          vars: { ...one.data.vars, ...(__vars ?? {}) },
-        },
-      });
-      one = await this.moveOn(save, one, workflow, node, result.outcome);
+      let finished: Task = { ...task, ...result.task, ...(agent && !result.task.agent ? { agent: agent.id } : {}), outcome: result.outcome, outputs: result.outputs ?? {}, finishedAt: this.iso() };
+      if (finished.status === "running") finished = { ...finished, status: "done" };
+      const { wait: _wait, ...withoutWait } = finished;
+      await this.writeTask(withoutWait);
+      one = await this.applied(save, one, workflow, node, withoutWait);
       if (one.status !== "running") return one;
     }
   }
 
+  /**
+   * Move a case on from a task that has finished: its outputs into the case,
+   * then down the arrow its outcome names. The only way a step's result
+   * reaches the case, so recovery and a normal run do the same thing.
+   */
+  private async applied(save: (next: WorkflowCase) => Promise<WorkflowCase>, one: WorkflowCase, workflow: WorkflowSpec, node: WorkflowNode, task: Task): Promise<WorkflowCase> {
+    const outcome = task.outcome ?? "next";
+    const { __vars, ...outputs } = (task.outputs ?? {}) as Record<string, unknown> & { __vars?: Record<string, unknown> };
+    const { attempt: _attempt, ...rest } = one;
+    const data = task.status === "done" ? { ...one.data, steps: { ...one.data.steps, [node.id]: { ...outputs, task: task.id } }, vars: { ...one.data.vars, ...(__vars ?? {}) } } : one.data;
+    const moved: WorkflowCase = { ...rest, data };
+    if (outcome === "failed") {
+      if (node.onFailure === "continue") return this.moveOn(save, moved, workflow, node, "next");
+      const next = node.onFailure === "path" ? nextNode(workflow, node.id, "failed") : undefined;
+      if (next) return save({ ...moved, at: next });
+      return this.finish(await save(moved), "failed", task.error ?? `${nodeName(node)} failed.`);
+    }
+    return this.moveOn(save, moved, workflow, node, outcome);
+  }
+
   private async moveOn(save: (next: WorkflowCase) => Promise<WorkflowCase>, one: WorkflowCase, workflow: WorkflowSpec, node: WorkflowNode, outcome: string): Promise<WorkflowCase> {
     const next = nextNode(workflow, node.id, outcome);
-    if (!next) {
-      const status = outcome === "timed_out" ? "timed_out" : "done";
-      return this.finish(one, status);
-    }
+    if (!next) return this.finish(await save(one), outcome === "timed_out" ? "timed_out" : "done");
     return save({ ...one, at: next });
   }
 
-  private async afterFailure(save: (next: WorkflowCase) => Promise<WorkflowCase>, one: WorkflowCase, workflow: WorkflowSpec, node: WorkflowNode, error: string): Promise<WorkflowCase> {
-    if (node.onFailure === "continue") return this.moveOn(save, one, workflow, node, "next");
-    if (node.onFailure === "path") {
-      const next = nextNode(workflow, node.id, "failed");
-      if (next) return save({ ...one, at: next });
-    }
-    return this.finish(one, "failed", error);
+  /** It may or may not have happened: a person says which, and nothing is done again until they do. */
+  private async uncertain(save: (next: WorkflowCase) => Promise<WorkflowCase>, one: WorkflowCase, attempt: CaseAttempt, task: Task, why: string): Promise<WorkflowCase> {
+    const wait: CaseWait = { node: attempt.node, kind: "uncertain", key: `task:${task.id}`, task: task.id };
+    const asked: Task = { ...task, status: "waiting_approval", uncertain: true, error: why, wait, reason: `${why} Check the other system, then say whether it happened, or run it again.` };
+    await this.writeTask(asked);
+    this.env.onEvent?.({ type: "task.waiting", task: asked.id, workflow: one.workflow, agent: asked.agent });
+    return save({ ...one, status: "waiting", waiting: wait, attempt: { ...attempt, executing: false } });
   }
 
   /** End a case, tell whatever waits on it, and count down a trial. */
   private async finish(one: WorkflowCase, status: "done" | "failed" | "cancelled" | "timed_out", error?: string): Promise<WorkflowCase> {
-    const { waiting: _waiting, ...rest } = one;
+    const { waiting: _waiting, attempt: _attempt, ...rest } = one;
     const ended = await this.env.cases.put({ ...rest, status, finishedAt: this.iso(), updatedAt: this.iso(), ...(error ? { error } : {}) }, one.revision);
     if (ended.trial) {
       const workflow = await this.env.store.get(ended.workflow);
       if (workflow && workflow.trial > 0) await this.env.store.put({ ...workflow, trial: workflow.trial - 1 });
     }
     this.env.onEvent?.({ type: "case.finished", workflow: ended.workflow, case: ended.id, status });
-    /* A step in another case may be waiting for this one. */
+    /* A step in another case may be waiting for this one, or for all of its group. */
     await this.emit(`case-done:${ended.id}`, { status, case: ended.id });
+    const { parentCase, group } = ended.start;
+    if (parentCase && group) {
+      const siblings = (await this.env.cases.children(parentCase)).filter((child) => child.start.group === group);
+      if (siblings.every((child) => FINISHED.has(child.status))) {
+        await this.emit(`group-done:${group}`, { statuses: Object.fromEntries(siblings.map((child) => [child.id, child.status])) });
+      }
+    }
     return ended;
   }
 
@@ -328,28 +509,49 @@ export class WorkflowEngine {
     this.env.onEvent?.({ type: "workflow.parked", workflow: workflow.id, reason });
   }
 
-  private async startChild(workflowId: string, inputs: Record<string, unknown>, parent: WorkflowCase): Promise<{ id: string; status: string }> {
+  /**
+   * Start another workflow's case from a step. The child's id comes from the
+   * step's attempt, so starting it twice opens it once. A workflow may not
+   * start itself, however far down, and calls go no deeper than
+   * `MAX_CALL_DEPTH`.
+   */
+  private async startChild(
+    workflowId: string,
+    inputs: Record<string, unknown>,
+    parent: WorkflowCase,
+    extra: { readonly key: string; readonly group?: string | undefined },
+  ): Promise<{ id: string; status: string }> {
     const workflow = await this.env.store.get(workflowId);
     if (!workflow) throw new Error(`There is no workflow "${workflowId}".`);
     if (workflowReads(workflow)) throw new Error(`"${workflow.name}" reads its own records, so it cannot be started by another workflow.`);
+    const chain = [...parent.chain, parent.workflow];
+    if (chain.includes(workflow.id)) throw new Error(`"${workflow.name}" is already running further up this chain of workflows, so starting it again would go round for ever.`);
+    if (chain.length >= MAX_CALL_DEPTH) throw new Error(`Workflows can start workflows only ${MAX_CALL_DEPTH} deep.`);
+    if (workflow.trigger.kind === "agent") {
+      const missing = workflow.trigger.inputs.filter((one) => one.required && (inputs[one.name] === undefined || inputs[one.name] === null || inputs[one.name] === ""));
+      if (missing.length > 0) throw new Error(`"${workflow.name}" needs ${missing.map((one) => one.name).join(", ")}.`);
+    }
     const child = await this.open(workflow, {
+      id: `${parent.id.slice(0, 24)}-${shortHash(extra.key)}`,
       inputs,
-      start: { kind: "workflow", parentCase: parent.id, ...(parent.agent ? { agentId: parent.agent } : {}) },
+      start: { kind: "workflow", parentCase: parent.id, ...(extra.group ? { group: extra.group } : {}), ...(parent.agent ? { agentId: parent.agent } : {}) },
       actor: parent.actor ?? null,
+      chain,
     });
     return { id: child.id, status: child.status };
   }
 
   /* ── tasks ───────────────────────────────────────────────────────── */
 
-  private newTask(workflow: WorkflowSpec, one: WorkflowCase, node: WorkflowNode, fields: Partial<Task>): Task {
+  private newTask(workflow: WorkflowSpec, one: WorkflowCase, node: WorkflowNode, attempt: CaseAttempt, fields: Partial<Task>): Task {
     const variant = actionVariant(node.action);
     return {
-      id: this.env.newId(),
+      id: attempt.task,
       workflow: workflow.id,
       workflowName: workflow.name,
       case: one.id,
       node: node.id,
+      attempt: attempt.id,
       action: node.action,
       base: variant?.base ?? node.action.split(".")[0] ?? node.action,
       title: nodeName(node),
@@ -364,6 +566,11 @@ export class WorkflowEngine {
 
   private async writeTask(task: Task): Promise<void> {
     await this.env.tasks.put(task);
+  }
+
+  private async dismissStale(id: string, why: string): Promise<void> {
+    const task = await this.env.tasks.get(id);
+    if (task && (task.status === "waiting_approval" || task.status === "waiting")) await this.env.tasks.put({ ...task, status: "dismissed", error: why, finishedAt: this.iso() });
   }
 
   /** One line for what an approval will do: "Text +1 555 0100 from Maintenance agent: …". */
@@ -385,34 +592,49 @@ export class WorkflowEngine {
   /* ── waking ──────────────────────────────────────────────────────── */
 
   /**
-   * Something happened: wake every case waiting for it. A signal for a task
-   * that has already finished is kept on the task, never applied.
+   * Something happened. It is kept first, so a case that starts waiting for
+   * it later still hears it; then each case waiting for it now is woken, and
+   * the first to take it has it. A case busy right now is left for the next
+   * delivery (`deliverPending`), never skipped.
    */
   async emit(key: string, payload: Readonly<Record<string, unknown>> = {}): Promise<number> {
-    const waiting = await this.env.cases.waitingOn(key);
-    for (const one of waiting) {
+    await this.env.signals.put({ id: this.env.newId(), key, at: this.iso(), payload });
+    const woken = await this.deliver(key);
+    if (woken === 0 && key.startsWith("task:")) {
+      const task = await this.env.tasks.get(key.slice(5));
+      if (task && FINAL_TASK_STATUSES.includes(task.status) && task.case && !(await this.env.cases.waitingOn(key)).length) {
+        await this.env.tasks.put({ ...task, late: [...(task.late ?? []), { at: this.iso(), what: JSON.stringify(payload).slice(0, 500) }] });
+      }
+    }
+    return woken;
+  }
+
+  private async deliver(key: string): Promise<number> {
+    let woken = 0;
+    for (const one of await this.env.cases.waitingOn(key)) {
       try {
-        await this.advance(one.id, { resume: { kind: "event", payload } });
+        const after = await this.advance(one.id, { resume: { kind: "event" } });
+        if (after.status !== "waiting" || after.waiting?.key !== key) woken++;
       } catch (error) {
         if (!(error instanceof CaseBusy || error instanceof RevisionConflict)) throw error;
       }
     }
-    if (waiting.length === 0 && key.startsWith("task:")) {
-      const task = await this.env.tasks.get(key.slice(5));
-      if (task && FINAL_TASK_STATUSES.includes(task.status)) {
-        await this.env.tasks.put({ ...task, late: [...(task.late ?? []), { at: this.iso(), what: JSON.stringify(payload).slice(0, 500) }] });
-      }
-    }
-    return waiting.length;
+    return woken;
   }
 
-  /** Cases whose deadline has passed go down their time-out path. */
-  async timeouts(): Promise<number> {
-    const due = await this.env.cases.overdue(this.iso());
+  /** Signals still untaken that a case is waiting for: delivered again. */
+  async deliverPending(): Promise<number> {
     let woken = 0;
-    for (const one of due) {
+    for (const key of await this.env.signals.untaken(this.iso(this.env.now() - SIGNAL_KEEP_MS))) woken += await this.deliver(key);
+    return woken;
+  }
+
+  /** Cases whose deadline has passed go down their time-out path, or try again. */
+  async timeouts(): Promise<number> {
+    let woken = 0;
+    for (const one of await this.env.cases.overdue(this.iso())) {
       try {
-        await this.advance(one.id, { resume: { kind: "timeout" } });
+        await this.advance(one.id, one.waiting?.kind === "retry" ? { retry: true } : { resume: { kind: "timeout" } });
         woken++;
       } catch (error) {
         if (!(error instanceof CaseBusy || error instanceof RevisionConflict)) throw error;
@@ -421,16 +643,72 @@ export class WorkflowEngine {
     return woken;
   }
 
-  /** Stop a case: sticky, even across a restart. A waiting case ends now; a running one at its next step. */
+  /** Cases left running by a call that stopped: carried on from what was written down. */
+  async recover(): Promise<number> {
+    let recovered = 0;
+    for (const one of await this.env.cases.stalled(this.iso(this.env.now() - STALL_MS))) {
+      if (this.active.has(one.id)) continue;
+      try {
+        await this.advance(one.id);
+        recovered++;
+      } catch (error) {
+        if (!(error instanceof CaseBusy || error instanceof RevisionConflict)) throw error;
+      }
+    }
+    return recovered;
+  }
+
+  /** Waiting cases that watch a record: each read as the case may read, inside its lease. */
+  async pollRecords(): Promise<number> {
+    let woken = 0;
+    for (const one of await this.env.cases.watchingRecords()) {
+      try {
+        const after = await this.advance(one.id, { poll: true });
+        if (after.status !== "waiting") woken++;
+      } catch (error) {
+        if (!(error instanceof CaseBusy || error instanceof RevisionConflict)) throw error;
+      }
+    }
+    return woken;
+  }
+
+  /**
+   * Read the record a waiting case watches. Its condition holds: the record.
+   * Not yet, or not reached: still waiting. Access gone: the workflow is
+   * paused, the case ends, and nothing is read.
+   */
+  private async pollRecord(one: WorkflowCase, workflow: WorkflowSpec): Promise<Record<string, unknown> | "waiting" | "parked"> {
+    const match = one.waiting?.match as { connection?: string; entity?: string; id?: string; condition?: string } | undefined;
+    if (one.waiting?.kind !== "record_change" || !match?.connection || !match.entity || !match.id) return "waiting";
+    try {
+      const agent = await agentNamed(this.env, one.agent);
+      const { record } = await readRecordAs(this.env, { actor: one.actor ?? workflow.enabledBy ?? null, agent }, { connection: match.connection, entity: match.entity, id: match.id });
+      if (record && (!match.condition || passes(match.condition, record, this.env.now()))) return record;
+      return "waiting";
+    } catch (error) {
+      if (!(error instanceof ParkWorkflow)) throw error;
+      await this.park(workflow, error.reason);
+      if (one.waiting?.task) await this.dismissStale(one.waiting.task, error.reason);
+      await this.finish(one, "failed", `Paused: ${error.reason}`);
+      return "parked";
+    }
+  }
+
+  /** Stop a case and the cases it started: sticky, even across a restart. A waiting case ends now; a running one at its next step. */
   async cancel(caseId: string): Promise<WorkflowCase> {
     const one = await this.env.cases.get(caseId);
     if (!one) throw new Error(`There is no case "${caseId}".`);
     if (FINISHED.has(one.status)) return one;
+    const children = (await this.env.cases.children(one.id)).filter((child) => !FINISHED.has(child.status));
+    for (const child of children) await this.cancel(child.id).catch(() => undefined);
+    /* A child ending may already have moved this case on. */
+    if (children.length > 0) {
+      const now = await this.env.cases.get(caseId);
+      if (!now || FINISHED.has(now.status)) return now ?? one;
+      if (now.revision !== one.revision) return this.cancel(caseId);
+    }
     if (one.status === "waiting") {
-      if (one.waiting?.task) {
-        const task = await this.env.tasks.get(one.waiting.task);
-        if (task && !FINAL_TASK_STATUSES.includes(task.status)) await this.env.tasks.put({ ...task, status: "dismissed", finishedAt: this.iso(), error: "The case was cancelled." });
-      }
+      if (one.waiting?.task) await this.dismissStale(one.waiting.task, "The case was cancelled.");
       return this.finish({ ...one, cancelRequested: true }, "cancelled", "Cancelled.");
     }
     return this.env.cases.put({ ...one, cancelRequested: true, updatedAt: this.iso() }, one.revision);

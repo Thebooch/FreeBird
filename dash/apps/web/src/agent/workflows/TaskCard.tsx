@@ -129,7 +129,7 @@ export const TaskCard = ({
   const [answer, setAnswer] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const status = STATUS_WORDS[task.status];
+  const status = task.uncertain && task.status === "waiting_approval" ? { label: "Did it happen?", tone: "warn" as const } : STATUS_WORDS[task.status];
   const isQuestion = task.body.kind === "question" && task.status === "waiting";
 
   const act = async (work: () => Promise<unknown>, done = true): Promise<void> => {
@@ -181,7 +181,8 @@ export const TaskCard = ({
         {task.workflowName ? `${task.workflowName} · ` : ""}
         {when(task.finishedAt ?? task.createdAt)}
         {task.approvedBy ? ` · by ${task.approvedBy}` : ""}
-        {task.error && task.status !== "failed" ? ` · ${task.error}` : ""}
+        {task.error && task.status !== "failed" && !task.uncertain ? ` · ${task.error}` : ""}
+        {task.retryAt && task.status === "waiting" ? ` · trying again ${when(task.retryAt)}` : ""}
       </span>
       {task.status === "failed" && task.error && <p className="dash-callout dash-callout--bad">{task.error}</p>}
       {error && (
@@ -213,7 +214,20 @@ export const TaskCard = ({
         </>
       ) : (
         <div className="dash-row">
-          {task.status === "waiting_approval" && (
+          {task.status === "waiting_approval" && task.uncertain && (
+            <>
+              <Button size="sm" tone="primary" busy={busy} onClick={() => void act(() => api.settleTask(task.id))} testId={`task-settle-${task.id}`}>
+                It happened
+              </Button>
+              <Button size="sm" busy={busy} onClick={() => void open()} testId={`task-again-${task.id}`}>
+                Run it again
+              </Button>
+              <Button size="sm" tone="ghost" busy={busy} onClick={() => void act(() => api.declineTask(task.id))}>
+                Don't run it
+              </Button>
+            </>
+          )}
+          {task.status === "waiting_approval" && !task.uncertain && (
             <>
               <Button size="sm" tone="primary" busy={busy} onClick={() => void open()} testId={`task-approve-${task.id}`}>
                 Review and approve

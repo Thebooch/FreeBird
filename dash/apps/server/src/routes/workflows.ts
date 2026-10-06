@@ -194,6 +194,9 @@ export const workflowRoutes = (deps: {
 
     app.post<{ Params: { id: string } }>("/api/tasks/:id/decline", guarded(async (principal, request) => tasks.decline(principal, request.params["id"]!)));
 
+    /** It happened: a send Dash was not sure of is marked done, and not sent again. */
+    app.post<{ Params: { id: string } }>("/api/tasks/:id/settle", guarded(async (principal, request) => tasks.settle(principal, request.params["id"]!)));
+
     app.post<{ Params: { id: string }; Body: { answer?: unknown } }>(
       "/api/tasks/:id/answer",
       guarded<{ answer?: unknown }>(async (principal, request) => {

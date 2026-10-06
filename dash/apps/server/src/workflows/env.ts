@@ -3,7 +3,7 @@ import type { RecordReader, WriteOnBehalfOf, WriteVia } from "@freebirdai/connec
 import type { LlmAdapter } from "@freebirdai/dash-agent";
 import type { ActionModelTask, AgentSpec, Principal, SharedAgentKnowledge } from "@freebirdai/dash-spec";
 import type { Policy } from "../identity/policy.js";
-import type { CalendarStore, CaseStore, TaskStore, TemplateStore, WorkflowStore } from "./store.js";
+import type { CalendarStore, CaseStore, SignalStore, TaskStore, TemplateStore, WorkflowStore } from "./store.js";
 
 /**
  * Everything a workflow reaches for, in one place, so the runner, a person's
@@ -52,14 +52,20 @@ export interface WorkflowEnv {
   readonly tasks: TaskStore;
   readonly calendar: CalendarStore;
   readonly templates: TemplateStore;
+  /** Things that happened, kept until a waiting case takes them. */
+  readonly signals: SignalStore;
   readonly agents: { get(id: string): Promise<AgentSpec | null>; shared?(): Promise<SharedAgentKnowledge> };
   readonly policy: Policy;
   /** The single read, at background priority. */
   readonly read: RecordReader;
   readonly writes: WorkflowWrites;
   readonly outreach?: OutreachSender;
-  /** Posts a webhook: the SSRF guard applies. Absent: Send to a system is not available. */
-  readonly post?: (url: string, body: unknown) => Promise<{ readonly status: number; readonly body: unknown }>;
+  /**
+   * Posts a webhook: the SSRF guard applies. `key` is the step's operation id,
+   * sent as `Idempotency-Key` so a receiver that honours it ignores a repeat.
+   * Absent: Send to a system is not available.
+   */
+  readonly post?: (url: string, body: unknown, options?: { readonly key?: string }) => Promise<{ readonly status: number; readonly body: unknown }>;
   /** The field that tells a record type's rows apart, where the catalog knows it. */
   readonly rowKeyField?: (connection: string, record: string) => string | undefined;
   readonly connectionTitle?: (connection: string) => string;

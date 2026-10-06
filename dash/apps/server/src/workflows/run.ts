@@ -11,7 +11,6 @@ import {
   nodeName,
   passes,
   readField,
-  reachCovers,
   renderText,
   stepRow,
   workflowReads,
@@ -24,6 +23,7 @@ import {
 } from "@freebirdai/dash-spec";
 import type { WorkflowEngine } from "./engine.js";
 import { ParkWorkflow, type WorkflowEnv } from "./env.js";
+import { mayRead } from "./reads.js";
 import { SEEDED_KEY, type FiredRow } from "./store.js";
 
 /**
@@ -32,9 +32,14 @@ import { SEEDED_KEY, type FiredRow } from "./store.js";
  *
  * The cases do the work (`engine.ts`). A run only decides which records start
  * one, within the trigger's limits: how many cases one record may open, how
- * long it rests in between, and when the trigger expires. What it has seen is
- * moved on only once a record's case is open, so a record whose case could
- * not open is tried again next time.
+ * long it rests in between, and when the trigger expires. Each record is
+ * claimed before its case opens, and the claim only succeeds if nobody else
+ * claimed it since this run looked, so two runs never open a case for the
+ * same record. A record whose case could not open is given back.
+ *
+ * A trigger on new records first takes note of what is already there, and
+ * keeps taking note until one read has reached every record: a record first
+ * seen later is new only once the baseline is whole.
  *
  * Access lost parks the workflow with the reason, as does a 401 or 403 from
  * the API; a 429 waits as long as the API asked.
@@ -95,15 +100,13 @@ const refusal = (error: unknown): number | undefined => {
 
 const plural = (count: number, one: string, many = `${one}s`): string => `${count} ${count === 1 ? one : many}`;
 
+const caseIdFor = (workflow: string, key: string, count: number): string => createHash("sha1").update(`${workflow}\u0000${key}\u0000${count}`).digest("hex").slice(0, 24);
+
 /** Read what a workflow reads, as a person (and an agent) may. */
 const gather = async (env: WorkflowEnv, workflow: WorkflowSpec, actor: Principal | null, agent: AgentSpec | null): Promise<Gathered> => {
   const source = workflowReads(workflow);
   if (!source) return { read: 0, complete: true, rows: [{ key: "", row: {} }] };
-  if (!actor) throw new ParkWorkflow("Nobody has turned this workflow on, so it has no one's permission to read with.");
-  const where = env.connectionTitle?.(source.connection) ?? source.connection;
-  const may = await env.policy.can(actor, "records.read", { connection: source.connection });
-  if (!may.ok) throw new ParkWorkflow(`The person who turned this on may no longer read ${where}: ${may.reason}`);
-  if (agent && !reachCovers(agent.reach, "records.read", { connection: source.connection })) throw new ParkWorkflow(`${agent.name} may not read ${where}.`);
+  await mayRead(env, { actor, agent }, source.connection);
 
   const answer = await env.read(
     source.connection,
@@ -133,10 +136,12 @@ const gather = async (env: WorkflowEnv, workflow: WorkflowSpec, actor: Principal
 
 interface Selected {
   readonly seeding: boolean;
+  /** Still seeding after this run: not every record has been reached yet. */
+  readonly baselinePartial?: boolean;
   readonly expired: boolean;
   readonly matched: Array<{ key: string; row: Record<string, unknown> }>;
-  /** What to remember once each record's case is open, by key. */
-  readonly marks: Map<string, FiredRow>;
+  /** What each record's claim will write, and what it must find there first, by key. */
+  readonly marks: Map<string, { readonly before: FiredRow | undefined; readonly next: FiredRow }>;
   /** Seen whatever happens: new or changed records that did not match. */
   readonly seen: Array<{ key: string } & FiredRow>;
 }
@@ -146,7 +151,7 @@ const select = async (env: WorkflowEnv, workflow: WorkflowSpec, gathered: Gather
   const now = env.now();
   const at = new Date(now).toISOString();
   const { trigger, triggerLimits: limits } = workflow;
-  const marks = new Map<string, FiredRow>();
+  const marks = new Map<string, { before: FiredRow | undefined; next: FiredRow }>();
   const seenOnly: Array<{ key: string } & FiredRow> = [];
   if (limits.expiresAt && Date.parse(limits.expiresAt) <= now) return { seeding: false, expired: true, matched: [], marks, seen: seenOnly };
   if (!workflowReads(workflow)) {
@@ -169,8 +174,10 @@ const select = async (env: WorkflowEnv, workflow: WorkflowSpec, gathered: Gather
   if (isApiTrigger(trigger)) {
     for (const one of rows) prints.set(one.key, fingerprint(one.row, trigger.kind === "record_changed" ? trigger.fields : undefined));
     if (!fired.has(SEEDED_KEY)) {
-      if (!dryRun) await env.store.markFired(workflow.id, [...[...prints].map(([key, print]) => ({ key, fingerprint: print, count: 0 })), { key: SEEDED_KEY, fingerprint: "", count: 0 }]);
-      return { seeding: true, expired: false, matched: [], marks, seen: seenOnly };
+      /* The baseline grows with each read, and is whole only once one read reached every record. */
+      const noted = [...prints].map(([key, print]) => ({ key, fingerprint: print, count: fired.get(key)?.count ?? 0, ...(fired.get(key)?.lastAt ? { lastAt: fired.get(key)!.lastAt } : {}) }));
+      if (!dryRun) await env.store.markFired(workflow.id, gathered.complete ? [...noted, { key: SEEDED_KEY, fingerprint: "", count: 0 }] : noted);
+      return { seeding: true, ...(gathered.complete ? {} : { baselinePartial: true }), expired: false, matched: [], marks, seen: seenOnly };
     }
     rows = rows.filter((one) => {
       const before = fired.get(one.key);
@@ -205,7 +212,7 @@ const select = async (env: WorkflowEnv, workflow: WorkflowSpec, gathered: Gather
   for (const one of matched) {
     const before = fired.get(one.key);
     const print = isApiTrigger(trigger) ? prints.get(one.key)! : workflow.once === "per-row" ? "acted" : (before?.fingerprint ?? "");
-    marks.set(one.key, { fingerprint: print, count: (before?.count ?? 0) + 1, lastAt: at });
+    marks.set(one.key, { before, next: { fingerprint: print, count: (before?.count ?? 0) + 1, lastAt: at } });
   }
   return { seeding: false, expired: false, matched, marks, seen: seenOnly };
 };
@@ -264,7 +271,9 @@ export const runTrigger = async (env: WorkflowEnv, engine: WorkflowEngine, workf
           status: "seeded",
           read: gathered.read,
           complete: gathered.complete,
-          summary: `Took note of ${plural(gathered.rows.length, "existing record")}. From now on, only ${workflow.trigger.kind === "record_created" ? "new ones" : "changes"} start it.`,
+          summary: selected.baselinePartial
+            ? `Took note of ${plural(gathered.rows.length, "existing record")}, but not every record was reached. It keeps taking note until one read reaches them all; nothing starts it until then.`
+            : `Took note of ${plural(gathered.rows.length, "existing record")}. From now on, only ${workflow.trigger.kind === "record_created" ? "new ones" : "changes"} start it.`,
         }),
       };
     }
@@ -273,18 +282,31 @@ export const runTrigger = async (env: WorkflowEnv, engine: WorkflowEngine, workf
     const cases: string[] = [];
     let failedCases = 0;
     for (const one of selected.matched) {
-      const opened = await engine.open(workflow, {
-        row: one.row,
-        ...(one.key ? { rowKey: one.key } : {}),
-        inputs: { ...inputs },
-        start: options.start,
-        run: started.id,
-        actor,
-      });
+      const mark = one.key ? selected.marks.get(one.key) : undefined;
+      /* Claimed first: another run that got here first has it, and this one leaves it. */
+      if (mark && !(await env.store.claimFired(workflow.id, one.key, mark.before, mark.next))) continue;
+      let opened: Awaited<ReturnType<WorkflowEngine["open"]>>;
+      try {
+        opened = await engine.open(workflow, {
+          /* One id per claim: opening again after an interruption opens the same case. */
+          ...(mark ? { id: `c-${caseIdFor(workflow.id, one.key, mark.next.count)}` } : {}),
+          row: one.row,
+          ...(one.key ? { rowKey: one.key } : {}),
+          inputs: { ...inputs },
+          start: options.start,
+          run: started.id,
+          actor,
+        });
+      } catch (error) {
+        /* Not opened: the record is given back, to be tried again next time. */
+        if (mark) {
+          if (mark.before === undefined) await env.store.unfire(workflow.id, [one.key]);
+          else await env.store.claimFired(workflow.id, one.key, mark.next, mark.before);
+        }
+        throw error;
+      }
       cases.push(opened.id);
       if (opened.status === "failed") failedCases++;
-      const mark = selected.marks.get(one.key);
-      if (mark && one.key) await env.store.markFired(workflow.id, [{ key: one.key, ...mark }]);
     }
 
     const summary = workflowReads(workflow)

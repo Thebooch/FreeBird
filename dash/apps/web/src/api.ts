@@ -1266,6 +1266,8 @@ export const api = {
     request(`/api/tasks/${encodeURIComponent(id)}/approve`, json(approval)),
 
   declineTask: (id: string): Promise<Task> => request(`/api/tasks/${encodeURIComponent(id)}/decline`, json({})),
+  /** It happened: a send Dash was not sure of is marked done, and not sent again. */
+  settleTask: (id: string): Promise<Task> => request(`/api/tasks/${encodeURIComponent(id)}/settle`, json({})),
 
   answerTask: (id: string, answer: string): Promise<Task> => request(`/api/tasks/${encodeURIComponent(id)}/answer`, json({ answer })),
 

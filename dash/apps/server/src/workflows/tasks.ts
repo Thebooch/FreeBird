@@ -14,6 +14,12 @@ import { startWorkflow, type Starter } from "./start.js";
  *   saw; anything else runs as them. **Approve always** also turns that step
  *   to Auto, if the approver holds the permission it needs.
  * - **Decline** it: the case goes down its `declined` arrow, if it has one.
+ * - **Settle** a task Dash could not be sure of (it stopped, or lost the
+ *   answer, while sending): "it happened" moves the case on without sending
+ *   again; approving it instead runs it again.
+ *
+ * Every decision applies to the step it was made for: if the case has moved
+ * on since, the task is out of date and says so.
  * - **Answer** a question an Ask step put to a teammate.
  * - **Reverse** a finished task, where it can be undone: an account change
  *   through the same review (the record as it is now, with what will be sent),
@@ -59,8 +65,10 @@ export class TaskService {
   private async pendingIntent(task: Task): Promise<WriteIntent | null> {
     const variant = actionVariant(task.action);
     if (!variant || !RECORD_CHANGE_VARIANTS.has(variant.id) || !task.pending) return null;
-    const workflow = task.workflow ? await this.env.store.get(task.workflow) : null;
-    return intentFor(variant, task.pending, workflow ? workflowReads(workflow)?.connection : undefined);
+    /* The connection the case's own version of the workflow reads, not whatever it reads now. */
+    const one = task.case ? await this.env.cases.get(task.case) : null;
+    const workflow = one ? null : task.workflow ? await this.env.store.get(task.workflow) : null;
+    return intentFor(variant, task.pending, workflowReads(one?.definition ?? workflow ?? { trigger: { kind: "manual" } })?.connection);
   }
 
   /**
@@ -132,6 +140,7 @@ export class TaskService {
     let advanced: WorkflowCase;
     try {
       advanced = await this.starter.engine.advance(task.case, {
+        task: id,
         approved: { by: principal, ...(approval.pendingId ? { pendingId: approval.pendingId } : {}), ...(approval.digest ? { digest: approval.digest } : {}) },
       });
     } catch (error) {
@@ -139,6 +148,7 @@ export class TaskService {
       throw error;
     }
     const after = await this.held(id);
+    if (after.status === "dismissed") throw new TaskError(after.error ?? "This no longer applies.", 409, { task: after });
     /* It went back to waiting: the record moved, or the review was not this person's. A fresh review comes back. */
     if (after.status === "waiting_approval") {
       const fresh = await this.review(principal, id).catch(() => null);
@@ -160,7 +170,8 @@ export class TaskService {
       const may = await this.env.policy.can(principal, variant.permission, connection ? { connection } : {});
       if (!may.ok) throw new TaskError(`Approved, but it cannot be made automatic: ${may.reason}`, 403);
     }
-    await this.env.store.put({ ...workflow, nodes: workflow.nodes.map((one) => (one.id === node.id ? { ...one, mode: "auto" } : one)), enabledBy: principal, updatedAt: this.iso() });
+    /* A new version: cases already open keep asking as they were; new ones run it by themselves. */
+    await this.env.store.put({ ...workflow, nodes: workflow.nodes.map((one) => (one.id === node.id ? { ...one, mode: "auto" } : one)), enabledBy: principal, version: workflow.version + 1, updatedAt: this.iso() });
   }
 
   /** Say no: the case goes down its `declined` arrow, if it has one, and otherwise ends. */
@@ -173,7 +184,20 @@ export class TaskService {
       return dismissed;
     }
     try {
-      await this.starter.engine.advance(task.case, { declined: { by: principal } });
+      await this.starter.engine.advance(task.case, { task: id, declined: { by: principal } });
+    } catch (error) {
+      if (error instanceof CaseBusy) throw new TaskError(error.message, 409);
+      throw error;
+    }
+    return this.held(id);
+  }
+
+  /** It happened: a task Dash could not be sure of is marked done, and the case goes on without doing it again. */
+  async settle(principal: Principal, id: string): Promise<Task> {
+    const task = await this.held(id);
+    if (task.status !== "waiting_approval" || !task.uncertain || !task.case) throw new TaskError("Only a task Dash was not sure about can be marked as having happened.", 409, { task });
+    try {
+      await this.starter.engine.advance(task.case, { task: id, settled: { by: principal } });
     } catch (error) {
       if (error instanceof CaseBusy) throw new TaskError(error.message, 409);
       throw error;

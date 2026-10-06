@@ -165,6 +165,7 @@ export type { ComposeResponsePromptInput, FoundContext, ResponseChannel } from "
 export {
   CASE_STATUSES,
   FINAL_TASK_STATUSES,
+  MAX_CALL_DEPTH,
   ON_FAILURE,
   RUN_STATUSES,
   TASK_STATUSES,
@@ -176,8 +177,11 @@ export {
   WORKFLOW_RANGES,
   WORKFLOW_STEP_MODES,
   calendarEventSchema,
+  caseAttemptSchema,
+  caseDefinitionSchema,
   caseScope,
   caseWaitSchema,
+  definitionOf,
   chainEdges,
   cronSchema,
   describeCron,
@@ -215,6 +219,8 @@ export {
 
 export type {
   CalendarEvent,
+  CaseAttempt,
+  CaseDefinition,
   CaseStatus,
   CaseWait,
   OwnerRef,

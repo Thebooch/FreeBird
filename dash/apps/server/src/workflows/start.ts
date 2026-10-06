@@ -39,7 +39,9 @@ export const startWorkflow = async (
   options: { readonly inputs?: Readonly<Record<string, unknown>>; readonly actor?: Principal | null } = {},
 ): Promise<RunResult> => {
   const key = leaseKey(workflow.id);
-  if (starter.leases && !(await starter.leases.acquire(key, starter.holder, RUN_LEASE_MS))) {
+  /* Each start is its own holder: a second start on the same server is refused like one on another. */
+  const holder = `${starter.holder}:${starter.env.newId()}`;
+  if (starter.leases && !(await starter.leases.acquire(key, holder, RUN_LEASE_MS))) {
     throw new StartError(`"${workflow.name}" is already running.`, 409);
   }
   try {
@@ -49,7 +51,7 @@ export const startWorkflow = async (
       ...(options.actor !== undefined ? { actor: options.actor } : {}),
     });
   } finally {
-    await starter.leases?.release(key, starter.holder);
+    await starter.leases?.release(key, holder);
   }
 };
 

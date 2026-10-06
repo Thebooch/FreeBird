@@ -144,11 +144,13 @@ import { TemplateService } from "./workflows/templates.js";
 import {
   MemoryCalendarStore,
   MemoryCaseStore,
+  MemorySignalStore,
   MemoryTaskStore,
   MemoryTemplateStore,
   MemoryWorkflowStore,
   type CalendarStore,
   type CaseStore,
+  type SignalStore,
   type TaskStore,
   type TemplateStore,
   type WorkflowStore,
@@ -398,6 +400,7 @@ export interface BuildServerOptions {
   readonly tasks?: TaskStore;
   readonly calendar?: CalendarStore;
   readonly templates?: TemplateStore;
+  readonly signals?: SignalStore;
   /** Sends Outreach (texts, calls, email). Comms supplies it; absent, nothing leaves Dash and tasks say so. */
   readonly outreach?: OutreachSender;
   /** Where this server is reached from outside, for webhook addresses a Wait step hands out. */
@@ -970,11 +973,13 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     tasks: options.tasks ?? new MemoryTaskStore(),
     calendar: options.calendar ?? new MemoryCalendarStore(),
     templates: options.templates ?? new MemoryTemplateStore(),
+    signals: options.signals ?? new MemorySignalStore(),
     agents: agentStore,
     ...(options.outreach ? { outreach: options.outreach } : {}),
     /* A webhook goes through the same guard as every other request to an address someone typed. */
-    post: async (url, body) => {
-      const answer = await guardedFetch(url, { method: "POST", purpose: "write", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }, null);
+    post: async (url, body, how) => {
+      const headers: Record<string, string> = { "content-type": "application/json", ...(how?.key ? { "idempotency-key": how.key } : {}) };
+      const answer = await guardedFetch(url, { method: "POST", purpose: "write", headers, body: JSON.stringify(body) }, null);
       let parsed: unknown = answer.text;
       try {
         parsed = JSON.parse(answer.text);

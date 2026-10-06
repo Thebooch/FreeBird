@@ -251,6 +251,8 @@ export const workflowSchema = z.object({
   failures: z.number().int().min(0).default(0),
   /** The template it was made from, and which version. */
   fromTemplate: z.object({ id: z.string(), version: z.number().int() }).optional(),
+  /** Moves on each time its steps, arrows, limits or guardrails change. A case keeps the version it opened on. */
+  version: z.number().int().min(1).default(1),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -317,6 +319,8 @@ export const workflowStartSchema = z.object({
   conversation: z.string().optional(),
   /** For a case another workflow's step started: that case. */
   parentCase: z.string().optional(),
+  /** For a case one of several a For each step started: that step's attempt, so the parent hears when all have ended. */
+  group: z.string().optional(),
 });
 export type WorkflowStart = z.infer<typeof workflowStartSchema>;
 
@@ -362,6 +366,54 @@ export const caseWaitSchema = z.object({
 export type CaseWait = z.infer<typeof caseWaitSchema>;
 
 /**
+ * The step a case is on, saved before anything is done for it. Its id is the
+ * step's operation id: the same on every try, so an outside system can tell a
+ * repeat from a new request. `executing` is set just before the step acts; a
+ * case found running with it set, and nobody working on it, was interrupted
+ * in the middle of acting.
+ */
+export const caseAttemptSchema = z.object({
+  id: z.string(),
+  node: z.string(),
+  /** The task this step writes to, on every try. */
+  task: z.string(),
+  tries: z.number().int().min(1).default(1),
+  executing: z.boolean().default(false),
+  /** Who approved this step, so a retry runs as them without asking again. */
+  approvedBy: principalSchema.optional(),
+  startedAt: z.string(),
+});
+export type CaseAttempt = z.infer<typeof caseAttemptSchema>;
+
+/** The part of a workflow a case follows, frozen when it opens: changes to the workflow reach new cases only. */
+export const caseDefinitionSchema = z.object({
+  version: z.number().int().min(1),
+  nodes: z.array(workflowNodeSchema),
+  edges: z.array(workflowEdgeSchema),
+  limits: workflowLimitsSchema,
+  guardrails: z.string().default(""),
+  trigger: workflowTriggerSchema,
+  source: workflowSourceSchema.optional(),
+  rowKey: z.string().optional(),
+});
+export type CaseDefinition = z.infer<typeof caseDefinitionSchema>;
+
+/** What a case freezes of its workflow. */
+export const definitionOf = (workflow: WorkflowSpec): CaseDefinition => ({
+  version: workflow.version,
+  nodes: workflow.nodes,
+  edges: workflow.edges,
+  limits: workflow.limits,
+  guardrails: workflow.guardrails,
+  trigger: workflow.trigger,
+  ...(workflow.source ? { source: workflow.source } : {}),
+  ...(workflow.rowKey ? { rowKey: workflow.rowKey } : {}),
+});
+
+/** Calls deeper than this (a workflow starting one that starts another…) are refused. */
+export const MAX_CALL_DEPTH = 5;
+
+/**
  * One record's way through a workflow: its data, where it is, what it waits
  * for. Durable and revisioned: a write that does not carry the revision it
  * read is refused, so two writers never overwrite each other's progress.
@@ -383,6 +435,12 @@ export const workflowCaseSchema = z.object({
     vars: z.record(z.unknown()).default({}),
   }),
   waiting: caseWaitSchema.optional(),
+  /** The step being worked on, saved before it acts. */
+  attempt: caseAttemptSchema.optional(),
+  /** The workflow as it was when the case opened. */
+  definition: caseDefinitionSchema,
+  /** The workflows above this one, outermost first, for a case another workflow started. */
+  chain: z.array(z.string()).default([]),
   visits: z.record(z.number().int()).default({}),
   steps: z.number().int().default(0),
   revision: z.number().int().default(0),
@@ -515,6 +573,18 @@ export const taskSchema = z.object({
   finishedAt: z.string().optional(),
   /** A signal that arrived after the task finished: kept, never applied. */
   late: z.array(z.object({ at: z.string(), what: z.string() })).optional(),
+  /** The case step it belongs to: an approval applies only to the attempt it was made for. */
+  attempt: z.string().optional(),
+  /** How it ended and what it handed on, so a case interrupted after the task was written goes on without doing it again. */
+  outcome: z.string().optional(),
+  outputs: z.record(z.unknown()).optional(),
+  /** What the case waits for while this task waits, so an interrupted case can be put back to waiting. */
+  wait: caseWaitSchema.optional(),
+  /** Dash stopped, or the answer was lost, while this was being sent: it may or may not have happened. A person says which. */
+  uncertain: z.boolean().optional(),
+  /** Tries so far, and when the next one is due, for a step set to retry. */
+  tries: z.number().int().optional(),
+  retryAt: z.string().optional(),
 });
 export type Task = z.infer<typeof taskSchema>;
 

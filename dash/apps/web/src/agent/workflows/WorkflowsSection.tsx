@@ -68,7 +68,7 @@ const useData = (reloadToken: number) => {
   return state;
 };
 
-const CASE_WORDS: Readonly<Record<string, string>> = { approval: "your approval", ask: "a teammate's answer", time: "a time", reply: "a reply", record_change: "a record to change", workflow_done: "another workflow", webhook: "its webhook" };
+const CASE_WORDS: Readonly<Record<string, string>> = { approval: "your approval", ask: "a teammate's answer", time: "a time", reply: "a reply", record_change: "a record to change", workflow_done: "another workflow", webhook: "its webhook", retry: "its next try", uncertain: "you to say whether it happened" };
 
 const CasesList = ({ workflow, reloadToken, onChanged }: { workflow: WorkflowSpec; reloadToken: number; onChanged: () => void }): JSX.Element => {
   const [cases, setCases] = useState<WorkflowCase[] | null>(null);

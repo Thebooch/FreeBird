@@ -74,6 +74,8 @@ const WAIT_WORDS: Readonly<Record<string, string>> = {
   decision: "an answer",
   workflow_done: "another workflow to finish",
   webhook: "a call to its webhook",
+  retry: "its next try",
+  uncertain: "you to say whether a send happened",
 };
 
 const caseWaits = (one: WorkflowCase): string => (one.waiting ? (WAIT_WORDS[one.waiting.kind] ?? one.waiting.kind) : "");

@@ -2,10 +2,10 @@ import type { WriteIntent } from "@freebirdai/connect";
 import { Priority, WriteError, type WriteReversal } from "@freebirdai/connect/host";
 import type { LlmTool } from "@freebirdai/dash-agent";
 import {
+  FINAL_TASK_STATUSES,
   composeResponsePrompt,
   durationMs,
   passes,
-  readField,
   reachCovers,
   renderText,
   renderValue,
@@ -13,6 +13,7 @@ import {
   type ActionVariant,
   type AgentSpec,
   type CalendarEvent,
+  type CaseAttempt,
   type CaseWait,
   type Permission,
   type Principal,
@@ -23,6 +24,7 @@ import {
 } from "@freebirdai/dash-spec";
 import { z } from "zod";
 import { ParkWorkflow, notConnectedSender, type WorkflowEnv } from "./env.js";
+import { mayRead, readRecordAs } from "./reads.js";
 
 /**
  * What each catalog variant does when a case reaches it.
@@ -70,23 +72,59 @@ export interface ActionContext {
   readonly resume?: Resume | undefined;
   /** The task this step writes to. */
   readonly task: Task;
-  /** Start another workflow's case from this one. */
-  readonly startCase: (workflowId: string, inputs: Record<string, unknown>) => Promise<{ readonly id: string; readonly status: string }>;
+  /** This try of the step: its `id` is the operation id, the same on every try. */
+  readonly attempt: CaseAttempt;
+  /**
+   * Start another workflow's case from this one. `key` makes it idempotent:
+   * the same key opens the same case once. `group` ties several together for
+   * a step that waits for all of them.
+   */
+  readonly startCase: (
+    workflowId: string,
+    inputs: Record<string, unknown>,
+    extra: { readonly key: string; readonly group?: string | undefined },
+  ) => Promise<{ readonly id: string; readonly status: string }>;
 }
 
 export type ActionResult =
   | { readonly kind: "done"; readonly outcome: string; readonly task: Partial<Task>; readonly outputs?: Readonly<Record<string, unknown>> }
   | { readonly kind: "wait"; readonly wait: Omit<CaseWait, "node" | "task">; readonly task: Partial<Task>; readonly outputs?: Readonly<Record<string, unknown>> }
-  | { readonly kind: "failed"; readonly error: string; readonly task?: Partial<Task> };
+  | {
+      readonly kind: "failed";
+      readonly error: string;
+      readonly task?: Partial<Task>;
+      /** Nothing was done, and trying again may work: a step set to retry tries again. */
+      readonly retryable?: boolean;
+      /** It may have been done: never retried by itself; a person says whether it happened. */
+      readonly uncertain?: boolean;
+    };
 
 export type ActionExecutor = (ctx: ActionContext) => Promise<ActionResult>;
 
 const done = (outcome: string, task: Partial<Task>, outputs?: Record<string, unknown>): ActionResult => ({ kind: "done", outcome, task, ...(outputs ? { outputs } : {}) });
-const failed = (error: string, task?: Partial<Task>): ActionResult => ({ kind: "failed", error, ...(task ? { task } : {}) });
+const failed = (error: string, task?: Partial<Task>, how: { retryable?: boolean; uncertain?: boolean } = {}): ActionResult => ({
+  kind: "failed",
+  error,
+  ...(task ? { task } : {}),
+  ...(how.retryable ? { retryable: true } : {}),
+  ...(how.uncertain ? { uncertain: true } : {}),
+});
+const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+/** An error from sending something whose answer never came: it may have arrived. */
+const lostAnswer = (error: unknown): boolean => /time(d)? ?out|abort|socket hang up|ECONNRESET|EPIPE/i.test(message(error));
 const text = (value: unknown): string => (value === undefined || value === null ? "" : typeof value === "string" ? value : JSON.stringify(value));
 const iso = (ms: number): string => new Date(ms).toISOString();
 
 /* ── settings ──────────────────────────────────────────────────────────── */
+
+/** Every string inside a value filled in from the case, however deep: objects and lists keep their shape. */
+export const renderDeep = (value: unknown, scope: Readonly<Record<string, unknown>>, now: number, depth = 0): unknown => {
+  if (depth > 12) throw new Error("A value is nested too deeply to fill in.");
+  if (typeof value === "string") return renderValue(value, scope, now);
+  if (Array.isArray(value)) return value.map((one) => renderDeep(one, scope, now, depth + 1));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, one]) => [key, renderDeep(one, scope, now, depth + 1)]));
+  return value;
+};
 
 /** A variant's settings with every template filled in from the case. Expressions stay as written. */
 export const renderSettings = (variant: ActionVariant, settings: Readonly<Record<string, unknown>>, scope: Readonly<Record<string, unknown>>, now: number): Record<string, unknown> => {
@@ -96,9 +134,7 @@ export const renderSettings = (variant: ActionVariant, settings: Readonly<Record
     if (value === undefined || value === null) continue;
     if (field.kind === "template" && typeof value === "string") out[field.key] = renderValue(value, scope, now);
     else if (field.kind === "longtext" && typeof value === "string") out[field.key] = renderText(value, scope, now);
-    else if (field.kind === "values" && typeof value === "object" && !Array.isArray(value)) {
-      out[field.key] = Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, one]) => [key, typeof one === "string" ? renderValue(one, scope, now) : one]));
-    }
+    else if (field.kind === "values" && typeof value === "object") out[field.key] = renderDeep(value, scope, now);
   }
   return out;
 };
@@ -111,17 +147,19 @@ export const intentFor = (variant: ActionVariant, s: Readonly<Record<string, unk
   const id = text(s["recordId"]) || undefined;
   const values = (s["values"] as Record<string, unknown> | undefined) ?? undefined;
   const parents = s["parents"] && typeof s["parents"] === "object" ? (Object.fromEntries(Object.entries(s["parents"] as Record<string, unknown>).map(([key, one]) => [key, text(one)])) as Record<string, string>) : undefined;
+  /* A record under another keeps the ids above it, whatever is done to it. */
+  const under = parents && Object.keys(parents).length > 0 ? { parents } : {};
   switch (variant.id) {
     case "create.record":
-      return { connection, entity, kind: "create", ...(values ? { values } : {}), ...(parents ? { parents } : {}) };
+      return { connection, entity, kind: "create", ...(values ? { values } : {}), ...under };
     case "update.record":
-      return { connection, entity, kind: "update", ...(id ? { id } : {}), ...(values ? { values } : {}) };
+      return { connection, entity, kind: "update", ...(id ? { id } : {}), ...under, ...(values ? { values } : {}) };
     case "update.action":
-      return { connection, entity, kind: "action", action: text(s["action"]), ...(id ? { id } : {}), ...(values && Object.keys(values).length > 0 ? { values } : {}) };
+      return { connection, entity, kind: "action", action: text(s["action"]), ...(id ? { id } : {}), ...under, ...(values && Object.keys(values).length > 0 ? { values } : {}) };
     case "delete.record":
-      return { connection, entity, kind: "delete", ...(id ? { id } : {}) };
+      return { connection, entity, kind: "delete", ...(id ? { id } : {}), ...under };
     case "assign.record":
-      return { connection, entity, kind: "update", ...(id ? { id } : {}), values: { [text(s["field"])]: s["value"] } };
+      return { connection, entity, kind: "update", ...(id ? { id } : {}), ...under, values: { [text(s["field"])]: s["value"] } };
     default:
       return null;
   }
@@ -162,10 +200,22 @@ const recordChange: ActionExecutor = async (ctx) => {
     throw new ParkWorkflow(`${agent?.name ?? "The agent"} may not ${intent.kind} ${intent.entity} on ${intent.connection}. Widen what it may touch, or change the step.`);
   }
 
-  /* "Only if still": checked against the record as it is now. */
+  /*
+   * "Only if still": checked against the record as it is now. A record not
+   * found in a read that reached every record is gone; one not found in a read
+   * that did not is unknown, and an unknown condition never lets a change through.
+   */
   if (variant.id === "update.record" && typeof s["onlyIf"] === "string" && s["onlyIf"].trim() && intent.id) {
-    const now = await readRecord(env, intent.connection, intent.entity, intent.id);
-    if (now && !passes(s["onlyIf"], now, env.now())) return done("next", { status: "skipped", title: `Skipped: ${intent.entity} ${intent.id} no longer matches "${s["onlyIf"]}".` });
+    let found: Awaited<ReturnType<typeof readRecordAs>>;
+    try {
+      found = await readRecordAs(env, { actor: ctx.actor, agent }, { connection: intent.connection, entity: intent.entity, id: intent.id });
+    } catch (error) {
+      if (error instanceof ParkWorkflow) throw error;
+      return failed(`Could not read ${intent.entity} ${intent.id} to check "${s["onlyIf"]}": ${message(error)}`, undefined, { retryable: true });
+    }
+    if (!found.record && !found.complete) return failed(`Could not tell whether ${intent.entity} ${intent.id} still matches "${s["onlyIf"]}": not every record was reached, and it was not among those that were.`, undefined, { retryable: true });
+    if (!found.record) return done("next", { status: "skipped", title: `Skipped: ${intent.entity} ${intent.id} is no longer there.` });
+    if (!passes(s["onlyIf"], found.record, env.now())) return done("next", { status: "skipped", title: `Skipped: ${intent.entity} ${intent.id} no longer matches "${s["onlyIf"]}".` });
   }
 
   const principal = ctx.approved?.by ?? ctx.actor;
@@ -174,6 +224,7 @@ const recordChange: ActionExecutor = async (ctx) => {
   let pendingId = ctx.approved?.pendingId;
   let digest = ctx.approved?.digest;
   let review: Awaited<ReturnType<WorkflowEnv["writes"]["prepare"]>> | undefined;
+  let sending = false;
   try {
     if (!pendingId || !digest) {
       review = await env.writes.prepare(principal, intent, { via: "workflow", ...(onBehalfOf ? { onBehalfOf } : {}) });
@@ -184,6 +235,7 @@ const recordChange: ActionExecutor = async (ctx) => {
       pendingId = review.pendingId;
       digest = review.digest;
     }
+    sending = true;
     const result = await env.writes.commit(principal, pendingId, digest);
     const rows = review?.rows ?? [];
     const what = `${review?.entityName ?? intent.entity}${intent.id ? ` ${intent.id}` : result.key?.id ? ` ${result.key.id}` : ""} on ${review?.connectionTitle ?? env.connectionTitle?.(intent.connection) ?? intent.connection}`;
@@ -221,18 +273,15 @@ const recordChange: ActionExecutor = async (ctx) => {
         return { kind: "wait", wait: { kind: "approval", key: `task:${ctx.task.id}` }, task: { status: "waiting_approval", error: error.message } };
       }
       if (error.code === "invalid" && /Nothing would change/.test(error.message)) return done("next", { status: "skipped", title: `Already so: ${intent.entity} ${intent.id ?? ""}`.trim() });
-      return failed(error.message, { ...(pendingId ? { links: { journal: pendingId } } : {}) });
+      const links = { ...(pendingId ? { links: { journal: pendingId } } : {}) };
+      /* Sent, and no answer: it may have happened. Not sent, or the API asked to wait: safe to try again. */
+      if (error.code === "upstream" && error.extra.outcome === "unknown") return failed(`${error.message} The change may or may not have been made.`, links, { uncertain: true });
+      if (error.code === "upstream" && (error.extra.outcome === "not-sent" || error.status === 429)) return failed(error.message, links, { retryable: true });
+      return failed(error.message, links);
     }
-    return failed(error instanceof Error ? error.message : String(error));
+    /* Thrown while the change was out: it may have been made. Before that, nothing was sent. */
+    return failed(message(error), undefined, sending ? { uncertain: true } : { retryable: true });
   }
-};
-
-/** One record, fresh enough to decide on: its type's list, found by key. */
-export const readRecord = async (env: WorkflowEnv, connection: string, entity: string, id: string): Promise<Record<string, unknown> | null> => {
-  const answer = await env.read(connection, { record: entity, fresh: 0, waitMs: 30_000 }, Priority.Background);
-  const field = env.rowKeyField?.(connection, entity) ?? "id";
-  const found = answer.rows.find((row) => String(readField(row, field) ?? "") === id);
-  return (found as Record<string, unknown> | undefined) ?? null;
 };
 
 /* ── inside Dash ───────────────────────────────────────────────────────── */
@@ -248,13 +297,14 @@ export const toWhen = (value: unknown): { readonly at: string; readonly dateOnly
 };
 
 const calendar: ActionExecutor = async ({ env, settings: s, agent, workflow, case: one, task }) => {
+  /* Its id is the task's, the same on every try: doing this step twice makes one entry. */
   const when = toWhen(s["at"]);
   const title = text(s["title"]).trim() || "Untitled";
   if (!when) return done("next", { status: "skipped", title: `"${title}" has no date to put it on.` });
   const end = toWhen(s["end"]);
   const ownerAgent = text(s["ownerAgent"]) || agent?.id;
   const event: CalendarEvent = {
-    id: env.newId(),
+    id: `cal-${task.id}`,
     title,
     at: when.at,
     ...(end ? { end: end.at } : {}),
@@ -315,40 +365,59 @@ const removeCalendar: ActionExecutor = async ({ env, settings: s }) => {
   return done("next", { status: "done", title: `Removed from the calendar: ${held.title}`, body: { kind: "removed", what: held.title, before: held }, reversal: { available: true, internal: { kind: "calendar", id, value: held } } });
 };
 
+/**
+ * Read records into the case: a record type's list, or a named endpoint with
+ * parameters. When not every record was reached it goes down `incomplete`
+ * (or `next`, with no such arrow), and says so in `complete`, so a later step
+ * never takes "none found" for "there are none".
+ */
 const lookup: ActionExecutor = async ({ env, settings: s, actor, agent }) => {
   const connection = text(s["connection"]);
   const entity = text(s["entity"]);
-  if (!actor) throw new ParkWorkflow("Nobody has turned this workflow on, so it has no one's permission to read with.");
-  const may = await env.policy.can(actor, "records.read", { connection });
-  if (!may.ok) throw new ParkWorkflow(`The person this workflow runs as may no longer read ${env.connectionTitle?.(connection) ?? connection}.`);
-  if (agent && !reachCovers(agent.reach, "records.read", { connection })) throw new ParkWorkflow(`${agent.name} may not read ${env.connectionTitle?.(connection) ?? connection}.`);
-  const answer = await env.read(connection, { record: entity, fresh: "5m", waitMs: 30_000 }, Priority.Background);
+  const op = text(s["op"]).trim();
+  if (!entity && !op) return failed("Say which record type, or which endpoint, to read.");
+  await mayRead(env, { actor, agent }, connection);
+  const params =
+    s["params"] && typeof s["params"] === "object" && !Array.isArray(s["params"])
+      ? Object.fromEntries(Object.entries(s["params"] as Record<string, unknown>).filter(([, one]) => one !== undefined && one !== null && one !== "").map(([key, one]) => [key, typeof one === "string" ? one : JSON.stringify(one)]))
+      : undefined;
+  let answer: Awaited<ReturnType<WorkflowEnv["read"]>>;
+  try {
+    answer = await env.read(connection, { ...(op ? { op } : { record: entity }), ...(params && Object.keys(params).length > 0 ? { params } : {}), fresh: "5m", waitMs: 30_000 }, Priority.Background);
+  } catch (error) {
+    return failed(`Could not read ${env.connectionTitle?.(connection) ?? connection}: ${message(error)}`, undefined, { retryable: true });
+  }
   const filter = typeof s["filter"] === "string" ? s["filter"] : undefined;
   const limit = typeof s["limit"] === "number" ? s["limit"] : 50;
-  const rows = answer.rows.filter((row) => passes(filter, row, env.now())).slice(0, limit);
+  const matching = answer.rows.filter((row) => passes(filter, row, env.now()));
+  const rows = matching.slice(0, limit);
+  const what = op || entity;
+  /* Reaching the limit is not incomplete: there were more than were asked for, and it says so. */
+  const complete = answer.complete;
   return done(
-    "next",
-    { status: "done", title: `Found ${rows.length} ${entity} record${rows.length === 1 ? "" : "s"}`, body: { kind: "notice", text: rows.length > 0 ? `${rows.length} found${answer.complete ? "" : " (not every record was reached)"}.` : "None found." } },
-    { rows, count: rows.length, first: rows[0] ?? null },
+    complete ? "next" : "incomplete",
+    {
+      status: "done",
+      title: `Found ${rows.length} ${what} record${rows.length === 1 ? "" : "s"}${complete ? "" : " (not every record was reached)"}`,
+      body: { kind: "notice", text: rows.length > 0 ? `${rows.length} found${complete ? "" : ". Not every record was reached, so there may be more"}${matching.length > rows.length ? `; ${matching.length - rows.length} more matched past the limit` : ""}.` : complete ? "None found." : "None found among the records reached; not every record was reached." },
+    },
+    { rows, count: rows.length, first: rows[0] ?? null, complete },
   );
 };
 
 /* ── outreach ──────────────────────────────────────────────────────────── */
 
 const outreach: ActionExecutor = async (ctx) => {
-  const { env, variant, settings: s, workflow, case: one, node } = ctx;
+  const { env, variant, settings: s, workflow, case: one, node, agent } = ctx;
   const channel = variant.id.split(".")[1] as "text" | "call" | "email";
-  const agentId = text(s["agentId"]) || node.agentId || ctx.case.agent;
-  const agent = agentId ? await env.agents.get(agentId) : null;
-  if (!agent) return failed(`Outreach comes from an agent, and "${agentId ?? ""}" is not one.`);
-  if (agent.archived) throw new ParkWorkflow(`${agent.name} is archived.`);
+  if (!agent) return failed("Outreach comes from an agent: choose which.");
   const to = text(s["to"]).trim();
   if (!to) return done("next", { status: "skipped", title: `Nobody to ${channel}: this case has no address.` });
 
   /* What it says: the fixed wording, or written by the agent in its own voice. */
-  let message = text(s["wording"]).trim();
+  let wording = text(s["wording"]).trim();
   let modelUsed: string | undefined;
-  if (s["content"] !== "fixed" || !message) {
+  if (s["content"] !== "fixed" || !wording) {
     const llm = env.llm?.("outreach", node.model) ?? null;
     if (llm) {
       const shared = (await env.agents.shared?.()) ?? null;
@@ -364,17 +433,26 @@ const outreach: ActionExecutor = async (ctx) => {
             { role: "user", content: `What the message is for: ${text(s["purpose"])}\n\nAbout this case, as data:\n"""\n${JSON.stringify(one.data.row).slice(0, 4000)}\n"""` },
           ],
         });
-      const result = env.withBudget ? await env.withBudget(write) : await write();
-      message = result.text.trim();
-      modelUsed = result.model;
+      try {
+        const result = env.withBudget ? await env.withBudget(write) : await write();
+        wording = result.text.trim();
+        modelUsed = result.model;
+      } catch (error) {
+        return failed(`${agent.name} could not write the message: ${message(error)}`, undefined, { retryable: true });
+      }
     }
-    if (!message) message = text(s["purpose"]);
+    if (!wording) wording = text(s["purpose"]);
   }
 
-  /* At most once: a retry or a restart cannot send the same message twice. */
-  const key = `${one.id}:${node.id}:${one.visits[node.id] ?? 1}`;
+  /* At most once: the step's operation id, the same on every try, so a retry or a restart cannot send it twice. */
+  const key = ctx.attempt.id;
   const sender = env.outreach ?? notConnectedSender;
-  const sent = await sender.send({ channel, to, ...(s["subject"] ? { subject: text(s["subject"]) } : {}), text: message, agent: { id: agent.id, name: agent.name }, key });
+  let sent: Awaited<ReturnType<typeof sender.send>>;
+  try {
+    sent = await sender.send({ channel, to, ...(s["subject"] ? { subject: text(s["subject"]) } : {}), text: wording, agent: { id: agent.id, name: agent.name }, key });
+  } catch (error) {
+    return failed(`Could not hand the message over to be sent: ${message(error)}`, undefined, { retryable: true });
+  }
   const conversation = sent.conversation ?? ctx.task.id;
   return done(
     "next",
@@ -382,13 +460,13 @@ const outreach: ActionExecutor = async (ctx) => {
       status: "done",
       title: `${variant.label} ${to} from ${agent.name}`,
       agent: agent.id,
-      body: { kind: "conversation", channel, to, agent: agent.id, sent: message, conversation },
+      body: { kind: "conversation", channel, to, agent: agent.id, sent: wording, conversation },
       links: { conversation },
       delivery: { status: sent.status, ...(sent.detail ? { detail: sent.detail } : {}), key },
       reversal: { available: false, reason: "A message cannot be unsent. Send a correction instead." },
       model: { task: "outreach", ...(modelUsed ? { model: modelUsed } : {}) },
     },
-    { conversation, message },
+    { conversation, message: wording },
   );
 };
 
@@ -451,7 +529,7 @@ const think: ActionExecutor = async ({ env, variant, settings: s, case: one, wor
   try {
     result = env.withBudget ? await env.withBudget(call) : await call();
   } catch (error) {
-    return failed(`The model could not answer: ${error instanceof Error ? error.message : String(error)}`);
+    return failed(`The model could not answer: ${message(error)}`, undefined, { retryable: true });
   }
   /* The answer must fit the shape the step declares, or it is refused. */
   const parsed = schema.safeParse(result.toolCalls[0]?.args);
@@ -469,18 +547,26 @@ const think: ActionExecutor = async ({ env, variant, settings: s, case: one, wor
 
 /* ── send to a system ──────────────────────────────────────────────────── */
 
-const webhook: ActionExecutor = async ({ env, settings: s }) => {
+/**
+ * POST to an address, with the step's operation id as `Idempotency-Key`. A
+ * refusal to take it now (429, 5xx) may be tried again; an answer that never
+ * came may mean it arrived, so a person is asked.
+ */
+const webhook: ActionExecutor = async ({ env, settings: s, attempt }) => {
   const url = text(s["url"]).trim();
   if (!env.post) return failed("Sending to other systems is not set up on this server.");
   if (!/^https:\/\//.test(url)) return failed("A webhook address must start with https://.");
+  const host = new URL(url).host;
   try {
-    const answer = await env.post(url, s["body"] ?? {});
-    const ok = answer.status >= 200 && answer.status < 300;
-    return ok
-      ? done("next", { status: "done", title: `Sent to ${new URL(url).host} (${answer.status})`, body: { kind: "request", url, status: answer.status, response: answer.body }, reversal: { available: false, reason: "Only the receiving system can undo this." } }, { status: answer.status, response: answer.body })
-      : failed(`${new URL(url).host} answered ${answer.status}.`, { body: { kind: "request", url, status: answer.status, response: answer.body } });
+    const answer = await env.post(url, s["body"] ?? {}, { key: attempt.id });
+    const body = { kind: "request" as const, url, status: answer.status, response: answer.body };
+    if (answer.status >= 200 && answer.status < 300) {
+      return done("next", { status: "done", title: `Sent to ${host} (${answer.status})`, body, reversal: { available: false, reason: "Only the receiving system can undo this." } }, { status: answer.status, response: answer.body });
+    }
+    return failed(`${host} answered ${answer.status}.`, { body }, { retryable: answer.status === 429 || answer.status >= 500 });
   } catch (error) {
-    return failed(`Could not reach ${url}: ${error instanceof Error ? error.message : String(error)}`);
+    if (lostAnswer(error)) return failed(`No answer from ${host}: ${message(error)}. It may have arrived.`, { body: { kind: "request", url } }, { uncertain: true });
+    return failed(`Could not reach ${host}: ${message(error)}`, { body: { kind: "request", url } }, { retryable: true });
   }
 };
 
@@ -539,6 +625,15 @@ const waitFor: ActionExecutor = async (ctx) => {
     case "decision": {
       const asked = text(earlier?.["task"]);
       if (!asked) return failed("Choose the Ask step this waits on, under From step.");
+      /* Answered already (the Ask step itself heard it): no need to wait. */
+      const question = await env.tasks.get(asked);
+      if (question && FINAL_TASK_STATUSES.includes(question.status) && question.body.kind === "question" && question.body.answer !== undefined) {
+        const payload = { answer: question.body.answer, ...(question.approvedBy ? { by: question.approvedBy } : {}) };
+        return done("happened", { status: "done", title: `Happened: ${words[event]}`, body: { kind: "wait", forWhat: words[event]!, ended: "happened" } }, { event: payload });
+      }
+      if (question && FINAL_TASK_STATUSES.includes(question.status)) {
+        return done("timed_out", { status: "timed_out", title: "The question was never answered", body: { kind: "wait", forWhat: words[event]!, ended: "timed_out" } });
+      }
       return waiting(`task:${asked}`);
     }
     case "workflow_done": {
@@ -560,8 +655,13 @@ const waitFor: ActionExecutor = async (ctx) => {
       if (!reads?.record || !one.rowKey) return failed("Waiting for a record to change needs the workflow to read a record type.");
       const condition = text(s["condition"]);
       const match = { connection: reads.connection, entity: reads.record, id: one.rowKey, condition };
-      /* Already so: no need to wait. */
-      const now = await readRecord(env, reads.connection, reads.record, one.rowKey).catch(() => null);
+      /* Already so: no need to wait. Read as the case may read; a read that fails is no answer, and it waits. */
+      let now: Record<string, unknown> | null = null;
+      try {
+        now = (await readRecordAs(env, { actor: ctx.actor, agent: ctx.agent }, { connection: reads.connection, entity: reads.record, id: one.rowKey })).record;
+      } catch (error) {
+        if (error instanceof ParkWorkflow) throw error;
+      }
       if (now && condition && passes(condition, now, env.now())) {
         return done("happened", { status: "done", title: `Already so: ${condition}`, body: { kind: "wait", forWhat: words[event]!, ended: "happened" } }, { event: { record: now } });
       }
@@ -590,19 +690,74 @@ const branchSwitch: ActionExecutor = async ({ settings: s }) => {
 
 /* ── run a workflow ────────────────────────────────────────────────────── */
 
-const runWorkflowStep: ActionExecutor = async ({ settings: s, resume, startCase }) => {
+/** How a case another one started ended, as the starting step's outcome: only `done` goes on down `next`. */
+const childEnded = (status: string, outputs: Record<string, unknown>, links: Task["links"]): ActionResult =>
+  status === "done"
+    ? done("next", { status: "done", title: "The workflow it started finished", links, body: { kind: "notice", text: "It finished." } }, { ...outputs, status })
+    : failed(`The workflow it started ended ${status === "timed_out" ? "by timing out" : status}.`, { links, body: { kind: "notice", text: `It ended: ${status}.` } });
+
+const runWorkflowStep: ActionExecutor = async ({ settings: s, resume, startCase, attempt, task }) => {
   if (resume) {
     const status = text(resume.payload?.["status"]) || "done";
-    return done(status === "done" ? "next" : "failed", { status: status === "done" ? "done" : "failed", title: `The workflow it started ${status === "done" ? "finished" : `ended: ${status}`}` }, { status });
+    return childEnded(status, { case: text(resume.payload?.["case"]) || task.links.startedCase }, task.links);
   }
   const workflowId = text(s["workflow"]);
   const inputs = (s["inputs"] as Record<string, unknown> | undefined) ?? {};
-  const child = await startCase(workflowId, inputs);
-  const outputs = { case: child.id, status: child.status };
-  if (s["waitForIt"] === true && (child.status === "running" || child.status === "waiting")) {
-    return { kind: "wait", wait: { kind: "workflow_done", key: `case-done:${child.id}` }, task: { status: "waiting", title: "Waiting for the workflow it started", links: { startedCase: child.id }, body: { kind: "notice", text: `Started case ${child.id}.` } }, outputs };
+  let child: { id: string; status: string };
+  try {
+    child = await startCase(workflowId, inputs, { key: attempt.id });
+  } catch (error) {
+    return failed(message(error));
   }
-  return done("next", { status: "done", title: "Started a workflow", links: { startedCase: child.id }, body: { kind: "notice", text: `Started case ${child.id}.` } }, outputs);
+  const outputs = { case: child.id, status: child.status };
+  const links = { startedCase: child.id };
+  if (s["waitForIt"] === true) {
+    if (child.status === "running" || child.status === "waiting") {
+      return { kind: "wait", wait: { kind: "workflow_done", key: `case-done:${child.id}` }, task: { status: "waiting", title: "Waiting for the workflow it started", links, body: { kind: "notice", text: `Started case ${child.id}.` } }, outputs };
+    }
+    /* It ended before it was waited for: how it ended decides the way out. */
+    return childEnded(child.status, outputs, links);
+  }
+  return done("next", { status: "done", title: "Started a workflow", links, body: { kind: "notice", text: `Started case ${child.id}.` } }, outputs);
+};
+
+export const FOR_EACH_MAX = 100;
+
+/**
+ * Start a workflow once per item of a list, side by side. With "wait for them
+ * all", the step waits until every one has ended and goes down `failed` if
+ * any did not finish.
+ */
+const runEach: ActionExecutor = async ({ settings: s, resume, startCase, attempt, task }) => {
+  if (resume) {
+    const statuses = (resume.payload?.["statuses"] ?? {}) as Record<string, string>;
+    const bad = Object.values(statuses).filter((status) => status !== "done").length;
+    const outputs = { cases: Object.keys(statuses), count: Object.keys(statuses).length, statuses };
+    const body = { kind: "notice" as const, text: bad === 0 ? `All ${outputs.count} finished.` : `${bad} of ${outputs.count} did not finish.` };
+    return bad === 0 ? done("next", { status: "done", title: `All ${outputs.count} finished`, body, links: task.links }, outputs) : failed(`${bad} of ${outputs.count} did not finish.`, { body });
+  }
+  const items = s["items"];
+  if (!Array.isArray(items)) return failed("Items must be a list, like {{ steps.find.rows }}.");
+  const max = Math.min(typeof s["max"] === "number" ? s["max"] : 25, FOR_EACH_MAX);
+  if (items.length > max) return failed(`There are ${items.length} items, more than the ${max} this step goes through.`);
+  const as = text(s["as"]).trim() || "item";
+  const extra = (s["inputs"] as Record<string, unknown> | undefined) ?? {};
+  const started: Array<{ id: string; status: string }> = [];
+  try {
+    for (const [index, item] of items.entries()) started.push(await startCase(text(s["workflow"]), { ...extra, [as]: item }, { key: `${attempt.id}#${index}`, group: attempt.id }));
+  } catch (error) {
+    return failed(`Started ${started.length} of ${items.length}, then: ${message(error)}`);
+  }
+  const outputs = { cases: started.map((one) => one.id), count: started.length };
+  const body = { kind: "notice" as const, text: `Started ${started.length}.` };
+  const open = started.filter((one) => one.status === "running" || one.status === "waiting");
+  if (s["waitForAll"] !== false && started.length > 0) {
+    if (open.length > 0) return { kind: "wait", wait: { kind: "workflow_done", key: `group-done:${attempt.id}` }, task: { status: "waiting", title: `Waiting for ${started.length} workflows`, body }, outputs };
+    const statuses = Object.fromEntries(started.map((one) => [one.id, one.status]));
+    const bad = started.filter((one) => one.status !== "done").length;
+    return bad === 0 ? done("next", { status: "done", title: `All ${started.length} finished`, body }, { ...outputs, statuses }) : failed(`${bad} of ${started.length} did not finish.`, { body });
+  }
+  return done("next", { status: "done", title: `Started ${started.length}`, body }, outputs);
 };
 
 export const EXECUTORS: Readonly<Record<string, ActionExecutor>> = {
@@ -634,6 +789,7 @@ export const EXECUTORS: Readonly<Record<string, ActionExecutor>> = {
   "branch.if": branchIf,
   "branch.switch": branchSwitch,
   "run_workflow.start": runWorkflowStep,
+  "run_workflow.each": runEach,
 };
 
 /** Variants whose approval is a reviewed change to an account: the approver sees the review. */

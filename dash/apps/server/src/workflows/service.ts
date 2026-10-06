@@ -88,6 +88,34 @@ const issues = (error: { issues: Array<{ path: Array<string | number>; message: 
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
+const STARTS_WORKFLOWS = new Set(["run_workflow.start", "run_workflow.each"]);
+
+/** The workflows a workflow's steps start. */
+const startsOf = (workflow: Pick<WorkflowSpec, "nodes">): string[] =>
+  workflow.nodes.filter((node) => STARTS_WORKFLOWS.has(node.action) && typeof node.settings["workflow"] === "string").map((node) => String(node.settings["workflow"]));
+
+/**
+ * A way round from this workflow back to itself through the steps that start
+ * workflows, as the ids along it, or null. The workflow being saved counts as
+ * it will be, the others as they are.
+ */
+export const callLoop = (workflow: Pick<WorkflowSpec, "nodes">, self: string | undefined, saved: ReadonlyMap<string, Pick<WorkflowSpec, "nodes">>): string[] | null => {
+  const me = self ?? " new workflow ";
+  const next = (id: string): string[] => (id === me ? startsOf(workflow) : startsOf(saved.get(id) ?? { nodes: [] }));
+  const seen = new Set<string>();
+  const walk = (id: string, path: string[]): string[] | null => {
+    for (const target of next(id)) {
+      if (target === me) return [...path, me];
+      if (seen.has(target)) continue;
+      seen.add(target);
+      const found = walk(target, [...path, target]);
+      if (found) return found;
+    }
+    return null;
+  };
+  return walk(me, [me]);
+};
+
 export class WorkflowService {
   constructor(private readonly deps: WorkflowServiceDeps) {}
 
@@ -204,6 +232,10 @@ export class WorkflowService {
       if (leaving.has(key)) out.push({ ...(fromNode ? { step: fromNode.id } : {}), message: `Two arrows leave ${fromNode ? nodeName(fromNode) : "the trigger"} for "${edge.outcome}".` });
       leaving.add(key);
     }
+    /* A workflow may not start itself, however far round: A starts B, B starts A. */
+    const loop = callLoop(workflow, self, workflows);
+    if (loop) out.push({ message: `These workflows would start each other for ever: ${loop.map((id) => (id === loop[0] ? "this one" : `"${workflows.get(id)?.name ?? id}"`)).join(" starts ")}.` });
+
     if (workflow.nodes.length > 0 && !workflow.edges.some((edge) => edge.from === TRIGGER_NODE)) {
       out.push({ incomplete: true, message: "Draw an arrow from the trigger to the first step." });
     }
@@ -267,7 +299,9 @@ export class WorkflowService {
     if (!held) throw new WorkflowError(`There is no workflow "${id}".`, 404);
     const valid = await this.checked(principal, input, held);
     if (!same(held.trigger, valid.trigger) || !same(held.source, valid.source) || held.rowKey !== valid.rowKey) await this.deps.store.clearFired(id);
-    const next = workflowSchema.parse({ ...valid, id, createdAt: held.createdAt, updatedAt: this.now() });
+    /* A change to what cases follow is a new version: cases already open keep theirs. */
+    const changed = !same(held.nodes, valid.nodes) || !same(held.edges, valid.edges) || !same(held.limits, valid.limits) || held.guardrails !== valid.guardrails || !same(held.trigger, valid.trigger) || !same(held.source, valid.source);
+    const next = workflowSchema.parse({ ...valid, id, version: changed ? held.version + 1 : held.version, createdAt: held.createdAt, updatedAt: this.now() });
     await this.deps.store.put(next);
     return next;
   }
@@ -290,7 +324,7 @@ export class WorkflowService {
     if (!held) throw new WorkflowError(`There is no workflow "${id}".`, 404);
     const agents = await this.startedBy(id);
     if (agents.length > 0) throw new WorkflowError(`${agents.map((agent) => agent.name).join(" and ")} can start this workflow. Remove it from their tools first.`, 409);
-    const callers = (await this.deps.store.list()).filter((one) => one.id !== id && one.nodes.some((node) => node.action === "run_workflow.start" && node.settings["workflow"] === id));
+    const callers = (await this.deps.store.list()).filter((one) => one.id !== id && startsOf(one).includes(id));
     if (callers.length > 0) throw new WorkflowError(`${callers.map((one) => `"${one.name}"`).join(" and ")} starts this workflow. Change that step first.`, 409);
     await this.deps.store.delete(id);
   }

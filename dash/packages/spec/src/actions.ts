@@ -130,6 +130,13 @@ export interface ActionVariant {
   /** The mode a new step of this kind starts in. */
   readonly defaultMode: "auto" | "approve";
   readonly suggestions?: readonly SuggestionId[];
+  /**
+   * What to do when Dash stopped while this step was acting. `repeat`: run it
+   * again — it cannot do the same thing twice (it checks first, or carries the
+   * step's operation id, or only touches Dash). `review`: a person says whether
+   * it happened, because doing it twice would do it twice.
+   */
+  readonly interrupted: "repeat" | "review";
 }
 
 const CONNECTION: ActionField = { key: "connection", label: "Connection", kind: "connection", ask: "Which connection is it on?", help: "Default: the one the workflow reads." };
@@ -137,11 +144,13 @@ const ENTITY: ActionField = { key: "entity", label: "Record type", kind: "record
 const RECORD_ID: ActionField = { key: "recordId", label: "Which record", kind: "template", required: true, default: "{{ id }}", placeholder: "{{ id }}" };
 const AGENT: ActionField = { key: "agentId", label: "From agent", kind: "agent", required: true, ask: "Which agent should it come from? It writes in that agent's voice." };
 const TO: ActionField = { key: "to", label: "To", kind: "template", required: true, placeholder: "{{ phone }}", ask: "Who should it reach? (a field on the record, or an address)" };
+const PARENTS: ActionField = { key: "parents", label: "Parent ids", kind: "values", help: "For a record that lives under another: the ids of the records above it." };
 const PURPOSE: ActionField = { key: "purpose", label: "What it is for", kind: "longtext", required: true, placeholder: "Let them know the work order was received", ask: "What should the message say or be for?" };
 const TIMEOUT: ActionField = { key: "timeout", label: "Give up after", kind: "duration", required: true, default: "2d", ask: "How long should it wait before giving up?" };
 
-const variant = (one: Omit<ActionVariant, "available" | "reversible" | "leavesDash" | "defaultMode" | "outputs"> & Partial<ActionVariant>): ActionVariant => ({
+const variant = (one: Omit<ActionVariant, "available" | "reversible" | "leavesDash" | "defaultMode" | "outputs" | "interrupted"> & Partial<ActionVariant>): ActionVariant => ({
   available: true,
+  interrupted: "repeat",
   reversible: false,
   leavesDash: false,
   defaultMode: "auto",
@@ -153,9 +162,9 @@ export const ACTION_VARIANTS: readonly ActionVariant[] = [
   /* ── create ── */
   variant({
     id: "create.record", base: "create", label: "Create a record", does: "Create a record on a connection.",
-    fields: [CONNECTION, ENTITY, { key: "values", label: "Values", kind: "values", required: true, ask: "What should the new record hold?" }, { key: "parents", label: "Parent ids", kind: "values" }],
+    fields: [CONNECTION, ENTITY, { key: "values", label: "Values", kind: "values", required: true, ask: "What should the new record hold?" }, PARENTS],
     outcomes: ["next", "failed"], outputs: [{ name: "id", description: "The new record's id" }, { name: "record", description: "The record as the API returned it" }],
-    body: "created", leavesDash: true, reversible: true, permission: "records.create", defaultMode: "approve",
+    body: "created", leavesDash: true, reversible: true, permission: "records.create", defaultMode: "approve", interrupted: "review",
   }),
   variant({
     id: "create.calendar", base: "create", label: "Calendar entry", does: "Put an entry or a deadline on the team's calendar.",
@@ -190,14 +199,14 @@ export const ACTION_VARIANTS: readonly ActionVariant[] = [
   /* ── update ── */
   variant({
     id: "update.record", base: "update", label: "Update record fields", does: "Change fields on a record.",
-    fields: [CONNECTION, ENTITY, RECORD_ID, { key: "values", label: "New values", kind: "values", required: true, ask: "Which fields should change, and to what?" }, { key: "onlyIf", label: "Only if still", kind: "expression", placeholder: 'status == "open"', help: "Skip it if the record no longer looks like this." }],
+    fields: [CONNECTION, ENTITY, RECORD_ID, PARENTS, { key: "values", label: "New values", kind: "values", required: true, ask: "Which fields should change, and to what?" }, { key: "onlyIf", label: "Only if still", kind: "expression", placeholder: 'status == "open"', help: "Skip it if the record no longer looks like this." }],
     outcomes: ["next", "failed"], outputs: [{ name: "changed", description: "The fields that changed" }],
     body: "change", leavesDash: true, reversible: true, permission: "records.update", defaultMode: "approve",
   }),
   variant({
     id: "update.action", base: "update", label: "Run a record's action", does: "Run an action the API offers, like assign or close.",
-    fields: [CONNECTION, ENTITY, RECORD_ID, { key: "action", label: "Action", kind: "text", required: true, ask: "Which action should it run?" }, { key: "values", label: "Inputs", kind: "values" }],
-    outcomes: ["next", "failed"], body: "change", leavesDash: true, reversible: true, permission: "records.act", defaultMode: "approve",
+    fields: [CONNECTION, ENTITY, RECORD_ID, PARENTS, { key: "action", label: "Action", kind: "text", required: true, ask: "Which action should it run?" }, { key: "values", label: "Inputs", kind: "values" }],
+    outcomes: ["next", "failed"], body: "change", leavesDash: true, reversible: true, permission: "records.act", defaultMode: "approve", interrupted: "review",
   }),
   variant({
     id: "update.case", base: "update", label: "Case value", does: "Keep a named value on the case for later steps.",
@@ -208,8 +217,8 @@ export const ACTION_VARIANTS: readonly ActionVariant[] = [
   /* ── delete ── */
   variant({
     id: "delete.record", base: "delete", label: "Delete a record", does: "Delete a record on a connection.",
-    fields: [CONNECTION, ENTITY, RECORD_ID],
-    outcomes: ["next", "failed"], body: "removed", leavesDash: true, reversible: true, permission: "records.delete", defaultMode: "approve",
+    fields: [CONNECTION, ENTITY, RECORD_ID, PARENTS],
+    outcomes: ["next", "failed"], body: "removed", leavesDash: true, reversible: true, permission: "records.delete", defaultMode: "approve", interrupted: "review",
     suggestions: ["delete_on_auto"],
   }),
   variant({
@@ -247,8 +256,21 @@ export const ACTION_VARIANTS: readonly ActionVariant[] = [
   /* ── look up ── */
   variant({
     id: "lookup.records", base: "lookup", label: "Look up records", does: "Read records into the case.",
-    fields: [{ ...CONNECTION, required: true }, ENTITY, { key: "filter", label: "Only where", kind: "expression" }, { key: "limit", label: "At most", kind: "number", default: 50 }],
-    outcomes: ["next", "failed"], outputs: [{ name: "rows", description: "The records found" }, { name: "count", description: "How many" }, { name: "first", description: "The first record" }],
+    fields: [
+      { ...CONNECTION, required: true },
+      { ...ENTITY, required: false, help: "Or name an endpoint below." },
+      { key: "op", label: "Endpoint", kind: "text", placeholder: "listWorkOrders", help: "An endpoint of the connection to read, instead of the record type's list." },
+      { key: "params", label: "Parameters", kind: "values", help: "What the endpoint is asked: status, unit, a date." },
+      { key: "filter", label: "Only where", kind: "expression" },
+      { key: "limit", label: "At most", kind: "number", default: 50 },
+    ],
+    outcomes: ["next", "incomplete", "failed"],
+    outputs: [
+      { name: "rows", description: "The records found" },
+      { name: "count", description: "How many" },
+      { name: "first", description: "The first record" },
+      { name: "complete", description: "Whether every record was reached: when not, none found does not mean there are none" },
+    ],
     body: "notice",
   }),
 
@@ -300,7 +322,7 @@ export const ACTION_VARIANTS: readonly ActionVariant[] = [
     id: "send.webhook", base: "send", label: "Webhook", does: "POST the case's data to an address.",
     fields: [{ key: "url", label: "Address", kind: "text", required: true, placeholder: "https://hooks.example.com/…", ask: "Which address should it send to?" }, { key: "body", label: "Body", kind: "values" }],
     outcomes: ["next", "failed"], outputs: [{ name: "status", description: "The answer's status" }, { name: "response", description: "What came back" }],
-    body: "request", leavesDash: true, defaultMode: "approve",
+    body: "request", leavesDash: true, defaultMode: "approve", interrupted: "review",
   }),
 
   /* ── wait ── */
@@ -328,7 +350,7 @@ export const ACTION_VARIANTS: readonly ActionVariant[] = [
         ],
         ask: "What should it wait for?",
       },
-      { key: "step", label: "From step", kind: "step", showWhen: { key: "event", equals: "reply" }, help: "The Outreach (or Ask, or Run a workflow) step it waits on." },
+      { key: "step", label: "From step", kind: "step", help: "The Outreach, Ask or Run a workflow step it waits on." },
       { key: "condition", label: "Until", kind: "expression", showWhen: { key: "event", equals: "record_change" }, placeholder: 'status == "scheduled"' },
       TIMEOUT,
     ],
@@ -353,6 +375,18 @@ export const ACTION_VARIANTS: readonly ActionVariant[] = [
     id: "run_workflow.start", base: "run_workflow", label: "Run a workflow", does: "Start another workflow with inputs from this case.",
     fields: [{ key: "workflow", label: "Workflow", kind: "workflow", required: true, ask: "Which workflow should it start?" }, { key: "inputs", label: "Inputs", kind: "values" }, { key: "waitForIt", label: "Wait for it to finish", kind: "boolean", default: false }],
     outcomes: ["next", "failed"], outputs: [{ name: "case", description: "The case it started" }, { name: "status", description: "How it ended, when waited for" }], body: "notice",
+  }),
+  variant({
+    id: "run_workflow.each", base: "run_workflow", label: "For each", does: "Start another workflow once for each item of a list, side by side, and wait for them all if asked.",
+    fields: [
+      { key: "workflow", label: "Workflow", kind: "workflow", required: true, ask: "Which workflow should run for each item?" },
+      { key: "items", label: "Items", kind: "template", required: true, placeholder: "{{ steps.find.rows }}", ask: "Which list should it go through?" },
+      { key: "as", label: "Each item is the input", kind: "text", default: "item", help: "The input of that workflow that gets the item." },
+      { key: "inputs", label: "Other inputs", kind: "values" },
+      { key: "waitForAll", label: "Wait for them all", kind: "boolean", default: true },
+      { key: "max", label: "At most", kind: "number", default: 25 },
+    ],
+    outcomes: ["next", "failed"], outputs: [{ name: "cases", description: "The cases it started" }, { name: "count", description: "How many" }, { name: "statuses", description: "How each ended, when waited for" }], body: "notice",
   }),
 ];
 

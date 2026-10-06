@@ -48,6 +48,12 @@ export interface WorkflowStore {
 
   fired(workflow: string): Promise<Map<string, FiredRow>>;
   markFired(workflow: string, rows: ReadonlyArray<{ readonly key: string } & FiredRow>): Promise<void>;
+  /**
+   * Claim one record for a case: write `next` only if what is stored is still
+   * `before` (absent: nothing stored). False when another run claimed it first,
+   * so two runs never open a case for the same record.
+   */
+  claimFired(workflow: string, key: string, before: FiredRow | undefined, next: FiredRow): Promise<boolean>;
   unfire(workflow: string, keys: readonly string[]): Promise<void>;
   clearFired(workflow: string): Promise<void>;
 }
@@ -76,6 +82,33 @@ export interface CaseStore {
   overdue(now: string): Promise<WorkflowCase[]>;
   /** Waiting cases that watch a record for a change. */
   watchingRecords(): Promise<WorkflowCase[]>;
+  /** Running cases nobody has moved on since `before`: interrupted, to be recovered. */
+  stalled(before: string): Promise<WorkflowCase[]>;
+  /** Cases another case started. */
+  children(parent: string): Promise<WorkflowCase[]>;
+}
+
+/** Something that happened that a case may wait for: kept until one case takes it. */
+export interface WorkflowSignal {
+  readonly id: string;
+  /** What a waiting case's `waiting.key` must be to take it. */
+  readonly key: string;
+  readonly at: string;
+  readonly payload: Readonly<Record<string, unknown>>;
+  readonly takenBy?: string | undefined;
+}
+
+/**
+ * The inbox of things that happened: a reply, an answer, a webhook call, a
+ * case ending. Kept whether or not a case is waiting yet, so one that starts
+ * waiting later still hears it; taken by exactly one case.
+ */
+export interface SignalStore {
+  put(signal: WorkflowSignal): Promise<void>;
+  /** The oldest signal for this key not yet taken since `since`, marked taken by this case; null when there is none. Atomic. */
+  take(key: string, by: string, since: string): Promise<WorkflowSignal | null>;
+  /** Keys with signals nobody has taken since `since`. */
+  untaken(since: string): Promise<string[]>;
 }
 
 export interface TaskStore {
@@ -141,6 +174,14 @@ export class MemoryWorkflowStore implements WorkflowStore {
     for (const { key, ...row } of rows) held.set(key, row);
     this.seen.set(workflow, held);
   }
+  async claimFired(workflow: string, key: string, before: FiredRow | undefined, next: FiredRow): Promise<boolean> {
+    const held = this.seen.get(workflow) ?? new Map<string, FiredRow>();
+    const now = held.get(key);
+    if (before === undefined ? now !== undefined : now === undefined || now.fingerprint !== before.fingerprint || now.count !== before.count) return false;
+    held.set(key, next);
+    this.seen.set(workflow, held);
+    return true;
+  }
   async unfire(workflow: string, keys: readonly string[]): Promise<void> {
     const held = this.seen.get(workflow);
     for (const key of keys) held?.delete(key);
@@ -177,6 +218,29 @@ export class MemoryCaseStore implements CaseStore {
   }
   async watchingRecords(): Promise<WorkflowCase[]> {
     return [...this.rows.values()].filter((one) => one.status === "waiting" && one.waiting?.kind === "record_change");
+  }
+  async stalled(before: string): Promise<WorkflowCase[]> {
+    return [...this.rows.values()].filter((one) => one.status === "running" && one.updatedAt <= before);
+  }
+  async children(parent: string): Promise<WorkflowCase[]> {
+    return [...this.rows.values()].filter((one) => one.start.parentCase === parent);
+  }
+}
+
+export class MemorySignalStore implements SignalStore {
+  private readonly rows: WorkflowSignal[] = [];
+  async put(signal: WorkflowSignal): Promise<void> {
+    this.rows.push({ ...signal });
+  }
+  async take(key: string, by: string, since: string): Promise<WorkflowSignal | null> {
+    const index = this.rows.findIndex((one) => one.key === key && one.takenBy === undefined && one.at >= since);
+    if (index < 0) return null;
+    const taken = { ...this.rows[index]!, takenBy: by };
+    this.rows[index] = taken;
+    return taken;
+  }
+  async untaken(since: string): Promise<string[]> {
+    return [...new Set(this.rows.filter((one) => one.takenBy === undefined && one.at >= since).map((one) => one.key))];
   }
 }
 
@@ -317,6 +381,21 @@ export class DbWorkflowStore implements WorkflowStore {
       `.execute(this.db.kysely);
     }
   }
+  async claimFired(workflow: string, key: string, before: FiredRow | undefined, next: FiredRow): Promise<boolean> {
+    const result =
+      before === undefined
+        ? await sql`
+            INSERT INTO dash_workflow_fired (workspace, workflow, row_key, fingerprint, fire_count, last_at)
+            VALUES (${this.workspace}, ${workflow}, ${key}, ${next.fingerprint}, ${next.count}, ${next.lastAt ?? null})
+            ON CONFLICT (workspace, workflow, row_key) DO NOTHING
+          `.execute(this.db.kysely)
+        : await sql`
+            UPDATE dash_workflow_fired SET fingerprint = ${next.fingerprint}, fire_count = ${next.count}, last_at = ${next.lastAt ?? null}
+            WHERE workspace = ${this.workspace} AND workflow = ${workflow} AND row_key = ${key}
+              AND fingerprint = ${before.fingerprint} AND fire_count = ${before.count}
+          `.execute(this.db.kysely);
+    return Number(result.numAffectedRows ?? 0) > 0;
+  }
   async unfire(workflow: string, keys: readonly string[]): Promise<void> {
     for (const key of keys) {
       await sql`DELETE FROM dash_workflow_fired WHERE workspace = ${this.workspace} AND workflow = ${workflow} AND row_key = ${key}`.execute(this.db.kysely);
@@ -392,6 +471,51 @@ export class DbCaseStore implements CaseStore {
       SELECT record FROM dash_workflow_cases WHERE workspace = ${this.workspace} AND status = 'waiting' AND wait_kind = 'record_change'
     `.execute(this.db.kysely);
     return this.parse(result.rows);
+  }
+  async stalled(before: string): Promise<WorkflowCase[]> {
+    const result = await sql<{ record: unknown }>`
+      SELECT record FROM dash_workflow_cases WHERE workspace = ${this.workspace} AND status = 'running' AND (record->>'updatedAt') <= ${before}
+    `.execute(this.db.kysely);
+    return this.parse(result.rows);
+  }
+  async children(parent: string): Promise<WorkflowCase[]> {
+    const result = await sql<{ record: unknown }>`
+      SELECT record FROM dash_workflow_cases WHERE workspace = ${this.workspace} AND (record->'start'->>'parentCase') = ${parent}
+    `.execute(this.db.kysely);
+    return this.parse(result.rows);
+  }
+}
+
+export class DbSignalStore implements SignalStore {
+  constructor(
+    private readonly db: DashDb,
+    private readonly workspace = "local",
+  ) {}
+  async put(signal: WorkflowSignal): Promise<void> {
+    await sql`
+      INSERT INTO dash_workflow_signals (workspace, id, key, at, payload) VALUES (${this.workspace}, ${signal.id}, ${signal.key}, ${signal.at}, ${JSON.stringify(signal.payload)}::jsonb)
+      ON CONFLICT (workspace, id) DO NOTHING
+    `.execute(this.db.kysely);
+  }
+  async take(key: string, by: string, since: string): Promise<WorkflowSignal | null> {
+    /* One statement: the oldest untaken row is claimed, or none is, whoever else is taking. */
+    const result = await sql<{ id: string; key: string; at: string; payload: unknown }>`
+      UPDATE dash_workflow_signals SET taken_by = ${by}
+      WHERE workspace = ${this.workspace} AND id = (
+        SELECT id FROM dash_workflow_signals
+        WHERE workspace = ${this.workspace} AND key = ${key} AND taken_by IS NULL AND at >= ${since}
+        ORDER BY at, id LIMIT 1 FOR UPDATE SKIP LOCKED
+      ) AND taken_by IS NULL
+      RETURNING id, key, at, payload
+    `.execute(this.db.kysely);
+    const row = result.rows[0];
+    return row ? { id: row.id, key: row.key, at: row.at, payload: parsed(row.payload) as Record<string, unknown>, takenBy: by } : null;
+  }
+  async untaken(since: string): Promise<string[]> {
+    const result = await sql<{ key: string }>`
+      SELECT DISTINCT key FROM dash_workflow_signals WHERE workspace = ${this.workspace} AND taken_by IS NULL AND at >= ${since}
+    `.execute(this.db.kysely);
+    return result.rows.map((row) => row.key);
   }
 }
 

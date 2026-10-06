@@ -136,6 +136,18 @@ CREATE TABLE IF NOT EXISTS dash_workflow_templates (
 
 DROP TABLE IF EXISTS dash_proposals;
 
+CREATE TABLE IF NOT EXISTS dash_workflow_signals (
+  workspace TEXT NOT NULL,
+  id        TEXT NOT NULL,
+  key       TEXT NOT NULL,
+  at        TEXT NOT NULL,
+  payload   JSONB NOT NULL,
+  taken_by  TEXT,
+  PRIMARY KEY (workspace, id)
+);
+
+CREATE INDEX IF NOT EXISTS dash_workflow_signals_key ON dash_workflow_signals (workspace, key, taken_by, at);
+
 CREATE TABLE IF NOT EXISTS dash_calendar_events (
   workspace TEXT NOT NULL,
   id        TEXT NOT NULL,
