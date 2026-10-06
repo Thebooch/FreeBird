@@ -160,9 +160,9 @@ export type OwnerRef = z.infer<typeof ownerRefSchema>;
 export const calendarStepSchema = z.object({
   ...stepBase,
   kind: z.literal("calendar"),
-  title: templateSchema(300).pipe(z.string().trim().min(1)),
+  title: templateSchema(300).pipe(z.string().trim().min(1, "Give the calendar entry a title.")),
   /** When: a date or a date and time, usually from the row (`{{ due_date }}`). */
-  at: templateSchema(300).pipe(z.string().trim().min(1)),
+  at: templateSchema(300).pipe(z.string().trim().min(1, "Say when it goes on the calendar.")),
   end: templateSchema(300).optional(),
   allDay: z.boolean().default(false),
   /** A deadline, rather than an appointment. */
@@ -178,7 +178,7 @@ export const proposeChangeStepSchema = z.object({
   /** Default: the connection the workflow reads. */
   connection: idSchema.optional(),
   /** A record type, by id or name. */
-  entity: z.string().trim().min(1).max(120),
+  entity: z.string().trim().min(1, "Say which record type the change is on.").max(120),
   change: z.enum(PROPOSE_CHANGES),
   /** For `action`: which one. */
   action: z.string().trim().min(1).max(120).optional(),
@@ -200,12 +200,12 @@ export const MESSAGE_CHANNELS = ["text", "call", "email"] as const;
 export const messageStepSchema = z.object({
   ...stepBase,
   kind: z.literal("message"),
-  agentId: idSchema,
+  agentId: z.string().min(1, "Pick the agent that reaches out.").pipe(idSchema),
   channel: z.enum(MESSAGE_CHANNELS),
   /** A phone number or address, usually from the row: `{{ tenant.phone }}`. */
-  to: templateSchema(300).pipe(z.string().trim().min(1)),
+  to: templateSchema(300).pipe(z.string().trim().min(1, "Say who to reach.")),
   /** What the conversation is for. The agent writes the words. */
-  purpose: templateSchema(2000).pipe(z.string().trim().min(1)),
+  purpose: templateSchema(2000).pipe(z.string().trim().min(1, "Say what the conversation is for.")),
 });
 
 /**
@@ -215,13 +215,13 @@ export const messageStepSchema = z.object({
 export const thinkStepSchema = z.object({
   ...stepBase,
   kind: z.literal("think"),
-  prompt: z.string().trim().min(1).max(8000),
+  prompt: z.string().trim().min(1, "Say what to think through.").max(8000),
 });
 
 export const noteStepSchema = z.object({
   ...stepBase,
   kind: z.literal("note"),
-  text: templateSchema(2000).pipe(z.string().trim().min(1)),
+  text: templateSchema(2000).pipe(z.string().trim().min(1, "Write the note.")),
 });
 
 export const workflowStepSchema = z.discriminatedUnion("kind", [

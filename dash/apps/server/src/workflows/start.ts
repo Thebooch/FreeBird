@@ -116,8 +116,8 @@ export const startFromAgentTool = async (
       workflow: workflow.id,
       ...(request.conversation ? { conversation: request.conversation } : {}),
       intent: { workflow: workflow.id, inputs },
-      title: `Start "${workflow.name}"`,
-      reason: `${agent.name} was asked to${tool.whenToUse ? ` (${tool.whenToUse})` : ""}.`,
+      title: `Start "${workflow.name}"${Object.keys(inputs).length > 0 ? ` (${Object.entries(inputs).map(([name, value]) => `${name}: ${String(value)}`).join(", ")})` : ""}`,
+      reason: `${agent.name} asked to start it.`,
       status: "waiting",
       createdAt: new Date(env.now()).toISOString(),
     };

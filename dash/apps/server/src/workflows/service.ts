@@ -70,8 +70,15 @@ const allocateId = (name: string, taken: ReadonlySet<string>): string => {
   return id;
 };
 
+/** Zod's complaints in a person's words: "Step 3: Say which record type the change is on." */
 const issues = (error: { issues: Array<{ path: Array<string | number>; message: string }> }): string =>
-  error.issues.map((issue) => `${issue.path.join(".") || "workflow"}: ${issue.message}`).join("; ");
+  error.issues
+    .map((issue) => {
+      const [first, second, ...rest] = issue.path;
+      if (first === "steps" && typeof second === "number") return `Step ${second + 1}${rest.length > 0 && !/^[A-Z]/.test(issue.message) ? ` (${rest.join(".")})` : ""}: ${issue.message}`;
+      return `${issue.path.join(".") || "Workflow"}: ${issue.message}`;
+    })
+    .join(" ");
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 

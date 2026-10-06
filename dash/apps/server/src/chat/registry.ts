@@ -25,6 +25,7 @@ import {
 } from "./handles.js";
 
 import { agentActions, agentKnowledge, type AgentChatOps } from "./agent-actions.js";
+import { workflowActions, workflowKnowledge, type WorkflowChatOps } from "./workflow-actions.js";
 import { recordChangeActions, type RecordChangeOps } from "./record-actions.js";
 /**
  * The dashboard, described to the chat engine.
@@ -117,6 +118,12 @@ export interface BuildChatRegistryInput {
    * Absent means the three actions are not registered.
    */
   readonly agents?: AgentChatOps;
+  /**
+   * The workflows that exist, and drafting and changing them.
+   *
+   * Absent means the two actions are not registered.
+   */
+  readonly workflows?: WorkflowChatOps;
 }
 
 /* ── actions ──────────────────────────────────────────────────────────── */
@@ -829,6 +836,7 @@ export const buildChatRegistry = (input: BuildChatRegistryInput) => {
     ...(input.concierge ? (conciergeActions(input.concierge) ?? []) : []),
     ...(input.changes ? recordChangeActions(input.changes) : []),
     ...(input.agents ? agentActions(input.agents) : []),
+    ...(input.workflows ? workflowActions(input.workflows) : []),
   ];
 
   /*
@@ -861,6 +869,7 @@ export const buildChatRegistry = (input: BuildChatRegistryInput) => {
       ...inventoryKnowledge(input, handles),
       ...workspaceKnowledge(input),
       ...(input.agents ? agentKnowledge(input.agents) : []),
+      ...(input.workflows ? workflowKnowledge(input.workflows) : []),
       ...(input.concierge ? conciergeKnowledge(input.concierge) : []),
     ],
     grid: { minW: 12, minH: 4 },

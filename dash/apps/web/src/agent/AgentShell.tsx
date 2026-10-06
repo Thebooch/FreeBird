@@ -1,6 +1,7 @@
 import { EmptyState } from "@freebirdai/dash-components";
 import { AGENT_SECTIONS, type AgentSection, type Route } from "../route.js";
 import { AgentsSection } from "./AgentsSection.jsx";
+import { WorkflowsSection } from "./workflows/WorkflowsSection.jsx";
 
 /**
  * The Agent side of the app: fixed sections in place of boards.
@@ -8,8 +9,7 @@ import { AgentsSection } from "./AgentsSection.jsx";
  * Which section shows is decided by the route (`#/agent/<section>`), so a
  * reload lands where you were and Back steps through them. A section that is
  * not built yet shows what will live there, so the slot already exists when
- * the step that fills it arrives — workflows and calendar each
- * drop their view in here.
+ * the step that fills it arrives — the calendar drops its view in here.
  */
 
 export const SECTION_TITLES: Readonly<Record<AgentSection, string>> = {
@@ -22,10 +22,6 @@ export const AGENT_NAV_SECTIONS = AGENT_SECTIONS.map((id) => ({ id, title: SECTI
 
 /** What an unbuilt section says it will hold. */
 const COMING: Readonly<Partial<Record<AgentSection, { glyph: string; body: string }>>> = {
-  workflows: {
-    glyph: "⇄",
-    body: "Steps an agent runs for you, on a schedule or when something happens, each set to wait for your approval or to run on its own.",
-  },
   calendar: {
     glyph: "▦",
     body: "What your agents have scheduled and done, each entry in the colour of the agent that made it.",
@@ -45,6 +41,8 @@ export const AgentShell = ({
       <div className="dash-agent__inner">
         {route.section === "agents" ? (
           <AgentsSection selected={route.id ?? null} onNavigate={onNavigate} />
+        ) : route.section === "workflows" ? (
+          <WorkflowsSection selected={route.id ?? null} onNavigate={onNavigate} />
         ) : (
           <EmptyState
             glyph={coming?.glyph ?? "✦"}

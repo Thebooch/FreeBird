@@ -99,7 +99,7 @@ export class MemoryWorkflowStore implements WorkflowStore {
   async fired(workflow: string): Promise<Map<string, string>> {
     return new Map(this.seen.get(workflow) ?? []);
   }
-  async markFired(workflow: string, rows: ReadonlyArray<{ key: string; fingerprint: string }>): Promise<void> {
+  async markFired(workflow: string, rows: ReadonlyArray<{ key: string; fingerprint: string }>, _at?: string): Promise<void> {
     const held = this.seen.get(workflow) ?? new Map<string, string>();
     for (const row of rows) held.set(row.key, row.fingerprint);
     this.seen.set(workflow, held);

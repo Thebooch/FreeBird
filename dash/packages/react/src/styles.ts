@@ -1594,6 +1594,40 @@ export const DASH_REACT_STYLES = `
 }
 .dash-agent-editor select:disabled { opacity: 0.6; }
 
+/* Workflows: the editor's steps, a preview's paths, what waits for a person, and runs. */
+.dash-workflow-editor__heading {
+  margin: 16px 0 6px; font-size: var(--dash-text-sm); font-weight: var(--dash-weight-semi); color: var(--dash-ink-secondary);
+}
+.dash-workflow-editor .dash-reach__add .dash-tool__when { flex: 1 1 220px; width: auto; min-width: 0; }
+.dash-workflow-editor .dash-reach__add .dash-tool__when.dash-workflow__short { flex: 0 1 160px; }
+.dash-workflow-field { display: grid; grid-template-columns: 110px minmax(0, 1fr); align-items: center; gap: 8px; }
+.dash-workflow-field__label { font-size: var(--dash-text-xs); color: var(--dash-muted); }
+@media (max-width: 520px) { .dash-workflow-field { grid-template-columns: minmax(0, 1fr); gap: 2px; } }
+.dash-workflow-step__spacer { flex: 1 1 auto; }
+.dash-workflow-step[data-mode="auto"] { border-left: 3px solid var(--dash-accent-line); }
+.dash-workflow-step[data-mode="approve"] { border-left: 3px solid var(--dash-warning); }
+.dash-workflow-preview { margin: 12px 0; overflow-x: auto; }
+.dash-workflow-preview__table { width: 100%; border-collapse: collapse; font-size: var(--dash-text-xs); }
+.dash-workflow-preview__table th, .dash-workflow-preview__table td {
+  text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--dash-border); white-space: nowrap;
+}
+.dash-workflow-preview__table td[data-mode="auto"] { color: var(--dash-accent); font-weight: var(--dash-weight-semi); }
+.dash-workflow-preview__table td[data-mode="approve"] { color: var(--dash-warning); font-weight: var(--dash-weight-semi); }
+.dash-workflow-preview__table td[data-mode="skip"] { color: var(--dash-muted); }
+.dash-proposals, .dash-workflow-runs { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.dash-proposal, .dash-workflow-run {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px; border: 1px solid var(--dash-border); border-radius: var(--dash-radius-sm);
+}
+.dash-proposal[data-status="stale"] { opacity: 0.75; }
+.dash-proposal__head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dash-proposal__title { font-size: var(--dash-text-sm); }
+.dash-workflow-run__outputs { margin: 6px 0 0; padding-left: 18px; font-size: var(--dash-text-xs); color: var(--dash-ink-secondary); }
+.dash-workflow-run__outcome { font-weight: var(--dash-weight-semi); text-transform: capitalize; }
+.dash-workflow-run__outputs li[data-outcome="failed"] .dash-workflow-run__outcome { color: var(--dash-critical); }
+.dash-workflow-run__outputs li[data-outcome="proposed"] .dash-workflow-run__outcome { color: var(--dash-warning); }
+.dash-callout--warn { border-left-color: var(--dash-warning); }
+
 @media (max-width: 760px) {
   .dash-agents { grid-template-columns: minmax(0, 1fr); }
 }

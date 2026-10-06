@@ -8,8 +8,9 @@ import {
   type AgentToolKind,
   type AgentToolMode,
 } from "@freebirdai/dash-spec";
-import { useState } from "react";
-import type { ConnectionSummary } from "../api";
+import { useEffect, useState } from "react";
+import { api, type ConnectionSummary } from "../api";
+import type { WorkflowSpec } from "@freebirdai/dash-spec";
 import { newToolId } from "./ids.js";
 
 /**
@@ -34,8 +35,6 @@ const MODES: ReadonlyArray<{ readonly id: AgentToolMode; readonly label: string;
   { id: "deny", label: "Deny", hint: "Declines, answering the way you say below." },
 ];
 
-/** Workflows arrive with plan 2; until then the kind is shown but cannot be added. */
-const AVAILABLE = (kind: AgentToolKind): boolean => kind !== "run_workflow";
 
 const ToolRow = ({
   tool,
@@ -43,6 +42,7 @@ const ToolRow = ({
   connections,
   entities,
   loadEntities,
+  workflows,
   onChange,
   onRemove,
 }: {
@@ -51,6 +51,8 @@ const ToolRow = ({
   connections: readonly ConnectionSummary[];
   entities: Entities;
   loadEntities: (connection: string) => void;
+  /** Workflows an agent can start: their trigger is "When an agent is asked". */
+  workflows: readonly WorkflowSpec[];
   onChange: (next: AgentTool) => void;
   onRemove: () => void;
 }): JSX.Element => {
@@ -68,7 +70,9 @@ const ToolRow = ({
             aria-label={tool.enabled ? "Active" : "Inactive"}
             onChange={(event) => onChange({ ...tool, enabled: event.target.checked })}
           />
-          <span className="dash-tool__name">{tool.label || info.label}</span>
+          <span className="dash-tool__name">
+            {tool.label || (tool.kind === "run_workflow" && tool.workflow ? `Run “${workflows.find((one) => one.id === tool.workflow)?.name ?? tool.workflow}”` : info.label)}
+          </span>
         </label>
         <span className="dash-tool__modes" role="radiogroup" aria-label="What it does">
           {MODES.map((mode) => (
@@ -94,6 +98,40 @@ const ToolRow = ({
 
       <div className="dash-tool__body">
         <span className="dash-hint">{MODES.find((mode) => mode.id === tool.mode)?.hint}</span>
+        {tool.kind === "run_workflow" && (
+          <>
+            <select
+              aria-label="Workflow"
+              value={tool.workflow ?? ""}
+              onChange={(event) => {
+                const { workflow: _old, ...rest } = tool;
+                onChange(event.target.value ? { ...rest, workflow: event.target.value } : rest);
+              }}
+              data-testid={`agent-tool-workflow-${tool.id}`}
+            >
+              <option value="">Pick a workflow</option>
+              {workflows.map((one) => (
+                <option key={one.id} value={one.id}>
+                  {one.name}
+                </option>
+              ))}
+              {tool.workflow && !workflows.some((one) => one.id === tool.workflow) && <option value={tool.workflow}>{tool.workflow} (not found)</option>}
+            </select>
+            {workflows.length === 0 && (
+              <span className="dash-hint">No workflow can be started by an agent yet. Make one whose trigger is “When an agent is asked”.</span>
+            )}
+            {(() => {
+              const picked = workflows.find((one) => one.id === tool.workflow);
+              const inputs = picked?.trigger.kind === "agent" ? picked.trigger.inputs : [];
+              return picked ? (
+                <span className="dash-hint">
+                  {picked.description || "Starts this workflow."}
+                  {inputs.length > 0 ? ` It asks for: ${inputs.map((one) => one.description).join("; ")}.` : ""}
+                </span>
+              ) : null;
+            })()}
+          </>
+        )}
         {info.scoped && (
           <div className="dash-reach__add">
             <select
@@ -233,6 +271,17 @@ export const ToolsEditor = ({
   loadEntities: (connection: string) => void;
 }): JSX.Element => {
   const [kind, setKind] = useState<AgentToolKind>("look_up_record");
+  const [workflows, setWorkflows] = useState<WorkflowSpec[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .workflows(true)
+      .then((list) => !cancelled && setWorkflows(list))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <div className="dash-tools" data-testid="agent-tools">
@@ -247,6 +296,7 @@ export const ToolsEditor = ({
           connections={connections}
           entities={entities}
           loadEntities={loadEntities}
+          workflows={workflows}
           onChange={(next) => onChange(tools.map((one, at) => (at === index ? next : one)))}
           onRemove={() => onChange(tools.filter((_, at) => at !== index))}
         />
@@ -254,15 +304,14 @@ export const ToolsEditor = ({
       <div className="dash-reach__add">
         <select aria-label="Tool" value={kind} onChange={(event) => setKind(event.target.value as AgentToolKind)}>
           {AGENT_TOOL_KINDS.map((one) => (
-            <option key={one} value={one} disabled={!AVAILABLE(one)}>
+            <option key={one} value={one}>
               {AGENT_TOOL_INFO[one].label}
-              {AVAILABLE(one) ? "" : " (once workflows exist)"}
             </option>
           ))}
         </select>
         <Button
           size="sm"
-          disabled={!AVAILABLE(kind) || tools.length >= 60}
+          disabled={tools.length >= 60}
           onClick={() =>
             onChange([
               ...tools,
@@ -275,6 +324,7 @@ export const ToolsEditor = ({
                 whenToUse: "",
                 denyReply: "",
                 description: "",
+                ...(kind === "run_workflow" && workflows[0] ? { workflow: workflows[0].id } : {}),
               },
             ])
           }

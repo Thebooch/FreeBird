@@ -184,7 +184,7 @@ describe("WorkflowService", () => {
       steps: [{ id: "n", kind: "note", text: "Hello {{ }}", when: "((" }],
     }));
     await expect(attempt).rejects.toBeInstanceOf(WorkflowError);
-    const problems = await attempt.catch((error: WorkflowError) => error.problems);
+    const problems = (await attempt.catch((error: WorkflowError) => error.problems)) as WorkflowError["problems"];
     expect(problems.map((one) => one.field)).toEqual(expect.arrayContaining(["criteria", "when", "text"]));
   });
 

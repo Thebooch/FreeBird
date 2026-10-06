@@ -3300,6 +3300,12 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             update: (principal, id, input) => agents.update(principal, id, input),
             archive: (id) => agents.setArchived(id, true),
           },
+          workflows: {
+            roster: await workflows.list(),
+            mayManage: async (principal) => (await policy.can(principal, "workflows.manage", {})).ok,
+            create: (principal, input) => workflows.create(principal, input),
+            update: (principal, id, input) => workflows.update(principal, id, input),
+          },
           changes: {
             prepare: (principal, intent, sessionId) =>
               writes.prepare(principal, intent, { via: "chat", sessionId }),

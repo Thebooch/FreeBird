@@ -2,7 +2,14 @@ import type { EachAnswer, EachRequest } from "@freebirdai/dash-react";
 import type {
   AgentInput,
   AgentSpec,
+  CalendarEvent,
+  Proposal,
+  ProposalStatus,
   SharedAgentKnowledge,
+  WorkflowInput,
+  WorkflowRun,
+  WorkflowSpec,
+  WriteReviewView,
   ApiProfile,
   CatalogEntry,
   ConnectionSpec,
@@ -106,6 +113,21 @@ const json = (body: unknown): RequestInit => ({
   headers: { "content-type": "application/json" },
   body: JSON.stringify(body),
 });
+
+/** What a workflow would do now: see `previewWorkflow` on the server. */
+export interface WorkflowPreview {
+  readonly read: number;
+  readonly complete: boolean;
+  readonly seeding: boolean;
+  readonly matched: number;
+  readonly rows: ReadonlyArray<{
+    readonly key: string;
+    readonly fields: Readonly<Record<string, unknown>>;
+    readonly steps: ReadonlyArray<{ readonly step: string; readonly kind: string; readonly mode: "auto" | "approve"; readonly runs: boolean }>;
+  }>;
+  readonly perRun: ReadonlyArray<{ readonly step: string; readonly kind: string; readonly mode: "auto" | "approve"; readonly runs: boolean }>;
+  readonly problem?: string;
+}
 
 /** A machine-readable page index the docs site publishes. */
 export interface DocsIndex {
@@ -1153,6 +1175,48 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(knowledge),
     }),
+
+  /* ── workflows ─────────────────────────────────────────────────────── */
+
+  workflows: (startableByAgent = false): Promise<WorkflowSpec[]> =>
+    request(`/api/workflows${startableByAgent ? "?startableBy=agent" : ""}`),
+
+  /** Make a workflow (any id not in use) or change one (its own id). Saving makes you the person it runs as. */
+  saveWorkflow: (id: string, input: WorkflowInput): Promise<WorkflowSpec> =>
+    request(`/api/workflows/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    }),
+
+  setWorkflowEnabled: (id: string, enabled: boolean): Promise<WorkflowSpec> =>
+    request(`/api/workflows/${encodeURIComponent(id)}/enabled`, json({ enabled })),
+
+  deleteWorkflow: (id: string): Promise<{ removed: true }> =>
+    request(`/api/workflows/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  runWorkflow: (id: string, inputs: Record<string, unknown> = {}): Promise<WorkflowRun> =>
+    request(`/api/workflows/${encodeURIComponent(id)}/run`, json({ inputs })),
+
+  /** A dry run of a saved workflow, or of an unsaved draft: what it reads, what matches, and each row's path. */
+  previewWorkflow: (id: string, draft?: WorkflowInput, inputs: Record<string, unknown> = {}): Promise<WorkflowPreview> =>
+    request(`/api/workflows/${encodeURIComponent(id)}/preview`, json({ ...(draft ? { workflow: draft } : {}), inputs })),
+
+  workflowRuns: (id?: string): Promise<WorkflowRun[]> =>
+    request(id ? `/api/workflows/${encodeURIComponent(id)}/runs` : "/api/workflow-runs"),
+
+  proposals: (status?: ProposalStatus): Promise<Proposal[]> => request(`/api/proposals${status ? `?status=${status}` : ""}`),
+
+  /** Open one: a change is prepared now, as you. */
+  reviewProposal: (id: string): Promise<{ proposal: Proposal; review?: WriteReviewView }> =>
+    request(`/api/proposals/${encodeURIComponent(id)}/review`, json({})),
+
+  applyProposal: (id: string, approval: { pendingId?: string; digest?: string } = {}): Promise<{ proposal: Proposal; run?: WorkflowRun }> =>
+    request(`/api/proposals/${encodeURIComponent(id)}/apply`, json(approval)),
+
+  dismissProposal: (id: string): Promise<Proposal> => request(`/api/proposals/${encodeURIComponent(id)}/dismiss`, json({})),
+
+  calendarEvents: (): Promise<CalendarEvent[]> => request("/api/calendar/events"),
 
   /**
    * Connect a catalog API. Marked for onboarding, so it opens with the boards
