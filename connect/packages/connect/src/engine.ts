@@ -7,6 +7,11 @@ import {
   evidenceRank,
   fingerprintConnection,
   getOp,
+  isStale,
+  observeEntity,
+  pathParamNames,
+  readingsDiffer,
+  resolveRange,
 } from "@freebirdai/connect-spec";
 import {
   AdapterError,
@@ -19,7 +24,7 @@ import {
   McpAdapter,
   RestAdapter,
 } from "./adapters/index.js";
-import type { LlmAdapter } from "./agent/index.js";
+import { type InferredShape, inferShape, type LlmAdapter } from "./agent/index.js";
 import { CredentialBroker, type OAuthAppRegistry, vaultApps } from "./auth/broker.js";
 import { type CredentialMetaStore, MemoryCredentialMetaStore } from "./auth/credential-meta.js";
 import { OAuthRetryAdapter, RateLimitWaitAdapter } from "./auth/retry-adapter.js";
@@ -27,6 +32,7 @@ import { coolingMessage, retryAfterSeconds } from "./cache/cooldown.js";
 import { ConnectionGate, Priority } from "./cache/gate.js";
 import { QueryCache } from "./cache/queryCache.js";
 import type { CacheStore } from "./cache/store.js";
+import { analyseConnection, type AnalyseOptions, fromReport, type SampleFn, toReport, withVerifiedParams } from "./capabilities.js";
 import type { CatalogStore } from "./catalog.js";
 import type { ConnectionRepository } from "./connections.js";
 import { ConnectorAdapter } from "./connector/adapter.js";
@@ -52,7 +58,8 @@ import type { SecretRepository } from "./vault.js";
 import { nullJournal, type WriteJournal } from "./writes/journal.js";
 import type { WritePolicy } from "./writes/policy.js";
 import { JournalingAdapter, readEventFor } from "./writes/read-journal.js";
-import type { FetchDocument } from "./writes/read-writes.js";
+import { type FetchDocument, WriteEndpointReader } from "./writes/read-writes.js";
+import { Discovered } from "./writes/catalog-writes.js";
 import { WriteService } from "./writes/service.js";
 
 /**
@@ -148,6 +155,18 @@ export interface EngineOptions {
    * about them can be applied now.
    */
   readonly onDescribed?: ((catalogId: string) => void) | undefined;
+  /**
+   * What an account read showed changed how some record types' fields read
+   * (a flag sent as 0/1, a number sent as text). A host rebuilds whatever it
+   * built on them.
+   */
+  readonly onReadingsChanged?:
+    | ((connection: string, entities: ReadonlySet<string>, wrapped: ReadonlyMap<string, string>) => void)
+    | undefined;
+  /** Read each API's write endpoints from its specification, in the background. Off unless asked. */
+  readonly autoReadWrites?: boolean | undefined;
+  /** An API's write endpoints were just read. */
+  readonly onWritesChanged?: (() => void) | undefined;
 }
 
 /**
@@ -485,6 +504,235 @@ export const createEngine = (options: EngineOptions) => {
   const seenValues: SeenValueStore = options.seenValues ?? new MemorySeenValueStore();
   const fetchDocument: FetchDocument = options.fetchDocument ?? fetchSpecification;
 
+  /**
+   * The last enumeration of a connection, kept briefly.
+   *
+   * Enumerating is by far the most request-hungry thing here — dozens of real
+   * calls against someone else's API — and both `/capabilities` and
+   * `/suggestions` need the same answer. Without this, opening the drawer
+   * twice doubles the load on an API that may well start refusing: a 403 where
+   * an empty list used to be, which then makes everything look broken.
+   *
+   * Deliberately in memory and short-lived. It is an observation about a
+   * moment, not a fact worth persisting, and `refresh` forces a fresh look.
+   */
+  const enumerated = new Map<
+    string,
+    {
+      at: number;
+      value: Awaited<ReturnType<typeof analyseConnection>>;
+      shapes: Record<string, InferredShape>;
+    }
+  >();
+  const ENUMERATION_TTL = 5 * 60_000;
+
+  /**
+   * What the last account read saw, endpoint by endpoint, values included.
+   *
+   * Held only until the record types can be told what their fields really
+   * hold (see `observeConnection`): a read often finishes before the record
+   * types are described, and the values it saw are the evidence. In memory
+   * and short-lived, like the enumeration beside it — they are a customer's
+   * data, and only the conclusions drawn from them are ever written down.
+   */
+  const sampledShapes = new Map<string, { at: number; byOp: Map<string, InferredShape> }>();
+  const SAMPLES_TTL = 30 * 60_000;
+
+  /**
+   * One real request against one endpoint, shaped for the analyser.
+   *
+   * Extracted because enumeration is no longer the only caller: verifying a
+   * proposed relationship reads a single child collection the same way, and
+   * two implementations of "call an endpoint and describe what came back"
+   * would drift on exactly the details that matter — how inputs are split, how
+   * an empty 200 is classified.
+   */
+  const sampleFor =
+    (
+      connection: ConnectionSpec,
+      onShape?: (opId: string, shape: InferredShape) => void,
+    ): SampleFn =>
+    async (opId, inputs) => {
+      const op = getOp(connection, opId);
+      if (!op) return { kind: "failed", message: `no endpoint named "${opId}"` };
+
+      /*
+       * A caller's inputs are a flat bag; the endpoint knows which of them are
+       * path segments and which are query values. Splitting here rather than
+       * guessing is the same rule `/api/query` follows — a path token resolved
+       * from the wrong bag interpolates to nothing and produces a 404 that
+       * reads like a bad credential.
+       */
+      const declared = new Set(pathParamNames(op.path));
+      const filters: Record<string, string | number | boolean> = {};
+      const query: Record<string, string | number | boolean> = {};
+      for (const [name, value] of Object.entries(
+        (inputs ?? {}) as Record<string, string | number | boolean>,
+      )) {
+        if (declared.has(name)) filters[name] = value;
+        else query[name] = value;
+      }
+
+      const result = await upstream(connection.id, () =>
+        registry.fetch(connection.id, op.id, query, {
+          params: { range: resolveRange({ preset: "30d", now: Date.now() }), filters },
+          now: Date.now(),
+          resolveSecret: secretFor,
+        }),
+      );
+      const shape = inferShape(result.body, op.rowsPath ? { rowsPath: op.rowsPath } : {});
+      // A 200 with nothing in it is a fact about the account, not a failure.
+      if (shape.fields.length === 0) return { kind: "empty" };
+      onShape?.(op.id, shape);
+      return { kind: "rows", fields: shape.fields, rowCount: shape.rowCount };
+    };
+
+  /**
+   * Enumerate a connection, reusing a recent pass unless told not to.
+   *
+   * Three tiers, cheapest first: the in-process cache, then the report on disk,
+   * then real requests. The disk tier is what makes a restart free — the report
+   * describes the same endpoints (`isStale` proves it) so re-spending the
+   * budget to learn what we already wrote down would be pure waste.
+   */
+  const enumerate = async (
+    connection: ConnectionSpec,
+    refresh: boolean,
+    budget: AnalyseOptions = {},
+  ) => {
+    const cached = enumerated.get(connection.id);
+    const currentReport = store.getReport(connection.id);
+    if (
+      !refresh &&
+      cached &&
+      currentReport &&
+      !isStale(currentReport, connection) &&
+      Date.now() - cached.at < ENUMERATION_TTL
+    )
+      return cached;
+
+    if (!refresh) {
+      const stored = store.getReport(connection.id);
+      if (stored && !isStale(stored, connection)) {
+        const { value, shapes } = fromReport(stored);
+        /*
+         * A report is data written by an earlier version of this code, so it
+         * is normalised on the way in rather than trusted. The case that
+         * forced it: a relation carrying a filter parameter the endpoint never
+         * declared, which no later pass would rewrite — the model can see the
+         * link already and correctly declines to propose it again.
+         */
+        const restored = {
+          at: Date.now(),
+          shapes,
+          value: {
+            ...value,
+            resources: withVerifiedParams(value.resources, connection.ops),
+          },
+        };
+        enumerated.set(connection.id, restored);
+        return restored;
+      }
+    }
+
+    const shapes: Record<string, InferredShape> = {};
+    const byOpShape = new Map<string, InferredShape>();
+
+    const value = await analyseConnection(
+      connection,
+      sampleFor(connection, (opId, shape) => byOpShape.set(opId, shape)),
+      budget,
+    );
+    sampledShapes.set(connection.id, { at: Date.now(), byOp: byOpShape });
+    observeConnection(connection.id);
+
+    // Re-key the shapes from op id onto resource id, which is what the
+    // suggestion engine reasons in.
+    for (const resource of value.resources) {
+      const shape = resource.listOp ? byOpShape.get(resource.listOp) : undefined;
+      if (shape) shapes[resource.id] = shape;
+    }
+
+    const entry = { at: Date.now(), value, shapes };
+    enumerated.set(connection.id, entry);
+    // Write it down so the next process — or the next drawer opening after a
+    // restart — costs nothing.
+    store.putReport(toReport(connection, value, shapes));
+    return entry;
+  };
+
+  /**
+   * Tell a connection's record types what their fields really hold.
+   *
+   * From the last account read, while its values are still held: flags the
+   * docs call boolean and the API sends as 0/1, numbers declared as text. Runs
+   * when a read lands and again when the record types are described, because
+   * either can finish first. Widgets reading a field whose reading changed are
+   * rebuilt so a filter on a flag compares what the API actually sends.
+   */
+  const observeConnection = (connectionId: string): void => {
+    const connection = store.getConnection(connectionId);
+    const held = sampledShapes.get(connectionId);
+    if (!connection?.catalog || !held || !options.catalog) return;
+    if (Date.now() - held.at > SAMPLES_TTL) {
+      sampledShapes.delete(connectionId);
+      return;
+    }
+    const entry = options.catalog.get(connection.catalog);
+    if (!entry?.entities?.length) return;
+
+    const at = new Date(held.at).toISOString();
+    const resources = connection.resources.length > 0 ? connection.resources : (entry.resources ?? []);
+    const changed = new Set<string>();
+    const wrapped = new Map<string, string>();
+    let touched = false;
+    const entities = entry.entities.map((entity) => {
+      const found = resources.find((one) => one.id === entity.resource);
+      // The list where it was read, else the record's own endpoint.
+      const shape =
+        (found?.listOp ? held.byOp.get(found.listOp) : undefined) ??
+        (found?.detailOp ? held.byOp.get(found.detailOp) : undefined);
+      if (!shape) return entity;
+      const observed = observeEntity(entity, shape.fields, at);
+      if (observed === entity) return entity;
+      const { wrapped: wrapper, ...next } = observed;
+      touched = true;
+      if (wrapper) wrapped.set(entity.id, wrapper);
+      if (wrapper || readingsDiffer(entity, next)) changed.add(entity.id);
+      return next;
+    });
+    if (!touched) return;
+    options.catalog.put({ ...entry, entities });
+    if (changed.size > 0) options.onReadingsChanged?.(connection.id, changed, wrapped);
+  };
+
+  /*
+   * Every connection can change what its API lets it change — nothing to
+   * switch on — so an entry whose write endpoints were never read has them
+   * read: when a connection is added from it, and once at start for any
+   * added before writes existed. That is a read of the API's published
+   * specification, never of the account.
+   */
+  const writeReader =
+    options.autoReadWrites === true && options.catalog
+      ? new WriteEndpointReader({
+          catalog: options.catalog,
+          fetchDocument,
+          onRead: (entryId, result) => {
+            log.info(`read ${result.writes} write endpoint(s) for ${entryId}`);
+            options.onWritesChanged?.();
+          },
+          onFailed: (entryId, error) =>
+            log.warn(`could not read the write endpoints for ${entryId}: ${error instanceof Error ? error.message : String(error)}`),
+        })
+      : undefined;
+  /** Read a connection's write endpoints if its entry never has had them read. */
+  const readWritesFor = (connection: ConnectionSpec): void => {
+    if (connection.catalog) void writeReader?.ensure(connection.catalog);
+  };
+  /** Write endpoints discovery read, held until their entry is adopted. */
+  const discovered = new Discovered();
+
   /* Catalog ids whose record types are being described right now: one pass per API at a time. */
   const describing = new Set<string>();
   /** Describe an API's record types where they have not been, when a model is configured. */
@@ -494,7 +742,10 @@ export const createEngine = (options: EngineOptions) => {
         catalog: options.catalog,
         llm: (task) => llm(task),
         describing,
-        ...(options.onDescribed ? { onDescribed: options.onDescribed } : {}),
+        onDescribed: (catalogId) => {
+          for (const one of store.listConnections()) if (one.catalog === catalogId) observeConnection(one.id);
+          options.onDescribed?.(catalogId);
+        },
       },
       entryId,
     );
@@ -638,13 +889,24 @@ export const createEngine = (options: EngineOptions) => {
     describing,
     describeRecords,
     keepObserved,
+    enumerated,
+    enumerate,
+    sampledShapes,
+    sampleFor,
+    observeConnection,
+    readWritesFor,
+    discovered,
     /** Carry on whatever was being read, read for every record, or waiting a check when the engine last stopped. */
     resume: (): void => {
       void longReads.resume().catch((error: unknown) => log.warn(`long reads could not resume: ${String(error)}`));
       void eachReads.resume().catch((error: unknown) => log.warn(`per-record reads could not resume: ${String(error)}`));
       void checkQueue.resume().catch((error: unknown) => log.warn(`checks waiting their turn could not resume: ${String(error)}`));
+      for (const connection of store.listConnections()) readWritesFor(connection);
     },
-    stop: (): void => longReads.stop(),
+    stop: (): void => {
+      longReads.stop();
+      writeReader?.close();
+    },
   };
 };
 

@@ -646,8 +646,6 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     return reply.status(403).send({ error: "This connection has not been shared with you." });
   });
   const journal = options.journal ?? nullJournal;
-  /** Write endpoints discovery read, held until their entry is adopted. */
-  const discovered = new Discovered();
 
   /*
    * The integration engine: the credential broker, the adapter chain behind
@@ -675,10 +673,10 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     fetchDocument: options.fetchDocument,
     autoIntegrate: options.autoIntegrate,
     log: { info: (line) => app.log.info(line), warn: (line) => app.log.warn(line), debug: (line) => app.log.debug(line) },
-    /* What an account read showed about the record types, applied once they exist. */
-    onDescribed: (catalogId) => {
-      for (const one of store.listConnections()) if (one.catalog === catalogId) observeConnection(one.id);
-    },
+    /* A field whose reading changed: Dash rebuilds the widgets that read it. */
+    onReadingsChanged: (connection, changed, wrapped) => recompileReadings(connection, changed, wrapped),
+    autoReadWrites: options.autoReadWrites,
+    onWritesChanged: () => onWritesChanged(),
     integration: {
       /* The endpoints Dash's boards read, so a check settles those first. */
       usedOps: (connection) => [
@@ -714,6 +712,11 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     seenValues: seenValueStore,
     integrationDeps,
     integration,
+    discovered,
+    enumerated,
+    enumerate,
+    observeConnection,
+    readWritesFor,
   } = engine;
   /* Once the server is up: whatever was being read when it last stopped is carried on. */
   app.addHook("onReady", async () => engine.resume());
@@ -775,8 +778,6 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * and cooldown as every other reader of the connection; a check that
    * started by itself waits behind boards. See `routes/integrate.ts`.
    */
-  /** Read a connection's write endpoints if its entry never has had them read. Set below, once the reader exists. */
-  let readWritesFor: (connection: ConnectionSpec) => void = () => {};
   const previews = new SetupPreviews(queries.store, (id) => store.getConnection(id));
   // Normalise the static and resolved forms to one shape at the edge, so no
   // route has to care which kind it was given.
@@ -804,40 +805,6 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * connection write without ever overwriting anyone's work.
    */
   /**
-   * The last enumeration of a connection, kept briefly.
-   *
-   * Enumerating is by far the most request-hungry thing here — dozens of real
-   * calls against someone else's API — and both `/capabilities` and
-   * `/suggestions` need the same answer. Without this, opening the drawer
-   * twice doubles the load on an API that may well start refusing: a 403 where
-   * an empty list used to be, which then makes everything look broken.
-   *
-   * Deliberately in memory and short-lived. It is an observation about a
-   * moment, not a fact worth persisting, and `refresh` forces a fresh look.
-   */
-  const enumerated = new Map<
-    string,
-    {
-      at: number;
-      value: Awaited<ReturnType<typeof analyseConnection>>;
-      shapes: Record<string, InferredShape>;
-    }
-  >();
-  const ENUMERATION_TTL = 5 * 60_000;
-
-  /**
-   * What the last account read saw, endpoint by endpoint, values included.
-   *
-   * Held only until the record types can be told what their fields really
-   * hold (see `observeConnection`): a read often finishes before the record
-   * types are described, and the values it saw are the evidence. In memory
-   * and short-lived, like the enumeration beside it — they are a customer's
-   * data, and only the conclusions drawn from them are ever written down.
-   */
-  const sampledShapes = new Map<string, { at: number; byOp: Map<string, InferredShape> }>();
-  const SAMPLES_TTL = 30 * 60_000;
-
-  /**
    * The second-opinion pass, on whatever `suggest` routes to.
    *
    * This used to hardcode a cheap model here, because reviewing a resource map
@@ -852,129 +819,6 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * reaches the network.
    */
   const llmForReview = (): LlmAdapter | null => resolveLlm("suggest");
-
-  /**
-   * One real request against one endpoint, shaped for the analyser.
-   *
-   * Extracted because enumeration is no longer the only caller: verifying a
-   * proposed relationship reads a single child collection the same way, and
-   * two implementations of "call an endpoint and describe what came back"
-   * would drift on exactly the details that matter — how inputs are split, how
-   * an empty 200 is classified.
-   */
-  const sampleFor =
-    (
-      connection: ReturnType<SpecStore["getConnection"]> & object,
-      onShape?: (opId: string, shape: InferredShape) => void,
-    ): SampleFn =>
-    async (opId, inputs) => {
-      const op = getOp(connection, opId);
-      if (!op) return { kind: "failed", message: `no endpoint named "${opId}"` };
-
-      /*
-       * A caller's inputs are a flat bag; the endpoint knows which of them are
-       * path segments and which are query values. Splitting here rather than
-       * guessing is the same rule `/api/query` follows — a path token resolved
-       * from the wrong bag interpolates to nothing and produces a 404 that
-       * reads like a bad credential.
-       */
-      const declared = new Set(pathParamNames(op.path));
-      const filters: Record<string, string | number | boolean> = {};
-      const query: Record<string, string | number | boolean> = {};
-      for (const [name, value] of Object.entries(
-        (inputs ?? {}) as Record<string, string | number | boolean>,
-      )) {
-        if (declared.has(name)) filters[name] = value;
-        else query[name] = value;
-      }
-
-      const result = await upstream(connection.id, () =>
-        registry.fetch(connection.id, op.id, query, {
-          params: { range: resolveRange({ preset: "30d", now: Date.now() }), filters },
-          now: Date.now(),
-          resolveSecret: secretFor,
-        }),
-      );
-      const shape = inferShape(result.body, op.rowsPath ? { rowsPath: op.rowsPath } : {});
-      // A 200 with nothing in it is a fact about the account, not a failure.
-      if (shape.fields.length === 0) return { kind: "empty" };
-      onShape?.(op.id, shape);
-      return { kind: "rows", fields: shape.fields, rowCount: shape.rowCount };
-    };
-
-  /**
-   * Enumerate a connection, reusing a recent pass unless told not to.
-   *
-   * Three tiers, cheapest first: the in-process cache, then the report on disk,
-   * then real requests. The disk tier is what makes a restart free — the report
-   * describes the same endpoints (`isStale` proves it) so re-spending the
-   * budget to learn what we already wrote down would be pure waste.
-   */
-  const enumerate = async (
-    connection: ReturnType<SpecStore["getConnection"]> & object,
-    refresh: boolean,
-    budget: AnalyseOptions = {},
-  ) => {
-    const cached = enumerated.get(connection.id);
-    const currentReport = store.getReport(connection.id);
-    if (
-      !refresh &&
-      cached &&
-      currentReport &&
-      !isStale(currentReport, connection) &&
-      Date.now() - cached.at < ENUMERATION_TTL
-    )
-      return cached;
-
-    if (!refresh) {
-      const stored = store.getReport(connection.id);
-      if (stored && !isStale(stored, connection)) {
-        const { value, shapes } = fromReport(stored);
-        /*
-         * A report is data written by an earlier version of this code, so it
-         * is normalised on the way in rather than trusted. The case that
-         * forced it: a relation carrying a filter parameter the endpoint never
-         * declared, which no later pass would rewrite — the model can see the
-         * link already and correctly declines to propose it again.
-         */
-        const restored = {
-          at: Date.now(),
-          shapes,
-          value: {
-            ...value,
-            resources: withVerifiedParams(value.resources, connection.ops),
-          },
-        };
-        enumerated.set(connection.id, restored);
-        return restored;
-      }
-    }
-
-    const shapes: Record<string, InferredShape> = {};
-    const byOpShape = new Map<string, InferredShape>();
-
-    const value = await analyseConnection(
-      connection,
-      sampleFor(connection, (opId, shape) => byOpShape.set(opId, shape)),
-      budget,
-    );
-    sampledShapes.set(connection.id, { at: Date.now(), byOp: byOpShape });
-    observeConnection(connection.id);
-
-    // Re-key the shapes from op id onto resource id, which is what the
-    // suggestion engine reasons in.
-    for (const resource of value.resources) {
-      const shape = resource.listOp ? byOpShape.get(resource.listOp) : undefined;
-      if (shape) shapes[resource.id] = shape;
-    }
-
-    const entry = { at: Date.now(), value, shapes };
-    enumerated.set(connection.id, entry);
-    // Write it down so the next process — or the next drawer opening after a
-    // restart — costs nothing.
-    store.putReport(toReport(connection, value, shapes));
-    return entry;
-  };
 
   /**
    * Create a board from a title, slugified and de-duplicated.
@@ -3682,50 +3526,6 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     };
   };
 
-  /**
-   * Tell a connection's record types what their fields really hold.
-   *
-   * From the last account read, while its values are still held: flags the
-   * docs call boolean and the API sends as 0/1, numbers declared as text. Runs
-   * when a read lands and again when the record types are described, because
-   * either can finish first. Widgets reading a field whose reading changed are
-   * rebuilt so a filter on a flag compares what the API actually sends.
-   */
-  const observeConnection = (connectionId: string): void => {
-    const connection = store.getConnection(connectionId);
-    const held = sampledShapes.get(connectionId);
-    if (!connection?.catalog || !held || !options.catalog) return;
-    if (Date.now() - held.at > SAMPLES_TTL) {
-      sampledShapes.delete(connectionId);
-      return;
-    }
-    const entry = options.catalog.get(connection.catalog);
-    if (!entry?.entities?.length) return;
-
-    const at = new Date(held.at).toISOString();
-    const resources = connection.resources.length > 0 ? connection.resources : (entry.resources ?? []);
-    const changed = new Set<string>();
-    const wrapped = new Map<string, string>();
-    let touched = false;
-    const entities = entry.entities.map((entity) => {
-      const found = resources.find((one) => one.id === entity.resource);
-      // The list where it was read, else the record's own endpoint.
-      const shape =
-        (found?.listOp ? held.byOp.get(found.listOp) : undefined) ??
-        (found?.detailOp ? held.byOp.get(found.detailOp) : undefined);
-      if (!shape) return entity;
-      const observed = observeEntity(entity, shape.fields, at);
-      if (observed === entity) return entity;
-      const { wrapped: wrapper, ...next } = observed;
-      touched = true;
-      if (wrapper) wrapped.set(entity.id, wrapper);
-      if (wrapper || readingsDiffer(entity, next)) changed.add(entity.id);
-      return next;
-    });
-    if (!touched) return;
-    options.catalog.put({ ...entry, entities });
-    if (changed.size > 0) recompileReadings(connection.id, changed, wrapped);
-  };
 
   app.get<{ Params: { id: string; widgetId: string } }>(
     "/api/dashboards/:id/widgets/:widgetId/settings",
@@ -4013,36 +3813,6 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       onWritesChanged: () => onWritesChanged(),
     }),
   );
-
-  /*
-   * Every connection can change what its API lets it change — nothing to
-   * switch on — so an entry whose write endpoints were never read has them
-   * read: when a connection is added from it, and once at startup for any
-   * added before writes existed. That is a read of the API's published
-   * specification, never of the account.
-   */
-  const writeReader =
-    options.autoReadWrites === true && catalog
-      ? new WriteEndpointReader({
-          catalog,
-          fetchDocument: readDocument,
-          onRead: (entryId, result) => {
-            app.log.info(`read ${result.writes} write endpoint(s) for ${entryId}`);
-            onWritesChanged();
-          },
-          onFailed: (entryId, error) =>
-            app.log.warn(`could not read the write endpoints for ${entryId}: ${error instanceof Error ? error.message : String(error)}`),
-        })
-      : undefined;
-  readWritesFor = (connection) => {
-    if (connection.catalog) void writeReader?.ensure(connection.catalog);
-  };
-  if (writeReader) {
-    app.addHook("onReady", async () => {
-      for (const connection of store.listConnections()) readWritesFor(connection);
-    });
-    app.addHook("onClose", async () => writeReader.close());
-  }
 
   /* ── chat ───────────────────────────────────────────────────────────── */
 
