@@ -1,6 +1,7 @@
 import { EmptyState } from "@freebirdai/dash-components";
 import { AGENT_SECTIONS, type AgentSection, type Route } from "../route.js";
 import { AgentsSection } from "./AgentsSection.jsx";
+import { OverviewSection } from "./overview/OverviewSection.jsx";
 import { WorkflowsSection } from "./workflows/WorkflowsSection.jsx";
 
 /**
@@ -13,6 +14,7 @@ import { WorkflowsSection } from "./workflows/WorkflowsSection.jsx";
  */
 
 export const SECTION_TITLES: Readonly<Record<AgentSection, string>> = {
+  overview: "Overview",
   workflows: "Workflows",
   agents: "Agents",
   calendar: "Calendar",
@@ -39,7 +41,9 @@ export const AgentShell = ({
   return (
     <div className="dash-page dash-agent" data-testid={`agent-section-${route.section}`}>
       <div className="dash-agent__inner">
-        {route.section === "agents" ? (
+        {route.section === "overview" ? (
+          <OverviewSection onNavigate={onNavigate} />
+        ) : route.section === "agents" ? (
           <AgentsSection selected={route.id ?? null} onNavigate={onNavigate} />
         ) : route.section === "workflows" ? (
           <WorkflowsSection selected={route.id ?? null} onNavigate={onNavigate} />

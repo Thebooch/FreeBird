@@ -154,7 +154,8 @@ const summarize = (gathered: Gathered, matched: number, outputs: readonly Workfl
   const counts = new Map<string, number>();
   for (const output of outputs) counts.set(output.outcome, (counts.get(output.outcome) ?? 0) + 1);
   const parts = [...counts].map(([outcome, count]) => `${count} ${outcome}`);
-  const reading = hasSource ? `${matched} of ${plural(gathered.read, "record")} matched${gathered.complete ? "" : " (not every record was reached)"}` : "Ran";
+  if (!hasSource) return parts.length > 0 ? parts.join(", ") : "Nothing to do";
+  const reading = `${matched} of ${plural(gathered.read, "record")} matched${gathered.complete ? "" : " (not every record was reached)"}`;
   return parts.length > 0 ? `${reading} · ${parts.join(", ")}` : `${reading} · nothing to do`;
 };
 
@@ -301,6 +302,28 @@ export const runWorkflow = async (env: WorkflowEnv, workflow: WorkflowSpec, opti
     const now = env.now();
     const outputs: WorkflowRunOutput[] = [];
     const common = { env, workflow, run: started.id, actor, agent, connection: gathered.connection, rows: matched, inputs };
+    /*
+     * Where the run has got to, for the Overview. Written when the step changes,
+     * and otherwise at most once a second, so a long run over many records does
+     * not cost a write per record.
+     */
+    let staged = { step: "", at: 0 };
+    const stage = async (step: WorkflowSpec["steps"][number], rowKey: string | undefined, rowIndex: number | undefined): Promise<void> => {
+      const at = env.now();
+      if (staged.step === step.id && at - staged.at < 1_000) return;
+      staged = { step: step.id, at };
+      await env.store.putRun({
+        ...started,
+        stage: {
+          step: step.id,
+          kind: step.kind,
+          index: workflow.steps.indexOf(step) + 1,
+          of: workflow.steps.length,
+          ...(rowKey !== undefined ? { row: rowKey } : {}),
+          ...(rowIndex !== undefined ? { rowIndex: rowIndex + 1, rows: matched.length } : {}),
+        },
+      });
+    };
     const execute = async (step: WorkflowSpec["steps"][number], input: Omit<StepInput, "step">): Promise<void> => {
       const executor = executors[step.kind] as WorkflowStepExecutor | undefined;
       if (!executor) {
@@ -310,9 +333,10 @@ export const runWorkflow = async (env: WorkflowEnv, workflow: WorkflowSpec, opti
       outputs.push(...(await executor({ ...input, step } as StepInput)));
     };
 
-    for (const one of matched) {
+    for (const [rowIndex, one] of matched.entries()) {
       for (const step of workflow.steps) {
         if (WORKFLOW_STEP_INFO[step.kind].perRun || !passes(step.when, one.row, now)) continue;
+        await stage(step, one.key, rowIndex);
         await execute(step, { ...common, row: one.row, rowKey: one.key });
       }
     }
@@ -320,6 +344,7 @@ export const runWorkflow = async (env: WorkflowEnv, workflow: WorkflowSpec, opti
       const runRow = { count: matched.length, input: inputs };
       for (const step of workflow.steps) {
         if (!WORKFLOW_STEP_INFO[step.kind].perRun || !passes(step.when, runRow, now)) continue;
+        await stage(step, undefined, undefined);
         await execute(step, common);
       }
     }

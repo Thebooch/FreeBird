@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { PROPOSAL_STATUSES, workflowInputSchema, workflowSchema, type ProposalStatus } from "@freebirdai/dash-spec";
+import { PROPOSAL_STATUSES, workflowInputSchema, workflowSchema, type AgentSpec, type ProposalStatus } from "@freebirdai/dash-spec";
+import { buildOverview } from "../workflows/overview.js";
 import { requirePermission } from "../identity/context.js";
 import type { Policy } from "../identity/policy.js";
 import { ProposalError, type ProposalService } from "../workflows/proposals.js";
@@ -21,6 +22,8 @@ export const workflowRoutes = (deps: {
   readonly proposals: ProposalService;
   readonly starter: Starter;
   readonly policy: Policy;
+  /** Every agent, archived ones included, for the Overview's names and filters. */
+  readonly agents?: () => Promise<AgentSpec[]>;
 }) =>
   async (app: FastifyInstance): Promise<void> => {
     const { workflows, proposals, starter, policy } = deps;
@@ -125,6 +128,12 @@ export const workflowRoutes = (deps: {
     app.get<{ Params: { id: string }; Querystring: { limit?: string } }>("/api/workflows/:id/runs", async (request) =>
       starter.env.store.runs({ workflow: request.params.id, limit: Number(request.query.limit) || 50 }),
     );
+
+    /**
+     * The Agent side's Overview: active workflows (their stage, and what each
+     * waits for) and completed tasks, newest first. Filtering is the page's.
+     */
+    app.get("/api/overview", async () => buildOverview(starter.env, { agents: (await deps.agents?.()) ?? [] }));
 
     /** Every workflow's runs, newest first: the completed-work feed. */
     app.get<{ Querystring: { limit?: string } }>("/api/workflow-runs", async (request) =>

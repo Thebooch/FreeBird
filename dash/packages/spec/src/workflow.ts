@@ -367,6 +367,21 @@ export const workflowRunSchema = z.object({
   complete: z.boolean().default(true),
   summary: z.string().default(""),
   outputs: z.array(workflowRunOutputSchema).default([]),
+  /**
+   * Where a running run has got to: the step it is on (1-based, of how many)
+   * and the record it is on. Written as it goes, so the Overview can say so.
+   */
+  stage: z
+    .object({
+      step: z.string(),
+      kind: z.string(),
+      index: z.number().int(),
+      of: z.number().int(),
+      row: z.string().optional(),
+      rowIndex: z.number().int().optional(),
+      rows: z.number().int().optional(),
+    })
+    .optional(),
   error: z.string().optional(),
 });
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;

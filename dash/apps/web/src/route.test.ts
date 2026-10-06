@@ -192,13 +192,14 @@ describe("the Agent side", () => {
   it("reads a section, and an item within it", () => {
     expect(parseRoute("#/agent/workflows")).toEqual({ kind: "agent", section: "workflows" });
     expect(parseRoute("#/agent/agents/scout")).toEqual({ kind: "agent", section: "agents", id: "scout" });
-    expect(parseRoute("#/agent/communications")).toEqual({ kind: "agent", section: "agents" });
+    expect(parseRoute("#/agent/communications")).toEqual({ kind: "agent", section: "overview" });
   });
 
   it("lands on Agents for a section it does not have, and on Agents for a bare #/agent", () => {
-    expect(parseRoute("#/agent")).toEqual({ kind: "agent", section: "agents" });
-    expect(parseRoute("#/agent/nonsense")).toEqual({ kind: "agent", section: "agents" });
-    expect(parseRoute("#/agent/nonsense/7")).toEqual({ kind: "agent", section: "agents", id: "7" });
+    expect(parseRoute("#/agent")).toEqual({ kind: "agent", section: "overview" });
+    expect(parseRoute("#/agent/overview")).toEqual({ kind: "agent", section: "overview" });
+    expect(parseRoute("#/agent/nonsense")).toEqual({ kind: "agent", section: "overview" });
+    expect(parseRoute("#/agent/nonsense/7")).toEqual({ kind: "agent", section: "overview", id: "7" });
   });
 
   it("round-trips, escaping an id that needs it", () => {

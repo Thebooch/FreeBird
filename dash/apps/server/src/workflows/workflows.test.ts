@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { MemoryMembershipStore } from "../identity/members.js";
 import { rolePolicy, type Policy } from "../identity/policy.js";
 import type { WorkflowEnv } from "./env.js";
+import { buildOverview } from "./overview.js";
 import { ProposalService } from "./proposals.js";
 import { previewWorkflow, runWorkflow } from "./run.js";
 import { WorkflowRunner } from "./runner.js";
@@ -590,5 +591,54 @@ describe("the think step", () => {
     expect(run.outputs[0]).toMatchObject({ kind: "think", outcome: "proposed" });
     expect(f.committed).toHaveLength(0);
     expect((await f.env.proposals.list())[0]).toMatchObject({ agent: "maint", reason: "Costly and open.", intent: { values: { priority: "high" } } });
+  });
+});
+
+/* ── the Overview ───────────────────────────────────────────────────── */
+
+describe("the Overview", () => {
+  it("says what each active workflow is waiting for, and lists what was done, newest first", async () => {
+    const f = fake();
+    f.rows = ORDERS;
+    const agent = agentOf({ tools: [{ id: "t", kind: "run_workflow", workflow: "inspect" }] });
+    f.agents.set(agent.id, agent);
+    const assign = workflowOf({ trigger: { kind: "every", every: "1h" }, source: { connection: "pms", record: "work_order" }, criteria: 'status == "open"', steps: assignSteps });
+    await f.env.store.put(assign);
+    await f.env.store.put(workflowOf({ id: "inspect", name: "Inspection", trigger: { kind: "agent", inputs: [] } }));
+    await f.env.store.put(workflowOf({ id: "daily", name: "Daily", trigger: { kind: "schedule", cron: "0 7 * * 1-5", timezone: "UTC" } }));
+    await f.env.store.put(workflowOf({ id: "stuck", name: "Stuck", parked: { reason: "Access lost.", at }, trigger: { kind: "every", every: "1h" } }));
+    await f.env.store.put(workflowOf({ id: "off", name: "Off", enabled: false, trigger: { kind: "manual" } }));
+    await runWorkflow(f.env, assign, { start: { kind: "every" } });
+
+    const overview = await buildOverview(f.env, { agents: [agent] });
+    const state = Object.fromEntries(overview.active.map((one) => [one.workflow, one]));
+    expect(Object.keys(state)).not.toContain("off");
+    expect(state["wf"]).toMatchObject({ state: "waiting_approval", waiting: 1, tasks: ["propose_change", "calendar"] });
+    expect(state["inspect"]).toMatchObject({ state: "waiting_agent", waitingFor: "Maintenance agent to be asked", agents: ["maint"] });
+    expect(state["daily"]).toMatchObject({ state: "waiting_schedule", nextAt: "2026-10-07T07:00:00.000Z" });
+    expect(state["stuck"]?.waitingFor).toMatch(/turn it back on: Access lost/);
+    expect(overview.active[0]?.workflow).toBe("wf");
+    /* Row 1's change, row 1's deadline, row 2's deadline (row 2's change waits): newest first. */
+    expect(overview.completed.map((one) => one.task)).toEqual(["calendar", "calendar", "propose_change"]);
+  });
+
+  it("shows the step a running workflow is on", async () => {
+    const f = fake();
+    f.rows = ORDERS;
+    const workflow = workflowOf({ trigger: { kind: "manual" }, source: { connection: "pms", record: "work_order" }, once: "per-run", steps: [{ id: "n", kind: "calendar", title: "{{ unit }}", at: "2026-10-09" }] });
+    await f.env.store.put(workflow);
+    let seen: string | undefined;
+    const calendar = f.env.calendar;
+    (f.env as { calendar: typeof calendar }).calendar = {
+      ...calendar,
+      list: calendar.list.bind(calendar),
+      put: async (event) => {
+        seen ??= (await buildOverview(f.env, { agents: [] })).active[0]?.stage;
+        await calendar.put(event);
+      },
+    };
+    await runWorkflow(f.env, workflow, { start: { kind: "manual" }, actor: owner });
+    expect(seen).toBe("Step 1 of 1: Put it on the calendar, record 1 of 3");
+    expect((await buildOverview(f.env, { agents: [] })).active[0]?.state).toBe("waiting_trigger");
   });
 });

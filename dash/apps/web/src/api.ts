@@ -114,6 +114,34 @@ const json = (body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 });
 
+/** The Overview: see `buildOverview` on the server. */
+export interface AgentOverview {
+  readonly active: ReadonlyArray<{
+    readonly workflow: string;
+    readonly name: string;
+    readonly agents: readonly string[];
+    readonly state: "running" | "waiting_approval" | "waiting_schedule" | "waiting_trigger" | "waiting_agent" | "paused";
+    readonly stage: string;
+    readonly waitingFor: string;
+    readonly tasks: readonly string[];
+    readonly waiting: number;
+    readonly since?: string;
+    readonly nextAt?: string;
+    readonly run?: string;
+  }>;
+  readonly completed: ReadonlyArray<{
+    readonly id: string;
+    readonly at: string;
+    readonly task: string;
+    readonly title: string;
+    readonly workflow?: string;
+    readonly workflowName?: string;
+    readonly agent?: string;
+    readonly run?: string;
+    readonly by?: string;
+  }>;
+}
+
 /** What a workflow would do now: see `previewWorkflow` on the server. */
 export interface WorkflowPreview {
   readonly read: number;
@@ -1217,6 +1245,9 @@ export const api = {
   dismissProposal: (id: string): Promise<Proposal> => request(`/api/proposals/${encodeURIComponent(id)}/dismiss`, json({})),
 
   calendarEvents: (): Promise<CalendarEvent[]> => request("/api/calendar/events"),
+
+  /** The Agent side's Overview: active workflows and completed tasks. */
+  overview: (): Promise<AgentOverview> => request("/api/overview"),
 
   /**
    * Connect a catalog API. Marked for onboarding, so it opens with the boards

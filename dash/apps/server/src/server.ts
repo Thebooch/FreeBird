@@ -997,7 +997,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     useTool: (agent, tool, inputs, conversation) =>
       startFromAgentTool(workflowStarter, { agent, tool, inputs, ...(conversation ? { conversation } : {}) }),
   }));
-  void app.register(workflowRoutes({ workflows, proposals, starter: workflowStarter, policy }));
+  void app.register(workflowRoutes({ workflows, proposals, starter: workflowStarter, policy, agents: () => agentStore.list() }));
   const workflowRunner = new WorkflowRunner({ ...workflowStarter, log: { warn: (line) => app.log.warn(line) } });
   if (options.workflowRunner === true) workflowRunner.start();
   app.addHook("onClose", async () => workflowRunner.stop());
