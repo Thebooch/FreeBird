@@ -371,8 +371,8 @@ const StepCard = ({
                 <option value="create">Create a record</option>
               </select>
             </div>
-            {text("Record type", step.entity, (entity) => onChange({ ...step, entity }), "e.g. work_order")}
-            {step.change === "action" && text("Action", step.action, (action) => onChange({ ...step, action }), "e.g. assign_vendor")}
+            {text("Record type", step.entity, (entity) => onChange({ ...step, entity }), "e.g. task")}
+            {step.change === "action" && text("Action", step.action, (action) => onChange({ ...step, action }), "e.g. close")}
             {step.change !== "create" && text("Which record", step.recordId, (recordId) => onChange({ ...step, recordId }), "{{ id }}")}
             <ValuesEditor values={step.values ?? {}} onChange={(values) => onChange({ ...step, values })} />
           </>
@@ -397,8 +397,8 @@ const StepCard = ({
                 ))}
               </select>
             </div>
-            {text("To", step.to, (to) => onChange({ ...step, to }), "{{ tenant.phone }}")}
-            {text("What it is for", step.purpose, (purpose) => onChange({ ...step, purpose }), "e.g. Let them know the work order was received", true)}
+            {text("To", step.to, (to) => onChange({ ...step, to }), "{{ contact.phone }}")}
+            {text("What it is for", step.purpose, (purpose) => onChange({ ...step, purpose }), "e.g. Let them know it was received", true)}
             <span className="dash-hint">The agent writes the words with its own reply prompt. Texts, calls and email arrive with Communications; until then the run notes what it would have sent.</span>
           </>
         )}
@@ -579,7 +579,7 @@ export const WorkflowEditor = ({
     >
       <div className="dash-field">
         <label htmlFor="workflow-name">Name</label>
-        <input id="workflow-name" value={draft.name} maxLength={80} onChange={(event) => set({ name: event.target.value })} placeholder="New work orders" />
+        <input id="workflow-name" value={draft.name} maxLength={80} onChange={(event) => set({ name: event.target.value })} placeholder="New requests" />
       </div>
       <div className="dash-field">
         <label htmlFor="workflow-description">What it does</label>
@@ -621,7 +621,7 @@ export const WorkflowEditor = ({
           <input
             className="dash-tool__when"
             aria-label="Criteria"
-            placeholder='All of them, or e.g. status == "open" && vendor == null'
+            placeholder='All of them, or e.g. status == "open" && owner == null'
             value={draft.criteria ?? ""}
             onChange={(event) => set({ criteria: event.target.value })}
             data-testid="workflow-criteria"
