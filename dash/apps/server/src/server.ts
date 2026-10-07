@@ -57,8 +57,10 @@ import {
   buildQueryRequest,
   CatalogStore,
   createEngine,
+  createRecordReader,
   describeFields,
   fetchPublicDocument,
+  guardedFetch,
   Keeper,
   KeyStore,
   MemoryShapeStore,
@@ -131,6 +133,29 @@ import { RATES_AS_OF } from "./pricing.js";
 import type { PartRegistry } from "@freebirdai/dash-parts";
 import { partsRoutes } from "./routes/parts.js";
 import { agentRoutes } from "./routes/agents.js";
+import { workflowRoutes } from "./routes/workflows.js";
+import { explainDraft } from "./workflows/draft.js";
+import { WorkflowEngine } from "./workflows/engine.js";
+import { WorkflowRunner } from "./workflows/runner.js";
+import { WorkflowService } from "./workflows/service.js";
+import { startFromAgentTool, type Starter } from "./workflows/start.js";
+import { TaskService } from "./workflows/tasks.js";
+import { TemplateService } from "./workflows/templates.js";
+import {
+  MemoryCalendarStore,
+  MemoryCaseStore,
+  MemorySignalStore,
+  MemoryTaskStore,
+  MemoryTemplateStore,
+  MemoryWorkflowStore,
+  type CalendarStore,
+  type CaseStore,
+  type SignalStore,
+  type TaskStore,
+  type TemplateStore,
+  type WorkflowStore,
+} from "./workflows/store.js";
+import { deliveryErrorOf, type OutreachSender, type WorkflowEnv } from "./workflows/env.js";
 import { AgentService } from "./agents/service.js";
 import { MemoryAgentStore, type AgentStore } from "./agents/store.js";
 import { installIdentity } from "./identity/context.js";
@@ -295,6 +320,12 @@ export interface BuildServerOptions {
    */
   readonly keeper?: boolean;
   /**
+   * Whether workflows start by themselves — on a schedule, or when an API's
+   * records appear or change (`workflows/runner.ts`). **Off unless asked**,
+   * for the keeper's reason. "Run now" and an agent's tool work either way.
+   */
+  readonly workflowRunner?: boolean;
+  /**
    * Where cached responses live. Omitted means in this process only, which
    * is the right default for a self-hoster and the wrong one for a fleet.
    */
@@ -359,6 +390,21 @@ export interface BuildServerOptions {
    * this process only; the real entry point keeps them in Dash's database.
    */
   readonly agents?: AgentStore;
+  /**
+   * Where this workspace's workflows are kept, with their runs, cases (one
+   * record's way through a workflow), tasks (one record per action), calendar
+   * entries and templates (`workflows/store.ts`). Absent means in this process only.
+   */
+  readonly workflows?: WorkflowStore;
+  readonly cases?: CaseStore;
+  readonly tasks?: TaskStore;
+  readonly calendar?: CalendarStore;
+  readonly templates?: TemplateStore;
+  readonly signals?: SignalStore;
+  /** Sends Outreach (texts, calls, email). Comms supplies it; absent, nothing leaves Dash and tasks say so. */
+  readonly outreach?: OutreachSender;
+  /** Where this server is reached from outside, for webhook addresses a Wait step hands out. */
+  readonly publicOrigin?: string;
   /**
    * The shape each endpoint was accepted in, and any change seen since
    * (`drift/`). Memory unless supplied: tests and embedders get a store that
@@ -903,13 +949,112 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   // to: a function of its dependencies rather than a closure over one big
   // builder.
   void app.register(partsRoutes(options.parts));
+  const agentStore = options.agents ?? new MemoryAgentStore();
+  const workflowStore = options.workflows ?? new MemoryWorkflowStore();
   const agents = new AgentService({
-    store: options.agents ?? new MemoryAgentStore(),
+    store: agentStore,
     policy,
     hasConnection: (id) => store.getConnection(id) !== null,
     hasOp: (connection, op) => store.getConnection(connection)?.ops.some((one) => one.id === op) ?? false,
+    /* A tool that starts a workflow names one an agent can start. */
+    startableWorkflow: async (id) => (await workflowStore.get(id))?.trigger.kind === "agent",
   });
-  void app.register(agentRoutes(agents, policy, () => resolveLlm("agent")));
+
+  /*
+   * Workflows: a trigger and a path (`workflows/`). They read through the
+   * engine's single read at background priority, change records only through
+   * the write service's review, and never use an agent's reply prompt.
+   */
+  const catalogEntryOf = (connection: ConnectionSpec) => (connection.catalog ? (options.catalog?.get(connection.catalog) ?? undefined) : undefined);
+  const workflowEnv: WorkflowEnv = {
+    workspaceId: options.workspace?.id ?? LOCAL_WORKSPACE_ID,
+    store: workflowStore,
+    cases: options.cases ?? new MemoryCaseStore(),
+    tasks: options.tasks ?? new MemoryTaskStore(),
+    calendar: options.calendar ?? new MemoryCalendarStore(),
+    templates: options.templates ?? new MemoryTemplateStore(),
+    signals: options.signals ?? new MemorySignalStore(),
+    agents: agentStore,
+    ...(options.outreach ? { outreach: options.outreach } : {}),
+    /* A webhook goes through the same guard as every other request to an address someone typed. */
+    post: async (url, body, how) => {
+      const headers: Record<string, string> = { "content-type": "application/json", ...(how?.key ? { "idempotency-key": how.key } : {}) };
+      let answer: Awaited<ReturnType<typeof guardedFetch>>;
+      try {
+        answer = await guardedFetch(url, { method: "POST", purpose: "write", headers, body: JSON.stringify(body) }, null);
+      } catch (error) {
+        throw deliveryErrorOf(error, (cause) => cause instanceof BlockedUrlError);
+      }
+      let parsed: unknown = answer.text;
+      try {
+        parsed = JSON.parse(answer.text);
+      } catch {
+        /* Plain text stays text. */
+      }
+      return { status: answer.status, body: parsed };
+    },
+    ...(options.publicOrigin ? { publicOrigin: options.publicOrigin } : {}),
+    policy,
+    read: createRecordReader({ engine, store, entryOf: catalogEntryOf }),
+    writes: {
+      prepare: (principal, intent, how) => writes.prepare(principal, intent, how),
+      commit: (principal, pendingId, digest) => writes.commit(principal, pendingId, digest),
+      discard: (principal, pendingId) => writes.discard(principal, pendingId),
+    },
+    rowKeyField: (connectionId, record) => {
+      const connection = store.getConnection(connectionId);
+      const entities = connection ? (catalogEntryOf(connection)?.entities ?? []) : [];
+      const wanted = record.toLowerCase();
+      const entity =
+        entities.find((one) => one.id === record) ??
+        entities.find((one) => one.name.one.toLowerCase() === wanted || one.name.many.toLowerCase() === wanted);
+      return entity?.identity?.field;
+    },
+    connectionTitle: (id) => store.getConnection(id)?.title ?? id,
+    /* Each kind of call has its own model task; a step may name its own model (`task@model`). */
+    llm: (task, model) => resolveLlm(model ? `${task}@${model}` : task),
+    withBudget: async (run) => {
+      enterTurnBudget(turnCeilingUsd());
+      return run();
+    },
+    onEvent: (event) => app.log.info({ event }, event.type),
+    now: () => Date.now(),
+    newId: () => randomUUID(),
+  };
+  const workflowHolder = `${process.pid}-${randomUUID()}`;
+  const workflowEngine = new WorkflowEngine({ env: workflowEnv, holder: workflowHolder, ...(options.leases ? { leases: options.leases } : {}) });
+  const workflowStarter: Starter = {
+    env: workflowEnv,
+    engine: workflowEngine,
+    holder: workflowHolder,
+    ...(options.leases ? { leases: options.leases } : {}),
+  };
+  const workflows = new WorkflowService({
+    store: workflowStore,
+    policy,
+    agents: { list: () => agentStore.list() },
+    hasConnection: (id) => store.getConnection(id) !== null,
+  });
+  const workflowTasks = new TaskService(workflowStarter);
+  const workflowTemplates = new TemplateService({ templates: workflowEnv.templates, workflows: workflowStore, newId: () => randomUUID() });
+  void app.register(agentRoutes(agents, policy, () => resolveLlm("agent"), {
+    useTool: (agent, tool, inputs, conversation) =>
+      startFromAgentTool(workflowStarter, { agent, tool, inputs, ...(conversation ? { conversation } : {}) }),
+  }));
+  void app.register(
+    workflowRoutes({
+      workflows,
+      tasks: workflowTasks,
+      templates: workflowTemplates,
+      starter: workflowStarter,
+      policy,
+      agents: () => agentStore.list(),
+      connectionTitle: (id) => store.getConnection(id)?.title ?? id,
+    }),
+  );
+  const workflowRunner = new WorkflowRunner({ ...workflowStarter, log: { warn: (line) => app.log.warn(line) } });
+  if (options.workflowRunner === true) workflowRunner.start();
+  app.addHook("onClose", async () => workflowRunner.stop());
 
   /*
    * Half-finished widget setups, one per board.
@@ -3208,6 +3353,23 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             create: (principal, input) => agents.create(principal, input),
             update: (principal, id, input) => agents.update(principal, id, input),
             archive: (id) => agents.setArchived(id, true),
+          },
+          workflows: {
+            roster: await workflows.list(),
+            templates: await workflowTemplates.list(),
+            mayManage: async (principal) => (await policy.can(principal, "workflows.manage", {})).ok,
+            explain: async (principal, workflow) =>
+              explainDraft(workflows, principal, workflow, await agentStore.list(), { connection: (id) => store.getConnection(id)?.title ?? id }),
+            create: (principal, input) => workflows.create(principal, input),
+            update: (principal, id, input) => workflows.update(principal, id, input),
+            saveTemplate: (input) => workflowTemplates.saveFrom(input),
+            fromTemplate: async (principal, id, values, name) => {
+              const { input, template } = await workflowTemplates.workflowFrom(id, values, name);
+              const made = await workflows.create(principal, input);
+              const marked = { ...made, fromTemplate: { id: template.id, version: template.version } };
+              await workflowStore.put(marked);
+              return marked;
+            },
           },
           changes: {
             prepare: (principal, intent, sessionId) =>

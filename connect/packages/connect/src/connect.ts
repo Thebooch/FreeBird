@@ -8,13 +8,10 @@ import {
   connectionNeedsAuthSetup,
   type EntitySpec,
   getOp,
-  type OpSpec,
-  type ReadCompletion,
   resolveRange,
 } from "@freebirdai/connect-spec";
-import { AdapterError, type HttpFetch } from "./adapters/index.js";
+import type { HttpFetch } from "./adapters/index.js";
 import type { LlmAdapter } from "./agent/index.js";
-import type { Priority } from "./cache/gate.js";
 import type { CacheStore } from "./cache/store.js";
 import { CatalogStore, connectionFromCatalog } from "./catalog.js";
 import type { ConnectionRepository } from "./connections.js";
@@ -23,15 +20,18 @@ import { type DocsRenderer, discover, type DiscoveryResult } from "./discovery/i
 import type { SearchProvider } from "./discovery/search.js";
 import { createEngine, type Engine, type EngineLog } from "./engine.js";
 import type { IntegrationRun } from "./integrate/runner.js";
-import { rowsOf } from "./integrate/read.js";
 import { Keeper, type WarmTarget } from "./keeper/keeper.js";
 import { createLocalStores, type EngineStores } from "./platform/stores.js";
 import { buildQueryRequest } from "./query.js";
+import { createRecordReader, freshness, type ReadRequest, type ReadResult } from "./read.js";
 import type { SecretRepository } from "./vault.js";
 import type { WriteIntent, WriteReview } from "./writes/pending.js";
 import type { WriteActor, WritePermission, WriteScope } from "./writes/policy.js";
 import type { FetchDocument } from "./writes/read-writes.js";
-import { type CommitResult, findEntity } from "./writes/service.js";
+import type { CommitResult } from "./writes/service.js";
+
+export { createRecordReader, freshness } from "./read.js";
+export type { ReadRequest, ReadResult, RecordReader, RecordReaderDeps } from "./read.js";
 
 /** Connections kept in this process only: the default, and right for a script. */
 export class MemoryConnectionStore implements ConnectionRepository {
@@ -107,63 +107,6 @@ export interface ConnectOptions {
   readonly log?: EngineLog;
 }
 
-export interface ReadRequest {
-  /** An endpoint by its id. */
-  readonly op?: string;
-  /** Or a record type, by its id or its name ("tenant", "Tenants"): its list endpoint is read. */
-  readonly record?: string;
-  /** Inputs for the endpoint: path segments and query values, by name. */
-  readonly params?: Readonly<Record<string, string | number | boolean>>;
-  /** Rows whose fields equal these, kept; the rest left out. Applied after the read. */
-  readonly filter?: Readonly<Record<string, unknown>>;
-  /** How old an answer is acceptable: milliseconds, or "30s", "5m", "1h", "1d". Default 5 minutes. */
-  readonly fresh?: number | string;
-  /** The time window, for endpoints that read one. Default the last 30 days. */
-  readonly range?: "1h" | "24h" | "7d" | "30d" | "90d" | "12mo" | "ytd";
-  /**
-   * When the answer is longer than one read takes, the rest is read in the
-   * background. `true` (the default) waits for it and returns every record;
-   * `false` returns what the first read got, with `progress` saying how far
-   * the rest has got. Read again later for the whole answer.
-   */
-  readonly wait?: boolean;
-  /** The longest `wait` waits, in milliseconds. Default two minutes. */
-  readonly waitMs?: number;
-}
-
-export interface ReadResult {
-  readonly rows: unknown[];
-  /** The whole response, as the API sent it. */
-  readonly body: unknown;
-  readonly op: string;
-  readonly cache: "hit" | "miss" | "revalidating" | "stale";
-  readonly ageMs: number;
-  /** What the reader should know: pages not read, a read carried on, a change in shape. */
-  readonly warnings: readonly string[];
-  /**
-   * Whether these are known to be all the records: the read reached its end
-   * (`completion.state` is `traversed`), nothing was cut short, and nothing is
-   * still being read. False whenever that is not established, including when
-   * the end is unknown.
-   */
-  readonly complete: boolean;
-  /** How the read ended, as the adapter judged it: traversed to its end, partial, or unknown. */
-  readonly completion?: ReadCompletion | undefined;
-  /** Pages read for this answer. */
-  readonly pages: number;
-  /** How many records the API says there are, where it says. */
-  readonly reportedTotal?: number | undefined;
-  /** The rest of the answer, being read in the background: how far it has got. Null when there is none. */
-  readonly progress: {
-    readonly state: string;
-    readonly read: number;
-    readonly of?: number | undefined;
-    readonly error?: string | undefined;
-  } | null;
-  /** A change in the endpoint's response since it was accepted, in words; null when there is none. */
-  readonly changed: string | null;
-}
-
 export type ConnectEvent =
   | { readonly type: "read"; readonly connection: string; readonly op: string; readonly rows: number; readonly cache: ReadResult["cache"] }
   | { readonly type: "read-failed"; readonly connection: string; readonly op: string; readonly message: string; readonly status: number }
@@ -171,16 +114,6 @@ export type ConnectEvent =
   | { readonly type: "write"; readonly connection: string; readonly entity: string; readonly kind: WriteIntent["kind"] };
 
 const OWNER: WriteActor = { userId: "owner", workspaceId: "local" };
-
-/** "30s", "5m", "1h", "1d" or a number of milliseconds. */
-export const freshness = (value: number | string | undefined): number => {
-  if (value === undefined) return 5 * 60_000;
-  if (typeof value === "number") return Math.max(0, value);
-  const match = /^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)$/.exec(value.trim());
-  if (!match) throw new Error(`"${value}" is not a duration: use 30s, 5m, 1h or 1d.`);
-  const unit = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 }[match[2] as "ms" | "s" | "m" | "h" | "d"];
-  return Math.round(Number(match[1]) * unit);
-};
 
 /**
  * The integration engine, ready to use.
@@ -248,97 +181,13 @@ export const createConnect = (options: ConnectOptions = {}) => {
   const entryOf = (connection: ConnectionSpec): CatalogEntry | undefined =>
     (connection.catalog ? catalog.get(connection.catalog) : null) ?? undefined;
 
-  /** The endpoint a read names, directly or through a record type's list. */
-  const opFor = (connection: ConnectionSpec, request: ReadRequest): OpSpec => {
-    if (request.op) {
-      /* An operation id as the documentation spells it finds the endpoint too: ids are kept lower-case. */
-      const wanted = request.op.toLowerCase();
-      const op =
-        getOp(connection, request.op) ??
-        getOp(connection, connection.ops.find((one) => one.id.toLowerCase() === wanted)?.id ?? request.op);
-      if (!op) throw new Error(`${connection.title} has no endpoint "${request.op}".`);
-      return op;
-    }
-    if (!request.record) throw new Error("Say what to read: an `op`, or a `record` type.");
-    const entities = entryOf(connection)?.entities ?? [];
-    const entity: EntitySpec | undefined = findEntity(entities, request.record);
-    if (!entity) {
-      const known = entities.map((one) => one.id).slice(0, 12).join(", ");
-      throw new Error(
-        entities.length > 0
-          ? `${connection.title} has no record type "${request.record}". It has: ${known}.`
-          : `${connection.title}'s record types are not mapped yet: run integrate() with a model, or read by \`op\`.`,
-      );
-    }
-    const resource = connection.resources.find((one) => one.id === entity.resource);
-    const opId = resource?.listOp ?? resource?.detailOp;
-    const op = opId ? getOp(connection, opId) : undefined;
-    if (!op) throw new Error(`Nothing on ${connection.title} lists ${entity.name.many}.`);
-    return op;
-  };
-
-  const read = async (id: string, request: ReadRequest, priority?: Priority): Promise<ReadResult> => {
-    const connection = need(id);
-    const op = opFor(connection, request);
-    engine.seen.touch(id, Date.now());
-    const asked = {
-      connection,
-      op,
-      params: { ...request.params },
-      resolved: { range: resolveRange({ preset: request.range ?? "30d", now: Date.now() }), filters: {} },
-      maxAgeMs: freshness(request.fresh),
-      ...(priority !== undefined ? { priority } : {}),
-    };
-    try {
-      /* The engine's read: the same one Dash's tiles go through. */
-      let answer = await engine.read({ ...asked, mode: "refresh" });
-      const unfinished = (status: typeof answer.reading) => status !== null && status.state !== "done" && status.state !== "cancelled";
-      if ((request.wait ?? true) && unfinished(answer.reading)) {
-        /* The rest is being read in the background: wait for it, then take the whole answer as now held. */
-        await engine.settled(answer.key, request.waitMs);
-        answer = await engine.read({ ...asked, mode: "view" });
-      }
-      const { outcome, meta, reading, changed } = answer;
-      const filter = Object.entries(request.filter ?? {});
-      const rows = rowsOf(outcome.body, op.rowsPath).filter((row) =>
-        filter.every(([field, wanted]) => (row as Record<string, unknown> | null)?.[field] === wanted),
-      );
-      const progress = reading
-        ? {
-            state: reading.state,
-            read: reading.read,
-            ...(reading.of !== undefined ? { of: reading.of } : {}),
-            ...(reading.error ? { error: reading.error } : {}),
-          }
-        : null;
-      /*
-       * Only on affirmative evidence: the read was traversed to its end, nothing
-       * was cut short, and nothing is still being read. An unknown end (paging
-       * nobody confirmed, say) is not complete, however the background work went.
-       */
-      const complete = !unfinished(reading) && !meta.truncated && meta.completion?.state === "traversed";
-      emit({ type: "read", connection: id, op: op.id, rows: rows.length, cache: outcome.outcome });
-      return {
-        rows,
-        body: outcome.body,
-        op: op.id,
-        cache: outcome.outcome,
-        ageMs: Number.isFinite(outcome.ageMs) ? outcome.ageMs : 0,
-        warnings: changed ? [...meta.warnings, changed] : meta.warnings,
-        complete,
-        ...(meta.completion ? { completion: meta.completion } : {}),
-        pages: meta.pages,
-        ...(meta.reportedTotal !== undefined ? { reportedTotal: meta.reportedTotal } : {}),
-        progress,
-        changed,
-      };
-    } catch (error) {
-      const message = error instanceof AdapterError ? (error.userMessage ?? error.message) : String(error);
-      const status = error instanceof AdapterError ? error.status : 500;
-      emit({ type: "read-failed", connection: id, op: op.id, message, status });
-      throw error;
-    }
-  };
+  const read = createRecordReader({
+    engine,
+    store,
+    entryOf,
+    onRead: (event) => emit({ type: "read", ...event }),
+    onReadFailed: (event) => emit({ type: "read-failed", ...event }),
+  });
 
   /* What `keep` has been asked to keep warm, refreshed on each one's rhythm. */
   const kept = new Map<string, Map<string, WarmTarget>>();

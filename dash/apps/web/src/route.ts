@@ -13,14 +13,15 @@
  */
 
 /**
- * The Agent side of the app: fixed sections in place of boards. Workflows,
+ * The Agent side of the app: fixed sections in place of boards. Overview
+ * comes first: what is running, what waits, and what has been done.
  * Communications has a place of its own (`#/comms`), because calls, texts and
  * email are a lot to watch.
  */
-export const AGENT_SECTIONS = ["workflows", "agents", "calendar"] as const;
+export const AGENT_SECTIONS = ["overview", "workflows", "agents", "calendar"] as const;
 export type AgentSection = (typeof AGENT_SECTIONS)[number];
-/** Where an unknown section lands: the one place that already has something in it. */
-export const DEFAULT_AGENT_SECTION: AgentSection = "agents";
+/** Where an unknown section lands: the Overview, first in the list. */
+export const DEFAULT_AGENT_SECTION: AgentSection = "overview";
 
 export type Route =
   | { readonly kind: "board"; readonly dashboardId: string | null }

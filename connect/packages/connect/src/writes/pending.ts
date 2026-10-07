@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WriteReviewView, WriteTarget } from "@freebirdai/connect-spec";
+import type { WriteOnBehalfOf, WriteVia } from "./journal.js";
 
 /**
  * A change somebody is looking at, and has not yet said yes to.
@@ -41,7 +42,8 @@ export interface PendingWrite {
   /** Digest of the intent, so the assistant asking twice gets the same review. */
   readonly intentDigest: string;
   readonly intent: WriteIntent;
-  readonly via: "form" | "chat";
+  readonly via: WriteVia;
+  readonly onBehalfOf?: WriteOnBehalfOf | undefined;
   readonly target: WriteTarget;
   /** Every path value, filled. */
   readonly params: Readonly<Record<string, string>>;

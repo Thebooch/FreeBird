@@ -87,7 +87,9 @@ export { MAX_VALIDATION_CANDIDATES, catalogEntryToVerify, rowsFromBody, usableRo
 export { VERIFY_BUDGET_DEFAULT, VERIFY_BUDGET_MAX, verifyRecords } from "./verify-records.js";
 export { Discovered, catalogForBrowser, preservedWrites } from "./writes/catalog-writes.js";
 export { MemoryJournal, nullJournal } from "./writes/journal.js";
-export type { ReadEvent, WriteEvent, WriteJournal } from "./writes/journal.js";
+export type { ReadEvent, WriteEvent, WriteJournal, WriteOnBehalfOf, WriteReversal, WriteVia } from "./writes/journal.js";
+export { createRecordReader, freshness } from "./read.js";
+export type { ReadRequest, ReadResult, RecordReader, RecordReaderDeps } from "./read.js";
 export type { WriteIntent, WriteReview } from "./writes/pending.js";
 export { WriteEndpointReader, readWriteEndpoints } from "./writes/read-writes.js";
 export type { FetchDocument } from "./writes/read-writes.js";

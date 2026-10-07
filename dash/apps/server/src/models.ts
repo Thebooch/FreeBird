@@ -239,7 +239,13 @@ export type LlmTask =
   | "writes"
   | "repair"
   | "connector"
-  | "agent";
+  | "agent"
+  | "outreach"
+  | "agent-reply"
+  | "agent-tools"
+  | "think"
+  | "wait-match"
+  | "workflow-draft";
 
 /**
  * Two tiers, not three.
@@ -258,6 +264,14 @@ export interface TaskInfo {
   readonly tier: Tier;
   /** When this runs, in the user's terms — the reason the tier is what it is. */
   readonly note: string;
+  /**
+   * Another task whose model this one uses until it is given its own: the
+   * workflow and agent tasks follow the chat, so changing the chat's model
+   * moves them all together.
+   */
+  readonly follows?: LlmTask;
+  /** The picker's heading for it. */
+  readonly group?: string;
 }
 
 export const TASKS: readonly TaskInfo[] = [
@@ -349,6 +363,16 @@ export const TASKS: readonly TaskInfo[] = [
     tier: "capable",
     note: "Structures an agent's role, instructions, personality or knowledge when you press Generate.",
   },
+  /*
+   * Workflows and agents. Each kind of call has its own task so it can be given
+   * its own model later; until then every one follows the chat's model.
+   */
+  { id: "outreach", label: "Outreach messages", tier: "fast", follows: "chat", group: "Workflows and agents", note: "Writes a text, email or call script in an agent's voice." },
+  { id: "agent-reply", label: "Agent replies", tier: "fast", follows: "chat", group: "Workflows and agents", note: "An agent answering someone in a conversation." },
+  { id: "agent-tools", label: "Agent tool use", tier: "fast", follows: "chat", group: "Workflows and agents", note: "An agent deciding which of its tools to use, and with what." },
+  { id: "think", label: "Think steps", tier: "fast", follows: "chat", group: "Workflows and agents", note: "A workflow's Think step: classify, extract, write. Never an agent's reply prompt." },
+  { id: "wait-match", label: "Matching replies", tier: "fast", follows: "chat", group: "Workflows and agents", note: "Deciding whether a reply is the one a workflow waits for, when plain rules cannot." },
+  { id: "workflow-draft", label: "Drafting workflows", tier: "fast", follows: "chat", group: "Workflows and agents", note: "Turning a request in the chat into a draft workflow and its questions." },
   {
     id: "record",
     label: "Designing a record view",
@@ -421,4 +445,4 @@ export const TIER_MODELS: Record<Provider, Record<Tier, string>> = {
 };
 
 /** The environment variable that pins one task, e.g. `DASH_MODEL_WIDGET`. */
-export const envVarForTask = (task: LlmTask): string => `DASH_MODEL_${task.toUpperCase()}`;
+export const envVarForTask = (task: LlmTask): string => `DASH_MODEL_${task.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;

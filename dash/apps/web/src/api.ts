@@ -2,7 +2,16 @@ import type { EachAnswer, EachRequest } from "@freebirdai/dash-react";
 import type {
   AgentInput,
   AgentSpec,
+  CalendarEvent,
+  Task,
+  TaskStatus,
+  WorkflowCase,
+  WorkflowTemplate,
   SharedAgentKnowledge,
+  WorkflowInput,
+  WorkflowRun,
+  WorkflowSpec,
+  WriteReviewView,
   ApiProfile,
   CatalogEntry,
   ConnectionSpec,
@@ -106,6 +115,59 @@ const json = (body: unknown): RequestInit => ({
   headers: { "content-type": "application/json" },
   body: JSON.stringify(body),
 });
+
+/** The Overview: see `buildOverview` on the server. */
+export interface AgentOverview {
+  readonly active: ReadonlyArray<{
+    readonly workflow: string;
+    readonly name: string;
+    readonly agents: readonly string[];
+    readonly state: "running" | "waiting_approval" | "waiting" | "waiting_schedule" | "waiting_trigger" | "waiting_agent" | "paused";
+    readonly stage: string;
+    readonly waitingFor: string;
+    readonly tasks: readonly string[];
+    readonly waiting: number;
+    readonly cases: ReadonlyArray<{ readonly id: string; readonly rowKey?: string; readonly status: string; readonly step?: string; readonly waitingFor?: string; readonly deadline?: string; readonly since: string }>;
+    readonly since?: string;
+    readonly nextAt?: string;
+  }>;
+  readonly completed: ReadonlyArray<{
+    readonly id: string;
+    readonly at: string;
+    readonly task: string;
+    readonly action: string;
+    readonly title: string;
+    readonly status: string;
+    readonly workflow?: string;
+    readonly workflowName?: string;
+    readonly agent?: string;
+    readonly case?: string;
+    readonly by?: string;
+    readonly reversible: boolean;
+  }>;
+}
+
+/** What a workflow would do now: see `previewWorkflow` on the server. */
+export interface WorkflowPreview {
+  readonly read: number;
+  readonly complete: boolean;
+  readonly seeding: boolean;
+  readonly matched: number;
+  readonly rows: ReadonlyArray<{
+    readonly key: string;
+    readonly fields: Readonly<Record<string, unknown>>;
+    readonly path: ReadonlyArray<{ readonly node: string; readonly name: string; readonly mode: "auto" | "approve"; readonly stops?: string; readonly skipped?: boolean }>;
+  }>;
+  readonly problem?: string;
+}
+
+/** A draft, explained: see `explainDraft` on the server. */
+export interface WorkflowCheck {
+  readonly sentence: string;
+  readonly steps: ReadonlyArray<{ readonly id: string; readonly picked: string; readonly mode: string; readonly name: string }>;
+  readonly questions: ReadonlyArray<{ readonly step?: string; readonly field?: string; readonly question: string; readonly default?: string; readonly kind: "missing" | "suggestion" }>;
+  readonly problems: ReadonlyArray<{ readonly step?: string; readonly field?: string; readonly message: string }>;
+}
 
 /** A machine-readable page index the docs site publishes. */
 export interface DocsIndex {
@@ -1153,6 +1215,87 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(knowledge),
     }),
+
+  /* ── workflows ─────────────────────────────────────────────────────── */
+
+  workflows: (startableByAgent = false): Promise<WorkflowSpec[]> =>
+    request(`/api/workflows${startableByAgent ? "?startableBy=agent" : ""}`),
+
+  /** Make a workflow (any id not in use) or change one (its own id). Saving makes you the person it runs as. */
+  saveWorkflow: (id: string, input: WorkflowInput): Promise<WorkflowSpec> =>
+    request(`/api/workflows/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    }),
+
+  setWorkflowEnabled: (id: string, enabled: boolean): Promise<WorkflowSpec> =>
+    request(`/api/workflows/${encodeURIComponent(id)}/enabled`, json({ enabled })),
+
+  deleteWorkflow: (id: string): Promise<{ removed: true }> =>
+    request(`/api/workflows/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  runWorkflow: (id: string, inputs: Record<string, unknown> = {}): Promise<WorkflowRun> =>
+    request(`/api/workflows/${encodeURIComponent(id)}/run`, json({ inputs })),
+
+  /** A dry run of a saved workflow, or of an unsaved draft: what it reads, what matches, and each row's path. */
+  previewWorkflow: (id: string, draft?: WorkflowInput, inputs: Record<string, unknown> = {}): Promise<WorkflowPreview> =>
+    request(`/api/workflows/${encodeURIComponent(id)}/preview`, json({ ...(draft ? { workflow: draft } : {}), inputs })),
+
+  workflowRuns: (id?: string): Promise<WorkflowRun[]> =>
+    request(id ? `/api/workflows/${encodeURIComponent(id)}/runs` : "/api/workflow-runs"),
+
+  /** A draft explained: what is missing, what to suggest, the one-sentence summary. Nothing is saved. */
+  checkWorkflow: (id: string, draft: WorkflowInput): Promise<WorkflowCheck> => request(`/api/workflows/${encodeURIComponent(id)}/check`, json({ workflow: draft })),
+
+  workflowCases: (id: string): Promise<WorkflowCase[]> => request(`/api/workflows/${encodeURIComponent(id)}/cases`),
+
+  workflowCase: (id: string): Promise<WorkflowCase & { tasks: Task[] }> => request(`/api/cases/${encodeURIComponent(id)}`),
+
+  cancelCase: (id: string): Promise<WorkflowCase> => request(`/api/cases/${encodeURIComponent(id)}/cancel`, json({})),
+
+  tasks: (filter: { status?: TaskStatus; workflow?: string; case?: string; limit?: number } = {}): Promise<Task[]> => {
+    const query = new URLSearchParams(Object.entries(filter).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)]));
+    return request(`/api/tasks${query.size > 0 ? `?${query}` : ""}`);
+  },
+
+  /** Open a task waiting for approval: a change is prepared now, as you. */
+  reviewTask: (id: string): Promise<{ task: Task; review?: WriteReviewView; stale?: string }> => request(`/api/tasks/${encodeURIComponent(id)}/review`, json({})),
+
+  approveTask: (id: string, approval: { pendingId?: string; digest?: string; always?: boolean } = {}): Promise<{ task: Task; case?: WorkflowCase }> =>
+    request(`/api/tasks/${encodeURIComponent(id)}/approve`, json(approval)),
+
+  declineTask: (id: string): Promise<Task> => request(`/api/tasks/${encodeURIComponent(id)}/decline`, json({})),
+  /** It happened: a send Dash was not sure of is marked done, and not sent again. */
+  settleTask: (id: string): Promise<Task> => request(`/api/tasks/${encodeURIComponent(id)}/settle`, json({})),
+
+  answerTask: (id: string, answer: string): Promise<Task> => request(`/api/tasks/${encodeURIComponent(id)}/answer`, json({ answer })),
+
+  completeTask: (id: string): Promise<Task> => request(`/api/tasks/${encodeURIComponent(id)}/complete`, json({})),
+
+  reverseReview: (id: string): Promise<{ task: Task; review?: WriteReviewView; stale?: string }> => request(`/api/tasks/${encodeURIComponent(id)}/reverse-review`, json({})),
+
+  reverseTask: (id: string, approval: { pendingId?: string; digest?: string } = {}): Promise<{ task: Task; reversal: Task }> =>
+    request(`/api/tasks/${encodeURIComponent(id)}/reverse`, json(approval)),
+
+  templates: (): Promise<WorkflowTemplate[]> => request("/api/workflow-templates"),
+
+  saveTemplate: (input: { workflow: string; kind: "step" | "path" | "workflow"; name: string; steps?: string[]; description?: string }): Promise<WorkflowTemplate> =>
+    request("/api/workflow-templates", json(input)),
+
+  deleteTemplate: (id: string): Promise<{ removed: true }> => request(`/api/workflow-templates/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  /** A template's steps with its blanks filled, ready to add to the canvas. Nothing is saved. */
+  insertTemplate: (id: string, values: Record<string, string>, at: { x: number; y: number }): Promise<{ nodes: WorkflowInput["nodes"]; edges: WorkflowInput["edges"]; entry?: string; template: WorkflowTemplate }> =>
+    request(`/api/workflow-templates/${encodeURIComponent(id)}/insert`, json({ values, at })),
+
+  workflowFromTemplate: (id: string, values: Record<string, string>, name?: string): Promise<WorkflowSpec> =>
+    request(`/api/workflow-templates/${encodeURIComponent(id)}/workflow`, json({ values, ...(name ? { name } : {}) })),
+
+  calendarEvents: (): Promise<CalendarEvent[]> => request("/api/calendar/events"),
+
+  /** The Agent side's Overview: active workflows and completed tasks. */
+  overview: (): Promise<AgentOverview> => request("/api/overview"),
 
   /**
    * Connect a catalog API. Marked for onboarding, so it opens with the boards
