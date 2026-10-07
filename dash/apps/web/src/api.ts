@@ -1,3 +1,4 @@
+import type { ChatMessage } from "@freebirdai/core";
 import type { EachAnswer, EachRequest } from "@freebirdai/dash-react";
 import type {
   AgentInput,
@@ -797,6 +798,57 @@ export interface MapRunResult extends MapState {
   readonly errors: readonly string[];
 }
 
+/* ── chat topics and the timeline (plan 3) ─────────────────────────────── */
+
+/** A topic: one subject in the continuous chat. Its id is the chat session's. */
+export interface ChatTopic {
+  readonly id: string;
+  readonly name: string;
+  readonly firstAt: string;
+  readonly lastAt: string;
+  readonly count: number;
+}
+
+/** Work that finished, listed in the timeline beside the topics. */
+export interface ChatTimelineTask {
+  readonly id: string;
+  readonly kind: "run" | "task";
+  readonly at: string;
+  readonly title: string;
+  readonly detail?: string;
+  readonly status: string;
+  readonly agent?: string;
+  readonly workflow?: string;
+  readonly link?: string;
+}
+
+export interface ChatDaySummary {
+  readonly day: string;
+  readonly messages: number;
+  readonly topics: number;
+  readonly tasks: number;
+}
+
+/** One day of the chat's stream, and the nearest days either side with messages. */
+export interface ChatDayMessages {
+  readonly day: string;
+  readonly today: string;
+  readonly messages: ChatMessage[];
+  /** Topic names by id, for the dividers. */
+  readonly topics: Readonly<Record<string, string>>;
+  readonly prev: string | null;
+  readonly next: string | null;
+}
+
+/** The browser's own time zone, so days match what the person sees. */
+const timeZone = (): string => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+};
+
 export const api = {
   /** What a number tile was, day by day, since the server began keeping it. Free: nothing is asked of the API. */
   widgetHistory: async (dashboardId: string, widgetId: string): Promise<readonly { day: string; value: number }[]> =>
@@ -1426,4 +1478,23 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ resources }),
     }),
+  /** Which topic the next message belongs in, decided before it is sent. */
+  chatRoute: (body: { text: string; topicId?: string; viewing?: string }): Promise<{ topicId: string; name: string; isNew: boolean }> =>
+    request("/api/chat/route", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...body, tz: timeZone() }),
+    }),
+
+  /** Days with talk or finished work, newest first. */
+  chatDays: (before?: string): Promise<{ today: string; days: ChatDaySummary[]; more: boolean }> =>
+    request(`/api/chat/days?${new URLSearchParams({ tz: timeZone(), ...(before ? { before } : {}) }).toString()}`),
+
+  /** One day's topics and finished work. */
+  chatDay: (day: string): Promise<{ day: string; topics: ChatTopic[]; tasks: ChatTimelineTask[] }> =>
+    request(`/api/chat/day/${encodeURIComponent(day)}?${new URLSearchParams({ tz: timeZone() }).toString()}`),
+
+  /** Every message on one day (today when no day is given). */
+  chatMessages: (day?: string): Promise<ChatDayMessages> =>
+    request(`/api/chat/messages?${new URLSearchParams({ tz: timeZone(), ...(day ? { day } : {}) }).toString()}`),
 };

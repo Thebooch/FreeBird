@@ -94,6 +94,8 @@ import type { ChatDb } from "./chat/db.js";
 import { resolveChatLlm } from "./chat/llm-bridge.js";
 import { LOOK_UP_TOOL, lookUpEndpoint, lookUpSchema } from "./chat/concierge-actions.js";
 import { buildChatRegistry } from "./chat/registry.js";
+import { TopicStore, withTopicContext } from "./chat/topics.js";
+import { chatTopicRoutes, type TimelineTask } from "./routes/chat-topics.js";
 import { buildConciergeContext } from "./concierge/context.js";
 import { rearrangeSetup } from "./concierge/arrange.js";
 import { planDetailSetup } from "./concierge/detail.js";
@@ -2740,6 +2742,57 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
      */
     let invalidateRegistry: (tenantKey?: string) => void = () => {};
 
+    /*
+     * Topics (plan 3): one continuous chat, divided by subject. A topic is a
+     * chat session; these read a person's topics across sessions, by day.
+     */
+    const topicStoreFor = (owner: { readonly userId?: string | undefined }): TopicStore =>
+      new TopicStore(chatDb, { userId: owner.userId || LOCAL_USER_ID, tenantId: workspaceKey });
+    /** Finished work for the timeline: workflow runs that ended and tasks that were done. */
+    const finishedWork = async (): Promise<TimelineTask[]> => {
+      const [runs, tasks] = await Promise.all([
+        workflowStore.runs({ limit: 500 }),
+        workflowEnv.tasks.list({ status: "done", limit: 500 }),
+      ]);
+      const link = (workflow: string | undefined) =>
+        workflow ? `#/agent/workflows/${encodeURIComponent(workflow)}` : undefined;
+      return [
+        ...runs
+          .filter((run) => run.finishedAt && (run.status === "succeeded" || run.status === "failed"))
+          .map((run) => ({
+            id: `run:${run.id}`,
+            kind: "run" as const,
+            at: run.finishedAt!,
+            title: run.workflowName,
+            detail: run.summary || undefined,
+            status: run.status,
+            agent: run.agent,
+            workflow: run.workflow,
+            link: link(run.workflow),
+          })),
+        ...tasks
+          .filter((task) => task.finishedAt)
+          .map((task) => ({
+            id: `task:${task.id}`,
+            kind: "task" as const,
+            at: task.finishedAt!,
+            title: task.title,
+            detail: task.workflowName,
+            status: task.status,
+            agent: task.agent,
+            workflow: task.workflow,
+            link: link(task.workflow),
+          })),
+      ].sort((a, b) => b.at.localeCompare(a.at));
+    };
+    void app.register(
+      chatTopicRoutes({
+        storeFor: (principal) => topicStoreFor(principal),
+        llm: () => (options.llm ? resolveLlm("context") : null),
+        work: finishedWork,
+      }),
+    );
+
     /**
      * Which board a message is about.
      *
@@ -3013,7 +3066,15 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     const answered = new Map<string, { at: number; value: unknown }>();
 
     const chatPlugin = createFreeBirdPlugin({
-      db: chatDb.adapter,
+      /*
+       * On a chat turn the current topic's history also carries the earlier
+       * topics inside the window: the last two, or the last 24 hours, whichever
+       * is smaller (`chat/topics.ts`). Every other read sees the store as it is.
+       */
+      db: withTopicContext(chatDb.adapter, {
+        storeFor: (auth) => (auth.userId ? topicStoreFor(auth) : null),
+        isTurn: (auth) => auth.extra?.["turn"] === true,
+      }),
       llm: () => resolveChatLlm(() => resolveLlm("chat")),
 
       /*
@@ -3858,6 +3919,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
              * be prepared again at the moment somebody says yes to it.
              */
             via: /\/actions\/confirm\b/.test(req?.url ?? "") ? "confirm" : "chat",
+            /** A chat turn, which reads the earlier topics as well as the current one. */
+            turn: /\/chat(?:\/explain)?(?:\?|$)/.test(req?.url ?? ""),
             dashboardId: headers["x-dash-dashboard"],
             /*
              * The window the board resolved, not one resolved here. The

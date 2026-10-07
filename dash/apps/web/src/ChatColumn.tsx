@@ -5,10 +5,14 @@ import {
   useFreeBird,
   useSession,
 } from "@freebirdai/react";
-import { useCallback } from "react";
+import type { ChatMessage } from "@freebirdai/core";
+import { Tabs } from "@freebirdai/dash-components";
+import { useCallback, useLayoutEffect, useMemo } from "react";
 import { useOptionalDashboard } from "@freebirdai/dash-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
+import { buildStream, dayLabel, mergeLive, reachesLatest, withDay, type StreamDay } from "./chat/stream.js";
+import { ChatTimeline } from "./chat/Timeline.jsx";
 import { ConciergeCard } from "./ConciergeCard";
 import { CHANGE_ACTIONS, ChatChangeCard } from "./ChatChangeCard.jsx";
 import { writeStoredSession } from "./ChatSession.jsx";
@@ -183,58 +187,30 @@ const ChatBody = ({
   takePending,
   onRecordChanged,
 }: Omit<ChatColumnProps, "open">): JSX.Element => {
-  const { sessionId, createSession } = useSession({ autoCreate: true, topic: "dashboard" });
+  /*
+   * No session is made up front any more. A topic is a session, and which
+   * topic a message goes in is decided when it is sent (`sendRouted`), so the
+   * first message of the day starts one and the rest find theirs.
+   */
+  const { sessionId, createSession } = useSession({ autoCreate: false });
   const freeBird = useFreeBird();
 
   /*
-   * Written down as soon as there is one, so a reload continues the
-   * conversation instead of silently starting a new one. `ChatSession` reads
-   * it back at mount; `useChat` refetches the history whenever the id changes,
-   * so nothing else is needed to restore what was said.
+   * Written down as soon as there is one, so a reload continues the topic
+   * rather than asking the server to decide again from nothing.
    */
   useEffect(() => {
     if (sessionId) writeStoredSession(sessionId);
   }, [sessionId]);
 
   /*
-   * A remembered session can outlive the database it was made in.
+   * A remembered topic can outlive the database it was made in.
    *
    * The chat store is embedded and gets replaced — restored from a backup, or
-   * set aside after a hard kill damaged it, which has happened more than once.
-   * The id in `sessionStorage` then names a session the server has never heard
-   * of, and until this the failure was total silence: the append fails, the
-   * stream ends carrying nothing, and every message after it does the same
-   * with the input still looking ready.
-   *
-   * Recovering once is right and twice is a loop, so it is attempted a single
-   * time per mount: start a fresh session and let the user send again.
+   * set aside after a hard kill damaged it. The id in `sessionStorage` then
+   * names a session the server has never heard of. Recovering once is right
+   * and twice is a loop: forget it, and the next message is routed afresh.
    */
-  /**
-   * Start a fresh conversation.
-   *
-   * Creating a session *is* switching to one, so `createSession` clears what
-   * the last conversation had on screen. The one being left is not saved
-   * anywhere and not deleted — it stays on the server untouched, which is the
-   * seam a chat history will pick up: nothing lists those sessions today, and
-   * when something does, `openSession` is already how you return to one.
-   *
-   * The stored id is cleared first so a reload during a failed create resumes
-   * nothing rather than the conversation the user just asked to leave.
-   */
-  const [startingChat, setStartingChat] = useState(false);
-  const startNewChat = useCallback(async () => {
-    if (startingChat) return;
-    setStartingChat(true);
-    writeStoredSession(null);
-    try {
-      await createSession();
-    } catch {
-      // The session callout already explains a server that cannot make one.
-    } finally {
-      setStartingChat(false);
-    }
-  }, [createSession, startingChat]);
-
   const recovered = useRef(false);
   useEffect(() => {
     const failure = freeBird.lastChatError;
@@ -242,10 +218,8 @@ const ChatBody = ({
     if (!/session/i.test(failure)) return;
     recovered.current = true;
     writeStoredSession(null);
-    void createSession().catch(() => {
-      // Nothing left to try; the callout below is what the user sees.
-    });
-  }, [freeBird.lastChatError, createSession]);
+    freeBird.openSession(null);
+  }, [freeBird.lastChatError, freeBird]);
 
   /*
    * Whether the server has an assistant at all.
@@ -307,8 +281,161 @@ const ChatBody = ({
 
   const unavailable = chatAvailable === false;
   const keyless = hasModel === false;
-  const chat = useChat();
-  const { send, streaming } = chat;
+  /*
+   * History is loaded here, by day, across topics — not per session by the
+   * hook, which would show one topic and hide the rest.
+   */
+  const chat = useChat({ autoLoadMessages: false });
+  const { streaming } = chat;
+
+  /* ── the one stream ─────────────────────────────────────────────────── */
+
+  const [tab, setTab] = useState<"chat" | "timeline">("chat");
+  const [days, setDays] = useState<StreamDay[]>([]);
+  const [today, setToday] = useState("");
+  const [topicNames, setTopicNames] = useState<Record<string, string>>({});
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const loading = useRef(false);
+  /** A topic opened from the timeline: where to scroll, and what the next message may continue. */
+  const [viewing, setViewing] = useState<string | null>(null);
+  const scrollTarget = useRef<{ kind: "bottom" } | { kind: "topic"; id: string } | { kind: "keep"; height: number; top: number } | null>({ kind: "bottom" });
+  /*
+   * What the store has held since the column opened. Opening another topic
+   * empties the store, and what was just said must not vanish from the stream.
+   */
+  const [live, setLive] = useState<ChatMessage[]>([]);
+  useEffect(() => {
+    setLive((kept) => mergeLive(kept, chat.messages));
+  }, [chat.messages]);
+
+  const loadDay = useCallback(async (day?: string): Promise<StreamDay | null> => {
+    try {
+      const found = await api.chatMessages(day);
+      setToday(found.today);
+      setTopicNames((names) => ({ ...names, ...found.topics }));
+      setHistoryError(null);
+      return { day: found.day, messages: found.messages, prev: found.prev, next: found.next };
+    } catch (cause) {
+      setHistoryError(cause instanceof Error ? cause.message : "Earlier messages could not be read.");
+      return null;
+    }
+  }, []);
+
+  /** Today, always, when the column opens. */
+  useEffect(() => {
+    let cancelled = false;
+    void loadDay().then((loaded) => {
+      if (!cancelled && loaded) {
+        scrollTarget.current = { kind: "bottom" };
+        setDays([loaded]);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadDay]);
+
+  const atLatest = today === "" || reachesLatest(days, today);
+
+  /** Back to the bottom: today's newest message, reloading today when the view is elsewhere. */
+  const backToLatest = useCallback(async () => {
+    setViewing(null);
+    if (reachesLatest(days, today)) {
+      const log = logRef.current;
+      if (log) log.scrollTop = log.scrollHeight;
+      return;
+    }
+    const loaded = await loadDay();
+    if (loaded) {
+      scrollTarget.current = { kind: "bottom" };
+      setDays([loaded]);
+    }
+  }, [days, today, loadDay]);
+
+  /** A topic from the timeline: its whole day, scrolled to where it started. */
+  const openTopic = useCallback(
+    async (day: string, topicId: string) => {
+      setTab("chat");
+      const loaded = await loadDay(day);
+      if (!loaded) return;
+      setViewing(topicId);
+      scrollTarget.current = { kind: "topic", id: topicId };
+      setDays([loaded]);
+    },
+    [loadDay],
+  );
+
+  /** Past the top border: the day before. Past the bottom one, while on an earlier day: the day after. */
+  const loadNeighbour = useCallback(
+    async (direction: "prev" | "next") => {
+      if (loading.current || days.length === 0) return;
+      const edge = direction === "prev" ? days[0]! : days[days.length - 1]!;
+      const wanted = direction === "prev" ? edge.prev : edge.next;
+      if (!wanted) return;
+      loading.current = true;
+      try {
+        const log = logRef.current;
+        const loaded = await loadDay(wanted);
+        if (!loaded) return;
+        if (direction === "prev" && log) {
+          scrollTarget.current = { kind: "keep", height: log.scrollHeight, top: log.scrollTop };
+        }
+        setDays((current) => withDay(current, loaded));
+      } finally {
+        loading.current = false;
+      }
+    },
+    [days, loadDay],
+  );
+
+  const [awayFromBottom, setAwayFromBottom] = useState(false);
+  const onLogScroll = (): void => {
+    const log = logRef.current;
+    if (!log) return;
+    const fromBottom = log.scrollHeight - log.scrollTop - log.clientHeight;
+    setAwayFromBottom(fromBottom > 160);
+    if (log.scrollTop < 48) void loadNeighbour("prev");
+    if (fromBottom < 48 && !reachesLatest(days, today)) void loadNeighbour("next");
+  };
+
+  /**
+   * Send, in the right topic.
+   *
+   * The server decides first: the same topic, an earlier one the person is
+   * returning to, or a new one (`POST /api/chat/route`). Opening a different
+   * topic is what makes the message land in it.
+   */
+  const [routing, setRouting] = useState(false);
+  const sendRouted = useCallback(
+    async (text: string) => {
+      setRouting(true);
+      try {
+        let target: string | null = null;
+        try {
+          const routed = await api.chatRoute({
+            text,
+            ...(freeBird.sessionId ? { topicId: freeBird.sessionId } : {}),
+            ...(viewing ? { viewing } : {}),
+          });
+          target = routed.topicId;
+          setTopicNames((names) => ({ ...names, [routed.topicId]: routed.name }));
+        } catch {
+          // Deciding failed: keep talking in the topic already open, or start one.
+        }
+        if (target && target !== freeBird.sessionId) freeBird.openSession(target);
+        if (!target && !freeBird.sessionId) await createSession({ title: "" });
+        setViewing(null);
+        if (!reachesLatest(days, today)) await backToLatest();
+        scrollTarget.current = { kind: "bottom" };
+      } finally {
+        setRouting(false);
+      }
+      await freeBird.store.send(text).catch(() => {
+        // The store already put the failure in the log.
+      });
+    },
+    [freeBird, viewing, days, today, backToLatest, createSession],
+  );
 
   /*
    * Said once, on the user's behalf, and then forgotten.
@@ -328,10 +455,10 @@ const ChatBody = ({
      * moment the drawer opens and the session is created asynchronously, so
      * sending on mount posts into nothing and the sentence is simply lost.
      */
-    if (!pending || !sessionId || streaming) return;
+    if (!pending || streaming || routing) return;
     const text = takePending?.() ?? null;
-    if (text) void send(text);
-  }, [pending, sessionId, streaming, send, takePending]);
+    if (text) void sendRouted(text);
+  }, [pending, streaming, routing, sendRouted, takePending]);
   const actions = useActionState();
   /*
    * When a board is open the column renders inside its provider — via the
@@ -369,11 +496,41 @@ const ChatBody = ({
   /** The action the server is carrying out right now, if any. */
   const [running, setRunning] = useState<{ actionId: string; label?: string } | null>(null);
 
-  // Keep the newest message in view, including while a reply streams in.
-  useEffect(() => {
+  const stream = useMemo(
+    () => buildStream({ days, live, today, topics: topicNames }),
+    [days, live, today, topicNames],
+  );
+
+  /*
+   * Where the log should sit after it changes: at the bottom (today, or a
+   * reply streaming in while the reader is there), at a topic's first message
+   * (a jump from the timeline), or where it was (a day loaded above).
+   */
+  useLayoutEffect(() => {
     const log = logRef.current;
-    if (log) log.scrollTop = log.scrollHeight;
-  }, [chat.messages, chat.streamingText]);
+    if (!log) return;
+    const target = scrollTarget.current;
+    if (target?.kind === "keep") {
+      log.scrollTop = log.scrollHeight - target.height + target.top;
+      scrollTarget.current = null;
+      return;
+    }
+    if (target?.kind === "topic") {
+      const start = log.querySelector<HTMLElement>(`[data-topic-start="${CSS.escape(target.id)}"]`);
+      if (start) {
+        log.scrollTop = start.offsetTop - log.offsetTop - 8;
+        scrollTarget.current = null;
+      }
+      return;
+    }
+    if (target?.kind === "bottom") {
+      log.scrollTop = log.scrollHeight;
+      scrollTarget.current = null;
+      return;
+    }
+    // A reply streaming in follows only a reader who is already at the bottom.
+    if (atLatest && !awayFromBottom) log.scrollTop = log.scrollHeight;
+  }, [stream, chat.streamingText, chat.streaming, atLatest, awayFromBottom, tab]);
 
   /*
    * Executed actions are the assistant's hands.
@@ -484,28 +641,34 @@ const ChatBody = ({
 
   const submit = (): void => {
     const text = draft.trim();
-    if (!text || chat.streaming || !sessionId || keyless) return;
+    if (!text || chat.streaming || routing || keyless) return;
     setDraft("");
-    void chat.send(text);
+    void sendRouted(text);
   };
+  const send = (text: string): void => void sendRouted(text);
 
   return (
     <>
       <div className="dash-chat__head">
         <h3 className="dash-chat__title">Assistant</h3>
+        {/*
+         * No "new chat" button: the chat is one stream, divided by topic, and
+         * the Timeline tab is how somebody goes back to a day.
+         */}
+        <div className="dash-chat__tabs">
+          <Tabs
+            tabs={[
+              { id: "chat", label: "Chat" },
+              { id: "timeline", label: "Timeline" },
+            ]}
+            activeId={tab}
+            onSelect={(id) => setTab(id === "timeline" ? "timeline" : "chat")}
+            label="Assistant view"
+          />
+        </div>
         <button
           className="dash-iconbtn"
           style={{ marginLeft: "auto" }}
-          onClick={() => void startNewChat()}
-          disabled={startingChat || chat.streaming}
-          aria-label="Start a new chat"
-          title="Start a new chat"
-          data-testid="chat-new"
-        >
-          ＋
-        </button>
-        <button
-          className="dash-iconbtn"
           onClick={() => onToggle(false)}
           aria-label="Close the assistant"
           data-testid="chat-close"
@@ -514,8 +677,22 @@ const ChatBody = ({
         </button>
       </div>
 
-      <div className="dash-chat__log" ref={logRef} data-testid="chat-log">
-        {chat.messages.length === 0 && !chat.streamingText && !chat.streaming && (
+      {tab === "timeline" && <ChatTimeline onOpenTopic={(day, topicId) => void openTopic(day, topicId)} />}
+
+      <div
+        className="dash-chat__log"
+        ref={logRef}
+        data-testid="chat-log"
+        onScroll={onLogScroll}
+        hidden={tab !== "chat"}
+      >
+        {days[0]?.prev && (
+          <button type="button" className="dash-chat__earlier" onClick={() => void loadNeighbour("prev")} data-testid="chat-earlier">
+            Earlier messages
+          </button>
+        )}
+        {historyError && <div className="dash-callout dash-callout--bad">{historyError}</div>}
+        {stream.length === 0 && !chat.streamingText && !chat.streaming && (
           /*
            * A prompt for the user, not the assistant speaking. It stays fixed
            * because it is the one thing said before there is anything to say
@@ -528,20 +705,42 @@ const ChatBody = ({
           </p>
         )}
 
-        {chat.messages.map((message) => (
-          <div key={message.id} className="dash-chat__msg" data-role={message.role}>
-            {message.content}
-            {/*
-             * Where the answer came from, and how far it looked. Both sit
-             * under the text rather than in it — a footnote, not a hedge.
-             */}
-            <Citations message={message} />
-            <DigDeeper message={message} onAsk={(text) => void chat.send(text)} />
-            <OfferWidget message={message} onAsk={(text) => void chat.send(text)} />
-          </div>
-        ))}
+        {stream.map((item) =>
+          item.kind === "day" ? (
+            <div key={item.key} className="dash-chat__day" role="separator" data-testid={`chat-day-${item.day}`}>
+              <span>{dayLabel(item.day, today || item.day)}</span>
+            </div>
+          ) : item.kind === "topic" ? (
+            <div
+              key={item.key}
+              className="dash-chat__topic"
+              role="separator"
+              data-topic-start={item.topicId}
+              data-viewing={viewing === item.topicId ? "true" : undefined}
+            >
+              <span>{item.name}</span>
+            </div>
+          ) : (
+            <div key={item.key} className="dash-chat__msg" data-role={item.message.role}>
+              {item.message.content}
+              {/*
+               * Where the answer came from, and how far it looked. Both sit
+               * under the text rather than in it — a footnote, not a hedge.
+               */}
+              <Citations message={item.message} />
+              <DigDeeper message={item.message} onAsk={send} />
+              <OfferWidget message={item.message} onAsk={send} />
+            </div>
+          ),
+        )}
 
-        {chat.streamingText && (
+        {days.length > 0 && !atLatest && (
+          <button type="button" className="dash-chat__earlier" onClick={() => void loadNeighbour("next")} data-testid="chat-later">
+            Later messages
+          </button>
+        )}
+
+        {chat.streamingText && atLatest && (
           <div className="dash-chat__msg" data-role="assistant" data-streaming="true">
             {chat.streamingText}
           </div>
@@ -691,7 +890,20 @@ const ChatBody = ({
         )}
       </div>
 
+      {tab === "chat" && (awayFromBottom || !atLatest) && (
+        <button
+          type="button"
+          className="dash-chat__latest"
+          onClick={() => void backToLatest()}
+          aria-label="Back to the latest message"
+          data-testid="chat-latest"
+        >
+          ↓ Latest
+        </button>
+      )}
+
       <form
+        hidden={tab !== "chat"}
         className="dash-chat__form"
         onSubmit={(event) => {
           event.preventDefault();
@@ -707,11 +919,9 @@ const ChatBody = ({
               ? "The assistant is unavailable — see the server console"
               : keyless
                 ? "No AI model is configured"
-                : sessionId
-                  ? "Ask about this dashboard…"
-                  : "Starting…"
+                : "Ask about this dashboard…"
           }
-          disabled={!sessionId || keyless}
+          disabled={keyless || unavailable}
           data-testid="chat-input"
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
@@ -725,7 +935,7 @@ const ChatBody = ({
         <button
           className="dash-control"
           type="submit"
-          disabled={!sessionId || keyless || chat.streaming || draft.trim().length === 0}
+          disabled={keyless || unavailable || routing || chat.streaming || draft.trim().length === 0}
           data-testid="chat-send"
         >
           {chat.streaming ? "…" : "Send"}
