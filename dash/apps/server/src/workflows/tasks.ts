@@ -19,7 +19,10 @@ import { startWorkflow, type Starter } from "./start.js";
  *   again; approving it instead runs it again.
  *
  * Every decision applies to the step it was made for: if the case has moved
- * on since, the task is out of date and says so.
+ * on since, the task is out of date and says so. A review is accepted only
+ * for the task it was opened from, for the same purpose (approve or
+ * reverse), by the person who opened it, for the same case step: a valid
+ * review of another task's change is refused before anything is sent.
  * - **Answer** a question an Ask step put to a teammate.
  * - **Reverse** a finished task, where it can be undone: an account change
  *   through the same review (the record as it is now, with what will be sent),
@@ -88,6 +91,7 @@ export class TaskService {
       /* What the approver saw, kept on the task: the before and after it records once applied. */
       const shown: Task = {
         ...task,
+        reviews: { ...task.reviews, approve: { pendingId: review.pendingId, by: principal.userId, ...(task.attempt ? { attempt: task.attempt } : {}), at: this.iso() } },
         body: {
           kind: "change",
           what: `${review.entityName}${intent.id ? ` ${intent.id}` : ""} on ${review.connectionTitle}`,
@@ -137,6 +141,8 @@ export class TaskService {
 
     const intent = await this.pendingIntent(task);
     if (intent && (!approval.pendingId || !approval.digest)) throw new TaskError("Open the change and approve its review first.", 400);
+    if (!intent && approval.pendingId) throw new TaskError("This task has no change to review.", 400);
+    if (intent) this.boundTo(task, "approve", principal, approval.pendingId!);
     let advanced: WorkflowCase;
     try {
       advanced = await this.starter.engine.advance(task.case, {
@@ -156,6 +162,15 @@ export class TaskService {
     }
     if (approval.always) await this.approveAlways(principal, after);
     return { task: after, case: advanced };
+  }
+
+  /** Refuse a review that was not prepared from this task, for this purpose, by this person (and, for an approval, for this case step). */
+  private boundTo(task: Task, purpose: "approve" | "reverse", principal: Principal, pendingId: string): void {
+    const bound = task.reviews?.[purpose];
+    const sameStep = purpose === "reverse" || (bound as { attempt?: string } | undefined)?.attempt === task.attempt;
+    if (!bound || bound.pendingId !== pendingId || bound.by !== principal.userId || !sameStep) {
+      throw new TaskError(`That review was not opened from this task. Open this task's ${purpose === "approve" ? "change" : "reversal"} and approve what it shows.`, 409, { task });
+    }
   }
 
   /** Turn the step behind a task to Auto, if the approver holds what it needs. */
@@ -238,7 +253,9 @@ export class TaskService {
     if (!reversal.intent) return { task };
     try {
       const review = await this.env.writes.prepare(principal, reversal.intent as unknown as WriteIntent, { via: "workflow", ...(task.agent ? { onBehalfOf: { kind: "agent" as const, id: task.agent } } : {}) });
-      return { task, review };
+      const bound: Task = { ...task, reviews: { ...task.reviews, reverse: { pendingId: review.pendingId, by: principal.userId, at: this.iso() } } };
+      await this.env.tasks.put(bound);
+      return { task: bound, review };
     } catch (error) {
       if (stale(error)) return { task, stale: (error as Error).message };
       if (error instanceof WriteError) throw new TaskError(error.message, error.status);
@@ -254,6 +271,7 @@ export class TaskService {
     let made: Task;
     if (reversal.intent) {
       if (!approval.pendingId || !approval.digest) throw new TaskError("Open the reversal and approve its review first.", 400);
+      this.boundTo(task, "reverse", principal, approval.pendingId);
       try {
         const result = await this.env.writes.commit(principal, approval.pendingId, approval.digest);
         made = {

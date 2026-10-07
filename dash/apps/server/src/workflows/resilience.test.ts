@@ -8,7 +8,7 @@ import { WorkflowService } from "./service.js";
 import { StartError, startWorkflow } from "./start.js";
 import { DeliveryError, deliveryErrorOf } from "./env.js";
 import { DbSignalStore, DbWorkflowStore } from "./store.js";
-import { ORDERS, agentOf, byHand, every, fake, node, owner, run, source, workflowOf, type Fake } from "./testing.js";
+import { ORDERS, agentOf, byHand, every, fake, member, node, owner, run, source, workflowOf, type Fake } from "./testing.js";
 
 /**
  * The engine under interruption, concurrency, edits, revoked access,
@@ -899,5 +899,67 @@ describe("an answer and a deadline", () => {
     await f.engine.emit(key, { answer: "Too late" });
     expect(await f.env.cases.get(done.cases[0]!)).toMatchObject({ status: "timed_out" });
     expect((await f.env.tasks.list()).map((task) => task.title)).not.toContain("heard");
+  });
+});
+
+/* ── reviews belong to the task they were opened from ──────────────── */
+
+describe("reviews bound to their task", () => {
+  const change = (recordId: string) => node("fix", "update.record", { connection: "pms", entity: "work_order", recordId, values: { status: "closed" } }, { mode: "approve" });
+
+  it("refuses another task's review when approving, and sends nothing", async () => {
+    const f = fake();
+    const a = workflowOf({ id: "a", name: "A", trigger: manual, nodes: [change("A")] });
+    const b = workflowOf({ id: "b", name: "B", trigger: manual, nodes: [change("B")] });
+    await f.env.store.put(a);
+    await f.env.store.put(b);
+    const caseA = (await byHand(f, a)).run.cases[0]!;
+    const caseB = (await byHand(f, b)).run.cases[0]!;
+    const taskA = (await f.env.tasks.list({ workflow: "a", status: "waiting_approval" }))[0]!;
+    const taskB = (await f.env.tasks.list({ workflow: "b", status: "waiting_approval" }))[0]!;
+    await f.tasks.review(owner, taskA.id);
+    const reviewB = (await f.tasks.review(owner, taskB.id)).review!;
+
+    await expect(f.tasks.approve(owner, taskA.id, { pendingId: reviewB.pendingId, digest: reviewB.digest })).rejects.toMatchObject({ status: 409 });
+    expect(f.committed).toHaveLength(0);
+    expect((await f.env.cases.get(caseA))?.status).toBe("waiting");
+    expect((await f.env.cases.get(caseB))?.status).toBe("waiting");
+
+    /* Its own review still works, as does another person's own. */
+    const reviewA = (await f.tasks.review(owner, taskA.id)).review!;
+    await f.tasks.approve(owner, taskA.id, { pendingId: reviewA.pendingId, digest: reviewA.digest });
+    expect(f.prepared.at(-1)?.intent.id).toBe("A");
+    expect((await f.env.cases.get(caseA))?.status).toBe("done");
+    expect(f.committed).toEqual([reviewA.pendingId]);
+  });
+
+  it("refuses a review opened by someone else for the same task", async () => {
+    const f = fake();
+    const a = workflowOf({ id: "a", name: "A", trigger: manual, nodes: [change("A")] });
+    await f.env.store.put(a);
+    await byHand(f, a);
+    const task = (await f.env.tasks.list({ status: "waiting_approval" }))[0]!;
+    const theirs = (await f.tasks.review(member("sam", "admin"), task.id)).review!;
+    await expect(f.tasks.approve(owner, task.id, { pendingId: theirs.pendingId, digest: theirs.digest })).rejects.toMatchObject({ status: 409 });
+    expect(f.committed).toHaveLength(0);
+  });
+
+  it("refuses another task's review when reversing", async () => {
+    const f = fake();
+    const auto = (id: string, recordId: string) =>
+      workflowOf({ id, name: id, trigger: manual, nodes: [node("fix", "update.record", { connection: "pms", entity: "work_order", recordId, values: { status: "closed" } })] });
+    await f.env.store.put(auto("a", "A"));
+    await f.env.store.put(auto("b", "B"));
+    await byHand(f, (await f.env.store.get("a"))!);
+    await byHand(f, (await f.env.store.get("b"))!);
+    const doneA = (await f.env.tasks.list({ workflow: "a", status: "done" }))[0]!;
+    const doneB = (await f.env.tasks.list({ workflow: "b", status: "done" }))[0]!;
+    await f.tasks.reverseReview(owner, doneA.id);
+    const undoB = (await f.tasks.reverseReview(owner, doneB.id)).review!;
+    const before = f.committed.length;
+    await expect(f.tasks.reverse(owner, doneA.id, { pendingId: undoB.pendingId, digest: undoB.digest })).rejects.toMatchObject({ status: 409 });
+    expect(f.committed).toHaveLength(before);
+    expect((await f.env.tasks.get(doneA.id))?.status).toBe("done");
+    expect((await f.env.tasks.get(doneB.id))?.status).toBe("done");
   });
 });

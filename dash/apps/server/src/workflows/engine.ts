@@ -410,6 +410,14 @@ export class WorkflowEngine {
         continue;
       }
 
+      /* A review must be the one opened from this task for this step: anything else is not this step's approval. */
+      if (wake?.approved?.pendingId) {
+        const bound = base.reviews?.approve;
+        if (!bound || bound.pendingId !== wake.approved.pendingId || bound.by !== wake.approved.by.userId || bound.attempt !== attempt.id) {
+          return save({ ...one, status: "waiting", waiting: { node: node.id, kind: "approval", key: `task:${base.id}`, task: base.id }, attempt: { ...attempt, executing: false } });
+        }
+      }
+
       /* Approve: the step waits for a person, with its settings frozen as they will run. */
       const approval: Approval | undefined = wake?.approved ?? (attempt.approvedBy && (wake?.retry || attempt.executing) ? { by: attempt.approvedBy } : undefined);
       const mode = nodeMode(node, one.trial);

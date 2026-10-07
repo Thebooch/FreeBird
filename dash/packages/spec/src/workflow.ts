@@ -594,6 +594,18 @@ export const taskSchema = z.object({
   wait: caseWaitSchema.optional(),
   /** Dash stopped, or the answer was lost, while this was being sent: it may or may not have happened. A person says which. */
   uncertain: z.boolean().optional(),
+  /**
+   * The reviews prepared for this task, by what they are for: approving its
+   * change, or reversing it. Each names the prepared change, who prepared it
+   * and, for an approval, the case step it is for. A review is accepted only
+   * for the task, purpose, person and step it was prepared for.
+   */
+  reviews: z
+    .object({
+      approve: z.object({ pendingId: z.string(), by: z.string(), attempt: z.string().optional(), at: z.string() }).optional(),
+      reverse: z.object({ pendingId: z.string(), by: z.string(), at: z.string() }).optional(),
+    })
+    .optional(),
   /** Tries so far, and when the next one is due, for a step set to retry. */
   tries: z.number().int().optional(),
   retryAt: z.string().optional(),
