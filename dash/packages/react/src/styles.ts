@@ -820,6 +820,75 @@ export const DASH_REACT_STYLES = `
   line-height: var(--dash-leading-relaxed);
 }
 
+/*
+ * One stream, divided by day and by topic (plan 3). The dividers are quiet
+ * on purpose: they are where the reader is, not something said.
+ */
+.dash-chat__tabs { display: flex; min-width: 0; }
+.dash-chat__log[hidden], .dash-chat__form[hidden] { display: none; }
+.dash-chat__tabs .dash-tabs { border-bottom: 0; }
+.dash-chat__day, .dash-chat__topic {
+  display: flex; align-items: center; gap: var(--dash-space-2);
+  font-size: var(--dash-text-xs); color: var(--dash-muted);
+}
+.dash-chat__day::before, .dash-chat__day::after,
+.dash-chat__topic::after {
+  content: ""; flex: 1; height: 1px; background: var(--dash-border);
+}
+.dash-chat__day { justify-content: center; font-weight: var(--dash-weight-semi); }
+.dash-chat__topic span {
+  padding: 1px var(--dash-space-2);
+  border: 1px solid var(--dash-border); border-radius: var(--dash-radius-pill);
+}
+.dash-chat__topic[data-viewing="true"] span { color: var(--dash-accent); border-color: var(--dash-accent); }
+.dash-chat__earlier {
+  align-self: center; font: inherit; font-size: var(--dash-text-xs);
+  padding: 2px var(--dash-space-2); border: 0; background: none;
+  color: var(--dash-accent); cursor: pointer;
+}
+.dash-chat__latest {
+  position: absolute; right: var(--dash-space-4); bottom: 72px; z-index: 1;
+  font: inherit; font-size: var(--dash-text-xs);
+  padding: var(--dash-space-1) var(--dash-space-3);
+  border: 1px solid var(--dash-border); border-radius: var(--dash-radius-pill);
+  background: var(--dash-surface); color: var(--dash-ink);
+  box-shadow: var(--dash-shadow-md);
+  cursor: pointer;
+}
+.dash-chat__latest:hover { color: var(--dash-accent); border-color: var(--dash-accent); }
+.dash-chat__latest:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 1px; }
+
+/* The Timeline tab: days, then a day's topics and finished work. */
+.dash-timeline { flex: 1; overflow-y: auto; padding: var(--dash-space-3) var(--dash-space-4); }
+.dash-timeline__pad { padding: var(--dash-space-2) 0; }
+.dash-timeline__days, .dash-timeline__rail { list-style: none; margin: 0; padding: 0; }
+.dash-timeline__day {
+  display: flex; width: 100%; align-items: baseline; justify-content: space-between;
+  gap: var(--dash-space-2); font: inherit; font-size: var(--dash-text-sm);
+  padding: var(--dash-space-2) var(--dash-space-2); text-align: left;
+  border: 0; border-bottom: 1px solid var(--dash-border); background: none;
+  color: var(--dash-ink); cursor: pointer;
+}
+.dash-timeline__day:hover, .dash-timeline__row:hover { background: var(--dash-surface-sunken); }
+.dash-timeline__day:focus-visible, .dash-timeline__row:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: -2px; }
+.dash-timeline__day-name { font-weight: var(--dash-weight-semi); }
+.dash-timeline__counts, .dash-timeline__meta, .dash-timeline__time { font-size: var(--dash-text-xs); color: var(--dash-muted); }
+.dash-timeline__more { display: block; margin: var(--dash-space-3) auto 0; }
+.dash-timeline__dayhead { display: flex; align-items: center; gap: var(--dash-space-2); margin-bottom: var(--dash-space-2); }
+.dash-timeline__title { margin: 0; font-size: var(--dash-text-sm); font-weight: var(--dash-weight-semi); color: var(--dash-ink); }
+.dash-timeline__item { border-left: 2px solid var(--dash-border); margin-left: var(--dash-space-2); }
+.dash-timeline__item[data-kind="task"] { border-left-color: var(--dash-accent); }
+.dash-timeline__item[data-status="failed"] { border-left-color: var(--dash-critical); }
+.dash-timeline__row {
+  display: grid; grid-template-columns: 4.5em 1fr; column-gap: var(--dash-space-2);
+  width: 100%; font: inherit; font-size: var(--dash-text-sm); text-align: left;
+  padding: var(--dash-space-2) var(--dash-space-3);
+  border: 0; background: none; color: var(--dash-ink); cursor: pointer; text-decoration: none;
+}
+.dash-timeline__name { grid-column: 2; }
+.dash-timeline__meta { grid-column: 2; display: flex; flex-wrap: wrap; align-items: center; gap: var(--dash-space-1); }
+.dash-timeline__time { grid-row: 1; grid-column: 1; }
+
 @media (prefers-reduced-motion: reduce) {
   .dash-shell, .dash-chat { transition: none; }
 }

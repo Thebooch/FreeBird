@@ -49,6 +49,14 @@ apps/
 - **Workflows never call `composeResponsePrompt`.** Only an `outreach` step's conversation uses an agent's reply prompt, and that arrives with Comms.
 - Web: `apps/web/src/agent/workflows/` (`WorkflowsSection`, `WorkflowEditor`, `Canvas`, `StepPanel`, `TaskCard`, `fields.tsx`, `draft.ts`). The agent Tools tab's "Run a workflow" lists workflows whose trigger is `agent`.
 
+## Chat topics and the timeline
+
+- A topic is a chat session: `freebird_chat_session.id` is the topic id, `title` its name, so a message's topic is its `session_id`. No guide schema change.
+- Server: `apps/server/src/chat/topics.ts` (`TopicStore` reads one person's topics by day across sessions; `decideTopic`; `withTopicContext`). Routes in `routes/chat-topics.ts`: `POST /api/chat/route` (which topic the next message goes in, called before every send), `GET /api/chat/days`, `GET /api/chat/day/:date` (topics plus finished workflow runs and done tasks), `GET /api/chat/messages?day=`. All take `tz` so days are the reader's own.
+- The model's context on a chat turn is the current topic plus the earlier topics that are both among the last 2 and active in the last 24 hours (the smaller window wins). `withTopicContext` adds them as one system note, only when `auth.extra.turn` is set (`POST /freebird/chat`); the history route sees the store unchanged.
+- Topic rules: "new topic[: name]" always splits; a person's first message of a day starts a new topic; otherwise the `context` model task picks among the current topic, the 2 before it and the one jumped to from the timeline. No model, or a failed call, stays put.
+- Web: no "new chat" button. `ChatColumn` loads today from `/api/chat/messages`, lazy loads neighbouring days past the top (and, after a jump, the bottom) border, merges the store's live messages (`chat/stream.ts`), and shows "↓ Latest". `chat/Timeline.tsx` is the Timeline tab (days → a day's topics and tasks → back into the chat at the topic's first message).
+
 ## Conventions
 
 Mirrors the FreeBird monorepo: `"type": "module"`, tsup ESM builds, zod ^3 as a peer, vitest, per-package `tsc --noEmit`, `workspace:*` internal deps. Packages should be foldable into the OSS FreeBird monorepo later without rework.
