@@ -273,6 +273,7 @@ export class WorkflowService {
       ...(held?.parked && given.enabled !== true ? { parked: held.parked } : {}),
       failures: given.enabled === true ? 0 : (held?.failures ?? 0),
       ...(held?.fromTemplate ? { fromTemplate: held.fromTemplate } : {}),
+      trialCases: held?.trialCases ?? [],
       createdAt: held?.createdAt ?? this.now(),
       updatedAt: this.now(),
     });

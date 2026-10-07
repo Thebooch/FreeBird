@@ -60,6 +60,16 @@ export interface EngineOptions {
   readonly leases?: LeaseLock | undefined;
   /** This server, among any others. Each call adds its own id to it. */
   readonly holder: string;
+  /** How often a call working on a case renews its lease, in real time. Default a third of the lease. */
+  readonly heartbeatMs?: number | undefined;
+}
+
+/** A call's hold on a case: renewed between steps and, by a heartbeat, while a step acts. */
+interface Hold {
+  /** Renew now; throws `CaseBusy` if the case is no longer this call's. */
+  renew(): Promise<void>;
+  /** Throws `CaseBusy` if a heartbeat found the case is no longer this call's. */
+  check(): void;
 }
 
 /** How long a case may hold its lease between steps. */
@@ -68,8 +78,22 @@ export const CASE_LEASE_MS = 5 * 60_000;
 export const STALL_MS = CASE_LEASE_MS;
 /** How long a signal nobody has taken is kept for a case that starts waiting later. */
 export const SIGNAL_KEEP_MS = 7 * 86_400_000;
+/** How many counted trial cases a workflow remembers, so a case announced again is not counted again. */
+const TRIAL_LEDGER = 500;
 /** The longest one retry waits. */
 const MAX_RETRY_DELAY_MS = 86_400_000;
+
+/** What a new case starts from. */
+export interface OpenSeed {
+  readonly id?: string | undefined;
+  readonly row?: Record<string, unknown> | undefined;
+  readonly rowKey?: string | undefined;
+  readonly inputs?: Record<string, unknown> | undefined;
+  readonly start: WorkflowStart;
+  readonly run?: string | undefined;
+  readonly actor?: Principal | null | undefined;
+  readonly chain?: readonly string[] | undefined;
+}
 
 export class CaseBusy extends Error {
   constructor(readonly caseId: string) {
@@ -118,19 +142,17 @@ export class WorkflowEngine {
    * Open a case and run it as far as it goes. With `id`, opening is
    * idempotent: a case already open under that id is returned as it is.
    */
-  async open(
-    workflow: WorkflowSpec,
-    seed: {
-      readonly id?: string | undefined;
-      readonly row?: Record<string, unknown> | undefined;
-      readonly rowKey?: string | undefined;
-      readonly inputs?: Record<string, unknown> | undefined;
-      readonly start: WorkflowStart;
-      readonly run?: string | undefined;
-      readonly actor?: Principal | null | undefined;
-      readonly chain?: readonly string[] | undefined;
-    },
-  ): Promise<WorkflowCase> {
+  async open(workflow: WorkflowSpec, seed: OpenSeed): Promise<WorkflowCase> {
+    const { case: one, created } = await this.create(workflow, seed);
+    return created ? this.advance(one.id) : one;
+  }
+
+  /**
+   * Write a new case down, and nothing more. With `id`, a case already under
+   * that id is returned (`created: false`). Kept apart from running it, so a
+   * caller that claimed a record knows the case exists before anything acts.
+   */
+  async create(workflow: WorkflowSpec, seed: OpenSeed): Promise<{ readonly case: WorkflowCase; readonly created: boolean }> {
     const at = this.iso();
     const actor = seed.actor ?? workflow.enabledBy;
     const first = firstNode(workflow);
@@ -161,17 +183,23 @@ export class WorkflowEngine {
     } catch (error) {
       if (error instanceof RevisionConflict && seed.id) {
         const held = await this.env.cases.get(seed.id);
-        if (held) return held;
+        if (held) return { case: held, created: false };
       }
       throw error;
     }
-    return this.advance(opened.id);
+    return { case: opened, created: true };
   }
 
   /* ── running ─────────────────────────────────────────────────────── */
 
-  /** Take a case's lease for this call alone, run `work`, and let it go. */
-  private async leased<T>(caseId: string, work: (renew: () => Promise<void>) => Promise<T>): Promise<T> {
+  /**
+   * Take a case's lease for this call alone, run `work`, and let it go. A
+   * heartbeat renews the lease while `work` runs, however long one step takes
+   * (a slow API, a long run of child starts), so nobody else takes the case
+   * from a call still working on it. A heartbeat that finds the lease gone
+   * marks the hold lost, and the call stops before writing or starting more.
+   */
+  private async leased<T>(caseId: string, work: (hold: Hold) => Promise<T>): Promise<T> {
     if (this.active.has(caseId)) throw new CaseBusy(caseId);
     const key = `case:${caseId}`;
     /* Each call is its own holder: the same server calling twice does not get the lease twice. */
@@ -179,14 +207,35 @@ export class WorkflowEngine {
     const leases = this.options.leases;
     if (leases && !(await leases.acquire(key, holder, CASE_LEASE_MS))) throw new CaseBusy(caseId);
     this.active.add(caseId);
-    const renew = async (): Promise<void> => {
-      if (leases && !(await leases.acquire(key, holder, CASE_LEASE_MS))) throw new CaseBusy(caseId);
+    let lost = false;
+    const beat = leases
+      ? setInterval(() => {
+          void leases.acquire(key, holder, CASE_LEASE_MS).then(
+            (ok) => {
+              if (!ok) lost = true;
+            },
+            () => undefined,
+          );
+        }, this.options.heartbeatMs ?? CASE_LEASE_MS / 3)
+      : null;
+    (beat as { unref?: () => void } | null)?.unref?.();
+    const hold: Hold = {
+      renew: async () => {
+        if (lost || (leases && !(await leases.acquire(key, holder, CASE_LEASE_MS)))) {
+          lost = true;
+          throw new CaseBusy(caseId);
+        }
+      },
+      check: () => {
+        if (lost) throw new CaseBusy(caseId);
+      },
     };
     try {
-      return await work(renew);
+      return await work(hold);
     } finally {
+      if (beat) clearInterval(beat);
       this.active.delete(caseId);
-      await leases?.release(key, holder);
+      if (!lost) await leases?.release(key, holder);
     }
   }
 
@@ -196,12 +245,17 @@ export class WorkflowEngine {
    * woke it; with nothing, a running case carries on (or is recovered).
    */
   advance(caseId: string, how: Wake = {}): Promise<WorkflowCase> {
-    return this.leased(caseId, (renew) => this.walk(caseId, how, renew));
+    return this.leased(caseId, (hold) => this.walk(caseId, how, hold));
   }
 
-  private async walk(caseId: string, how: Wake, renew: () => Promise<void>): Promise<WorkflowCase> {
+  private async walk(caseId: string, how: Wake, hold: Hold): Promise<WorkflowCase> {
     let one = await this.env.cases.get(caseId);
     if (!one) throw new Error(`There is no case "${caseId}".`);
+    /* Cancelled while it waited: it ends here, whatever woke it. */
+    if (one.cancelRequested && one.status === "waiting") {
+      if (one.waiting?.task) await this.dismissStale(one.waiting.task, "The case was cancelled.");
+      return this.finish(one, "cancelled", "Cancelled.");
+    }
     const live = await this.env.store.get(one.workflow);
     if (!live) return this.finish(one, "failed", "Its workflow is gone.");
     /* The graph the case opened on; the rest (its name, whether it is parked) as it is now. */
@@ -259,7 +313,7 @@ export class WorkflowEngine {
     if (one.status !== "running") return one;
 
     for (;;) {
-      await renew();
+      await hold.renew();
       if (one.cancelRequested) return this.finish(one, "cancelled", "Cancelled.");
       const node = workflow.nodes.find((each) => each.id === one!.at);
       if (!node) return this.finish(one, "done");
@@ -286,7 +340,7 @@ export class WorkflowEngine {
           continue;
         }
         if ((held.status === "waiting" || held.status === "waiting_approval") && held.wait) {
-          return save({ ...one, status: "waiting", waiting: held.wait, attempt: { ...attempt, executing: false } });
+          return save(this.waitingOn(one, attempt, node, held));
         }
         if (held.status === "running" && attempt.executing && variant?.interrupted === "review") {
           return this.uncertain(save, one, attempt, { ...held, title: `Did it happen? ${held.title}` }, "Dash stopped while this was being done, so it may or may not have happened.");
@@ -396,6 +450,8 @@ export class WorkflowEngine {
           startCase: (workflowId, inputs, extra) => this.startChild(workflowId, inputs, parent, extra),
         };
         result = await executor(ctx);
+        /* Lost the case while acting: whoever has it now decides; nothing more is written from here. */
+        hold.check();
       } catch (error) {
         if (error instanceof ParkWorkflow) {
           await this.park(workflow, error.reason);
@@ -411,16 +467,11 @@ export class WorkflowEngine {
       if (result.kind === "wait") {
         /* The agent the step acts for goes with the wait, so checks made while waiting read as that agent may. */
         const wait: CaseWait = { ...result.wait, node: node.id, task: task.id, ...(agent ? { agent: agent.id } : {}) };
-        const outputs = { ...(result.outputs ?? {}), task: task.id };
-        await this.writeTask({ ...task, ...result.task, wait });
+        /* The wait and what the step handed on are written together on the task, and the case is put to waiting from that, as recovery does. */
+        const waitingTask: Task = { ...task, ...result.task, wait, outputs: { ...(result.outputs ?? {}), task: task.id } };
+        await this.writeTask(waitingTask);
         await consumed();
-        one = await save({
-          ...one,
-          status: "waiting",
-          waiting: wait,
-          attempt: { ...attempt, executing: false },
-          data: { ...one.data, steps: { ...one.data.steps, [node.id]: outputs } },
-        });
+        one = await save(this.waitingOn(one, attempt, node, waitingTask));
         /* Whatever it waits for may already have happened. */
         if (!PERSON_WAITS.has(wait.kind) && wait.key !== "time") {
           const signal = await this.env.signals.take(wait.key, one.id, one.startedAt);
@@ -495,6 +546,17 @@ export class WorkflowEngine {
     return save({ ...one, at: next });
   }
 
+  /** A case put to waiting from a task that waits: the wait, and whatever the step handed on. Used by a normal run and by recovery alike. */
+  private waitingOn(one: WorkflowCase, attempt: CaseAttempt, node: WorkflowNode, task: Task): WorkflowCase {
+    return {
+      ...one,
+      status: "waiting",
+      waiting: task.wait!,
+      attempt: { ...attempt, executing: false },
+      ...(task.outputs ? { data: { ...one.data, steps: { ...one.data.steps, [node.id]: task.outputs } } } : {}),
+    };
+  }
+
   /** It may or may not have happened: a person says which, and nothing is done again until they do. */
   private async uncertain(save: (next: WorkflowCase) => Promise<WorkflowCase>, one: WorkflowCase, attempt: CaseAttempt, task: Task, why: string): Promise<WorkflowCase> {
     const wait: CaseWait = { node: attempt.node, kind: "uncertain", key: `task:${task.id}`, task: task.id };
@@ -517,16 +579,18 @@ export class WorkflowEngine {
   }
 
   /**
-   * What follows a case's ending: its trial counted down (once), and whatever
-   * waits on it told. Each signal has an id of its own making, so telling
-   * twice tells once.
+   * What follows a case's ending: its trial counted down, and whatever waits
+   * on it told. Counting is one write that records which case it counted, so
+   * announcing again never counts it twice; each signal has an id of its own
+   * making, so telling twice tells once.
    */
   private async announce(ended: WorkflowCase): Promise<WorkflowCase> {
-    let one = ended;
-    if (one.trial && !one.trialCounted) {
+    const one = ended;
+    if (one.trial) {
       const workflow = await this.env.store.get(one.workflow);
-      if (workflow && workflow.trial > 0) await this.env.store.put({ ...workflow, trial: workflow.trial - 1 });
-      one = await this.env.cases.put({ ...one, trialCounted: true }, one.revision);
+      if (workflow && workflow.trial > 0 && !workflow.trialCases.includes(one.id)) {
+        await this.env.store.put({ ...workflow, trial: workflow.trial - 1, trialCases: [...workflow.trialCases, one.id].slice(-TRIAL_LEDGER) });
+      }
     }
     /* A step in another case may be waiting for this one, or for all of its group. */
     await this.emit(`case-done:${one.id}`, { status: one.status, case: one.id }, `case-done:${one.id}`);
@@ -750,24 +814,44 @@ export class WorkflowEngine {
     }
   }
 
-  /** Stop a case and the cases it started: sticky, even across a restart. A waiting case ends now; a running one at its next step. */
+  /**
+   * Stop a case and the cases it started: sticky, even across a restart.
+   *
+   * The case is marked first, in its own save, and only then are its children
+   * cancelled: a child's ending wakes this case, and the mark makes that
+   * wake end it rather than carry it on. A waiting case then ends now; a
+   * running one ends at its next step, whoever is running it.
+   */
   async cancel(caseId: string): Promise<WorkflowCase> {
-    const one = await this.env.cases.get(caseId);
-    if (!one) throw new Error(`There is no case "${caseId}".`);
-    if (FINISHED.has(one.status)) return one;
-    const children = (await this.env.cases.children(one.id)).filter((child) => !FINISHED.has(child.status));
-    for (const child of children) await this.cancel(child.id).catch(() => undefined);
-    /* A child ending may already have moved this case on. */
-    if (children.length > 0) {
-      const now = await this.env.cases.get(caseId);
-      if (!now || FINISHED.has(now.status)) return now ?? one;
-      if (now.revision !== one.revision) return this.cancel(caseId);
+    let one: WorkflowCase | null = null;
+    for (let tries = 0; tries < 10; tries++) {
+      one = await this.env.cases.get(caseId);
+      if (!one) throw new Error(`There is no case "${caseId}".`);
+      if (FINISHED.has(one.status) || one.cancelRequested) break;
+      try {
+        one = await this.env.cases.put({ ...one, cancelRequested: true, updatedAt: this.iso() }, one.revision);
+        break;
+      } catch (error) {
+        if (!(error instanceof RevisionConflict)) throw error;
+      }
     }
-    if (one.status === "waiting") {
-      if (one.waiting?.task) await this.dismissStale(one.waiting.task, "The case was cancelled.");
-      return this.finish({ ...one, cancelRequested: true }, "cancelled", "Cancelled.");
+    if (!one || FINISHED.has(one.status)) return one!;
+    if (!one.cancelRequested) throw new CaseBusy(caseId);
+    for (const child of await this.env.cases.children(one.id)) {
+      if (!FINISHED.has(child.status)) await this.cancel(child.id).catch(() => undefined);
     }
-    return this.env.cases.put({ ...one, cancelRequested: true, updatedAt: this.iso() }, one.revision);
+    /* Waiting: ended now, under its lease. Busy: whoever has it ends it at its next step. */
+    try {
+      return await this.leased(caseId, async () => {
+        const now = (await this.env.cases.get(caseId))!;
+        if (now.status !== "waiting") return now;
+        if (now.waiting?.task) await this.dismissStale(now.waiting.task, "The case was cancelled.");
+        return this.finish(now, "cancelled", "Cancelled.");
+      });
+    } catch (error) {
+      if (error instanceof CaseBusy) return (await this.env.cases.get(caseId))!;
+      throw error;
+    }
   }
 }
 

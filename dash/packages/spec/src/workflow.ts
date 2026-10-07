@@ -253,6 +253,8 @@ export const workflowSchema = z.object({
   fromTemplate: z.object({ id: z.string(), version: z.number().int() }).optional(),
   /** Moves on each time its steps, arrows, limits or guardrails change. A case keeps the version it opened on. */
   version: z.number().int().min(1).default(1),
+  /** The trial cases already counted down, so a case is never counted twice. */
+  trialCases: z.array(z.string()).max(500).default([]),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -466,7 +468,6 @@ export const workflowCaseSchema = z.object({
    * save that ends it, so an interruption in between is picked up.
    */
   announced: z.boolean().optional(),
-  trialCounted: z.boolean().optional(),
 });
 export type WorkflowCase = z.infer<typeof workflowCaseSchema>;
 

@@ -1,8 +1,8 @@
 import { WriteError } from "@freebirdai/connect/host";
-import { chainEdges, type Principal, type WorkflowSpec } from "@freebirdai/dash-spec";
+import { chainEdges, type WorkflowSpec } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import { openDashDb } from "../platform/db.js";
-import { CaseBusy, STALL_MS } from "./engine.js";
+import { CASE_LEASE_MS, CaseBusy, STALL_MS, WorkflowEngine } from "./engine.js";
 import { WorkflowRunner } from "./runner.js";
 import { WorkflowService } from "./service.js";
 import { StartError, startWorkflow } from "./start.js";
@@ -649,11 +649,11 @@ describe("waiting for all", () => {
 });
 
 describe("trigger claims", () => {
-  const perRow = (f: Fake): WorkflowSpec => workflowOf({ trigger: every, source, criteria: 'status == "open"', nodes: [hook()] });
+  const perRow = (): WorkflowSpec => workflowOf({ trigger: every, source, criteria: 'status == "open"', nodes: [hook()] });
 
   it("opens a new case each time a record matches again", async () => {
     const f = fake();
-    const workflow = perRow(f);
+    const workflow = perRow();
     await f.env.store.put(workflow);
     f.rows = [{ id: 7, status: "open" }];
     const first = await run(f, workflow);
@@ -668,7 +668,7 @@ describe("trigger claims", () => {
 
   it("opens the case of a record claimed by a run that stopped before opening it", async () => {
     const f = fake();
-    const workflow = perRow(f);
+    const workflow = perRow();
     await f.env.store.put(workflow);
     f.rows = [{ id: 7, status: "open" }];
     breakOnce(f.env.store, "claimFired", () => true, true);
@@ -729,5 +729,101 @@ describe("webhook outcomes", () => {
     expect(deliveryErrorOf(Object.assign(new Error("fetch failed"), { cause: { code: "ECONNRESET" } })).sent).toBe("unknown");
     expect(deliveryErrorOf(new Error("blocked"), () => true).sent).toBe("no");
     expect(deliveryErrorOf(new Error("The operation was aborted.")).sent).toBe("unknown");
+  });
+});
+
+/* ── third review: claims, cancellation, ownership, waits, trial ─────── */
+
+describe("a claim stays with its case", () => {
+  it("never opens a second case for a record whose first case already acted", async () => {
+    const f = fake();
+    const workflow = workflowOf({ trigger: every, source, criteria: 'status == "open"', nodes: [hook()] });
+    await f.env.store.put(workflow);
+    f.rows = [{ id: 7, status: "open" }];
+    crashOn(f, "tasks", (task: { action?: string; status?: string }) => task.action === "send.webhook" && task.status === "done");
+    await run(f, workflow);
+    expect(f.posts).toHaveLength(1);
+    await run(f, workflow);
+    expect(await f.env.cases.list()).toHaveLength(1);
+    expect(f.posts).toHaveLength(1);
+    later(f);
+    await f.engine.recover();
+    expect(f.posts).toHaveLength(1);
+    expect((await f.env.tasks.list({ status: "waiting_approval" }))[0]).toMatchObject({ uncertain: true });
+  });
+});
+
+describe("cancelling a parent", () => {
+  it("ends the parent, and never lets its child's ending carry it on", async () => {
+    const f = fake();
+    await f.env.store.put(workflowOf({ id: "kid", name: "kid", trigger: manual, nodes: [node("pause", "wait.duration", { duration: "1h" })] }));
+    const parent = workflowOf({ trigger: manual, nodes: [node("start", "run_workflow.start", { workflow: "kid", waitForIt: true }, { onFailure: "continue" }), hook()] });
+    await f.env.store.put(parent);
+    const { run: done } = await byHand(f, parent);
+    const ended = await f.engine.cancel(done.cases[0]!);
+    expect(ended.status).toBe("cancelled");
+    expect((await f.env.cases.list({ workflow: "kid" }))[0]?.status).toBe("cancelled");
+    expect(f.posts).toHaveLength(0);
+  });
+});
+
+describe("holding a case while a step acts", () => {
+  it("keeps another server from taking a case whose step is still acting", async () => {
+    const f = fake({ leases: true });
+    const leases = f.starter.leases!;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let entered = false;
+    const commit = f.env.writes.commit.bind(f.env.writes);
+    (f.env.writes as { commit: typeof commit }).commit = async (...args) => {
+      entered = true;
+      await gate;
+      return commit(...args);
+    };
+    const first = new WorkflowEngine({ env: f.env, leases, holder: "server-a", heartbeatMs: 5 });
+    const second = new WorkflowEngine({ env: f.env, leases, holder: "server-b" });
+    const workflow = workflowOf({ trigger: manual, nodes: [node("fix", "update.record", { connection: "pms", entity: "work_order", recordId: "7", values: { status: "closed" } })] });
+    await f.env.store.put(workflow);
+    const running = first.open(workflow, { start: { kind: "manual" }, actor: owner });
+    while (!entered) await new Promise((resolve) => setTimeout(resolve, 2));
+
+    later(f, STALL_MS + CASE_LEASE_MS);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await second.recover();
+    expect(f.prepared).toHaveLength(1);
+
+    release();
+    expect((await running).status).toBe("done");
+    expect(f.committed).toHaveLength(1);
+  });
+});
+
+describe("a step that enters waiting", () => {
+  it("restores what the step handed on along with its wait", async () => {
+    const f = fake();
+    const workflow = workflowOf({ trigger: manual, nodes: [node("hook", "wait.for", { event: "webhook", timeout: "2d" })] });
+    await f.env.store.put(workflow);
+    crashOn(f, "cases", (one: { status?: string }) => one.status === "waiting");
+    await byHand(f, workflow);
+    later(f);
+    await f.engine.recover();
+    const [one] = await f.env.cases.list();
+    expect(one?.status).toBe("waiting");
+    expect((one?.data.steps["hook"] as { hook?: string } | undefined)?.hook).toMatch(/\/api\/workflow-hooks\//);
+  });
+});
+
+describe("the trial countdown", () => {
+  it("counts a case once however often its ending is announced", async () => {
+    const f = fake();
+    const workflow = workflowOf({ trigger: manual, trial: 5, nodes: [node("note", "create.note", { text: "x" })] });
+    await f.env.store.put(workflow);
+    crashOn(f, "cases", (one: { announced?: boolean }) => one.announced === true);
+    await byHand(f, workflow);
+    expect((await f.env.store.get("wf"))?.trial).toBe(4);
+    later(f);
+    await f.engine.recover();
+    expect((await f.env.store.get("wf"))?.trial).toBe(4);
+    expect((await f.env.cases.list())[0]?.announced).toBe(true);
   });
 });

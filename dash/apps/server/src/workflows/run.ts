@@ -17,6 +17,7 @@ import {
   type AgentSpec,
   type Principal,
   type WorkflowRun,
+  type WorkflowCase,
   type WorkflowSpec,
   type WorkflowStart,
   type WorkflowStepMode,
@@ -321,28 +322,46 @@ export const runTrigger = async (env: WorkflowEnv, engine: WorkflowEngine, workf
       const claim = mark && pending ? { ...mark.next, pending } : undefined;
       /* Claimed first: another run that got here first has it, and this one leaves it. */
       if (mark && claim && !(await env.store.claimFired(workflow.id, one.key, mark.before, claim))) continue;
-      let opened: Awaited<ReturnType<WorkflowEngine["open"]>>;
+      /*
+       * The case is written down first, and nothing acts until it is. Only a
+       * case known not to exist gives its record back: once it exists, the
+       * claim stays with it, and whatever happens while it runs is that
+       * case's to recover, never a reason to open another.
+       */
+      let created: WorkflowCase;
       try {
-        opened = await engine.open(workflow, {
-          ...(pending ? { id: pending.caseId } : {}),
-          row: one.row,
-          ...(one.key ? { rowKey: one.key } : {}),
-          inputs: { ...inputs },
-          start: options.start,
-          run: started.id,
-          actor,
-        });
+        created = (
+          await engine.create(workflow, {
+            ...(pending ? { id: pending.caseId } : {}),
+            row: one.row,
+            ...(one.key ? { rowKey: one.key } : {}),
+            inputs: { ...inputs },
+            start: options.start,
+            run: started.id,
+            actor,
+          })
+        ).case;
       } catch (error) {
-        /* Not opened: the record is given back, to be tried again next time. */
-        if (mark && claim) {
-          if (mark.before === undefined) await env.store.unfire(workflow.id, [one.key]);
-          else await env.store.claimFired(workflow.id, one.key, claim, mark.before);
+        const exists = pending ? await env.cases.get(pending.caseId).catch(() => null) : null;
+        if (!exists) {
+          if (mark && claim) {
+            if (mark.before === undefined) await env.store.unfire(workflow.id, [one.key]);
+            else await env.store.claimFired(workflow.id, one.key, claim, mark.before);
+          }
+          throw error;
         }
-        throw error;
+        created = exists;
       }
       if (pending) await env.store.settleClaim(workflow.id, one.key, pending.caseId);
-      cases.push(opened.id);
-      if (opened.status === "failed") failedCases++;
+      cases.push(created.id);
+      let ran: WorkflowCase = created;
+      try {
+        ran = await engine.advance(created.id);
+      } catch (error) {
+        /* It exists and may have acted: recovery carries it on from what it wrote down. */
+        env.onEvent?.({ type: "case.error", case: created.id, message: error instanceof Error ? error.message : String(error) });
+      }
+      if (ran.status === "failed") failedCases++;
     }
 
     const summary = workflowReads(workflow)
@@ -389,22 +408,23 @@ export const reopenClaims = async (env: WorkflowEnv, engine: WorkflowEngine, bef
   for (const { workflow: id, key, pending } of await env.store.pendingClaims(before)) {
     const workflow = await env.store.get(id);
     if (!workflow) continue;
-    try {
-      await engine.open(workflow, {
-        id: pending.caseId,
-        row: pending.row,
-        rowKey: key,
-        inputs: pending.inputs,
-        start: pending.start as WorkflowStart,
-        ...(pending.run ? { run: pending.run } : {}),
-        actor: (pending.actor as Principal | undefined) ?? null,
-      });
-    } catch (error) {
-      if (error instanceof CaseBusy || error instanceof RevisionConflict) continue;
-      throw error;
-    }
+    const { case: made, created } = await engine.create(workflow, {
+      id: pending.caseId,
+      row: pending.row,
+      rowKey: key,
+      inputs: pending.inputs,
+      start: pending.start as WorkflowStart,
+      ...(pending.run ? { run: pending.run } : {}),
+      actor: (pending.actor as Principal | undefined) ?? null,
+    });
     await env.store.settleClaim(id, key, pending.caseId);
     reopened++;
+    if (!created) continue;
+    try {
+      await engine.advance(made.id);
+    } catch (error) {
+      if (!(error instanceof CaseBusy || error instanceof RevisionConflict)) env.onEvent?.({ type: "case.error", case: made.id, message: error instanceof Error ? error.message : String(error) });
+    }
   }
   return reopened;
 };
