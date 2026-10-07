@@ -134,8 +134,12 @@ export interface WorkflowSignal {
  */
 export interface SignalStore {
   put(signal: WorkflowSignal): Promise<void>;
-  /** The oldest signal for this key since `since` that nobody else holds and nobody has acknowledged, claimed for this case; null when there is none. Atomic. */
-  take(key: string, by: string, since: string): Promise<WorkflowSignal | null>;
+  /**
+   * The oldest signal for this key since `since` (and, with `until`, no later
+   * than it) that nobody else holds and nobody has acknowledged, claimed for
+   * this case; null when there is none. Atomic.
+   */
+  take(key: string, by: string, since: string, until?: string): Promise<WorkflowSignal | null>;
   /** What the signal caused is saved: it is done with. */
   ack(id: string): Promise<void>;
   /** Keys with signals not yet acknowledged since `since`. */
@@ -279,8 +283,8 @@ export class MemorySignalStore implements SignalStore {
   async put(signal: WorkflowSignal): Promise<void> {
     if (!this.rows.some((one) => one.id === signal.id)) this.rows.push({ ...signal });
   }
-  async take(key: string, by: string, since: string): Promise<WorkflowSignal | null> {
-    const index = this.rows.findIndex((one) => one.key === key && !one.acked && (one.takenBy === undefined || one.takenBy === by) && one.at >= since);
+  async take(key: string, by: string, since: string, until?: string): Promise<WorkflowSignal | null> {
+    const index = this.rows.findIndex((one) => one.key === key && !one.acked && (one.takenBy === undefined || one.takenBy === by) && one.at >= since && (until === undefined || one.at <= until));
     if (index < 0) return null;
     const taken = { ...this.rows[index]!, takenBy: by };
     this.rows[index] = taken;
@@ -573,13 +577,14 @@ export class DbSignalStore implements SignalStore {
       ON CONFLICT (workspace, id) DO NOTHING
     `.execute(this.db.kysely);
   }
-  async take(key: string, by: string, since: string): Promise<WorkflowSignal | null> {
+  async take(key: string, by: string, since: string, until?: string): Promise<WorkflowSignal | null> {
     /* One statement: the oldest row free to this case is claimed, or none is, whoever else is taking. */
     const result = await sql<{ id: string; key: string; at: string; payload: unknown }>`
       UPDATE dash_workflow_signals SET taken_by = ${by}
       WHERE workspace = ${this.workspace} AND id = (
         SELECT id FROM dash_workflow_signals
         WHERE workspace = ${this.workspace} AND key = ${key} AND NOT acked AND (taken_by IS NULL OR taken_by = ${by}) AND at >= ${since}
+          AND (${until ?? null}::text IS NULL OR at <= ${until ?? null})
         ORDER BY at, id LIMIT 1 FOR UPDATE SKIP LOCKED
       ) AND NOT acked AND (taken_by IS NULL OR taken_by = ${by})
       RETURNING id, key, at, payload

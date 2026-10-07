@@ -342,7 +342,19 @@ export const runTrigger = async (env: WorkflowEnv, engine: WorkflowEngine, workf
           })
         ).case;
       } catch (error) {
-        const exists = pending ? await env.cases.get(pending.caseId).catch(() => null) : null;
+        /*
+         * Whether the case was written is asked, not assumed. A lookup that
+         * fails says nothing, so the claim is kept, with its case id, and
+         * `reopenClaims` finishes the job. Only a lookup that answers "not
+         * there" gives the record back.
+         */
+        if (!pending) throw error;
+        let exists: WorkflowCase | null;
+        try {
+          exists = await env.cases.get(pending.caseId);
+        } catch {
+          throw error;
+        }
         if (!exists) {
           if (mark && claim) {
             if (mark.before === undefined) await env.store.unfire(workflow.id, [one.key]);

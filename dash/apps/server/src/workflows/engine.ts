@@ -300,7 +300,15 @@ export class WorkflowEngine {
         const signal = await this.env.signals.take(waiting.key, one.id, one.startedAt);
         if (!signal) return one;
         heldSignal = signal.id;
-        resume = { kind: "event", payload: signal.payload };
+        /* What arrived after the deadline does not count: the wait timed out first, whenever the time-out is noticed. */
+        resume = waiting.deadline && signal.at > waiting.deadline ? { kind: "timeout" } : { kind: "event", payload: signal.payload };
+      } else if (resume?.kind === "timeout" && waiting.kind !== "retry" && waiting.key !== "time") {
+        /* The deadline passed, but what it waited for may have arrived in time and not been handed over yet: that wins. */
+        const signal = await this.env.signals.take(waiting.key, one.id, one.startedAt, waiting.deadline);
+        if (signal) {
+          heldSignal = signal.id;
+          resume = { kind: "event", payload: signal.payload };
+        }
       }
       if (resume?.kind === "timeout" && waiting.kind === "retry") {
         wake = { retry: true };
@@ -497,9 +505,11 @@ export class WorkflowEngine {
           const delay = Math.min((durationMs(retry.delay) ?? 60_000) * 2 ** (attempt.tries - 1), MAX_RETRY_DELAY_MS);
           const retryAt = this.iso(this.env.now() + delay);
           const wait: CaseWait = { node: node.id, kind: "retry", key: "time", deadline: retryAt, task: task.id };
-          await this.writeTask({ ...task, ...result.task, status: "waiting", error: result.error, retryAt, wait, title: `${nodeName(node)}: trying again (${attempt.tries} of ${retry.times})` });
+          /* The tries made are written with the retry, so recovery restores the count with the wait and never grants an extra try. */
+          const retrying: Task = { ...task, ...result.task, status: "waiting", error: result.error, retryAt, wait, tries: attempt.tries, title: `${nodeName(node)}: trying again (${attempt.tries} of ${retry.times})` };
+          await this.writeTask(retrying);
           await consumed();
-          return save({ ...one, status: "waiting", waiting: wait, attempt: { ...attempt, tries: attempt.tries + 1, executing: false } });
+          return save(this.waitingOn(one, attempt, node, retrying));
         }
         const failedTask: Task = { ...task, ...result.task, status: "failed", error: result.error, outcome: "failed", finishedAt: this.iso() };
         await this.writeTask(failedTask);
@@ -548,11 +558,13 @@ export class WorkflowEngine {
 
   /** A case put to waiting from a task that waits: the wait, and whatever the step handed on. Used by a normal run and by recovery alike. */
   private waitingOn(one: WorkflowCase, attempt: CaseAttempt, node: WorkflowNode, task: Task): WorkflowCase {
+    /* A retry's next try is one more than the tries its task records. */
+    const tries = task.wait?.kind === "retry" && task.tries !== undefined ? Math.max(attempt.tries, task.tries + 1) : attempt.tries;
     return {
       ...one,
       status: "waiting",
       waiting: task.wait!,
-      attempt: { ...attempt, executing: false },
+      attempt: { ...attempt, tries, executing: false },
       ...(task.outputs ? { data: { ...one.data, steps: { ...one.data.steps, [node.id]: task.outputs } } } : {}),
     };
   }

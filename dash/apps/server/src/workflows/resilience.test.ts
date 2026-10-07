@@ -827,3 +827,77 @@ describe("the trial countdown", () => {
     expect((await f.env.cases.list())[0]?.announced).toBe(true);
   });
 });
+
+/* ── fourth review: unknown existence, retry counts, on-time answers ─── */
+
+describe("a case whose creation went unanswered", () => {
+  it("keeps the claim when it cannot tell whether the case was written, and opens it once", async () => {
+    const f = fake();
+    const workflow = workflowOf({ trigger: every, source, criteria: 'status == "open"', nodes: [hook()] });
+    await f.env.store.put(workflow);
+    f.rows = [{ id: 7, status: "open" }];
+    /* The insert lands, its answer is lost, and the check that follows fails too. */
+    breakOnce(f.env.cases, "put", (one: { steps?: number; attempt?: unknown; revision?: number }) => one.steps === 0 && one.attempt === undefined && one.revision === 0, true);
+    breakOnce(f.env.cases, "get", () => true);
+    await run(f, workflow);
+    expect(f.posts).toHaveLength(0);
+    await run(f, workflow);
+    expect(await f.env.cases.list()).toHaveLength(1);
+    later(f);
+    const runner = new WorkflowRunner(f.starter);
+    await runner.tick();
+    await runner.tick();
+    expect(await f.env.cases.list()).toHaveLength(1);
+    expect(f.posts).toHaveLength(1);
+  });
+});
+
+describe("retry counts across an interruption", () => {
+  it("never grants an extra try when it stopped as it scheduled one", async () => {
+    const f = fake();
+    f.postAnswer = 500;
+    const workflow = workflowOf({ trigger: manual, nodes: [webhookIdempotent({ mode: "auto", retry: { times: 1, delay: "1m" } })] });
+    await f.env.store.put(workflow);
+    crashOn(f, "cases", (one: { status?: string; waiting?: { kind?: string } }) => one.status === "waiting" && one.waiting?.kind === "retry");
+    await byHand(f, workflow);
+    later(f);
+    await f.engine.recover();
+    const runner = new WorkflowRunner(f.starter);
+    for (let tick = 0; tick < 4; tick++) {
+      later(f, 600_000);
+      await runner.tick();
+    }
+    expect(f.posts).toHaveLength(2);
+    expect((await f.env.cases.list())[0]?.status).toBe("failed");
+  });
+});
+
+describe("an answer and a deadline", () => {
+  it("takes an answer that arrived before the deadline over the time-out", async () => {
+    const f = fake();
+    const nodes = [node("ask", "ask.answer", { question: "When?", timeout: "1h" }), node("note", "create.note", { text: "heard {{ steps.ask.answer }}" })];
+    const workflow = workflowOf({ trigger: manual, nodes });
+    await f.env.store.put(workflow);
+    const { run: done } = await byHand(f, workflow);
+    const [question] = await f.env.tasks.list({ status: "waiting" });
+    crashOn(f, "cases", (one: { status?: string; at?: string }) => one.status === "running" && one.at === "ask");
+    await f.tasks.answer(owner, question!.id, "Tuesday").catch(() => undefined);
+    later(f, 2 * 3_600_000);
+    await new WorkflowRunner(f.starter).tick();
+    expect(await f.env.cases.get(done.cases[0]!)).toMatchObject({ status: "done" });
+    expect((await f.env.tasks.list()).map((task) => task.title)).toContain("heard Tuesday");
+  });
+
+  it("times out on an answer that arrived after the deadline, even if it is handed over first", async () => {
+    const f = fake();
+    const nodes = [node("ask", "ask.answer", { question: "When?", timeout: "1h" }), node("note", "create.note", { text: "heard" })];
+    const workflow = workflowOf({ trigger: manual, nodes, edges: chainEdges(nodes.slice(0, 1)) });
+    await f.env.store.put(workflow);
+    const { run: done } = await byHand(f, workflow);
+    const key = (await f.env.cases.get(done.cases[0]!))!.waiting!.key;
+    later(f, 2 * 3_600_000);
+    await f.engine.emit(key, { answer: "Too late" });
+    expect(await f.env.cases.get(done.cases[0]!)).toMatchObject({ status: "timed_out" });
+    expect((await f.env.tasks.list()).map((task) => task.title)).not.toContain("heard");
+  });
+});
