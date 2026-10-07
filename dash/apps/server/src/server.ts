@@ -155,7 +155,7 @@ import {
   type TemplateStore,
   type WorkflowStore,
 } from "./workflows/store.js";
-import type { OutreachSender, WorkflowEnv } from "./workflows/env.js";
+import { deliveryErrorOf, type OutreachSender, type WorkflowEnv } from "./workflows/env.js";
 import { AgentService } from "./agents/service.js";
 import { MemoryAgentStore, type AgentStore } from "./agents/store.js";
 import { installIdentity } from "./identity/context.js";
@@ -979,7 +979,12 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     /* A webhook goes through the same guard as every other request to an address someone typed. */
     post: async (url, body, how) => {
       const headers: Record<string, string> = { "content-type": "application/json", ...(how?.key ? { "idempotency-key": how.key } : {}) };
-      const answer = await guardedFetch(url, { method: "POST", purpose: "write", headers, body: JSON.stringify(body) }, null);
+      let answer: Awaited<ReturnType<typeof guardedFetch>>;
+      try {
+        answer = await guardedFetch(url, { method: "POST", purpose: "write", headers, body: JSON.stringify(body) }, null);
+      } catch (error) {
+        throw deliveryErrorOf(error, (cause) => cause instanceof BlockedUrlError);
+      }
       let parsed: unknown = answer.text;
       try {
         parsed = JSON.parse(answer.text);

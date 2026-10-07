@@ -24,7 +24,8 @@ import {
 import type { WorkflowEngine } from "./engine.js";
 import { ParkWorkflow, type WorkflowEnv } from "./env.js";
 import { mayRead } from "./reads.js";
-import { SEEDED_KEY, type FiredRow } from "./store.js";
+import { CaseBusy } from "./engine.js";
+import { RevisionConflict, SEEDED_KEY, type FiredRow, type PendingOpen } from "./store.js";
 
 /**
  * One pass of a workflow's trigger: read what it reads, keep the records that
@@ -35,7 +36,14 @@ import { SEEDED_KEY, type FiredRow } from "./store.js";
  * long it rests in between, and when the trigger expires. Each record is
  * claimed before its case opens, and the claim only succeeds if nobody else
  * claimed it since this run looked, so two runs never open a case for the
- * same record. A record whose case could not open is given back.
+ * same record. The claim carries everything needed to open the case (its id,
+ * the record, who it runs as), so a claim whose case never opened — the
+ * server stopped in between — is opened by `reopenClaims`. A record whose
+ * case could not open is given back.
+ *
+ * A record's count of cases only ever goes up while the trigger stays the
+ * same: one that stops matching and matches again is a new occurrence, with
+ * a new case.
  *
  * A trigger on new records first takes note of what is already there, and
  * keeps taking note until one read has reached every record: a record first
@@ -100,7 +108,9 @@ const refusal = (error: unknown): number | undefined => {
 
 const plural = (count: number, one: string, many = `${one}s`): string => `${count} ${count === 1 ? one : many}`;
 
-const caseIdFor = (workflow: string, key: string, count: number): string => createHash("sha1").update(`${workflow}\u0000${key}\u0000${count}`).digest("hex").slice(0, 24);
+/** A claimed record's case id: unique to the run that claimed it, and kept on the claim. */
+const caseIdFor = (workflow: string, key: string, count: number, run: string): string =>
+  createHash("sha1").update(JSON.stringify([workflow, key, count, run])).digest("hex").slice(0, 24);
 
 /** Read what a workflow reads, as a person (and an agent) may. */
 const gather = async (env: WorkflowEnv, workflow: WorkflowSpec, actor: Principal | null, agent: AgentSpec | null): Promise<Gathered> => {
@@ -169,7 +179,8 @@ const select = async (env: WorkflowEnv, workflow: WorkflowSpec, gathered: Gather
     return true;
   };
 
-  let rows: readonly Row[] = gathered.rows;
+  /* A record whose claim is still being opened is left to that claim. */
+  let rows: readonly Row[] = gathered.rows.filter((one) => !fired.get(one.key)?.pending);
   const prints = new Map<string, string>();
   if (isApiTrigger(trigger)) {
     for (const one of rows) prints.set(one.key, fingerprint(one.row, trigger.kind === "record_changed" ? trigger.fields : undefined));
@@ -202,9 +213,21 @@ const select = async (env: WorkflowEnv, workflow: WorkflowSpec, gathered: Gather
       seenOnly.push({ key: one.key, fingerprint: prints.get(one.key)!, count: before?.count ?? 0, ...(before?.lastAt ? { lastAt: before.lastAt } : {}) });
     }
   } else if (workflow.once === "per-row") {
-    /* A record that stopped matching can open a case again when it matches again. Only records this read reached. */
-    const lapsed = rows.map((one) => one.key).filter((key) => fired.get(key)?.fingerprint === "acted" && !matchedKeys.has(key));
-    if (lapsed.length > 0 && !dryRun) await env.store.unfire(workflow.id, lapsed);
+    /*
+     * A record that stopped matching can open a case again when it matches
+     * again: it is marked lapsed, keeping its count, so the next case is a new
+     * occurrence. Only records this read reached.
+     */
+    const lapsed = rows.filter((one) => fired.get(one.key)?.fingerprint === "acted" && !matchedKeys.has(one.key));
+    if (lapsed.length > 0 && !dryRun) {
+      await env.store.markFired(
+        workflow.id,
+        lapsed.map((one) => {
+          const held = fired.get(one.key)!;
+          return { key: one.key, fingerprint: "lapsed", count: held.count, ...(held.lastAt ? { lastAt: held.lastAt } : {}) };
+        }),
+      );
+    }
     matched = matched.filter((one) => fired.get(one.key)?.fingerprint !== "acted");
   }
 
@@ -283,13 +306,25 @@ export const runTrigger = async (env: WorkflowEnv, engine: WorkflowEngine, workf
     let failedCases = 0;
     for (const one of selected.matched) {
       const mark = one.key ? selected.marks.get(one.key) : undefined;
+      /* The claim holds everything needed to open the case, so an interruption after it never loses the record. */
+      const pending: PendingOpen | undefined = mark
+        ? {
+            caseId: `c-${caseIdFor(workflow.id, one.key, mark.next.count, started.id)}`,
+            row: one.row,
+            inputs: { ...inputs },
+            start: { ...options.start },
+            run: started.id,
+            ...(actor ? { actor: { ...actor } } : {}),
+            at: new Date(env.now()).toISOString(),
+          }
+        : undefined;
+      const claim = mark && pending ? { ...mark.next, pending } : undefined;
       /* Claimed first: another run that got here first has it, and this one leaves it. */
-      if (mark && !(await env.store.claimFired(workflow.id, one.key, mark.before, mark.next))) continue;
+      if (mark && claim && !(await env.store.claimFired(workflow.id, one.key, mark.before, claim))) continue;
       let opened: Awaited<ReturnType<WorkflowEngine["open"]>>;
       try {
         opened = await engine.open(workflow, {
-          /* One id per claim: opening again after an interruption opens the same case. */
-          ...(mark ? { id: `c-${caseIdFor(workflow.id, one.key, mark.next.count)}` } : {}),
+          ...(pending ? { id: pending.caseId } : {}),
           row: one.row,
           ...(one.key ? { rowKey: one.key } : {}),
           inputs: { ...inputs },
@@ -299,12 +334,13 @@ export const runTrigger = async (env: WorkflowEnv, engine: WorkflowEngine, workf
         });
       } catch (error) {
         /* Not opened: the record is given back, to be tried again next time. */
-        if (mark) {
+        if (mark && claim) {
           if (mark.before === undefined) await env.store.unfire(workflow.id, [one.key]);
-          else await env.store.claimFired(workflow.id, one.key, mark.next, mark.before);
+          else await env.store.claimFired(workflow.id, one.key, claim, mark.before);
         }
         throw error;
       }
+      if (pending) await env.store.settleClaim(workflow.id, one.key, pending.caseId);
       cases.push(opened.id);
       if (opened.status === "failed") failedCases++;
     }
@@ -341,6 +377,36 @@ export const runTrigger = async (env: WorkflowEnv, engine: WorkflowEngine, workf
     await countFailure(message);
     return { run: await finish({ status: "failed", error: message, summary: `Failed: ${message}` }) };
   }
+};
+
+/**
+ * Claims whose case never opened (the server stopped between the claim and
+ * the case): each is opened now, under the id the claim holds, so opening it
+ * twice opens it once.
+ */
+export const reopenClaims = async (env: WorkflowEnv, engine: WorkflowEngine, before: string): Promise<number> => {
+  let reopened = 0;
+  for (const { workflow: id, key, pending } of await env.store.pendingClaims(before)) {
+    const workflow = await env.store.get(id);
+    if (!workflow) continue;
+    try {
+      await engine.open(workflow, {
+        id: pending.caseId,
+        row: pending.row,
+        rowKey: key,
+        inputs: pending.inputs,
+        start: pending.start as WorkflowStart,
+        ...(pending.run ? { run: pending.run } : {}),
+        actor: (pending.actor as Principal | undefined) ?? null,
+      });
+    } catch (error) {
+      if (error instanceof CaseBusy || error instanceof RevisionConflict) continue;
+      throw error;
+    }
+    await env.store.settleClaim(id, key, pending.caseId);
+    reopened++;
+  }
+  return reopened;
 };
 
 /* ── preview ───────────────────────────────────────────────────────────── */

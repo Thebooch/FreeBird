@@ -147,6 +147,8 @@ CREATE TABLE IF NOT EXISTS dash_workflow_signals (
 );
 
 CREATE INDEX IF NOT EXISTS dash_workflow_signals_key ON dash_workflow_signals (workspace, key, taken_by, at);
+ALTER TABLE dash_workflow_signals ADD COLUMN IF NOT EXISTS acked BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE dash_workflow_fired ADD COLUMN IF NOT EXISTS pending JSONB;
 
 CREATE TABLE IF NOT EXISTS dash_calendar_events (
   workspace TEXT NOT NULL,

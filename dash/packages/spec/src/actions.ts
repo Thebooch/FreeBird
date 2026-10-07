@@ -320,7 +320,14 @@ export const ACTION_VARIANTS: readonly ActionVariant[] = [
   /* ── send to a system ── */
   variant({
     id: "send.webhook", base: "send", label: "Webhook", does: "POST the case's data to an address.",
-    fields: [{ key: "url", label: "Address", kind: "text", required: true, placeholder: "https://hooks.example.com/…", ask: "Which address should it send to?" }, { key: "body", label: "Body", kind: "values" }],
+    fields: [
+      { key: "url", label: "Address", kind: "text", required: true, placeholder: "https://hooks.example.com/…", ask: "Which address should it send to?" },
+      { key: "body", label: "Body", kind: "values" },
+      {
+        key: "idempotent", label: "The receiver ignores repeats", kind: "boolean", default: false,
+        help: "Only if it honours Idempotency-Key. Then a 5xx answer can be retried; otherwise a person is asked whether it went through.",
+      },
+    ],
     outcomes: ["next", "failed"], outputs: [{ name: "status", description: "The answer's status" }, { name: "response", description: "What came back" }],
     body: "request", leavesDash: true, defaultMode: "approve", interrupted: "review",
   }),

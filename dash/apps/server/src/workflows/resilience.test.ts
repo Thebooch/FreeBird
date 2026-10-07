@@ -6,6 +6,7 @@ import { CaseBusy, STALL_MS } from "./engine.js";
 import { WorkflowRunner } from "./runner.js";
 import { WorkflowService } from "./service.js";
 import { StartError, startWorkflow } from "./start.js";
+import { DeliveryError, deliveryErrorOf } from "./env.js";
 import { DbSignalStore, DbWorkflowStore } from "./store.js";
 import { ORDERS, agentOf, byHand, every, fake, node, owner, run, source, workflowOf, type Fake } from "./testing.js";
 
@@ -35,6 +36,7 @@ const later = (f: Fake, ms = STALL_MS + 1000): void => {
 };
 
 const manual = { kind: "manual" } as const;
+const webhookIdempotent = (extra: Record<string, unknown> = {}) => node("send", "send.webhook", { url: "https://hooks.example.com/in", body: {}, idempotent: true }, extra);
 const hook = (extra: Record<string, unknown> = {}) => node("send", "send.webhook", { url: "https://hooks.example.com/in", body: { id: "{{ input.id }}" } }, extra);
 
 /* ── 1. interrupted steps are recovered without acting twice ─────────── */
@@ -301,7 +303,7 @@ describe("retries", () => {
   it("tries a refused webhook again after its delay, with backoff, up to the times set", async () => {
     const f = fake();
     f.postAnswer = 503;
-    const workflow = workflowOf({ trigger: manual, nodes: [hook({ mode: "auto", retry: { times: 3, delay: "1m" } })] });
+    const workflow = workflowOf({ trigger: manual, nodes: [webhookIdempotent({ mode: "auto", retry: { times: 3, delay: "1m" } })] });
     await f.env.store.put(workflow);
     const { run: done } = await byHand(f, workflow);
     const id = done.cases[0]!;
@@ -327,7 +329,7 @@ describe("retries", () => {
   it("gives up after the last try", async () => {
     const f = fake();
     f.postAnswer = 500;
-    const workflow = workflowOf({ trigger: manual, nodes: [hook({ mode: "auto", retry: { times: 1, delay: "1m" } })] });
+    const workflow = workflowOf({ trigger: manual, nodes: [webhookIdempotent({ mode: "auto", retry: { times: 1, delay: "1m" } })] });
     await f.env.store.put(workflow);
     const { run: done } = await byHand(f, workflow);
     later(f, 60_000);
@@ -520,6 +522,7 @@ describe("database stores", () => {
       const [a, b] = await Promise.all([signals.take("hook:x", "case-a", "2026-10-01T00:00:00.000Z"), signals.take("hook:x", "case-b", "2026-10-01T00:00:00.000Z")]);
       expect([a, b].filter(Boolean)).toHaveLength(1);
       expect((a ?? b)?.payload).toEqual({ n: 1 });
+      await signals.ack((a ?? b)!.id);
       expect(await signals.untaken("2026-10-01T00:00:00.000Z")).toEqual([]);
     } finally {
       await db.close();
@@ -527,4 +530,204 @@ describe("database stores", () => {
   });
 });
 
-export type { Principal };
+/* ── second review: state transitions, joins, trigger identity ───────── */
+
+/** Break one call of a store method: before it does anything, or after it has done it. */
+const breakOnce = <T extends object>(target: T, method: keyof T & string, when: (...args: never[]) => boolean, after = false): void => {
+  const original = (target[method] as unknown as (...args: unknown[]) => Promise<unknown>).bind(target);
+  let armed = true;
+  (target as Record<string, unknown>)[method] = async (...args: unknown[]) => {
+    if (armed && when(...(args as never[]))) {
+      armed = false;
+      if (after) await original(...args);
+      throw new Error("The server stopped.");
+    }
+    return original(...args);
+  };
+};
+
+describe("the last step and its ending", () => {
+  it("never sends again when it stopped while ending the case after its last step", async () => {
+    const f = fake();
+    const workflow = workflowOf({ trigger: manual, nodes: [hook()] });
+    await f.env.store.put(workflow);
+    crashOn(f, "cases", (one: { status?: string }) => one.status === "done");
+    await byHand(f, workflow);
+    expect(f.posts).toHaveLength(1);
+    later(f);
+    await f.engine.recover();
+    expect(f.posts).toHaveLength(1);
+    expect((await f.env.cases.list())[0]).toMatchObject({ status: "done" });
+  });
+
+  it("never asks again when it stopped while ending the case after an answer", async () => {
+    const f = fake();
+    const workflow = workflowOf({ trigger: manual, nodes: [node("ask", "ask.answer", { question: "When?", timeout: "2d" })] });
+    await f.env.store.put(workflow);
+    const { run: done } = await byHand(f, workflow);
+    const [question] = await f.env.tasks.list({ status: "waiting" });
+    crashOn(f, "cases", (one: { status?: string }) => one.status === "done");
+    await f.tasks.answer(owner, question!.id, "Tuesday").catch(() => undefined);
+    later(f);
+    await f.engine.recover();
+    await f.engine.deliverPending();
+    expect(await f.env.cases.get(done.cases[0]!)).toMatchObject({ status: "done" });
+    expect((await f.env.tasks.list()).filter((task) => task.body.kind === "question")).toHaveLength(1);
+  });
+
+  it("tells a waiting parent after it stopped between ending a child and announcing it", async () => {
+    const f = fake();
+    await f.env.store.put(workflowOf({ id: "kid", name: "kid", trigger: manual, nodes: [node("pause", "wait.duration", { duration: "1h" })] }));
+    const parent = workflowOf({ trigger: manual, nodes: [node("start", "run_workflow.start", { workflow: "kid", waitForIt: true })] });
+    await f.env.store.put(parent);
+    const { run: done } = await byHand(f, parent);
+    breakOnce(f.env.signals, "put", (signal: { key: string }) => signal.key.startsWith("case-done:"));
+    later(f, 3_600_000);
+    await f.engine.timeouts();
+    expect((await f.env.cases.get(done.cases[0]!))?.status).toBe("waiting");
+    later(f);
+    await f.engine.recover();
+    expect(await f.env.cases.get(done.cases[0]!)).toMatchObject({ status: "done" });
+  });
+});
+
+describe("taking a signal", () => {
+  it("keeps an answer for the case when it stopped between taking it and saving what it caused", async () => {
+    const f = fake();
+    const nodes = [node("ask", "ask.answer", { question: "When?", timeout: "2d" }), node("note", "create.note", { text: "heard {{ steps.ask.answer }}" })];
+    const workflow = workflowOf({ trigger: manual, nodes });
+    await f.env.store.put(workflow);
+    const { run: done } = await byHand(f, workflow);
+    const [question] = await f.env.tasks.list({ status: "waiting" });
+    crashOn(f, "cases", (one: { status?: string; at?: string }) => one.status === "running" && one.at === "ask");
+    await f.tasks.answer(owner, question!.id, "Tuesday").catch(() => undefined);
+    expect((await f.env.cases.get(done.cases[0]!))?.status).toBe("waiting");
+    await f.engine.deliverPending();
+    expect(await f.env.cases.get(done.cases[0]!)).toMatchObject({ status: "done" });
+    expect((await f.env.tasks.list()).map((task) => task.title)).toContain("heard Tuesday");
+  });
+
+  it("lets no other case take a signal one case holds, and frees it once acknowledged", async () => {
+    const f = fake();
+    await f.env.signals.put({ id: "s", key: "k", at: "2026-10-06T12:00:00.000Z", payload: {} });
+    expect(await f.env.signals.take("k", "a", "2026-01-01")).toBeTruthy();
+    expect(await f.env.signals.take("k", "b", "2026-01-01")).toBeNull();
+    expect(await f.env.signals.take("k", "a", "2026-01-01")).toBeTruthy();
+    await f.env.signals.ack("s");
+    expect(await f.env.signals.take("k", "a", "2026-01-01")).toBeNull();
+    expect(await f.env.signals.untaken("2026-01-01")).toEqual([]);
+  });
+});
+
+describe("waiting for all", () => {
+  it("waits for every item even when the first ends before the rest exist", async () => {
+    const f = fake();
+    f.rows = [
+      { id: 1, status: "open", slow: false },
+      { id: 2, status: "open", slow: true },
+    ];
+    await f.env.store.put(
+      workflowOf({
+        id: "each",
+        name: "each",
+        trigger: { kind: "agent", inputs: [{ name: "order", required: true, description: "The work order" }] },
+        nodes: [node("pause", "wait.duration", { duration: "1h" }, { when: "input.order.slow == true" })],
+      }),
+    );
+    const nodes = [node("find", "lookup.records", { connection: "pms", entity: "work_order" }), node("all", "run_workflow.each", { workflow: "each", items: "{{ steps.find.rows }}", as: "order" })];
+    const parent = workflowOf({ trigger: manual, nodes });
+    await f.env.store.put(parent);
+    const { run: done } = await byHand(f, parent);
+    expect((await f.env.cases.list({ workflow: "each" })).map((one) => one.status).sort()).toEqual(["done", "waiting"]);
+    expect((await f.env.cases.get(done.cases[0]!))?.status).toBe("waiting");
+    later(f, 3_600_000);
+    await f.engine.timeouts();
+    const after = await f.env.cases.get(done.cases[0]!);
+    expect(after).toMatchObject({ status: "done" });
+    expect((after?.data.steps["all"] as { count: number }).count).toBe(2);
+  });
+});
+
+describe("trigger claims", () => {
+  const perRow = (f: Fake): WorkflowSpec => workflowOf({ trigger: every, source, criteria: 'status == "open"', nodes: [hook()] });
+
+  it("opens a new case each time a record matches again", async () => {
+    const f = fake();
+    const workflow = perRow(f);
+    await f.env.store.put(workflow);
+    f.rows = [{ id: 7, status: "open" }];
+    const first = await run(f, workflow);
+    f.rows = [{ id: 7, status: "closed" }];
+    await run(f, workflow);
+    f.rows = [{ id: 7, status: "open" }];
+    const third = await run(f, workflow);
+    expect(third.run.cases).toHaveLength(1);
+    expect(third.run.cases[0]).not.toBe(first.run.cases[0]);
+    expect(f.posts).toHaveLength(2);
+  });
+
+  it("opens the case of a record claimed by a run that stopped before opening it", async () => {
+    const f = fake();
+    const workflow = perRow(f);
+    await f.env.store.put(workflow);
+    f.rows = [{ id: 7, status: "open" }];
+    breakOnce(f.env.store, "claimFired", () => true, true);
+    await run(f, workflow);
+    expect(await f.env.cases.list()).toHaveLength(0);
+    /* The next run leaves it alone: it is claimed. */
+    await run(f, workflow);
+    expect(await f.env.cases.list()).toHaveLength(0);
+    later(f);
+    await new WorkflowRunner(f.starter).tick();
+    expect(await f.env.cases.list()).toHaveLength(1);
+    expect(f.posts).toHaveLength(1);
+    await new WorkflowRunner(f.starter).tick();
+    expect(await f.env.cases.list()).toHaveLength(1);
+  });
+});
+
+describe("a wait's own agent", () => {
+  it("stops reading for a wait whose step's agent was removed", async () => {
+    const f = fake();
+    f.agents.set("maint", agentOf());
+    f.rows = [ORDERS[0]!];
+    const workflow = workflowOf({ trigger: every, source, nodes: [node("wait", "wait.for", { event: "record_change", condition: 'status == "scheduled"', timeout: "3d" }, { agentId: "maint" })] });
+    await f.env.store.put(workflow);
+    await run(f, workflow);
+    const [waiting] = await f.env.cases.list();
+    expect(waiting?.waiting?.agent).toBe("maint");
+    f.agents.delete("maint");
+    const reads = f.reads.length;
+    await new WorkflowRunner(f.starter).tick();
+    expect(f.reads.length).toBe(reads);
+    expect((await f.env.store.get("wf"))?.parked?.reason).toMatch(/"maint" it acts for no longer exists/);
+  });
+});
+
+describe("webhook outcomes", () => {
+  it("asks a person after a 5xx from a receiver not known to ignore repeats, and never retries it", async () => {
+    const f = fake();
+    f.postAnswer = 500;
+    const workflow = workflowOf({ trigger: manual, nodes: [hook({ mode: "auto", retry: { times: 3, delay: "1m" } })] });
+    await f.env.store.put(workflow);
+    await byHand(f, workflow);
+    later(f, 600_000);
+    await f.engine.timeouts();
+    expect(f.posts).toHaveLength(1);
+    expect((await f.env.tasks.list({ status: "waiting_approval" }))[0]).toMatchObject({ uncertain: true });
+  });
+
+  it("retries a request known never to have left, and treats any other lost answer as unknown", async () => {
+    const f = fake();
+    f.postAnswer = new DeliveryError("Connection refused.", "no");
+    const workflow = workflowOf({ trigger: manual, nodes: [hook({ mode: "auto", retry: { times: 1, delay: "1m" } })] });
+    await f.env.store.put(workflow);
+    const { run: done } = await byHand(f, workflow);
+    expect((await f.env.cases.get(done.cases[0]!))?.waiting?.kind).toBe("retry");
+
+    expect(deliveryErrorOf(Object.assign(new Error("fetch failed"), { cause: { code: "ECONNREFUSED" } })).sent).toBe("no");
+    expect(deliveryErrorOf(Object.assign(new Error("fetch failed"), { cause: { code: "ECONNRESET" } })).sent).toBe("unknown");
+    expect(deliveryErrorOf(new Error("blocked"), () => true).sent).toBe("no");
+    expect(deliveryErrorOf(new Error("The operation was aborted.")).sent).toBe("unknown");
+  });
+});

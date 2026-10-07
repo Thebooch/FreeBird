@@ -26,6 +26,7 @@ export type WorkflowEvent =
   | { readonly type: "workflow.run"; readonly workflow: string; readonly run: string; readonly status: string; readonly cases: number }
   | { readonly type: "workflow.parked"; readonly workflow: string; readonly reason: string }
   | { readonly type: "case.finished"; readonly workflow: string; readonly case: string; readonly status: string }
+  | { readonly type: "case.error"; readonly case: string; readonly message: string }
   | { readonly type: "task.waiting"; readonly task: string; readonly workflow?: string | undefined; readonly agent?: string | undefined };
 
 /** Sends Outreach. Comms supplies the real one; until then nothing leaves Dash. */
@@ -79,6 +80,56 @@ export interface WorkflowEnv {
   readonly now: () => number;
   readonly newId: () => string;
 }
+
+/**
+ * A request that did not get an answer, and whether it left: `no` when it
+ * never went out (refused by the guard, nobody at the address, no such
+ * name), `unknown` when it may have arrived (the connection dropped or timed
+ * out after sending began).
+ */
+export class DeliveryError extends Error {
+  constructor(
+    message: string,
+    readonly sent: "no" | "unknown",
+  ) {
+    super(message);
+    this.name = "DeliveryError";
+  }
+}
+
+/** Failures that happen before a request's first byte leaves: no connection, no such name, a certificate refused. */
+const NOT_SENT_CODES = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "CERT_HAS_EXPIRED",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+]);
+
+/** The system error code on an error or its cause. */
+const codeOf = (error: unknown): string | undefined => {
+  const own = (error as { code?: unknown } | null)?.code;
+  if (typeof own === "string") return own;
+  const cause = (error as { cause?: { code?: unknown } } | null)?.cause?.code;
+  return typeof cause === "string" ? cause : undefined;
+};
+
+/**
+ * Whether a failed request left, from what the error says structurally: its
+ * system error code, or the caller's own knowledge that it was refused before
+ * sending (the address guard). Anything else may have arrived.
+ */
+export const deliveryErrorOf = (error: unknown, refusedBeforeSending: (error: unknown) => boolean = () => false): DeliveryError => {
+  if (error instanceof DeliveryError) return error;
+  const text = error instanceof Error ? error.message : String(error);
+  const code = codeOf(error);
+  return new DeliveryError(text, refusedBeforeSending(error) || (code !== undefined && NOT_SENT_CODES.has(code)) ? "no" : "unknown");
+};
 
 /** A workflow is stopped by itself — access lost — until a person turns it back on. */
 export class ParkWorkflow extends Error {

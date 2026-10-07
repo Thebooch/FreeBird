@@ -1,4 +1,6 @@
 import { isWatchedTrigger, type WorkflowSpec, type WorkflowStart } from "@freebirdai/dash-spec";
+import { STALL_MS } from "./engine.js";
+import { reopenClaims } from "./run.js";
 import { isDue } from "./schedule.js";
 import { StartError, startWorkflow, type Starter } from "./start.js";
 
@@ -10,7 +12,8 @@ import { StartError, startWorkflow, type Starter } from "./start.js";
  * 2. wakes every waiting case whose deadline has passed, down its time-out path
  *    (or to try again, for a step set to retry);
  * 3. hands on signals a busy case could not take when they arrived;
- * 4. carries on cases a stopped call left running, from what they wrote down;
+ * 4. carries on cases a stopped call left running, from what they wrote down,
+ *    and opens the cases of records claimed by a run that stopped first;
  * 5. checks the records waiting cases watch, as each case may read them, and
  *    wakes those whose condition now holds.
  *
@@ -90,6 +93,7 @@ export class WorkflowRunner {
         await this.options.engine.timeouts();
         await this.options.engine.deliverPending();
         await this.options.engine.recover();
+        await reopenClaims(this.options.env, this.options.engine, new Date(this.options.env.now() - STALL_MS).toISOString());
         await this.watchRecords();
       } catch (error) {
         this.options.log?.warn(`workflows could not be checked: ${error instanceof Error ? error.message : String(error)}`);

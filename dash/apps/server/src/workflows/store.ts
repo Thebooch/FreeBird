@@ -29,11 +29,28 @@ import type { DashDb } from "../platform/db.js";
 /** The key a workflow's first look at an API is marked done under. A real row never has an empty key. */
 export const SEEDED_KEY = "";
 
-/** What a workflow has seen of one record: its fingerprint, how many cases it opened, and when last. */
+/** Everything needed to open a claimed record's case, kept with the claim until the case exists. */
+export interface PendingOpen {
+  readonly caseId: string;
+  readonly row: Record<string, unknown>;
+  readonly inputs: Record<string, unknown>;
+  readonly start: Record<string, unknown>;
+  readonly run?: string | undefined;
+  readonly actor?: Record<string, unknown> | undefined;
+  readonly at: string;
+}
+
+/**
+ * What a workflow has seen of one record: its fingerprint, how many cases it
+ * has opened in all (never reset while the trigger stays the same, so each
+ * occurrence has its own number), and when last. `pending` is a claim whose
+ * case has not been opened yet.
+ */
 export interface FiredRow {
   readonly fingerprint: string;
   readonly count: number;
   readonly lastAt?: string | undefined;
+  readonly pending?: PendingOpen | undefined;
 }
 
 export interface WorkflowStore {
@@ -54,6 +71,10 @@ export interface WorkflowStore {
    * so two runs never open a case for the same record.
    */
   claimFired(workflow: string, key: string, before: FiredRow | undefined, next: FiredRow): Promise<boolean>;
+  /** The claim's case is open: clear its pending open, if it is still that one. */
+  settleClaim(workflow: string, key: string, caseId: string): Promise<void>;
+  /** Claims whose case was never opened, made before `before`, in every workflow. */
+  pendingClaims(before: string): Promise<Array<{ readonly workflow: string; readonly key: string; readonly pending: PendingOpen }>>;
   unfire(workflow: string, keys: readonly string[]): Promise<void>;
   clearFired(workflow: string): Promise<void>;
 }
@@ -86,6 +107,8 @@ export interface CaseStore {
   stalled(before: string): Promise<WorkflowCase[]>;
   /** Cases another case started. */
   children(parent: string): Promise<WorkflowCase[]>;
+  /** Ended cases whose ending was not yet announced, ended before `before`. */
+  unannounced(before: string): Promise<WorkflowCase[]>;
 }
 
 /** Something that happened that a case may wait for: kept until one case takes it. */
@@ -96,18 +119,26 @@ export interface WorkflowSignal {
   readonly at: string;
   readonly payload: Readonly<Record<string, unknown>>;
   readonly takenBy?: string | undefined;
+  readonly acked?: boolean | undefined;
 }
 
 /**
  * The inbox of things that happened: a reply, an answer, a webhook call, a
  * case ending. Kept whether or not a case is waiting yet, so one that starts
- * waiting later still hears it; taken by exactly one case.
+ * waiting later still hears it.
+ *
+ * Taking is in two parts. `take` claims a signal for one case; the case may
+ * take it again (after an interruption) until it `ack`s it, which it does
+ * only once what the signal caused is saved. No other case can take it in
+ * between. Putting a signal whose id is already kept does nothing.
  */
 export interface SignalStore {
   put(signal: WorkflowSignal): Promise<void>;
-  /** The oldest signal for this key not yet taken since `since`, marked taken by this case; null when there is none. Atomic. */
+  /** The oldest signal for this key since `since` that nobody else holds and nobody has acknowledged, claimed for this case; null when there is none. Atomic. */
   take(key: string, by: string, since: string): Promise<WorkflowSignal | null>;
-  /** Keys with signals nobody has taken since `since`. */
+  /** What the signal caused is saved: it is done with. */
+  ack(id: string): Promise<void>;
+  /** Keys with signals not yet acknowledged since `since`. */
   untaken(since: string): Promise<string[]>;
 }
 
@@ -186,6 +217,19 @@ export class MemoryWorkflowStore implements WorkflowStore {
     const held = this.seen.get(workflow);
     for (const key of keys) held?.delete(key);
   }
+  async settleClaim(workflow: string, key: string, caseId: string): Promise<void> {
+    const held = this.seen.get(workflow);
+    const row = held?.get(key);
+    if (row?.pending?.caseId === caseId) {
+      const { pending: _pending, ...rest } = row;
+      held!.set(key, rest);
+    }
+  }
+  async pendingClaims(before: string): Promise<Array<{ workflow: string; key: string; pending: PendingOpen }>> {
+    const out: Array<{ workflow: string; key: string; pending: PendingOpen }> = [];
+    for (const [workflow, rows] of this.seen) for (const [key, row] of rows) if (row.pending && row.pending.at <= before) out.push({ workflow, key, pending: row.pending });
+    return out;
+  }
   async clearFired(workflow: string): Promise<void> {
     this.seen.delete(workflow);
   }
@@ -225,22 +269,29 @@ export class MemoryCaseStore implements CaseStore {
   async children(parent: string): Promise<WorkflowCase[]> {
     return [...this.rows.values()].filter((one) => one.start.parentCase === parent);
   }
+  async unannounced(before: string): Promise<WorkflowCase[]> {
+    return [...this.rows.values()].filter((one) => one.announced === false && (one.finishedAt ?? one.updatedAt) <= before);
+  }
 }
 
 export class MemorySignalStore implements SignalStore {
   private readonly rows: WorkflowSignal[] = [];
   async put(signal: WorkflowSignal): Promise<void> {
-    this.rows.push({ ...signal });
+    if (!this.rows.some((one) => one.id === signal.id)) this.rows.push({ ...signal });
   }
   async take(key: string, by: string, since: string): Promise<WorkflowSignal | null> {
-    const index = this.rows.findIndex((one) => one.key === key && one.takenBy === undefined && one.at >= since);
+    const index = this.rows.findIndex((one) => one.key === key && !one.acked && (one.takenBy === undefined || one.takenBy === by) && one.at >= since);
     if (index < 0) return null;
     const taken = { ...this.rows[index]!, takenBy: by };
     this.rows[index] = taken;
     return taken;
   }
+  async ack(id: string): Promise<void> {
+    const index = this.rows.findIndex((one) => one.id === id);
+    if (index >= 0) this.rows[index] = { ...this.rows[index]!, acked: true };
+  }
   async untaken(since: string): Promise<string[]> {
-    return [...new Set(this.rows.filter((one) => one.takenBy === undefined && one.at >= since).map((one) => one.key))];
+    return [...new Set(this.rows.filter((one) => !one.acked && one.at >= since).map((one) => one.key))];
   }
 }
 
@@ -367,17 +418,22 @@ export class DbWorkflowStore implements WorkflowStore {
     return result.rows.map((row) => workflowRunSchema.parse(parsed(row.record)));
   }
   async fired(workflow: string): Promise<Map<string, FiredRow>> {
-    const result = await sql<{ row_key: string; fingerprint: string; fire_count: number; last_at: string | null }>`
-      SELECT row_key, fingerprint, fire_count, last_at FROM dash_workflow_fired WHERE workspace = ${this.workspace} AND workflow = ${workflow}
+    const result = await sql<{ row_key: string; fingerprint: string; fire_count: number; last_at: string | null; pending: unknown }>`
+      SELECT row_key, fingerprint, fire_count, last_at, pending FROM dash_workflow_fired WHERE workspace = ${this.workspace} AND workflow = ${workflow}
     `.execute(this.db.kysely);
-    return new Map(result.rows.map((row) => [row.row_key, { fingerprint: row.fingerprint, count: Number(row.fire_count), ...(row.last_at ? { lastAt: row.last_at } : {}) }]));
+    return new Map(
+      result.rows.map((row) => [
+        row.row_key,
+        { fingerprint: row.fingerprint, count: Number(row.fire_count), ...(row.last_at ? { lastAt: row.last_at } : {}), ...(row.pending ? { pending: parsed(row.pending) as PendingOpen } : {}) },
+      ]),
+    );
   }
   async markFired(workflow: string, rows: ReadonlyArray<{ key: string } & FiredRow>): Promise<void> {
     for (const row of rows) {
       await sql`
-        INSERT INTO dash_workflow_fired (workspace, workflow, row_key, fingerprint, fire_count, last_at)
-        VALUES (${this.workspace}, ${workflow}, ${row.key}, ${row.fingerprint}, ${row.count}, ${row.lastAt ?? null})
-        ON CONFLICT (workspace, workflow, row_key) DO UPDATE SET fingerprint = EXCLUDED.fingerprint, fire_count = EXCLUDED.fire_count, last_at = EXCLUDED.last_at
+        INSERT INTO dash_workflow_fired (workspace, workflow, row_key, fingerprint, fire_count, last_at, pending)
+        VALUES (${this.workspace}, ${workflow}, ${row.key}, ${row.fingerprint}, ${row.count}, ${row.lastAt ?? null}, ${row.pending ? JSON.stringify(row.pending) : null}::jsonb)
+        ON CONFLICT (workspace, workflow, row_key) DO UPDATE SET fingerprint = EXCLUDED.fingerprint, fire_count = EXCLUDED.fire_count, last_at = EXCLUDED.last_at, pending = EXCLUDED.pending
       `.execute(this.db.kysely);
     }
   }
@@ -385,12 +441,12 @@ export class DbWorkflowStore implements WorkflowStore {
     const result =
       before === undefined
         ? await sql`
-            INSERT INTO dash_workflow_fired (workspace, workflow, row_key, fingerprint, fire_count, last_at)
-            VALUES (${this.workspace}, ${workflow}, ${key}, ${next.fingerprint}, ${next.count}, ${next.lastAt ?? null})
+            INSERT INTO dash_workflow_fired (workspace, workflow, row_key, fingerprint, fire_count, last_at, pending)
+            VALUES (${this.workspace}, ${workflow}, ${key}, ${next.fingerprint}, ${next.count}, ${next.lastAt ?? null}, ${next.pending ? JSON.stringify(next.pending) : null}::jsonb)
             ON CONFLICT (workspace, workflow, row_key) DO NOTHING
           `.execute(this.db.kysely)
         : await sql`
-            UPDATE dash_workflow_fired SET fingerprint = ${next.fingerprint}, fire_count = ${next.count}, last_at = ${next.lastAt ?? null}
+            UPDATE dash_workflow_fired SET fingerprint = ${next.fingerprint}, fire_count = ${next.count}, last_at = ${next.lastAt ?? null}, pending = ${next.pending ? JSON.stringify(next.pending) : null}::jsonb
             WHERE workspace = ${this.workspace} AND workflow = ${workflow} AND row_key = ${key}
               AND fingerprint = ${before.fingerprint} AND fire_count = ${before.count}
           `.execute(this.db.kysely);
@@ -400,6 +456,19 @@ export class DbWorkflowStore implements WorkflowStore {
     for (const key of keys) {
       await sql`DELETE FROM dash_workflow_fired WHERE workspace = ${this.workspace} AND workflow = ${workflow} AND row_key = ${key}`.execute(this.db.kysely);
     }
+  }
+  async settleClaim(workflow: string, key: string, caseId: string): Promise<void> {
+    await sql`
+      UPDATE dash_workflow_fired SET pending = NULL
+      WHERE workspace = ${this.workspace} AND workflow = ${workflow} AND row_key = ${key} AND (pending->>'caseId') = ${caseId}
+    `.execute(this.db.kysely);
+  }
+  async pendingClaims(before: string): Promise<Array<{ workflow: string; key: string; pending: PendingOpen }>> {
+    const result = await sql<{ workflow: string; row_key: string; pending: unknown }>`
+      SELECT workflow, row_key, pending FROM dash_workflow_fired
+      WHERE workspace = ${this.workspace} AND pending IS NOT NULL AND (pending->>'at') <= ${before}
+    `.execute(this.db.kysely);
+    return result.rows.map((row) => ({ workflow: row.workflow, key: row.row_key, pending: parsed(row.pending) as PendingOpen }));
   }
   async clearFired(workflow: string): Promise<void> {
     await sql`DELETE FROM dash_workflow_fired WHERE workspace = ${this.workspace} AND workflow = ${workflow}`.execute(this.db.kysely);
@@ -484,6 +553,13 @@ export class DbCaseStore implements CaseStore {
     `.execute(this.db.kysely);
     return this.parse(result.rows);
   }
+  async unannounced(before: string): Promise<WorkflowCase[]> {
+    const result = await sql<{ record: unknown }>`
+      SELECT record FROM dash_workflow_cases
+      WHERE workspace = ${this.workspace} AND (record->>'announced') = 'false' AND COALESCE(record->>'finishedAt', record->>'updatedAt') <= ${before}
+    `.execute(this.db.kysely);
+    return this.parse(result.rows);
+  }
 }
 
 export class DbSignalStore implements SignalStore {
@@ -498,22 +574,25 @@ export class DbSignalStore implements SignalStore {
     `.execute(this.db.kysely);
   }
   async take(key: string, by: string, since: string): Promise<WorkflowSignal | null> {
-    /* One statement: the oldest untaken row is claimed, or none is, whoever else is taking. */
+    /* One statement: the oldest row free to this case is claimed, or none is, whoever else is taking. */
     const result = await sql<{ id: string; key: string; at: string; payload: unknown }>`
       UPDATE dash_workflow_signals SET taken_by = ${by}
       WHERE workspace = ${this.workspace} AND id = (
         SELECT id FROM dash_workflow_signals
-        WHERE workspace = ${this.workspace} AND key = ${key} AND taken_by IS NULL AND at >= ${since}
+        WHERE workspace = ${this.workspace} AND key = ${key} AND NOT acked AND (taken_by IS NULL OR taken_by = ${by}) AND at >= ${since}
         ORDER BY at, id LIMIT 1 FOR UPDATE SKIP LOCKED
-      ) AND taken_by IS NULL
+      ) AND NOT acked AND (taken_by IS NULL OR taken_by = ${by})
       RETURNING id, key, at, payload
     `.execute(this.db.kysely);
     const row = result.rows[0];
     return row ? { id: row.id, key: row.key, at: row.at, payload: parsed(row.payload) as Record<string, unknown>, takenBy: by } : null;
   }
+  async ack(id: string): Promise<void> {
+    await sql`UPDATE dash_workflow_signals SET acked = true WHERE workspace = ${this.workspace} AND id = ${id}`.execute(this.db.kysely);
+  }
   async untaken(since: string): Promise<string[]> {
     const result = await sql<{ key: string }>`
-      SELECT DISTINCT key FROM dash_workflow_signals WHERE workspace = ${this.workspace} AND taken_by IS NULL AND at >= ${since}
+      SELECT DISTINCT key FROM dash_workflow_signals WHERE workspace = ${this.workspace} AND NOT acked AND at >= ${since}
     `.execute(this.db.kysely);
     return result.rows.map((row) => row.key);
   }

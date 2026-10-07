@@ -321,6 +321,8 @@ export const workflowStartSchema = z.object({
   parentCase: z.string().optional(),
   /** For a case one of several a For each step started: that step's attempt, so the parent hears when all have ended. */
   group: z.string().optional(),
+  /** How many cases that group has in all, fixed before the first starts: the group is done only when this many have ended. */
+  groupSize: z.number().int().min(1).optional(),
 });
 export type WorkflowStart = z.infer<typeof workflowStartSchema>;
 
@@ -362,6 +364,8 @@ export const caseWaitSchema = z.object({
   match: z.record(z.unknown()).optional(),
   /** The task that shows this wait. */
   task: z.string().optional(),
+  /** The agent the waiting step acts for, so a check made while waiting reads as that agent may. */
+  agent: z.string().optional(),
 });
 export type CaseWait = z.infer<typeof caseWaitSchema>;
 
@@ -456,6 +460,13 @@ export const workflowCaseSchema = z.object({
   updatedAt: z.string(),
   finishedAt: z.string().optional(),
   error: z.string().optional(),
+  /**
+   * For an ended case: whether what follows its ending (the trial counted
+   * down, cases waiting on it told) has been done. Written false in the same
+   * save that ends it, so an interruption in between is picked up.
+   */
+  announced: z.boolean().optional(),
+  trialCounted: z.boolean().optional(),
 });
 export type WorkflowCase = z.infer<typeof workflowCaseSchema>;
 

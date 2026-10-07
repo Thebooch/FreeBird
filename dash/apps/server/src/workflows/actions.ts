@@ -23,7 +23,7 @@ import {
   type WorkflowSpec,
 } from "@freebirdai/dash-spec";
 import { z } from "zod";
-import { ParkWorkflow, notConnectedSender, type WorkflowEnv } from "./env.js";
+import { DeliveryError, ParkWorkflow, notConnectedSender, type WorkflowEnv } from "./env.js";
 import { mayRead, readRecordAs } from "./reads.js";
 
 /**
@@ -82,7 +82,7 @@ export interface ActionContext {
   readonly startCase: (
     workflowId: string,
     inputs: Record<string, unknown>,
-    extra: { readonly key: string; readonly group?: string | undefined },
+    extra: { readonly key: string; readonly group?: string | undefined; readonly groupSize?: number | undefined },
   ) => Promise<{ readonly id: string; readonly status: string }>;
 }
 
@@ -110,8 +110,7 @@ const failed = (error: string, task?: Partial<Task>, how: { retryable?: boolean;
   ...(how.uncertain ? { uncertain: true } : {}),
 });
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
-/** An error from sending something whose answer never came: it may have arrived. */
-const lostAnswer = (error: unknown): boolean => /time(d)? ?out|abort|socket hang up|ECONNRESET|EPIPE/i.test(message(error));
+
 const text = (value: unknown): string => (value === undefined || value === null ? "" : typeof value === "string" ? value : JSON.stringify(value));
 const iso = (ms: number): string => new Date(ms).toISOString();
 
@@ -548,9 +547,15 @@ const think: ActionExecutor = async ({ env, variant, settings: s, case: one, wor
 /* ── send to a system ──────────────────────────────────────────────────── */
 
 /**
- * POST to an address, with the step's operation id as `Idempotency-Key`. A
- * refusal to take it now (429, 5xx) may be tried again; an answer that never
- * came may mean it arrived, so a person is asked.
+ * POST to an address, with the step's operation id as `Idempotency-Key`.
+ *
+ * - 429 says it was not taken: it may be tried again.
+ * - A 5xx may come after the receiver acted, so it is tried again only when
+ *   the step says the receiver ignores repeats of the same key; otherwise a
+ *   person is asked whether it went through.
+ * - No answer at all: tried again only when the request is known never to
+ *   have left (`DeliveryError` with `sent: "no"`); anything else may have
+ *   arrived, and a person is asked.
  */
 const webhook: ActionExecutor = async ({ env, settings: s, attempt }) => {
   const url = text(s["url"]).trim();
@@ -563,10 +568,16 @@ const webhook: ActionExecutor = async ({ env, settings: s, attempt }) => {
     if (answer.status >= 200 && answer.status < 300) {
       return done("next", { status: "done", title: `Sent to ${host} (${answer.status})`, body, reversal: { available: false, reason: "Only the receiving system can undo this." } }, { status: answer.status, response: answer.body });
     }
-    return failed(`${host} answered ${answer.status}.`, { body }, { retryable: answer.status === 429 || answer.status >= 500 });
+    if (answer.status === 429) return failed(`${host} asked to wait (429).`, { body }, { retryable: true });
+    if (answer.status >= 500) {
+      return s["idempotent"] === true
+        ? failed(`${host} answered ${answer.status}.`, { body }, { retryable: true })
+        : failed(`${host} answered ${answer.status}, which can come after it acted.`, { body }, { uncertain: true });
+    }
+    return failed(`${host} answered ${answer.status}.`, { body });
   } catch (error) {
-    if (lostAnswer(error)) return failed(`No answer from ${host}: ${message(error)}. It may have arrived.`, { body: { kind: "request", url } }, { uncertain: true });
-    return failed(`Could not reach ${host}: ${message(error)}`, { body: { kind: "request", url } }, { retryable: true });
+    if (error instanceof DeliveryError && error.sent === "no") return failed(`Could not reach ${host}: ${error.message}`, { body: { kind: "request", url } }, { retryable: true });
+    return failed(`No answer from ${host}: ${message(error)}. It may have arrived.`, { body: { kind: "request", url } }, { uncertain: true });
   }
 };
 
@@ -728,11 +739,19 @@ export const FOR_EACH_MAX = 100;
  * all", the step waits until every one has ended and goes down `failed` if
  * any did not finish.
  */
-const runEach: ActionExecutor = async ({ settings: s, resume, startCase, attempt, task }) => {
+const ENDED = new Set(["done", "failed", "cancelled", "timed_out"]);
+
+const runEach: ActionExecutor = async ({ env, settings: s, resume, startCase, attempt, task, case: one }) => {
   if (resume) {
-    const statuses = (resume.payload?.["statuses"] ?? {}) as Record<string, string>;
-    const bad = Object.values(statuses).filter((status) => status !== "done").length;
-    const outputs = { cases: Object.keys(statuses), count: Object.keys(statuses).length, statuses };
+    /* The join is checked against the cases themselves, never only the signal: every expected case must exist and have ended. */
+    const expected = typeof task.outputs?.["count"] === "number" ? (task.outputs["count"] as number) : Array.isArray(s["items"]) ? (s["items"] as unknown[]).length : 0;
+    const group = (await env.cases.children(one.id)).filter((child) => child.start.group === attempt.id);
+    if (group.length < expected || !group.every((child) => ENDED.has(child.status))) {
+      return { kind: "wait", wait: { kind: "workflow_done", key: `group-done:${attempt.id}` }, task: { status: "waiting", title: `Waiting for ${expected} workflows` } };
+    }
+    const statuses = Object.fromEntries(group.map((child) => [child.id, child.status]));
+    const bad = group.filter((child) => child.status !== "done").length;
+    const outputs = { cases: group.map((child) => child.id), count: group.length, statuses };
     const body = { kind: "notice" as const, text: bad === 0 ? `All ${outputs.count} finished.` : `${bad} of ${outputs.count} did not finish.` };
     return bad === 0 ? done("next", { status: "done", title: `All ${outputs.count} finished`, body, links: task.links }, outputs) : failed(`${bad} of ${outputs.count} did not finish.`, { body });
   }
@@ -744,7 +763,8 @@ const runEach: ActionExecutor = async ({ settings: s, resume, startCase, attempt
   const extra = (s["inputs"] as Record<string, unknown> | undefined) ?? {};
   const started: Array<{ id: string; status: string }> = [];
   try {
-    for (const [index, item] of items.entries()) started.push(await startCase(text(s["workflow"]), { ...extra, [as]: item }, { key: `${attempt.id}#${index}`, group: attempt.id }));
+    /* The group's size is fixed before the first starts, so one that ends early never makes it look done. */
+    for (const [index, item] of items.entries()) started.push(await startCase(text(s["workflow"]), { ...extra, [as]: item }, { key: `${attempt.id}#${index}`, group: attempt.id, groupSize: items.length }));
   } catch (error) {
     return failed(`Started ${started.length} of ${items.length}, then: ${message(error)}`);
   }
@@ -752,7 +772,7 @@ const runEach: ActionExecutor = async ({ settings: s, resume, startCase, attempt
   const body = { kind: "notice" as const, text: `Started ${started.length}.` };
   const open = started.filter((one) => one.status === "running" || one.status === "waiting");
   if (s["waitForAll"] !== false && started.length > 0) {
-    if (open.length > 0) return { kind: "wait", wait: { kind: "workflow_done", key: `group-done:${attempt.id}` }, task: { status: "waiting", title: `Waiting for ${started.length} workflows`, body }, outputs };
+    if (open.length > 0) return { kind: "wait", wait: { kind: "workflow_done", key: `group-done:${attempt.id}` }, task: { status: "waiting", title: `Waiting for ${started.length} workflows`, body, outputs }, outputs };
     const statuses = Object.fromEntries(started.map((one) => [one.id, one.status]));
     const bad = started.filter((one) => one.status !== "done").length;
     return bad === 0 ? done("next", { status: "done", title: `All ${started.length} finished`, body }, { ...outputs, statuses }) : failed(`${bad} of ${started.length} did not finish.`, { body });
