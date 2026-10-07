@@ -516,7 +516,10 @@ const ChatBody = ({
       return;
     }
     if (target?.kind === "topic") {
-      const start = log.querySelector<HTMLElement>(`[data-topic-start="${CSS.escape(target.id)}"]`);
+      const first = log.querySelector<HTMLElement>(`[data-topic-start="${CSS.escape(target.id)}"]`);
+      // A named topic's divider sits just above its first message; keep it in view.
+      const divider = first?.previousElementSibling;
+      const start = divider instanceof HTMLElement && divider.classList.contains("dash-chat__topic") ? divider : first;
       if (start) {
         log.scrollTop = start.offsetTop - log.offsetTop - 8;
         scrollTarget.current = null;
@@ -715,13 +718,17 @@ const ChatBody = ({
               key={item.key}
               className="dash-chat__topic"
               role="separator"
-              data-topic-start={item.topicId}
               data-viewing={viewing === item.topicId ? "true" : undefined}
             >
               <span>{item.name}</span>
             </div>
           ) : (
-            <div key={item.key} className="dash-chat__msg" data-role={item.message.role}>
+            <div
+              key={item.key}
+              className="dash-chat__msg"
+              data-role={item.message.role}
+              data-topic-start={item.topicStart}
+            >
               {item.message.content}
               {/*
                * Where the answer came from, and how far it looked. Both sit
@@ -898,7 +905,10 @@ const ChatBody = ({
           aria-label="Back to the latest message"
           data-testid="chat-latest"
         >
-          ↓ Latest
+          <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.75">
+            <path d="M8 2.5v11M3.5 9 8 13.5 12.5 9" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          Latest
         </button>
       )}
 
@@ -933,7 +943,7 @@ const ChatBody = ({
           }}
         />
         <button
-          className="dash-control"
+          className="dash-control dash-chat__send"
           type="submit"
           disabled={keyless || unavailable || routing || chat.streaming || draft.trim().length === 0}
           data-testid="chat-send"

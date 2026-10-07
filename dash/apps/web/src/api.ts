@@ -1487,8 +1487,14 @@ export const api = {
     }),
 
   /** Days with talk or finished work, newest first. */
-  chatDays: (before?: string): Promise<{ today: string; days: ChatDaySummary[]; more: boolean }> =>
-    request(`/api/chat/days?${new URLSearchParams({ tz: timeZone(), ...(before ? { before } : {}) }).toString()}`),
+  chatDays: (before?: string, limit?: number): Promise<{ today: string; days: ChatDaySummary[]; more: boolean }> =>
+    request(
+      `/api/chat/days?${new URLSearchParams({
+        tz: timeZone(),
+        ...(before ? { before } : {}),
+        ...(limit ? { limit: String(limit) } : {}),
+      }).toString()}`,
+    ),
 
   /** One day's topics and finished work. */
   chatDay: (day: string): Promise<{ day: string; topics: ChatTopic[]; tasks: ChatTimelineTask[] }> =>

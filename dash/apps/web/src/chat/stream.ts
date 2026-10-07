@@ -24,7 +24,17 @@ export interface StreamDay {
 export type StreamItem =
   | { readonly kind: "day"; readonly key: string; readonly day: string }
   | { readonly kind: "topic"; readonly key: string; readonly topicId: string; readonly name: string }
-  | { readonly kind: "message"; readonly key: string; readonly message: ChatMessage; readonly day: string };
+  | {
+      readonly kind: "message";
+      readonly key: string;
+      readonly message: ChatMessage;
+      readonly day: string;
+      /** Set on the first message of a topic on its day: where a jump from the timeline lands. */
+      readonly topicStart?: string;
+    };
+
+/** What the server calls a topic that was never named (`UNNAMED_TOPIC` in the server's `chat/topics.ts`). */
+export const UNNAMED_TOPIC = "Earlier chat";
 
 /** Whether the loaded days reach the latest message, so live messages belong below them. */
 export const reachesLatest = (days: readonly StreamDay[], today: string): boolean => {
@@ -41,9 +51,12 @@ const shown = (message: ChatMessage): boolean => message.role === "user" || mess
 /**
  * Day headings, topic dividers and messages, in reading order.
  *
- * A topic divider goes wherever the topic changes and at the top of each day,
- * so a day read on its own still says what it was about. Messages appear once
- * even when a loaded day and the live store both hold them.
+ * The day heading already says where the reader is, so a topic divider is
+ * shown only where it adds something: a named topic whose name differs from
+ * the one before it, mid-day or at the top of a day. An unnamed topic (the old
+ * sessions, "Earlier chat") never gets one. Every topic still marks its first
+ * message on each day (`topicStart`), so a jump from the timeline lands on it.
+ * Messages appear once even when a loaded day and the live store both hold them.
  */
 export const buildStream = (input: {
   readonly days: readonly StreamDay[];
@@ -56,25 +69,35 @@ export const buildStream = (input: {
   const items: StreamItem[] = [];
   const seen = new Set<string>();
   let day: string | null = null;
+  /** The topic of the message before, and its name, across days. */
   let topic: string | null = null;
+  let topicName: string | null = null;
+  /** Topics already marked on the current day. */
+  let started = new Set<string>();
 
   const push = (message: ChatMessage, on: string) => {
     if (seen.has(message.id)) return;
     seen.add(message.id);
     if (on !== day) {
       day = on;
-      topic = null;
+      started = new Set();
       items.push({ kind: "day", key: `day:${on}`, day: on });
     }
     // A message the store made up (an error line) has no topic of its own.
-    if (message.sessionId && message.sessionId !== topic && shown(message)) {
-      topic = message.sessionId;
-      items.push({
-        kind: "topic",
-        key: `topic:${on}:${message.id}`,
-        topicId: message.sessionId,
-        name: input.topics[message.sessionId] ?? "Earlier chat",
-      });
+    const id = message.sessionId && shown(message) ? message.sessionId : null;
+    if (id && id !== topic) {
+      const name = input.topics[id] ?? null;
+      // Two topics can share a name; the reader cannot tell them apart, so neither does the divider.
+      if (name && name !== UNNAMED_TOPIC && name !== topicName) {
+        items.push({ kind: "topic", key: `topic:${on}:${message.id}`, topicId: id, name });
+      }
+      topic = id;
+      topicName = name;
+    }
+    if (id && !started.has(id)) {
+      started.add(id);
+      items.push({ kind: "message", key: message.id, message, day: on, topicStart: id });
+      return;
     }
     items.push({ kind: "message", key: message.id, message, day: on });
   };
