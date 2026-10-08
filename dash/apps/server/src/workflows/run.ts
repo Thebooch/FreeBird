@@ -27,6 +27,7 @@ import { ParkWorkflow, type WorkflowEnv } from "./env.js";
 import { mayRead } from "./reads.js";
 import { CaseBusy } from "./engine.js";
 import { RevisionConflict, SEEDED_KEY, type FiredRow, type PendingOpen } from "./store.js";
+import { syncCalendar } from "./calendar-sync.js";
 
 /**
  * One pass of a workflow's trigger: read what it reads, keep the records that
@@ -376,9 +377,18 @@ export const runTrigger = async (env: WorkflowEnv, engine: WorkflowEngine, workf
       if (ran.status === "failed") failedCases++;
     }
 
-    const summary = workflowReads(workflow)
-      ? `${selected.matched.length} of ${plural(gathered.read, "record")} matched${gathered.complete ? "" : " (not every record was reached)"} · ${plural(cases.length, "case")} opened`
-      : `${plural(cases.length, "case")} opened`;
+    /* The calendar entries this workflow made follow their records: moved, or closed when a record stops matching. */
+    let kept = "";
+    try {
+      const synced = await syncCalendar(env, workflow, gathered.rows as ReadonlyArray<{ key: string; row: Record<string, unknown> }>, inputs);
+      kept = [synced.moved > 0 ? `${plural(synced.moved, "calendar entry", "calendar entries")} moved` : "", synced.closed > 0 ? `${plural(synced.closed, "calendar entry", "calendar entries")} closed` : ""].filter(Boolean).join(" · ");
+    } catch (error) {
+      kept = `calendar entries not checked: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    const summary =
+      (workflowReads(workflow)
+        ? `${selected.matched.length} of ${plural(gathered.read, "record")} matched${gathered.complete ? "" : " (not every record was reached)"} · ${plural(cases.length, "case")} opened`
+        : `${plural(cases.length, "case")} opened`) + (kept ? ` · ${kept}` : "");
     const patch = { read: gathered.read, matched: selected.matched.length, cases, complete: gathered.complete, summary };
     if (cases.length > 0 && failedCases === cases.length) {
       await countFailure("Every case failed.");

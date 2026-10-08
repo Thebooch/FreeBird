@@ -174,6 +174,12 @@ export const ACTION_VARIANTS: readonly ActionVariant[] = [
       { key: "end", label: "Ends", kind: "template" },
       { key: "deadline", label: "It is a deadline", kind: "boolean", default: false },
       { key: "ownerAgent", label: "Owner (agent)", kind: "agent" },
+      { key: "notes", label: "Notes", kind: "longtext", placeholder: "Gate code {{ access_code }}" },
+      {
+        key: "onUnmatch", label: "When the record stops matching", kind: "select", default: "done",
+        options: [{ value: "done", label: "Mark it done" }, { value: "cancel", label: "Mark it cancelled" }, { value: "keep", label: "Leave it" }],
+        help: "Each run keeps the entry in step with its record: it moves when the record's date moves. Changing the entry by hand pins it.",
+      },
     ],
     outcomes: ["next", "failed"], outputs: [{ name: "id", description: "The entry's id" }, { name: "at", description: "When it is" }],
     body: "created", reversible: true,
