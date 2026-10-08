@@ -135,7 +135,7 @@ import { RATES_AS_OF } from "./pricing.js";
 import type { PartRegistry } from "@freebirdai/dash-parts";
 import { partsRoutes } from "./routes/parts.js";
 import { agentRoutes } from "./routes/agents.js";
-import { workflowRoutes } from "./routes/workflows.js";
+import { WORKFLOW_HOOK_ROUTE, workflowRoutes } from "./routes/workflows.js";
 import { explainDraft } from "./workflows/draft.js";
 import { WorkflowEngine } from "./workflows/engine.js";
 import { WorkflowRunner } from "./workflows/runner.js";
@@ -620,9 +620,10 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * Every request carries who sent it, before any route runs. The open-source
    * build always answers "the owner"; the point is that every place a change
    * happens can already ask, so a managed build answers differently rather
-   * than hunting for those places.
+   * than hunting for those places. One route alone needs nobody: a webhook's
+   * call, whose token is its authority (`routes/workflows.ts`).
    */
-  installIdentity(app, options.identity ?? localOwner());
+  installIdentity(app, options.identity ?? localOwner(), [{ method: "POST", url: WORKFLOW_HOOK_ROUTE }]);
   /*
    * The workspace this server answers for, and the key its rows are kept
    * under. One host may hold several (`platform/workspaces.ts`): a member of
