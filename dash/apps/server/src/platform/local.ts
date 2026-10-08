@@ -23,6 +23,7 @@ import { LOCAL_WORKSPACE_ID, type IdentityResolver } from "../identity/resolver.
 import { isWorkspaceId } from "./workspaces.js";
 import { DbAgentStore } from "../agents/store.js";
 import { DbCalendarStore, DbCaseStore, DbSignalStore, DbTaskStore, DbTemplateStore, DbWorkflowStore } from "../workflows/store.js";
+import { DbSchedulingStore } from "../scheduling/store.js";
 import { DbSnapshotStore } from "../history/store.js";
 import { defaultModelId, llmForModel, modelForTask } from "../llm.js";
 import { TIER_MODELS, isTask, providerFor } from "../models.js";
@@ -148,6 +149,7 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     calendar: new DbCalendarStore(db, workspace),
     templates: new DbTemplateStore(db, workspace),
     signals: new DbSignalStore(db, workspace),
+    scheduling: new DbSchedulingStore(db, workspace),
   });
 
   /**
@@ -349,6 +351,8 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
 
   const platform: DashPlatform = {
     ...(identity && memberships ? { identity, policy: rolePolicy(memberships) } : {}),
+    /* Who is in the workspace, for scheduling's hosts. Without sign-in, the one owner. */
+    ...(memberships ? { members: async () => (await memberships.members(defaultWorkspace)).map((one) => ({ userId: one.userId, email: one.email, role: one.role })) } : {}),
     /* Its rows under `local`, as they always were, whatever the workspace is called. */
     workspace: { id: defaultWorkspace, key: LOCAL_WORKSPACE_ID },
     // The keeper: see `keeper/keeper.ts`. On here, off in tests.
@@ -396,6 +400,7 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     return {
       ...platform,
       workspace: { id: workspace, key: workspace },
+      ...(memberships ? { members: async () => (await memberships.members(workspace)).map((one) => ({ userId: one.userId, email: one.email, role: one.role })) } : {}),
       store: new SpecStore(join(filesAt, "dashboards"), join(filesAt, "connections"), join(filesAt, "reports")),
       keys: new KeyStore(vault, join(stateAt, "vault.json")),
       grants: new GrantStore(join(stateAt, "grants.json")),

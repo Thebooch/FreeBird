@@ -138,6 +138,9 @@ import { agentRoutes } from "./routes/agents.js";
 import { workflowRoutes } from "./routes/workflows.js";
 import { calendarRoutes } from "./routes/calendar.js";
 import { CalendarService } from "./calendar/service.js";
+import { schedulingRoutes } from "./routes/scheduling.js";
+import { SchedulingService, type WorkspaceMember } from "./scheduling/service.js";
+import { MemorySchedulingStore, type SchedulingStore } from "./scheduling/store.js";
 import { explainDraft } from "./workflows/draft.js";
 import { WorkflowEngine } from "./workflows/engine.js";
 import { WorkflowRunner } from "./workflows/runner.js";
@@ -404,6 +407,10 @@ export interface BuildServerOptions {
   readonly tasks?: TaskStore;
   readonly calendar?: CalendarStore;
   readonly templates?: TemplateStore;
+  /** Scheduling's setup: hosts, pools, appointment types, blocks and placements (`scheduling/store.ts`). Memory unless supplied. */
+  readonly scheduling?: SchedulingStore;
+  /** Who is in the workspace, for scheduling's hosts. Absent: the one person this server answers to. */
+  readonly members?: () => Promise<readonly WorkspaceMember[]>;
   readonly signals?: SignalStore;
   /** Sends Outreach (texts, calls, email). Comms supplies it; absent, nothing leaves Dash and tasks say so. */
   readonly outreach?: OutreachSender;
@@ -1059,6 +1066,14 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   /* The calendar: what agents, workflows, bookings and people put on it (`calendar/`). */
   const calendar = new CalendarService({ store: workflowEnv.calendar, now: () => Date.now(), newId: () => randomUUID() });
   void app.register(calendarRoutes({ calendar, policy }));
+  /* Scheduling: who can be booked, on what terms (`scheduling/`). */
+  const scheduling = new SchedulingService({
+    store: options.scheduling ?? new MemorySchedulingStore(),
+    calendar: workflowEnv.calendar,
+    members: options.members ?? (async () => [{ userId: LOCAL_USER_ID, email: "", role: "owner" as const }]),
+    now: () => Date.now(),
+  });
+  void app.register(schedulingRoutes({ scheduling, policy }));
   const workflowRunner = new WorkflowRunner({ ...workflowStarter, log: { warn: (line) => app.log.warn(line) } });
   if (options.workflowRunner === true) workflowRunner.start();
   app.addHook("onClose", async () => workflowRunner.stop());

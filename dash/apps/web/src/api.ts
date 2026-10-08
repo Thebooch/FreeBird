@@ -3,9 +3,17 @@ import type { EachAnswer, EachRequest } from "@freebirdai/dash-react";
 import type {
   AgentInput,
   AgentSpec,
+  AppointmentType,
+  Block,
   CalendarEntryInput,
   CalendarEvent,
+  Occurrence,
+  PartialSettings,
+  Placement,
+  Pool,
   Principal,
+  Role,
+  SchedulingProfile,
   Task,
   TaskStatus,
   WorkflowCase,
@@ -118,6 +126,38 @@ const json = (body: unknown): RequestInit => ({
   headers: { "content-type": "application/json" },
   body: JSON.stringify(body),
 });
+
+/** Scheduling's setup, as `GET /api/scheduling` serves it. */
+export interface SchedulingOverview {
+  readonly defaults: PartialSettings;
+  readonly profiles: SchedulingProfile[];
+  readonly pools: Pool[];
+  readonly types: AppointmentType[];
+  readonly blocks: Block[];
+  readonly placements: Placement[];
+  readonly members: ReadonlyArray<{ readonly userId: string; readonly email: string; readonly role: Role }>;
+}
+
+/** One block occurrence on one host's calendar. */
+export interface HostOccurrence extends Occurrence {
+  readonly host: string;
+  readonly kind: Block["kind"];
+  readonly setTo?: string;
+}
+
+/** Open times, as the slot engine offers them. */
+export interface SlotPreview {
+  readonly slots: ReadonlyArray<{
+    readonly start: number;
+    readonly end: number;
+    readonly approval: boolean;
+    readonly consolidated: boolean;
+    readonly options: ReadonlyArray<{ readonly host: string; readonly block?: string; readonly approval: boolean; readonly consolidated: boolean }>;
+  }>;
+  readonly needs: readonly string[];
+  readonly consolidatedOnly: boolean;
+  readonly more: boolean;
+}
 
 /** The Overview: see `buildOverview` on the server. */
 export interface AgentOverview {
@@ -1367,6 +1407,28 @@ export const api = {
     request(`/api/calendar/${encodeURIComponent(id)}/status`, json({ status })),
   removeCalendarEntry: (id: string): Promise<{ removed: true; id: string }> =>
     request(`/api/calendar/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  /* ── scheduling ────────────────────────────────────────────────────── */
+
+  scheduling: (): Promise<SchedulingOverview> => request("/api/scheduling"),
+  schedulingDefaults: (settings: PartialSettings): Promise<PartialSettings> => request("/api/scheduling/defaults", { ...json(settings), method: "PUT" }),
+  putProfile: (member: string, profile: Partial<SchedulingProfile>): Promise<SchedulingProfile> =>
+    request(`/api/scheduling/profiles/${encodeURIComponent(member)}`, { ...json(profile), method: "PUT" }),
+  removeProfile: (member: string): Promise<{ removed: true }> => request(`/api/scheduling/profiles/${encodeURIComponent(member)}`, { method: "DELETE" }),
+  putPool: (id: string, pool: Partial<Pool>): Promise<Pool> => request(`/api/scheduling/pools/${encodeURIComponent(id)}`, { ...json(pool), method: "PUT" }),
+  removePool: (id: string): Promise<{ removed: true }> => request(`/api/scheduling/pools/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  putType: (id: string, type: Partial<AppointmentType>): Promise<AppointmentType> => request(`/api/scheduling/types/${encodeURIComponent(id)}`, { ...json(type), method: "PUT" }),
+  removeType: (id: string): Promise<{ removed: true }> => request(`/api/scheduling/types/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  previewType: (id: string, input: { from?: string; to?: string; contact?: Record<string, unknown>; request?: Record<string, unknown>; all?: boolean }): Promise<SlotPreview> =>
+    request(`/api/scheduling/types/${encodeURIComponent(id)}/preview`, json(input)),
+  putBlock: (id: string, block: Partial<Block>): Promise<Block> => request(`/api/scheduling/blocks/${encodeURIComponent(id)}`, { ...json(block), method: "PUT" }),
+  removeBlock: (id: string): Promise<{ removed: true }> => request(`/api/scheduling/blocks/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  putPlacement: (id: string, placement: Partial<Placement>): Promise<Placement> => request(`/api/scheduling/placements/${encodeURIComponent(id)}`, { ...json(placement), method: "PUT" }),
+  removePlacement: (id: string): Promise<{ removed: true }> => request(`/api/scheduling/placements/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  skipOccurrence: (id: string, date: string): Promise<Placement> => request(`/api/scheduling/placements/${encodeURIComponent(id)}/skip`, json({ date })),
+  splitPlacement: (id: string, date: string, newId: string): Promise<{ before: Placement; after: Placement }> =>
+    request(`/api/scheduling/placements/${encodeURIComponent(id)}/split`, json({ date, newId })),
+  occurrences: (from: string, to: string): Promise<HostOccurrence[]> => request(`/api/scheduling/occurrences?${new URLSearchParams({ from, to })}`),
 
   /** Who this browser is talking as. */
   me: (): Promise<{ principal: Principal | null; mode: "local" | "managed" }> => request("/api/me"),
