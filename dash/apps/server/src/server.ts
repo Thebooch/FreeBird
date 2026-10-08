@@ -3437,6 +3437,13 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
               return marked;
             },
           },
+          calendar: {
+            agents: await agentStore.list(),
+            now: () => Date.now(),
+            mayManage: async (principal) => (await policy.can(principal, "calendar.manage", {})).ok,
+            list: (options) => calendar.list(options),
+            create: (principal, input) => calendar.create(principal, input),
+          },
           changes: {
             prepare: (principal, intent, sessionId) =>
               writes.prepare(principal, intent, { via: "chat", sessionId }),
