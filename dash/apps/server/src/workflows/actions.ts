@@ -308,17 +308,20 @@ const calendar: ActionExecutor = async ({ env, settings: s, agent, workflow, cas
     at: when.at,
     ...(end ? { end: end.at } : {}),
     allDay: when.dateOnly,
-    deadline: s["deadline"] === true,
+    kind: s["deadline"] === true ? "deadline" : "event",
+    status: "open",
+    pinned: false,
     ...(ownerAgent ? { owner: { kind: "agent" as const, id: ownerAgent } } : {}),
     workflow: workflow.id,
     case: one.id,
     task: task.id,
     createdAt: iso(env.now()),
+    updatedAt: iso(env.now()),
   };
   await env.calendar.put(event);
   return done(
     "next",
-    { status: "done", title: `${event.deadline ? "Deadline" : "On the calendar"}: ${title}`, body: { kind: "created", what: `${title}, ${event.at}`, id: event.id }, links: { calendar: event.id }, reversal: { available: true, internal: { kind: "calendar", id: event.id } } },
+    { status: "done", title: `${event.kind === "deadline" ? "Deadline" : "On the calendar"}: ${title}`, body: { kind: "created", what: `${title}, ${event.at}`, id: event.id }, links: { calendar: event.id }, reversal: { available: true, internal: { kind: "calendar", id: event.id } } },
     { id: event.id, at: event.at },
   );
 };
@@ -358,7 +361,7 @@ const caseValue: ActionExecutor = async ({ settings: s, case: one }) => {
 const removeCalendar: ActionExecutor = async ({ env, settings: s }) => {
   const id = text(s["entry"]).trim();
   if (!id) return done("next", { status: "skipped", title: "No calendar entry to remove." });
-  const held = (await env.calendar.list({ limit: 1000 })).find((one) => one.id === id);
+  const held = await env.calendar.get(id);
   if (!held) return done("next", { status: "skipped", title: "That calendar entry is already gone." });
   await env.calendar.delete(id);
   return done("next", { status: "done", title: `Removed from the calendar: ${held.title}`, body: { kind: "removed", what: held.title, before: held }, reversal: { available: true, internal: { kind: "calendar", id, value: held } } });

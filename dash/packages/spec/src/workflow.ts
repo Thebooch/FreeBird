@@ -643,26 +643,6 @@ export const workflowTemplateSchema = z.object({
 });
 export type WorkflowTemplate = z.infer<typeof workflowTemplateSchema>;
 
-/**
- * An entry on the calendar. Defined here so a workflow's calendar step works
- * before the calendar view exists; the calendar (step 4) owns its shape.
- */
-export const calendarEventSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  /** ISO date or date-time. */
-  at: z.string(),
-  end: z.string().optional(),
-  allDay: z.boolean().default(false),
-  deadline: z.boolean().default(false),
-  owner: ownerRefSchema.optional(),
-  workflow: z.string().optional(),
-  case: z.string().optional(),
-  task: z.string().optional(),
-  createdAt: z.string(),
-});
-export type CalendarEvent = z.infer<typeof calendarEventSchema>;
-
 /** One line for a step: "Text — Maintenance agent", "Wait for an event — up to 2 days". */
 export const describeNode = (node: Pick<WorkflowNode, "action" | "settings" | "name">): string => {
   const variant = actionVariant(node.action);

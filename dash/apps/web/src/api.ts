@@ -3,7 +3,9 @@ import type { EachAnswer, EachRequest } from "@freebirdai/dash-react";
 import type {
   AgentInput,
   AgentSpec,
+  CalendarEntryInput,
   CalendarEvent,
+  Principal,
   Task,
   TaskStatus,
   WorkflowCase,
@@ -1344,7 +1346,30 @@ export const api = {
   workflowFromTemplate: (id: string, values: Record<string, string>, name?: string): Promise<WorkflowSpec> =>
     request(`/api/workflow-templates/${encodeURIComponent(id)}/workflow`, json({ values, ...(name ? { name } : {}) })),
 
-  calendarEvents: (): Promise<CalendarEvent[]> => request("/api/calendar/events"),
+  /* ── calendar ──────────────────────────────────────────────────────── */
+
+  /** Entries overlapping [from, to), with optional owner (`agent:<id>`, `member:<id>`), kind and status filters. */
+  calendar: (filter: { from?: string; to?: string; owners?: readonly string[]; kinds?: readonly string[]; statuses?: readonly string[] } = {}): Promise<CalendarEvent[]> => {
+    const query = new URLSearchParams();
+    if (filter.from) query.set("from", filter.from);
+    if (filter.to) query.set("to", filter.to);
+    if (filter.owners && filter.owners.length > 0) query.set("owner", filter.owners.join(","));
+    if (filter.kinds && filter.kinds.length > 0) query.set("kind", filter.kinds.join(","));
+    if (filter.statuses && filter.statuses.length > 0) query.set("status", filter.statuses.join(","));
+    return request(`/api/calendar${query.size > 0 ? `?${query}` : ""}`);
+  },
+  calendarEntry: (id: string): Promise<CalendarEvent> => request(`/api/calendar/${encodeURIComponent(id)}`),
+  addCalendarEntry: (input: CalendarEntryInput): Promise<CalendarEvent> => request("/api/calendar", json(input)),
+  /** Change an entry. Sending `end` or `notes` empty clears it. */
+  updateCalendarEntry: (id: string, input: Partial<CalendarEntryInput>): Promise<CalendarEvent> =>
+    request(`/api/calendar/${encodeURIComponent(id)}`, { ...json(input), method: "PUT" }),
+  setCalendarStatus: (id: string, status: "open" | "done" | "cancelled"): Promise<CalendarEvent> =>
+    request(`/api/calendar/${encodeURIComponent(id)}/status`, json({ status })),
+  removeCalendarEntry: (id: string): Promise<{ removed: true; id: string }> =>
+    request(`/api/calendar/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  /** Who this browser is talking as. */
+  me: (): Promise<{ principal: Principal | null; mode: "local" | "managed" }> => request("/api/me"),
 
   /** The Agent side's Overview: active workflows and completed tasks. */
   overview: (): Promise<AgentOverview> => request("/api/overview"),

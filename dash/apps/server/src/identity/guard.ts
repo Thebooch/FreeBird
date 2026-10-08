@@ -43,6 +43,8 @@ export const GUARDED_ROUTES: readonly GuardRule[] = [
   /* Workflows: making, changing, running and previewing them, and deciding what waits for a person. */
   { methods: WRITE, path: /^\/api\/workflows(\/|$)/, permission: "workflows.manage" },
   { methods: WRITE, path: /^\/api\/(tasks|cases|workflow-templates|workflow-events)(\/|$)/, permission: "workflows.manage" },
+  /* The calendar: adding, changing and finishing entries. Appointments change through their bookings. */
+  { methods: WRITE, path: /^\/api\/calendar(\/|$)/, permission: "calendar.manage" },
   /* The parts a board is built from, and which models do what. */
   { methods: ["PUT", "DELETE"], path: /^\/api\/parts(\/|$)/, permission: "boards.edit" },
   { methods: ["PUT"], path: /^\/api\/models(\/|$)/, permission: "connections.manage" },

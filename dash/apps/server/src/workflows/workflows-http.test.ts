@@ -150,7 +150,7 @@ describe("workflows over HTTP", () => {
 
     const run = (await app.inject({ method: "POST", url: `/api/workflows/${id}/run` })).json();
     expect(run).toMatchObject({ status: "succeeded", matched: 1 });
-    expect((await app.inject({ method: "GET", url: "/api/calendar/events" })).json()).toEqual([expect.objectContaining({ title: "Check Birch Hall", deadline: true })]);
+    expect((await app.inject({ method: "GET", url: "/api/calendar/events" })).json()).toEqual([expect.objectContaining({ title: "Check Birch Hall", kind: "deadline" })]);
     expect(api.writes()).toBe(0);
 
     const [waiting] = (await app.inject({ method: "GET", url: "/api/tasks?status=waiting_approval" })).json();

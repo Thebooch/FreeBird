@@ -143,10 +143,6 @@ export const workflowRoutes = (deps: {
 
     app.get<{ Querystring: { limit?: string } }>("/api/workflow-runs", async (request) => env.store.runs({ limit: Number(request.query.limit) || 50 }));
 
-    app.get<{ Querystring: { from?: string; to?: string } }>("/api/calendar/events", async (request) =>
-      env.calendar.list({ ...(request.query.from ? { from: request.query.from } : {}), ...(request.query.to ? { to: request.query.to } : {}) }),
-    );
-
     app.get("/api/overview", async () => buildOverview(env, { agents: await deps.agents() }));
 
     /* ── cases ────────────────────────────────────────────────────── */

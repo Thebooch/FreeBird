@@ -1,11 +1,9 @@
 import {
-  calendarEventSchema,
   taskSchema,
   workflowCaseSchema,
   workflowRunSchema,
   workflowSchema,
   workflowTemplateSchema,
-  type CalendarEvent,
   type CaseStatus,
   type Task,
   type TaskStatus,
@@ -16,6 +14,9 @@ import {
 } from "@freebirdai/dash-spec";
 import { sql } from "kysely";
 import type { DashDb } from "../platform/db.js";
+
+/* Calendar entries are the calendar's own (`calendar/store.ts`); re-exported so step 2's imports stand. */
+export { DbCalendarStore, MemoryCalendarStore, type CalendarListOptions, type CalendarStore } from "../calendar/store.js";
 
 /**
  * Where a workspace's workflows are kept, with everything they make: runs,
@@ -151,13 +152,6 @@ export interface TaskStore {
   get(id: string): Promise<Task | null>;
   /** Newest first. */
   list(options?: { readonly status?: TaskStatus; readonly workflow?: string; readonly case?: string; readonly limit?: number }): Promise<Task[]>;
-}
-
-export interface CalendarStore {
-  put(event: CalendarEvent): Promise<void>;
-  delete(id: string): Promise<void>;
-  /** In time order. */
-  list(options?: { readonly from?: string; readonly to?: string; readonly limit?: number }): Promise<CalendarEvent[]>;
 }
 
 export interface TemplateStore {
@@ -316,22 +310,6 @@ export class MemoryTaskStore implements TaskStore {
           (options.case === undefined || one.case === options.case),
       )
       .sort(newestFirst((one) => one.finishedAt ?? one.createdAt))
-      .slice(0, limitOf(options.limit, 200));
-  }
-}
-
-export class MemoryCalendarStore implements CalendarStore {
-  private readonly rows = new Map<string, CalendarEvent>();
-  async put(event: CalendarEvent): Promise<void> {
-    this.rows.set(event.id, calendarEventSchema.parse(event));
-  }
-  async delete(id: string): Promise<void> {
-    this.rows.delete(id);
-  }
-  async list(options: { from?: string; to?: string; limit?: number } = {}): Promise<CalendarEvent[]> {
-    return [...this.rows.values()]
-      .filter((one) => (options.from === undefined || one.at >= options.from) && (options.to === undefined || one.at < options.to))
-      .sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id))
       .slice(0, limitOf(options.limit, 200));
   }
 }
@@ -631,33 +609,6 @@ export class DbTaskStore implements TaskStore {
       ORDER BY at DESC, id DESC LIMIT ${limitOf(options.limit, 200)}
     `.execute(this.db.kysely);
     return result.rows.map((row) => taskSchema.parse(parsed(row.record)));
-  }
-}
-
-export class DbCalendarStore implements CalendarStore {
-  constructor(
-    private readonly db: DashDb,
-    private readonly workspace = "local",
-  ) {}
-  async put(event: CalendarEvent): Promise<void> {
-    const one = calendarEventSchema.parse(event);
-    await sql`
-      INSERT INTO dash_calendar_events (workspace, id, at, record) VALUES (${this.workspace}, ${one.id}, ${one.at}, ${JSON.stringify(one)}::jsonb)
-      ON CONFLICT (workspace, id) DO UPDATE SET at = EXCLUDED.at, record = EXCLUDED.record
-    `.execute(this.db.kysely);
-  }
-  async delete(id: string): Promise<void> {
-    await sql`DELETE FROM dash_calendar_events WHERE workspace = ${this.workspace} AND id = ${id}`.execute(this.db.kysely);
-  }
-  async list(options: { from?: string; to?: string; limit?: number } = {}): Promise<CalendarEvent[]> {
-    const result = await sql<{ record: unknown }>`
-      SELECT record FROM dash_calendar_events
-      WHERE workspace = ${this.workspace}
-        AND (${options.from ?? null}::text IS NULL OR at >= ${options.from ?? null})
-        AND (${options.to ?? null}::text IS NULL OR at < ${options.to ?? null})
-      ORDER BY at, id LIMIT ${limitOf(options.limit, 200)}
-    `.execute(this.db.kysely);
-    return result.rows.map((row) => calendarEventSchema.parse(parsed(row.record)));
   }
 }
 

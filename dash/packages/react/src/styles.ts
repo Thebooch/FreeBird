@@ -5,6 +5,8 @@
  * components package when they became real units in `ui/`. A consumer using
  * only @freebirdai/dash-components has to get working controls out of one stylesheet.
  */
+import { DASH_CALENDAR_STYLES } from "./styles-calendar.js";
+
 export const DASH_REACT_STYLES = `
 .dash-page { background: var(--dash-plane); min-height: 100%; padding: 16px; }
 .dash-page__head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
@@ -2086,4 +2088,4 @@ export const DASH_REACT_STYLES = `
 @media (max-width: 760px) {
   .dash-agents { grid-template-columns: minmax(0, 1fr); }
 }
-`;
+` + DASH_CALENDAR_STYLES;

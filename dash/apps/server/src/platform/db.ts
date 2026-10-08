@@ -159,6 +159,9 @@ CREATE TABLE IF NOT EXISTS dash_calendar_events (
 );
 
 CREATE INDEX IF NOT EXISTS dash_calendar_events_at ON dash_calendar_events (workspace, at);
+ALTER TABLE dash_calendar_events ADD COLUMN IF NOT EXISTS ends_at TEXT;
+ALTER TABLE dash_calendar_events ADD COLUMN IF NOT EXISTS dedupe_key TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS dash_calendar_events_dedupe ON dash_calendar_events (workspace, dedupe_key) WHERE dedupe_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS dash_invites (
   id         TEXT PRIMARY KEY,

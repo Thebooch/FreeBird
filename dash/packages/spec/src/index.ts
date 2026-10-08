@@ -176,7 +176,6 @@ export {
   WORKFLOW_ONCE,
   WORKFLOW_RANGES,
   WORKFLOW_STEP_MODES,
-  calendarEventSchema,
   caseAttemptSchema,
   caseDefinitionSchema,
   caseScope,
@@ -218,7 +217,6 @@ export {
 } from "./workflow.js";
 
 export type {
-  CalendarEvent,
   CaseAttempt,
   CaseDefinition,
   CaseStatus,
@@ -244,6 +242,23 @@ export type {
   WorkflowTrigger,
   WorkflowTriggerKind,
 } from "./workflow.js";
+
+export {
+  CALENDAR_KINDS,
+  CALENDAR_STATUSES,
+  calendarEnd,
+  calendarEntryInputSchema,
+  calendarEventSchema,
+  calendarOverlaps,
+  calendarSortKey,
+  calendarSourceSchema,
+  calendarStart,
+  isDateOnly,
+  ownerKey,
+  upgradeCalendarEvent,
+} from "./calendar.js";
+
+export type { CalendarEntryInput, CalendarEvent, CalendarKind, CalendarSource, CalendarStatus } from "./calendar.js";
 
 export {
   ACTION_BASES,

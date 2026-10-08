@@ -136,6 +136,8 @@ import type { PartRegistry } from "@freebirdai/dash-parts";
 import { partsRoutes } from "./routes/parts.js";
 import { agentRoutes } from "./routes/agents.js";
 import { workflowRoutes } from "./routes/workflows.js";
+import { calendarRoutes } from "./routes/calendar.js";
+import { CalendarService } from "./calendar/service.js";
 import { explainDraft } from "./workflows/draft.js";
 import { WorkflowEngine } from "./workflows/engine.js";
 import { WorkflowRunner } from "./workflows/runner.js";
@@ -1054,6 +1056,9 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       connectionTitle: (id) => store.getConnection(id)?.title ?? id,
     }),
   );
+  /* The calendar: what agents, workflows, bookings and people put on it (`calendar/`). */
+  const calendar = new CalendarService({ store: workflowEnv.calendar, now: () => Date.now(), newId: () => randomUUID() });
+  void app.register(calendarRoutes({ calendar, policy }));
   const workflowRunner = new WorkflowRunner({ ...workflowStarter, log: { warn: (line) => app.log.warn(line) } });
   if (options.workflowRunner === true) workflowRunner.start();
   app.addHook("onClose", async () => workflowRunner.stop());
