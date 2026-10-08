@@ -19,6 +19,13 @@ import type { IdentityResolver } from "../identity/resolver.js";
  * can never reach another workspace's server by any route. A workspace nobody
  * has asked anything of for a while is closed, and built again when asked.
  *
+ * One request names its workspace itself: a webhook's call
+ * (`/api/workflow-hooks/<workspace>/<token>`), which another system makes with
+ * nobody signed in, the token being its authority. The host hands it to the
+ * workspace its address names, resolving and attaching no principal, and
+ * only when that workspace is held here. The server it reaches lets that one
+ * route through without a principal, and nothing else (`identity/context.ts`).
+ *
  * The open-source build has one workspace and does not use this: it runs one
  * server, as it always has.
  */
@@ -27,6 +34,12 @@ export interface WorkspaceHostOptions {
   readonly identity: IdentityResolver;
   /** The server for one workspace, built the first time a member of it asks. */
   readonly build: (workspace: string) => FastifyInstance | Promise<FastifyInstance>;
+  /**
+   * Whether a workspace by this id is held here. Asked before a webhook's
+   * call, which names its workspace with nobody signed in, opens its server:
+   * a name nobody vouches for opens nothing.
+   */
+  readonly holds: (workspace: string) => boolean | Promise<boolean>;
   /** A workspace asked nothing for this long is closed. Twenty minutes unless said. */
   readonly idleMs?: number;
   readonly now?: () => number;
@@ -37,6 +50,13 @@ export interface WorkspaceHostOptions {
 const WORKSPACE_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 
 export const isWorkspaceId = (id: string): boolean => WORKSPACE_ID.test(id);
+
+/** A webhook's call: `POST /api/workflow-hooks/<workspace>/<token>`, and the workspace it names. */
+const HOOK_CALL = /^\/api\/workflow-hooks\/([^/?#]+)\/[^/?#]+(?:\?|$)/;
+
+const hookWorkspace = (method: string, url: string): string | null => (method.toUpperCase() === "POST" ? (HOOK_CALL.exec(url)?.[1] ?? null) : null);
+
+type Routed = { readonly app: FastifyInstance } | { readonly status: number; readonly error: string };
 
 const IDLE_MS = 20 * 60_000;
 
@@ -82,16 +102,31 @@ export class WorkspaceHost {
     return this.options.identity.resolve({ headers: request.headers, url: request.url });
   }
 
+  /** Which workspace's server answers: the signed-in member's, or the one a webhook's call names. */
+  private async route(request: {
+    readonly method: string;
+    readonly headers: Readonly<Record<string, string | string[] | undefined>>;
+    readonly url: string;
+  }): Promise<Routed> {
+    const hooked = hookWorkspace(request.method, request.url);
+    if (hooked !== null) {
+      if (!isWorkspaceId(hooked) || !(await this.options.holds(hooked))) return { status: 404, error: "Unknown hook." };
+      return { app: await this.appFor(hooked) };
+    }
+    const principal = await this.principalOf(request);
+    if (!principal || !isWorkspaceId(principal.workspaceId)) return { status: 401, error: "Sign in to continue." };
+    return { app: await this.appFor(principal.workspaceId) };
+  }
+
   /** One request, answered by its workspace's server, streaming and all. */
   async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
-      const principal = await this.principalOf({ headers: request.headers, url: request.url ?? "/" });
-      if (!principal || !isWorkspaceId(principal.workspaceId)) {
-        response.writeHead(401, { "content-type": "application/json" }).end(JSON.stringify({ error: "Sign in to continue." }));
+      const routed = await this.route({ method: request.method ?? "GET", headers: request.headers, url: request.url ?? "/" });
+      if (!("app" in routed)) {
+        response.writeHead(routed.status, { "content-type": "application/json" }).end(JSON.stringify({ error: routed.error }));
         return;
       }
-      const app = await this.appFor(principal.workspaceId);
-      app.routing(request, response);
+      routed.app.routing(request, response);
     } catch (error) {
       this.options.log?.(`a request could not be answered: ${error instanceof Error ? error.message : String(error)}`);
       if (!response.headersSent) response.writeHead(500, { "content-type": "application/json" });
@@ -102,12 +137,12 @@ export class WorkspaceHost {
   /** The same, in process: what tests and a caller without a socket use. */
   async inject(options: InjectOptions & { readonly headers?: Record<string, string> }): Promise<{ statusCode: number; json: () => unknown; body: string }> {
     const url = typeof options.url === "string" ? options.url : "/";
-    const principal = await this.principalOf({ headers: { ...options.headers }, url });
-    if (!principal || !isWorkspaceId(principal.workspaceId)) {
-      const body = JSON.stringify({ error: "Sign in to continue." });
-      return { statusCode: 401, body, json: () => JSON.parse(body) as unknown };
+    const routed = await this.route({ method: options.method ?? "GET", headers: { ...options.headers }, url });
+    if (!("app" in routed)) {
+      const body = JSON.stringify({ error: routed.error });
+      return { statusCode: routed.status, body, json: () => JSON.parse(body) as unknown };
     }
-    return (await this.appFor(principal.workspaceId)).inject(options);
+    return routed.app.inject(options);
   }
 
   /** A server that listens, for a hosted build: every request through `handle`. */

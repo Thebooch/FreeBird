@@ -38,6 +38,7 @@ const startMany = (): void => {
   const workspaces = new WorkspaceHost({
     identity: local.identity,
     build: (workspace) => buildServer(local.forWorkspace(workspace)),
+    holds: (workspace) => local.holds(workspace),
     log: (line) => console.log(`[workspaces] ${line}`),
   });
   const server = workspaces.listen(port, host);

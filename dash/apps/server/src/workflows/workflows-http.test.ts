@@ -215,13 +215,36 @@ describe("workflows over HTTP", () => {
     expect(waiting).toMatchObject({ status: "waiting", agent: "leasing", waiting: { kind: "webhook" } });
     const hook = String(waiting.data.steps.hook.hook);
     const token = hook.split("/").pop()!;
+    expect(hook).toBe(`/api/workflow-hooks/local/${token}`);
 
     expect((await app.inject({ method: "POST", url: "/api/workflow-hooks/notarealtokenatall0000" })).statusCode).toBe(404);
+    /* The address before it named its workspace still wakes it on a server of one workspace. */
     const woke = await app.inject({ method: "POST", url: `/api/workflow-hooks/${token}`, payload: { paid: true } });
     expect(woke.json()).toEqual({ woken: 1 });
     expect(api.rentals.get("42")?.IsActive).toBe(false);
     expect(journal.events.at(-1)).toMatchObject({ via: "workflow", onBehalfOf: { kind: "agent", id: "leasing" } });
     expect((await app.inject({ method: "GET", url: `/api/cases/${caseId}` })).json()).toMatchObject({ status: "done" });
+  });
+
+  it("wakes a case at the address it handed out, which names its workspace, and at no other workspace's", async () => {
+    const app = makeApp();
+    const saved = await app.inject({
+      method: "PUT",
+      url: "/api/workflows/new",
+      payload: {
+        name: "Wait for a call",
+        trigger: { kind: "manual" },
+        nodes: [step("hook", "wait.for", { event: "webhook", timeout: "1d" })],
+        edges: [{ id: "a", from: "trigger", to: "hook" }],
+      },
+    });
+    const run = (await app.inject({ method: "POST", url: `/api/workflows/${saved.json().id}/run` })).json();
+    const caseId = run.cases[0] as string;
+    const hook = String((await app.inject({ method: "GET", url: `/api/cases/${caseId}` })).json().data.steps.hook.hook);
+    expect((await app.inject({ method: "POST", url: hook.replace("/local/", "/elsewhere/") })).json()).toEqual({ error: "Unknown hook." });
+    expect((await app.inject({ method: "GET", url: `/api/cases/${caseId}` })).json().status).toBe("waiting");
+    expect((await app.inject({ method: "POST", url: hook, payload: { paid: true } })).json()).toEqual({ woken: 1 });
+    expect((await app.inject({ method: "GET", url: `/api/cases/${caseId}` })).json().status).toBe("done");
   });
 
   it("checks a draft: what is missing, what to ask, and the one-sentence summary", async () => {

@@ -31,7 +31,7 @@ These routes change stored state. Before they were guarded, they ran for anyone 
 
 ## Several workspaces on one server
 
-A host holds one server per workspace (`platform/workspaces.ts`, `WorkspaceHost`). Each request is resolved by the identity provider, and the member's workspace's server answers it. That server is `buildServer` with the workspace's own stores (`createLocalPlatform().forWorkspace(id)`):
+A host holds one server per workspace (`platform/workspaces.ts`, `WorkspaceHost`). Each request is resolved by the identity provider, and the member's workspace's server answers it. One request names its workspace instead: a webhook's call, `POST /api/workflow-hooks/<workspace>/<token>`, which another system makes with nobody signed in. The host hands it to that workspace's server without resolving anyone, and only when `holds` says the workspace is there. That server lets that one route through without a principal (`installIdentity`'s `open` routes, matched on the route Fastify chose). The token, minted for one waiting case, is the authority. That server is `buildServer` with the workspace's own stores (`createLocalPlatform().forWorkspace(id)`):
 - its connections, boards and reports under `workspaces/<id>/`, its keys in its own vault file;
 - its rows in Dash's database under its own key: evidence (`scopedEvidence`), the journal, credential expiry, seen values, shapes, history, jobs and check queue, and leases;
 - its own catalog tier. The shipped catalog and the registry tier stay shared;
