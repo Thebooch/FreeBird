@@ -55,9 +55,30 @@ describe("composeResponsePrompt", () => {
       }),
     });
     expect(prompt).toContain("You can schedule a follow-up with the person");
-    expect(prompt).toMatch(/To schedule an appointment, ask the team: tell the person the team will look into it/);
+    expect(prompt).toContain("You can schedule an appointment with your scheduling tools");
+    expect(prompt).toContain("Every request you make waits for the team to confirm it.");
     expect(prompt).toContain("Answer instead: Refunds go through the office.");
     expect(prompt).not.toContain("delete a record");
+  });
+
+  it("adds how to book only when a booking tool is on, offering one time at a time and never an invented one", () => {
+    const book = { id: "book", kind: "schedule_appointment", mode: "auto" };
+    const scheduling = {
+      types: [
+        { id: "visit", name: "Home visit", minutes: 60, offer: "conversation" as const, linkOnRequest: true },
+        { id: "call", name: "Phone call", minutes: 15, offer: "link" as const, linkOnRequest: true },
+      ],
+      alwaysApproval: false,
+      timezone: "America/Chicago",
+    };
+    const prompt = composeResponsePrompt({ agent: agent({ tools: [book] }), scheduling });
+    expect(prompt).toContain("## Booking appointments");
+    expect(prompt).toContain('Home visit (60 min, type id "visit"): offer times in the conversation; send their booking link if they ask for one.');
+    expect(prompt).toContain('Phone call (15 min, type id "call"): send their booking link.');
+    expect(prompt).toContain("Then offer ONE time");
+    expect(prompt).toContain("Never state a date or time that a tool did not return");
+    expect(composeResponsePrompt({ agent: agent({ tools: [{ ...book, mode: "deny" }] }), scheduling })).not.toContain("## Booking appointments");
+    expect(composeResponsePrompt({ agent: agent({ tools: [] }), scheduling })).not.toContain("## Booking appointments");
   });
 
   it("says what to do with no tools at all", () => {

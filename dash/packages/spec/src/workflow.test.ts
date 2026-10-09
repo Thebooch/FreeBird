@@ -70,8 +70,8 @@ describe("the graph", () => {
 });
 
 describe("the catalog", () => {
-  it("has the thirteen base actions, each variant with a unique id", () => {
-    expect(new Set(ACTION_VARIANTS.map((one) => one.base)).size).toBe(13);
+  it("has the fourteen base actions, each variant with a unique id", () => {
+    expect(new Set(ACTION_VARIANTS.map((one) => one.base)).size).toBe(14);
     expect(new Set(ACTION_VARIANTS.map((one) => one.id)).size).toBe(ACTION_VARIANTS.length);
   });
 

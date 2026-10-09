@@ -157,6 +157,10 @@ export const buildOverview = async (env: WorkflowEnv, options: { readonly agents
       active.push({ ...base, state: "waiting_agent", stage: lastDone, waitingFor: names.length > 0 ? `${names.join(" or ")} to be asked` : "An agent to be given a tool that starts it" });
       continue;
     }
+    if (workflow.trigger.kind === "booking") {
+      active.push({ ...base, state: "waiting_trigger", stage: lastDone, waitingFor: describeTrigger(workflow.trigger).replace(/^When /, "") });
+      continue;
+    }
     active.push({ ...base, state: "waiting_trigger", stage: lastDone, waitingFor: "Somebody to press Run now" });
   }
 

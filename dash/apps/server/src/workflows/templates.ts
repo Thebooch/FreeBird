@@ -1,5 +1,6 @@
 import {
   TRIGGER_NODE,
+  actionVariant,
   firstNode,
   workflowTemplateSchema,
   type WorkflowEdge,
@@ -70,6 +71,14 @@ export interface InsertedSteps {
   readonly entry?: string | undefined;
 }
 
+/** `{{ steps.<old id>… }}` in any text setting, pointed at the step's new id. */
+const retarget = (value: unknown, ids: ReadonlyMap<string, string>): unknown => {
+  if (typeof value === "string") return value.replace(/\bsteps\.([a-zA-Z0-9_-]+)/g, (all, id: string) => (ids.has(id) ? `steps.${ids.get(id)}` : all));
+  if (Array.isArray(value)) return value.map((one) => retarget(one, ids));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, one]) => [key, retarget(one, ids)]));
+  return value;
+};
+
 export class TemplateService {
   constructor(
     private readonly deps: {
@@ -77,6 +86,8 @@ export class TemplateService {
       readonly workflows: WorkflowStore;
       readonly now?: () => Date;
       readonly newId: () => string;
+      /** Templates shipped with Dash, read-only, listed after the workspace's own. */
+      readonly builtIn?: readonly WorkflowTemplate[];
     },
   ) {}
 
@@ -84,17 +95,19 @@ export class TemplateService {
     return (this.deps.now?.() ?? new Date()).toISOString();
   }
 
-  list(): Promise<WorkflowTemplate[]> {
-    return this.deps.templates.list();
+  async list(): Promise<WorkflowTemplate[]> {
+    const own = await this.deps.templates.list();
+    return [...own, ...(this.deps.builtIn ?? []).filter((one) => !own.some((held) => held.id === one.id))];
   }
 
   async get(id: string): Promise<WorkflowTemplate> {
-    const held = await this.deps.templates.get(id);
+    const held = (await this.deps.templates.get(id)) ?? this.deps.builtIn?.find((one) => one.id === id);
     if (!held) throw new TemplateError(`There is no template "${id}".`, 404);
     return held;
   }
 
   async remove(id: string): Promise<void> {
+    if (!(await this.deps.templates.get(id)) && this.deps.builtIn?.some((one) => one.id === id)) throw new TemplateError("A template that comes with Dash can't be removed.", 409);
     await this.get(id);
     await this.deps.templates.delete(id);
   }
@@ -164,18 +177,23 @@ export class TemplateService {
       else filled[blank.name] = value;
     }
     if (missing.length > 0) throw new TemplateError(`"${template.name}" needs: ${missing.join(", ")}.`, 400);
-    const ids = new Map(template.nodes.map((node) => [node.id, `${node.id}-${this.deps.newId().slice(0, 6)}`.slice(0, 64)]));
+    /* Fresh ids, joined with an underscore so `{{ steps.<id>.… }}` can still name them. */
+    const ids = new Map(template.nodes.map((node) => [node.id, `${node.id.replace(/-/g, "_")}_${this.deps.newId().replace(/[^a-zA-Z0-9]/g, "").slice(0, 6)}`.slice(0, 64)]));
     const top = Math.min(...template.nodes.map((node) => node.position.y), 0);
     const left = Math.min(...template.nodes.map((node) => node.position.x), 0);
     const nodes = template.nodes.map((node) => ({
       ...node,
       id: ids.get(node.id)!,
-      settings: fill(node.settings, filled) as Record<string, unknown>,
+      settings: retarget(fill(node.settings, filled), ids) as Record<string, unknown>,
       position: { x: at.x + node.position.x - left, y: at.y + node.position.y - top },
-      ...(node.settings["step"] && ids.has(String(node.settings["step"])) ? {} : {}),
     }));
-    /* A setting naming a step of the template follows it to its new id. */
-    for (const node of nodes) if (typeof node.settings["step"] === "string" && ids.has(node.settings["step"])) node.settings = { ...node.settings, step: ids.get(node.settings["step"])! };
+    /* A setting naming a step of the template (any field of kind step) follows it to its new id. */
+    for (const node of nodes) {
+      for (const field of actionVariant(node.action)?.fields ?? []) {
+        const named = node.settings[field.key];
+        if (field.kind === "step" && typeof named === "string" && ids.has(named)) node.settings = { ...node.settings, [field.key]: ids.get(named)! };
+      }
+    }
     const edges = template.edges
       .filter((edge) => ids.has(edge.to) && (ids.has(edge.from) || edge.from === TRIGGER_NODE))
       .map((edge) => {
@@ -187,16 +205,23 @@ export class TemplateService {
   }
 
   /** A whole workflow from a workflow template: the input to save it with. */
-  async workflowFrom(id: string, values: Readonly<Record<string, string>>, name?: string): Promise<{ readonly input: WorkflowInput; readonly template: WorkflowTemplate }> {
+  async workflowFrom(
+    id: string,
+    values: Readonly<Record<string, string>>,
+    name?: string,
+    /** For a template a booking starts: only these appointment types. */
+    bookingTypes?: readonly string[],
+  ): Promise<{ readonly input: WorkflowInput; readonly template: WorkflowTemplate }> {
     const inserted = await this.insert(id, values);
     if (inserted.template.kind !== "workflow" || !inserted.template.workflow) throw new TemplateError(`"${inserted.template.name}" is not a whole workflow.`, 400);
     const rest = inserted.template.workflow as Partial<WorkflowSpec>;
+    const trigger = rest.trigger ?? { kind: "manual" as const };
     return {
       template: inserted.template,
       input: {
         ...(rest as object),
         name: name ?? rest.name ?? inserted.template.name,
-        trigger: rest.trigger ?? { kind: "manual" },
+        trigger: trigger.kind === "booking" && bookingTypes && bookingTypes.length > 0 ? { ...trigger, types: [...bookingTypes] } : trigger,
         nodes: inserted.nodes,
         edges: inserted.edges,
         enabled: false,

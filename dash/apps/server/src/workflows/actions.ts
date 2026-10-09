@@ -25,6 +25,7 @@ import {
 import { z } from "zod";
 import { DeliveryError, ParkWorkflow, notConnectedSender, type WorkflowEnv } from "./env.js";
 import { mayRead, readRecordAs } from "./reads.js";
+import { SCHEDULE_EXECUTORS } from "./schedule-actions.js";
 
 /**
  * What each catalog variant does when a case reaches it.
@@ -295,31 +296,59 @@ export const toWhen = (value: unknown): { readonly at: string; readonly dateOnly
   return Number.isFinite(parsed) ? { at: iso(parsed), dateOnly: false } : null;
 };
 
-const calendar: ActionExecutor = async ({ env, settings: s, agent, workflow, case: one, task }) => {
-  /* Its id is the task's, the same on every try: doing this step twice makes one entry. */
+const calendar: ActionExecutor = async ({ env, settings: s, agent, workflow, node, case: one, task }) => {
   const when = toWhen(s["at"]);
   const title = text(s["title"]).trim() || "Untitled";
   if (!when) return done("next", { status: "skipped", title: `"${title}" has no date to put it on.` });
   const end = toWhen(s["end"]);
   const ownerAgent = text(s["ownerAgent"]) || agent?.id;
+  const notes = text(s["notes"]).trim();
+  /*
+   * One entry per record and step: the same record matching again moves this
+   * entry rather than making another (`dedupeKey`). Without a record — a run
+   * by hand over its inputs — the entry's id is the task's, the same on every
+   * try, so doing the step twice still makes one entry.
+   */
+  const rowKey = one.rowKey || undefined;
+  const reads = workflowReads(one.definition);
+  const dedupeKey = rowKey ? `${workflow.id}:${rowKey}:${node.id}` : undefined;
+  const now = iso(env.now());
   const event: CalendarEvent = {
     id: `cal-${task.id}`,
     title,
+    ...(notes ? { notes } : {}),
     at: when.at,
     ...(end ? { end: end.at } : {}),
     allDay: when.dateOnly,
-    deadline: s["deadline"] === true,
+    kind: s["deadline"] === true ? "deadline" : "event",
+    status: "open",
+    pinned: false,
     ...(ownerAgent ? { owner: { kind: "agent" as const, id: ownerAgent } } : {}),
+    ...(rowKey && reads?.record ? { source: { connection: reads.connection, entity: reads.record, recordId: rowKey } } : {}),
     workflow: workflow.id,
+    ...(one.run ? { run: one.run } : {}),
     case: one.id,
     task: task.id,
-    createdAt: iso(env.now()),
+    ...(rowKey ? { rowKey } : {}),
+    ...(dedupeKey ? { dedupeKey } : {}),
+    createdAt: now,
+    updatedAt: now,
   };
-  await env.calendar.put(event);
+  const before = dedupeKey ? ((await env.calendar.list({ workflow: workflow.id, rowKey: rowKey! })).find((held) => held.dedupeKey === dedupeKey) ?? null) : null;
+  const stored = dedupeKey ? await env.calendar.upsertByKey({ ...event, dedupeKey }) : (await env.calendar.put(event), event);
+  const label = stored.kind === "deadline" ? "Deadline" : "On the calendar";
+  const heading = !before ? `${label}: ${title}` : before.pinned ? `Left as a person set it: ${before.title}` : before.at !== stored.at || before.end !== stored.end ? `Moved on the calendar: ${title}` : `Already on the calendar: ${title}`;
   return done(
     "next",
-    { status: "done", title: `${event.deadline ? "Deadline" : "On the calendar"}: ${title}`, body: { kind: "created", what: `${title}, ${event.at}`, id: event.id }, links: { calendar: event.id }, reversal: { available: true, internal: { kind: "calendar", id: event.id } } },
-    { id: event.id, at: event.at },
+    {
+      status: "done",
+      title: heading,
+      body: { kind: "created", what: `${stored.title}, ${stored.at}`, id: stored.id },
+      links: { calendar: stored.id },
+      /* Undo puts back what was there, or removes what this step made. */
+      reversal: { available: !before?.pinned, ...(before?.pinned ? { reason: "A person pinned this entry; it was left as they set it." } : {}), internal: { kind: "calendar", id: stored.id, ...(before ? { value: before } : {}) } },
+    },
+    { id: stored.id, at: stored.at },
   );
 };
 
@@ -358,7 +387,7 @@ const caseValue: ActionExecutor = async ({ settings: s, case: one }) => {
 const removeCalendar: ActionExecutor = async ({ env, settings: s }) => {
   const id = text(s["entry"]).trim();
   if (!id) return done("next", { status: "skipped", title: "No calendar entry to remove." });
-  const held = (await env.calendar.list({ limit: 1000 })).find((one) => one.id === id);
+  const held = await env.calendar.get(id);
   if (!held) return done("next", { status: "skipped", title: "That calendar entry is already gone." });
   await env.calendar.delete(id);
   return done("next", { status: "done", title: `Removed from the calendar: ${held.title}`, body: { kind: "removed", what: held.title, before: held }, reversal: { available: true, internal: { kind: "calendar", id, value: held } } });
@@ -782,6 +811,7 @@ const runEach: ActionExecutor = async ({ env, settings: s, resume, startCase, at
 };
 
 export const EXECUTORS: Readonly<Record<string, ActionExecutor>> = {
+  ...SCHEDULE_EXECUTORS,
   "create.record": recordChange,
   "create.calendar": calendar,
   "create.note": note,

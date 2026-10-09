@@ -43,6 +43,14 @@ export const GUARDED_ROUTES: readonly GuardRule[] = [
   /* Workflows: making, changing, running and previewing them, and deciding what waits for a person. */
   { methods: WRITE, path: /^\/api\/workflows(\/|$)/, permission: "workflows.manage" },
   { methods: WRITE, path: /^\/api\/(tasks|cases|workflow-templates|workflow-events)(\/|$)/, permission: "workflows.manage" },
+  /* The calendar: adding, changing and finishing entries. Appointments change through their bookings. */
+  { methods: WRITE, path: /^\/api\/calendar(\/|$)/, permission: "calendar.manage" },
+  /* Scheduling's setup: hosts, pools, appointment types, blocks and where they are placed. */
+  { methods: WRITE, path: /^\/api\/scheduling(\/|$)/, permission: "calendar.manage" },
+  /* Contacts: reading them is reading records; changing, linking and setting up how they are filled is its own. */
+  { methods: ["GET"], path: /^\/api\/contacts\/sources$/, permission: "contacts.manage" },
+  { methods: ["GET"], path: /^\/api\/contacts(\/|$)/, permission: "records.read" },
+  { methods: WRITE, path: /^\/api\/contacts(\/|$)/, permission: "contacts.manage" },
   /* The parts a board is built from, and which models do what. */
   { methods: ["PUT", "DELETE"], path: /^\/api\/parts(\/|$)/, permission: "boards.edit" },
   { methods: ["PUT"], path: /^\/api\/models(\/|$)/, permission: "connections.manage" },
@@ -55,7 +63,8 @@ export const GUARDED_ROUTES: readonly GuardRule[] = [
  * prepare and again on commit (`WriteService`). Guarding them here as well
  * would refuse a member granted one record type on one connection.
  */
-const OWN_CHECK = [/^\/api\/writes(\/|$)/, /^\/api\/connections\/[^/]+\/writes\/prepare$/];
+/* Routes that check for themselves: writes ask the policy per record, and a calendar feed is only ever your own. */
+const OWN_CHECK = [/^\/api\/writes(\/|$)/, /^\/api\/connections\/[^/]+\/writes\/prepare$/, /^\/api\/calendar\/feed(\/stop)?$/];
 
 export const permissionFor = (method: string, url: string): Permission | null => {
   const path = url.split("?")[0] ?? url;

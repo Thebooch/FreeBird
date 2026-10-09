@@ -95,7 +95,9 @@ export const agentRoutes = (
     /**
      * Use one of an agent's tools, as a conversation would: `{ inputs, conversation }`.
      * The tool's own mode decides what happens — auto does it, approve asks the
-     * team, deny declines. Only `run_workflow` tools do anything yet.
+     * team, deny declines. `run_workflow` starts its workflow; `schedule_appointment`
+     * writes the agent's reply to `inputs.message` from `inputs.contact`, booking as
+     * it goes (`scheduling/conversation.ts`), until Comms brings real conversations.
      */
     app.post<{ Params: { id: string; toolId: string }; Body: { inputs?: Record<string, unknown>; conversation?: string } | undefined }>(
       "/api/agents/:id/tools/:toolId/use",
@@ -105,8 +107,12 @@ export const agentRoutes = (
         const agent = await service.get(request.params.id);
         const tool = agent?.tools.find((one) => one.id === request.params.toolId);
         if (!agent || !tool) return reply.status(404).send({ error: "There is no such tool on this agent." });
-        if (!tools.useTool || tool.kind !== "run_workflow") return reply.status(501).send({ error: "This kind of tool is used in conversations, which are not set up yet." });
-        return tools.useTool(agent, tool, request.body?.inputs ?? {}, request.body?.conversation);
+        if (!tools.useTool || (tool.kind !== "run_workflow" && tool.kind !== "schedule_appointment")) return reply.status(501).send({ error: "This kind of tool is used in conversations, which are not set up yet." });
+        try {
+          return await tools.useTool(agent, tool, request.body?.inputs ?? {}, request.body?.conversation);
+        } catch (error) {
+          return fail(reply, error);
+        }
       },
     );
 

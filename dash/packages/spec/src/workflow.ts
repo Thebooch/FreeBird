@@ -1,6 +1,7 @@
 import { idSchema } from "@freebirdai/connect-spec";
 import { z } from "zod";
 import { principalSchema } from "./access.js";
+import { BOOKING_EVENTS, BOOKING_EVENT_WORDS } from "./booking-events.js";
 import { actionVariant, describeDuration, outcomesFor } from "./actions.js";
 
 /**
@@ -98,6 +99,19 @@ export const workflowTriggerSchema = z.discriminatedUnion("kind", [
   /** Started by an agent's `run_workflow` tool. Its inputs become the tool's parameters. */
   z.object({ kind: z.literal("agent"), inputs: z.array(workflowInputDefSchema).max(12).default([]) }),
   z.object({ kind: z.literal("manual") }),
+  /**
+   * Something happened to a booking: a request, a decision, a move, a
+   * cancellation. Fired from the bookings' outbox, never by polling; the
+   * case's row is the booking, its row key the booking's id.
+   */
+  z.object({
+    kind: z.literal("booking"),
+    events: z.array(z.enum(BOOKING_EVENTS)).min(1, "Pick what happens to the booking.").max(BOOKING_EVENTS.length),
+    /** Appointment types it is for. Empty: every type. */
+    types: z.array(z.string().trim().min(1).max(80)).max(50).default([]),
+    /** Cancelling the booking cancels this workflow's open cases for it, except ones a cancellation started. */
+    endWhenCancelled: z.boolean().default(true),
+  }),
 ]);
 export type WorkflowTrigger = z.infer<typeof workflowTriggerSchema>;
 export type WorkflowTriggerKind = WorkflowTrigger["kind"];
@@ -313,7 +327,9 @@ export const chainEdges = (nodes: ReadonlyArray<{ id: string }>): WorkflowEdge[]
 
 /** How a run or a case started. */
 export const workflowStartSchema = z.object({
-  kind: z.enum(["schedule", "every", "record_created", "record_changed", "agent", "manual", "approval", "workflow"]),
+  kind: z.enum(["schedule", "every", "record_created", "record_changed", "agent", "manual", "approval", "workflow", "booking"]),
+  /** For a case a booking started: the event that started it. */
+  bookingEvent: z.string().optional(),
   /** The person who started it by hand, or approved the request that did. */
   userId: z.string().optional(),
   /** The agent that started it, or asked to. */
@@ -520,6 +536,21 @@ export const taskBodySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("request"), url: z.string(), status: z.number().optional(), response: z.unknown().optional() }),
   z.object({ kind: z.literal("todo"), details: z.string().default(""), assignee: z.string().optional(), due: z.string().optional(), done: z.boolean().default(false) }),
   z.object({ kind: z.literal("question"), question: z.string(), options: z.array(z.string()).default([]), answer: z.string().optional(), assignee: z.string().optional() }),
+  /** A booking waiting on the team: approve it, offer other times, or deny it. The answer is applied to the booking. */
+  z.object({
+    kind: z.literal("booking"),
+    booking: z.string(),
+    question: z.string(),
+    /** approved, suggested, denied or withdrawn, once answered. */
+    answer: z.string().optional(),
+    allowSuggest: z.boolean().default(true),
+    allowDeny: z.boolean().default(true),
+    /** How many other times a member may offer. */
+    maxSuggestions: z.number().int().min(1).max(10).default(3),
+    assignee: z.string().optional(),
+    /** When the people asked were reminded, once. */
+    remindedAt: z.string().optional(),
+  }),
 ]);
 export type TaskBody = z.infer<typeof taskBodySchema>;
 
@@ -638,30 +669,12 @@ export const workflowTemplateSchema = z.object({
   entry: z.string().optional(),
   /** For a workflow template: everything but its steps. */
   workflow: z.record(z.unknown()).optional(),
+  /** Shipped with Dash: it can be used, not changed or removed. */
+  builtIn: z.boolean().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
 export type WorkflowTemplate = z.infer<typeof workflowTemplateSchema>;
-
-/**
- * An entry on the calendar. Defined here so a workflow's calendar step works
- * before the calendar view exists; the calendar (step 4) owns its shape.
- */
-export const calendarEventSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  /** ISO date or date-time. */
-  at: z.string(),
-  end: z.string().optional(),
-  allDay: z.boolean().default(false),
-  deadline: z.boolean().default(false),
-  owner: ownerRefSchema.optional(),
-  workflow: z.string().optional(),
-  case: z.string().optional(),
-  task: z.string().optional(),
-  createdAt: z.string(),
-});
-export type CalendarEvent = z.infer<typeof calendarEventSchema>;
 
 /** One line for a step: "Text — Maintenance agent", "Wait for an event — up to 2 days". */
 export const describeNode = (node: Pick<WorkflowNode, "action" | "settings" | "name">): string => {
@@ -716,6 +729,8 @@ export const describeTrigger = (
     readonly record?: (connection: string, record: string) => string;
     /** The agents whose tools start it. */
     readonly agents?: readonly string[];
+    /** An appointment type's name, for a booking trigger. */
+    readonly type?: (id: string) => string;
   } = {},
 ): string => {
   switch (trigger.kind) {
@@ -737,5 +752,11 @@ export const describeTrigger = (
         : "When an agent is asked";
     case "manual":
       return "By hand";
+    case "booking": {
+      const types = trigger.types.map((id) => names.type?.(id) ?? id);
+      const what = types.length === 0 ? "a booking" : types.length === 1 ? `a ${types[0]} booking` : `a ${types.slice(0, -1).join(", ")} or ${types.at(-1)} booking`;
+      const happens = trigger.events.map((event) => BOOKING_EVENT_WORDS[event]);
+      return `When ${what} ${happens.length === 1 ? happens[0] : `${happens.slice(0, -1).join(", ")} or ${happens.at(-1)}`}`;
+    }
   }
 };

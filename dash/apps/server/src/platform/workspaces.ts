@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Principal } from "@freebirdai/dash-spec";
 import type { FastifyInstance, InjectOptions } from "fastify";
+import { publicWorkspaceOf } from "../identity/public.js";
 import type { IdentityResolver } from "../identity/resolver.js";
 
 /**
@@ -19,12 +20,14 @@ import type { IdentityResolver } from "../identity/resolver.js";
  * can never reach another workspace's server by any route. A workspace nobody
  * has asked anything of for a while is closed, and built again when asked.
  *
- * One request names its workspace itself: a webhook's call
- * (`/api/workflow-hooks/<workspace>/<token>`), which another system makes with
- * nobody signed in, the token being its authority. The host hands it to the
- * workspace its address names, resolving and attaching no principal, and
- * only when that workspace is held here. The server it reaches lets that one
- * route through without a principal, and nothing else (`identity/context.ts`).
+ * Some requests name their workspace themselves, because they come with
+ * nobody signed in and a token in the path is their authority: a webhook's
+ * call (`POST /api/workflow-hooks/<workspace>/<token>`) and the booking and
+ * approval pages' API (`/api/public/<workspace>/…`). The host hands each to
+ * the workspace its address names, resolving and attaching no principal, and
+ * only when that workspace is held here. The server it reaches lets the routes
+ * marked public through without a principal, and nothing else
+ * (`identity/public.ts`).
  *
  * The open-source build has one workspace and does not use this: it runs one
  * server, as it always has.
@@ -35,9 +38,9 @@ export interface WorkspaceHostOptions {
   /** The server for one workspace, built the first time a member of it asks. */
   readonly build: (workspace: string) => FastifyInstance | Promise<FastifyInstance>;
   /**
-   * Whether a workspace by this id is held here. Asked before a webhook's
-   * call, which names its workspace with nobody signed in, opens its server:
-   * a name nobody vouches for opens nothing.
+   * Whether a workspace by this id is held here. Asked before a request that
+   * names its workspace with nobody signed in (a webhook's call, a booking
+   * page) opens its server: a name nobody vouches for opens nothing.
    */
   readonly holds: (workspace: string) => boolean | Promise<boolean>;
   /** A workspace asked nothing for this long is closed. Twenty minutes unless said. */
@@ -50,11 +53,6 @@ export interface WorkspaceHostOptions {
 const WORKSPACE_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 
 export const isWorkspaceId = (id: string): boolean => WORKSPACE_ID.test(id);
-
-/** A webhook's call: `POST /api/workflow-hooks/<workspace>/<token>`, and the workspace it names. */
-const HOOK_CALL = /^\/api\/workflow-hooks\/([^/?#]+)\/[^/?#]+(?:\?|$)/;
-
-const hookWorkspace = (method: string, url: string): string | null => (method.toUpperCase() === "POST" ? (HOOK_CALL.exec(url)?.[1] ?? null) : null);
 
 type Routed = { readonly app: FastifyInstance } | { readonly status: number; readonly error: string };
 
@@ -102,16 +100,16 @@ export class WorkspaceHost {
     return this.options.identity.resolve({ headers: request.headers, url: request.url });
   }
 
-  /** Which workspace's server answers: the signed-in member's, or the one a webhook's call names. */
+  /** Which workspace's server answers: the signed-in member's, or the one a public request names. */
   private async route(request: {
     readonly method: string;
     readonly headers: Readonly<Record<string, string | string[] | undefined>>;
     readonly url: string;
   }): Promise<Routed> {
-    const hooked = hookWorkspace(request.method, request.url);
-    if (hooked !== null) {
-      if (!isWorkspaceId(hooked) || !(await this.options.holds(hooked))) return { status: 404, error: "Unknown hook." };
-      return { app: await this.appFor(hooked) };
+    const named = publicWorkspaceOf(request.method, request.url);
+    if (named !== null) {
+      if (!isWorkspaceId(named) || !(await this.options.holds(named))) return { status: 404, error: "Not found." };
+      return { app: await this.appFor(named) };
     }
     const principal = await this.principalOf(request);
     if (!principal || !isWorkspaceId(principal.workspaceId)) return { status: 401, error: "Sign in to continue." };

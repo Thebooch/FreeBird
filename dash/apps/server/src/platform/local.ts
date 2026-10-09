@@ -23,6 +23,10 @@ import { LOCAL_WORKSPACE_ID, type IdentityResolver } from "../identity/resolver.
 import { isWorkspaceId } from "./workspaces.js";
 import { DbAgentStore } from "../agents/store.js";
 import { DbCalendarStore, DbCaseStore, DbSignalStore, DbTaskStore, DbTemplateStore, DbWorkflowStore } from "../workflows/store.js";
+import { DbBookingStore } from "../bookings/store.js";
+import { DbPublicTokenStore } from "../public/tokens.js";
+import { DbContactStore } from "../contacts/store.js";
+import { DbSchedulingStore } from "../scheduling/store.js";
 import { DbSnapshotStore } from "../history/store.js";
 import { defaultModelId, llmForModel, modelForTask } from "../llm.js";
 import { TIER_MODELS, isTask, providerFor } from "../models.js";
@@ -66,7 +70,7 @@ export interface LocalPlatform {
   /**
    * Whether a workspace is held here: the default one, or one the members
    * store knows. A host asks before it opens a workspace for a webhook's
-   * call, which names its workspace with nobody signed in.
+   * call or a booking page, which name their workspace with nobody signed in.
    */
   holds(workspace: string): Promise<boolean>;
   /**
@@ -154,6 +158,10 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     calendar: new DbCalendarStore(db, workspace),
     templates: new DbTemplateStore(db, workspace),
     signals: new DbSignalStore(db, workspace),
+    scheduling: new DbSchedulingStore(db, workspace),
+    contacts: new DbContactStore(db, workspace),
+    bookings: new DbBookingStore(db, workspace),
+    tokens: new DbPublicTokenStore(db, workspace),
   });
 
   /**
@@ -355,8 +363,13 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
 
   const platform: DashPlatform = {
     ...(identity && memberships ? { identity, policy: rolePolicy(memberships) } : {}),
+    /* Who is in the workspace, for scheduling's hosts. Without sign-in, the one owner. */
+    ...(memberships ? { members: async () => (await memberships.members(defaultWorkspace)).map((one) => ({ userId: one.userId, email: one.email, role: one.role })) } : {}),
     /* Its rows under `local`, as they always were, whatever the workspace is called. */
     workspace: { id: defaultWorkspace, key: LOCAL_WORKSPACE_ID },
+    /* How public pages and messages look, and where people open them. */
+    brand: async () => ({ ...(process.env.DASH_BRAND_NAME ? { name: process.env.DASH_BRAND_NAME } : {}), ...(process.env.DASH_BRAND_ACCENT ? { accent: process.env.DASH_BRAND_ACCENT } : {}) }),
+    ...(process.env.DASH_PAGES_ORIGIN ? { pagesOrigin: process.env.DASH_PAGES_ORIGIN } : {}),
     // The keeper: see `keeper/keeper.ts`. On here, off in tests.
     keeper: true,
     // Workflows start by themselves on their schedules and API triggers. On here, off in tests.
@@ -402,6 +415,11 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     return {
       ...platform,
       workspace: { id: workspace, key: workspace },
+      brand: async () => {
+        const name = (await memberships?.workspace(workspace))?.name;
+        return name ? { name } : {};
+      },
+      ...(memberships ? { members: async () => (await memberships.members(workspace)).map((one) => ({ userId: one.userId, email: one.email, role: one.role })) } : {}),
       store: new SpecStore(join(filesAt, "dashboards"), join(filesAt, "connections"), join(filesAt, "reports")),
       keys: new KeyStore(vault, join(stateAt, "vault.json")),
       grants: new GrantStore(join(stateAt, "grants.json")),

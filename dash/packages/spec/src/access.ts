@@ -45,6 +45,8 @@ export const PERMISSIONS = [
   "members.manage",
   "agents.manage",
   "workflows.manage",
+  "calendar.manage",
+  "contacts.manage",
 ] as const;
 export const permissionSchema = z.enum(PERMISSIONS);
 export type Permission = z.infer<typeof permissionSchema>;
@@ -57,7 +59,7 @@ export type Permission = z.infer<typeof permissionSchema>;
 export const ROLE_PERMISSIONS: Readonly<Record<Role, readonly Permission[]>> = {
   owner: PERMISSIONS,
   admin: PERMISSIONS,
-  editor: ["records.read", "records.create", "records.update", "records.delete", "records.act", "boards.edit", "workflows.manage"],
+  editor: ["records.read", "records.create", "records.update", "records.delete", "records.act", "boards.edit", "workflows.manage", "calendar.manage", "contacts.manage"],
   viewer: ["records.read"],
 };
 

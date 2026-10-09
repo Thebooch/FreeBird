@@ -61,6 +61,8 @@ export interface WorkflowServiceDeps {
   readonly policy: Policy;
   readonly agents: { list(): Promise<AgentSpec[]> };
   readonly hasConnection: (id: string) => boolean;
+  /** The workspace's appointment type ids, for a booking trigger. Absent: not checked. */
+  readonly appointmentTypes?: () => Promise<readonly string[]>;
   readonly now?: () => Date;
 }
 
@@ -152,6 +154,10 @@ export class WorkflowService {
       if (workflow.source) out.push({ field: "source", message: "A trigger on an API reads the records it watches; leave the source out." });
     }
     connection(workflow.source?.connection, { field: "source" });
+    if (workflow.trigger.kind === "booking" && this.deps.appointmentTypes) {
+      const known = new Set(await this.deps.appointmentTypes());
+      for (const type of workflow.trigger.types) if (!known.has(type)) out.push({ field: "trigger", message: `There is no appointment type "${type}".` });
+    }
     const criteria = predicateProblem(workflow.criteria);
     if (criteria) out.push({ field: "criteria", message: `The criteria cannot be read: ${criteria}` });
 
@@ -173,6 +179,11 @@ export class WorkflowService {
       const when = predicateProblem(node.when);
       if (when) out.push({ ...at, field: "when", message: `${name}: the condition cannot be read: ${when}` });
       for (const problem of fieldProblems(variant, node.settings)) out.push({ ...at, field: problem.key, message: `${name}: ${problem.message}` });
+      /* A step on "the booking" means the one that started the case; any other workflow must say which. */
+      if (workflow.trigger.kind !== "booking" && variant.fields.some((field) => field.key === "booking")) {
+        const booking = String(node.settings["booking"] ?? "").replace(/\s+/g, "");
+        if (!booking || booking === "{{id}}") out.push({ ...at, field: "booking", incomplete: true, message: `${name}: say which booking, e.g. {{ steps.<hold step>.booking }}. This workflow isn't started by a booking.` });
+      }
       for (const field of missingFields(variant, node.settings)) {
         out.push({ ...at, field: field.key, incomplete: true, message: `${name} needs ${field.label.toLowerCase()}.`, ...(field.ask ? { ask: field.ask } : {}) });
       }

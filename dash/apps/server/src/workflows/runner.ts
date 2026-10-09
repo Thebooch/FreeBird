@@ -30,6 +30,12 @@ export const RUNNER_TICK_MS = 30_000;
 export interface WorkflowRunnerOptions extends Starter {
   readonly tickMs?: number;
   readonly log?: { warn(line: string): void };
+  /**
+   * More passes, each run once a tick after the engine's own: delivering the
+   * bookings' outbox, settling holds that ran out. One failing never stops
+   * the others.
+   */
+  readonly passes?: ReadonlyArray<{ readonly name: string; readonly run: () => Promise<unknown> }>;
 }
 
 export class WorkflowRunner {
@@ -95,6 +101,13 @@ export class WorkflowRunner {
         await this.options.engine.recover();
         await reopenClaims(this.options.env, this.options.engine, new Date(this.options.env.now() - STALL_MS).toISOString());
         await this.watchRecords();
+        for (const pass of this.options.passes ?? []) {
+          try {
+            await pass.run();
+          } catch (error) {
+            this.options.log?.warn(`${pass.name} could not run: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
       } catch (error) {
         this.options.log?.warn(`workflows could not be checked: ${error instanceof Error ? error.message : String(error)}`);
       } finally {

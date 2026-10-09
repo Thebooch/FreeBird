@@ -34,6 +34,7 @@ import type {
   WidgetBrief,
 } from "@freebirdai/dash-spec";
 import {
+  readField,
   connectionKeyRefs,
   connectionNeedsAuthSetup,
   dashboardSchema,
@@ -135,7 +136,28 @@ import { RATES_AS_OF } from "./pricing.js";
 import type { PartRegistry } from "@freebirdai/dash-parts";
 import { partsRoutes } from "./routes/parts.js";
 import { agentRoutes } from "./routes/agents.js";
-import { WORKFLOW_HOOK_ROUTE, workflowRoutes } from "./routes/workflows.js";
+import { workflowRoutes } from "./routes/workflows.js";
+import { calendarRoutes } from "./routes/calendar.js";
+import { CalendarService } from "./calendar/service.js";
+import { schedulingRoutes } from "./routes/scheduling.js";
+import { contactRoutes, type ContactSource } from "./routes/contacts.js";
+import { bookingRoutes } from "./routes/bookings.js";
+import { linkRoutes } from "./routes/links.js";
+import { publicRoutes } from "./routes/public.js";
+import { ContactService } from "./contacts/service.js";
+import { BookingService, bookingsAsBusy } from "./bookings/service.js";
+import { workflowBookings } from "./bookings/row.js";
+import { BookingDispatcher } from "./workflows/booking-events.js";
+import { BOOKING_RECIPES } from "./workflows/recipes.js";
+import { MemoryBookingStore, type BookingStore } from "./bookings/store.js";
+import { BookingLinks } from "./bookings/links.js";
+import { replyWithScheduling } from "./scheduling/conversation.js";
+import { brandOf, notConnectedNotifier, type Brand, type TeamNotifier } from "./bookings/notify.js";
+import { MemoryRateLimiter, type RateLimiter } from "./public/limits.js";
+import { MemoryPublicTokenStore, type PublicTokenStore } from "./public/tokens.js";
+import { MemoryContactStore, type ContactStore } from "./contacts/store.js";
+import { SchedulingService, type WorkspaceMember } from "./scheduling/service.js";
+import { MemorySchedulingStore, type SchedulingStore } from "./scheduling/store.js";
 import { explainDraft } from "./workflows/draft.js";
 import { WorkflowEngine } from "./workflows/engine.js";
 import { WorkflowRunner } from "./workflows/runner.js";
@@ -157,8 +179,8 @@ import {
   type TemplateStore,
   type WorkflowStore,
 } from "./workflows/store.js";
-import { deliveryErrorOf, type OutreachSender, type WorkflowEnv } from "./workflows/env.js";
-import { AgentService } from "./agents/service.js";
+import { deliveryErrorOf, type OutreachSender, type WorkflowBookings, type WorkflowEnv } from "./workflows/env.js";
+import { AgentError, AgentService } from "./agents/service.js";
 import { MemoryAgentStore, type AgentStore } from "./agents/store.js";
 import { installIdentity } from "./identity/context.js";
 import { ownerPolicy, type Policy } from "./identity/policy.js";
@@ -182,6 +204,7 @@ import {
   fieldPathSchema,
   widgetBriefSchema,
 } from "@freebirdai/dash-spec";
+import type { AgentSpec, AgentTool, ResponseChannel } from "@freebirdai/dash-spec";
 import { onboardingRoutes } from "./routes/onboarding.js";
 import { allocateDashboardId } from "./onboarding/materialise.js";
 import { warmTargets } from "./keeper/targets.js";
@@ -402,11 +425,29 @@ export interface BuildServerOptions {
   readonly tasks?: TaskStore;
   readonly calendar?: CalendarStore;
   readonly templates?: TemplateStore;
+  /** Scheduling's setup: hosts, pools, appointment types, blocks and placements (`scheduling/store.ts`). Memory unless supplied. */
+  readonly scheduling?: SchedulingStore;
+  /** Who is in the workspace, for scheduling's hosts. Absent: the one person this server answers to. */
+  readonly members?: () => Promise<readonly WorkspaceMember[]>;
+  /** Contacts, their fields and how they are matched to records (`contacts/store.ts`). Memory unless supplied. */
+  readonly contacts?: ContactStore;
+  /** Bookings, the time they hold, and their events (`bookings/store.ts`). Memory unless supplied. */
+  readonly bookings?: BookingStore;
   readonly signals?: SignalStore;
   /** Sends Outreach (texts, calls, email). Comms supplies it; absent, nothing leaves Dash and tasks say so. */
   readonly outreach?: OutreachSender;
   /** Where this server is reached from outside, for webhook addresses a Wait step hands out. */
   readonly publicOrigin?: string;
+  /** Hashes of the links people open without signing in: booking pages and approval links (`public/tokens.ts`). Memory unless supplied. */
+  readonly tokens?: PublicTokenStore;
+  /** Tells the team about bookings: approval requests, reminders, decisions, changes. Comms supplies it; absent, nothing is sent and every request still waits in Waiting for you. */
+  readonly notifier?: TeamNotifier;
+  /** The workspace's name and color on its public pages and in its messages. Plain defaults unless supplied. */
+  readonly brand?: () => Promise<Partial<Brand>>;
+  /** Where people open the booking and approval pages (`/p/…`): the web app's origin. Default: `publicOrigin`, else http://localhost:5400. */
+  readonly pagesOrigin?: string;
+  /** Rate limits for the public pages. One server's own count unless supplied. */
+  readonly rateLimiter?: RateLimiter;
   /**
    * The shape each endpoint was accepted in, and any change seen since
    * (`drift/`). Memory unless supplied: tests and embedders get a store that
@@ -620,10 +661,11 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * Every request carries who sent it, before any route runs. The open-source
    * build always answers "the owner"; the point is that every place a change
    * happens can already ask, so a managed build answers differently rather
-   * than hunting for those places. One route alone needs nobody: a webhook's
-   * call, whose token is its authority (`routes/workflows.ts`).
+   * than hunting for those places. Only the routes marked public need nobody:
+   * a webhook's call and the booking pages' API, whose tokens are their
+   * authority (`identity/public.ts`).
    */
-  installIdentity(app, options.identity ?? localOwner(), [{ method: "POST", url: WORKFLOW_HOOK_ROUTE }]);
+  installIdentity(app, options.identity ?? localOwner());
   /*
    * The workspace this server answers for, and the key its rows are kept
    * under. One host may hold several (`platform/workspaces.ts`): a member of
@@ -969,7 +1011,15 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * the write service's review, and never use an agent's reply prompt.
    */
   const catalogEntryOf = (connection: ConnectionSpec) => (connection.catalog ? (options.catalog?.get(connection.catalog) ?? undefined) : undefined);
+  /* Bookings for workflow steps, set once the booking service exists below. */
+  let bookingsForWorkflows: WorkflowBookings | undefined;
+  /* Set once bookings exist, below; an agent's tool reaches it only when used. */
+  let scheduleInConversation: (agent: AgentSpec, tool: AgentTool, inputs: Record<string, unknown>) => Promise<unknown> = async () => {
+    throw new AgentError("Booking isn't set up on this server.", 501);
+  };
+  let bookingDispatcher: BookingDispatcher | undefined;
   const workflowEnv: WorkflowEnv = {
+    bookings: () => bookingsForWorkflows,
     workspaceId: options.workspace?.id ?? LOCAL_WORKSPACE_ID,
     store: workflowStore,
     cases: options.cases ?? new MemoryCaseStore(),
@@ -1037,12 +1087,15 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     policy,
     agents: { list: () => agentStore.list() },
     hasConnection: (id) => store.getConnection(id) !== null,
+    appointmentTypes: async () => (await scheduling.overview()).types.map((one) => one.id),
   });
   const workflowTasks = new TaskService(workflowStarter);
-  const workflowTemplates = new TemplateService({ templates: workflowEnv.templates, workflows: workflowStore, newId: () => randomUUID() });
+  const workflowTemplates = new TemplateService({ templates: workflowEnv.templates, workflows: workflowStore, newId: () => randomUUID(), builtIn: BOOKING_RECIPES });
   void app.register(agentRoutes(agents, policy, () => resolveLlm("agent"), {
-    useTool: (agent, tool, inputs, conversation) =>
-      startFromAgentTool(workflowStarter, { agent, tool, inputs, ...(conversation ? { conversation } : {}) }),
+    useTool: async (agent, tool, inputs, conversation) => {
+      if (tool.kind === "schedule_appointment") return scheduleInConversation(agent, tool, inputs);
+      return startFromAgentTool(workflowStarter, { agent, tool, inputs, ...(conversation ? { conversation } : {}) });
+    },
   }));
   void app.register(
     workflowRoutes({
@@ -1055,7 +1108,160 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       connectionTitle: (id) => store.getConnection(id)?.title ?? id,
     }),
   );
-  const workflowRunner = new WorkflowRunner({ ...workflowStarter, log: { warn: (line) => app.log.warn(line) } });
+  /* The calendar: what agents, workflows, bookings and people put on it (`calendar/`). */
+  const calendar = new CalendarService({ store: workflowEnv.calendar, now: () => Date.now(), newId: () => randomUUID() });
+  void app.register(calendarRoutes({ calendar, policy }));
+  /*
+   * Contacts (`contacts/`): who books, and the facts block rules read about
+   * them. Matching and Refresh read a connection's records as a person who
+   * may read it, through the same reader and policy workflows use.
+   */
+  const entitySpecOf = (connectionId: string, record: string) => {
+    const connection = store.getConnection(connectionId);
+    const entities = connection ? (catalogEntryOf(connection)?.entities ?? []) : [];
+    const wanted = record.toLowerCase();
+    return entities.find((one) => one.id === record) ?? entities.find((one) => one.name.one.toLowerCase() === wanted || one.name.many.toLowerCase() === wanted);
+  };
+  const bookingStore = options.bookings ?? new MemoryBookingStore();
+  const contacts = new ContactService({
+    store: options.contacts ?? new MemoryContactStore(),
+    reads: {
+      read: async (as, target, fresh) => {
+        const may = await policy.can(as, "records.read", { connection: target.connection });
+        if (!may.ok) return { refused: may.reason };
+        const answer = await workflowEnv.read(target.connection, { record: target.entity, fresh, waitMs: 30_000 }, Priority.Background);
+        return { rows: answer.rows, complete: answer.complete };
+      },
+      idField: (connection, entity) => workflowEnv.rowKeyField?.(connection, entity),
+      label: (connection, entity, row) => {
+        const title = entitySpecOf(connection, entity)?.display?.title ?? [];
+        const text = title.map((path) => readField(row, path)).filter((value) => typeof value === "string" || typeof value === "number").join(" ").trim();
+        return text || undefined;
+      },
+      describe: (connection, entity) => `${store.getConnection(connection)?.title ?? connection}'s ${(entitySpecOf(connection, entity)?.name.many ?? entity).toLowerCase()}`,
+    },
+    now: () => Date.now(),
+    newId: () => randomUUID(),
+  });
+  /** The record types a person may read, with their fields and values seen in them, for choosing where a contact field comes from. */
+  const contactSources = async (principal: Principal): Promise<ContactSource[]> => {
+    const out: ContactSource[] = [];
+    for (const connection of store.listConnections()) {
+      if (!(await policy.can(principal, "records.read", { connection: connection.id })).ok) continue;
+      const entities = catalogEntryOf(connection)?.entities ?? [];
+      if (entities.length === 0) continue;
+      const seen = await seenFor(connection, entities);
+      out.push({
+        connection: connection.id,
+        title: connection.title,
+        entities: entities.map((entity) => {
+          const fields = new Map<string, { path: string; label?: string; samples: string[] }>();
+          for (const field of entity.fields) fields.set(field.path, { path: field.path, ...(field.label ? { label: field.label } : {}), samples: [...field.values].slice(0, 12) });
+          for (const [path, values] of Object.entries(seen[entity.id]?.fields ?? {})) {
+            const held = fields.get(path);
+            fields.set(path, { ...(held ?? { path }), samples: [...new Set([...(held?.samples ?? []), ...values])].slice(0, 12) });
+          }
+          for (const path of seen[entity.id]?.unique ?? []) if (!fields.has(path)) fields.set(path, { path, samples: [] });
+          return { entity: entity.id, name: entity.name.one, fields: [...fields.values()].sort((a, b) => a.path.localeCompare(b.path)) };
+        }),
+      });
+    }
+    return out;
+  };
+  void app.register(contactRoutes({ contacts, policy, sources: contactSources }));
+  /* Who is in the workspace: hosts, and who may answer an approval. Without sign-in, the one person this server answers to. */
+  const workspaceMembers = options.members ?? (async () => [{ userId: LOCAL_USER_ID, email: "", role: "owner" as const }]);
+  /* Scheduling: who can be booked, on what terms (`scheduling/`). */
+  const scheduling = new SchedulingService({
+    store: options.scheduling ?? new MemorySchedulingStore(),
+    calendar: workflowEnv.calendar,
+    members: workspaceMembers,
+    factKinds: () => contacts.factKinds(),
+    contacts,
+    bookings: bookingsAsBusy(bookingStore),
+    now: () => Date.now(),
+  });
+  /* Bookings (`bookings/`): the only code that changes one; the calendar mirrors each. */
+  const bookings = new BookingService({
+    store: bookingStore,
+    scheduling,
+    contacts,
+    calendar: workflowEnv.calendar,
+    now: () => Date.now(),
+    newId: () => randomUUID(),
+    afterChange: () => void bookingDispatcher?.deliver(),
+    approvalAsked: async (type) =>
+      (await workflowStore.list()).some(
+        (one) => one.enabled && !one.parked && one.trigger.kind === "booking" && one.trigger.events.includes("requested") && (one.trigger.types.length === 0 || one.trigger.types.includes(type)),
+      ),
+  });
+  /* Links people open without signing in, and the notices that carry them (`bookings/links.ts`, `routes/public.ts`). */
+  const publicTokens = options.tokens ?? new MemoryPublicTokenStore();
+  const brand = async () => brandOf(await options.brand?.().catch(() => ({})));
+  const bookingLinks = new BookingLinks({
+    tokens: publicTokens,
+    bookings,
+    scheduling,
+    contacts,
+    members: workspaceMembers,
+    notifier: options.notifier ?? notConnectedNotifier,
+    brand,
+    workspace: options.workspace?.id ?? LOCAL_WORKSPACE_ID,
+    origin: (options.pagesOrigin ?? options.publicOrigin ?? "http://localhost:5400").replace(/\/+$/, ""),
+    now: () => Date.now(),
+  });
+  bookingsForWorkflows = workflowBookings({ service: bookings, contacts, scheduling, linkFor: (booking) => bookingLinks.bookingLink(booking), links: bookingLinks });
+  /*
+   * An agent booking in a conversation: its reply to one message, using its
+   * scheduling tools. `inputs`: `contact` (an id), `message`, and optionally
+   * `history` ([{ from: "them" | "agent", text }]) and `channel`.
+   */
+  scheduleInConversation = async (agent, tool, inputs) => {
+    const contactId = typeof inputs["contact"] === "string" ? inputs["contact"].trim() : "";
+    const message = typeof inputs["message"] === "string" ? inputs["message"].trim().slice(0, 4000) : "";
+    if (!contactId || !message) throw new AgentError("Say who is writing (contact) and what they said (message).", 400);
+    const contact = await contacts.get(contactId);
+    if (!contact) throw new AgentError(`There is no contact "${contactId}".`, 404);
+    const history = Array.isArray(inputs["history"])
+      ? (inputs["history"] as unknown[]).flatMap((one) => {
+          const line = one as { from?: unknown; text?: unknown } | null;
+          return line && (line.from === "them" || line.from === "agent") && typeof line.text === "string" ? [{ from: line.from as "them" | "agent", text: line.text.slice(0, 4000) }] : [];
+        }).slice(-30)
+      : [];
+    const channel = ["text", "call", "email", "chat"].includes(String(inputs["channel"])) ? (inputs["channel"] as ResponseChannel) : undefined;
+    return replyWithScheduling(
+      { bookings, scheduling, contacts, links: bookingLinks, now: () => Date.now(), llm: resolveLlm("agent-reply") },
+      { agent, tool, contact, message, history, ...(channel ? { channel } : {}), shared: await agents.shared().catch(() => null) },
+    );
+  };
+  bookingDispatcher = new BookingDispatcher({ env: workflowEnv, engine: workflowEngine, store: bookingStore, bookings: bookingsForWorkflows, contacts });
+  void app.register(bookingRoutes({ bookings, policy }));
+  void app.register(linkRoutes({ links: bookingLinks, bookings, tasks: workflowEnv.tasks, policy }));
+  void app.register(
+    publicRoutes({
+      workspace: options.workspace?.id ?? LOCAL_WORKSPACE_ID,
+      bookings,
+      scheduling,
+      contacts,
+      tokens: publicTokens,
+      links: bookingLinks,
+      tasks: workflowEnv.tasks,
+      members: workspaceMembers,
+      calendar: workflowEnv.calendar,
+      brand,
+      limiter: options.rateLimiter ?? new MemoryRateLimiter(),
+      now: () => Date.now(),
+    }),
+  );
+  void app.register(schedulingRoutes({ scheduling, policy }));
+  const workflowRunner = new WorkflowRunner({
+    ...workflowStarter,
+    log: { warn: (line) => app.log.warn(line) },
+    passes: [
+      { name: "booking events", run: () => bookingDispatcher?.deliver() ?? Promise.resolve(0) },
+      { name: "booking holds", run: () => bookings.settleDue() },
+    ],
+  });
   if (options.workflowRunner === true) workflowRunner.start();
   app.addHook("onClose", async () => workflowRunner.stop());
 
@@ -3432,6 +3638,13 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
               await workflowStore.put(marked);
               return marked;
             },
+          },
+          calendar: {
+            agents: await agentStore.list(),
+            now: () => Date.now(),
+            mayManage: async (principal) => (await policy.can(principal, "calendar.manage", {})).ok,
+            list: (options) => calendar.list(options),
+            create: (principal, input) => calendar.create(principal, input),
           },
           changes: {
             prepare: (principal, intent, sessionId) =>

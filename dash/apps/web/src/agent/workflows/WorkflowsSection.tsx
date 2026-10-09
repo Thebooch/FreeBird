@@ -52,7 +52,7 @@ const useData = (reloadToken: number) => {
           workflows,
           agents,
           connections,
-          waiting: [...approvals, ...questions.filter((task) => task.body.kind === "question")],
+          waiting: [...approvals, ...questions.filter((task) => task.body.kind === "question" || task.body.kind === "booking")],
           templates,
           error: null,
           loaded: true,
@@ -68,7 +68,75 @@ const useData = (reloadToken: number) => {
   return state;
 };
 
-const CASE_WORDS: Readonly<Record<string, string>> = { approval: "your approval", ask: "a teammate's answer", time: "a time", reply: "a reply", record_change: "a record to change", workflow_done: "another workflow", webhook: "its webhook", retry: "its next try", uncertain: "you to say whether it happened" };
+const CASE_WORDS: Readonly<Record<string, string>> = { approval: "your approval", ask: "a teammate's answer", time: "a time", reply: "a reply", record_change: "a record to change", workflow_done: "another workflow", webhook: "its webhook", retry: "its next try", uncertain: "you to say whether it happened", booking: "the person booking", appointment: "a time around the appointment" };
+
+/**
+ * One template: Use (asking first for any blank without a default, an
+ * agent's blank as a pick from the agents) and, for the workspace's own,
+ * Remove. Templates that come with Dash say so and can't be removed.
+ */
+const TemplateRow = ({
+  template,
+  agents,
+  onUse,
+  onRemove,
+}: {
+  template: WorkflowTemplate;
+  agents: readonly AgentSpec[];
+  onUse: (values: Record<string, string>) => void;
+  onRemove: () => void;
+}): JSX.Element => {
+  const [asking, setAsking] = useState(false);
+  const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(template.blanks.map((blank) => [blank.name, blank.default ?? ""])));
+  const unset = template.blanks.filter((blank) => !blank.default);
+  const ready = template.blanks.every((blank) => (values[blank.name] ?? "").trim() !== "");
+  const isAgent = (name: string) => /agent/i.test(name);
+  return (
+    <li className="dash-template-row" data-testid={`template-${template.id}`}>
+      <span className="dash-template-row__name">
+        {template.name} <span className="dash-hint">{template.builtIn ? "comes with Dash" : `${template.kind} · v${template.version}`}</span>
+      </span>
+      <span className="dash-row">
+        {template.kind === "workflow" && (
+          <Button size="sm" onClick={() => (unset.length > 0 && !asking ? setAsking(true) : onUse(values))} disabled={asking && !ready} testId={`template-use-${template.id}`}>
+            {asking ? "Make it" : "Use"}
+          </Button>
+        )}
+        {!template.builtIn && (
+          <Button size="sm" tone="ghost" onClick={onRemove}>
+            Remove
+          </Button>
+        )}
+      </span>
+      {asking && (
+        <div className="dash-template-row__blanks">
+          {template.blanks.map((blank) => (
+            <label key={blank.name} className="dash-template-row__blank">
+              <span className="dash-hint">{blank.label || blank.name}</span>
+              {isAgent(blank.name) ? (
+                <select value={values[blank.name] ?? ""} onChange={(event) => setValues({ ...values, [blank.name]: event.target.value })}>
+                  <option value="">Pick an agent…</option>
+                  {agents
+                    .filter((agent) => !agent.archived)
+                    .map((agent) => (
+                      <option key={agent.id} value={agent.id}>
+                        {agent.name}
+                      </option>
+                    ))}
+                </select>
+              ) : (
+                <input value={values[blank.name] ?? ""} onChange={(event) => setValues({ ...values, [blank.name]: event.target.value })} />
+              )}
+            </label>
+          ))}
+          <Button size="sm" tone="ghost" onClick={() => setAsking(false)}>
+            Not now
+          </Button>
+        </div>
+      )}
+    </li>
+  );
+};
 
 const CasesList = ({ workflow, reloadToken, onChanged }: { workflow: WorkflowSpec; reloadToken: number; onChanged: () => void }): JSX.Element => {
   const [cases, setCases] = useState<WorkflowCase[] | null>(null);
@@ -246,31 +314,18 @@ export const WorkflowsSection = ({ selected, onNavigate }: { readonly selected: 
             <h3 className="dash-workflow-editor__heading">Templates</h3>
             <ul className="dash-agents__rows" data-testid="templates">
               {templates.map((template) => (
-                <li key={template.id} className="dash-template-row">
-                  <span>
-                    {template.name} <span className="dash-hint">{template.kind} · v{template.version}</span>
-                  </span>
-                  <span className="dash-row">
-                    {template.kind === "workflow" && (
-                      <Button
-                        size="sm"
-                        onClick={() =>
-                          void act(async () => {
-                            const values: Record<string, string> = {};
-                            for (const blank of template.blanks) values[blank.name] = blank.default ?? "";
-                            const made = await api.workflowFromTemplate(template.id, values);
-                            go(made.id);
-                          })
-                        }
-                      >
-                        Use
-                      </Button>
-                    )}
-                    <Button size="sm" tone="ghost" onClick={() => void act(() => api.deleteTemplate(template.id))}>
-                      Remove
-                    </Button>
-                  </span>
-                </li>
+                <TemplateRow
+                  key={template.id}
+                  template={template}
+                  agents={agents}
+                  onUse={(values) =>
+                    void act(async () => {
+                      const made = await api.workflowFromTemplate(template.id, values);
+                      go(made.id);
+                    })
+                  }
+                  onRemove={() => void act(() => api.deleteTemplate(template.id))}
+                />
               ))}
             </ul>
           </>

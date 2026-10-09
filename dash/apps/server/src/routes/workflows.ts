@@ -20,12 +20,12 @@ import { TemplateError, type TemplateService } from "../workflows/templates.js";
  * A change to an account also needs the person's own permission for it, which
  * the write service asks when it prepares and commits.
  *
- * `POST /api/workflow-hooks/:workspace/:token` is the one route without a
- * person: the token, minted for one waiting case, is the authority. Its
+ * `POST /api/workflow-hooks/:workspace/:token` is the one route here without
+ * a person: the token, minted for one waiting case, is the authority. Its
  * address names its workspace, so a host holding several hands it to that
  * workspace's server with nobody signed in (`platform/workspaces.ts`), and
- * the identity hook lets it, and nothing else, through without a principal
- * (`identity/context.ts`).
+ * the identity hook lets it through without a principal because it is marked
+ * public, as the booking pages' API is (`identity/public.ts`).
  */
 export const WORKFLOW_HOOK_ROUTE = "/api/workflow-hooks/:workspace/:token";
 
@@ -149,10 +149,6 @@ export const workflowRoutes = (deps: {
 
     app.get<{ Querystring: { limit?: string } }>("/api/workflow-runs", async (request) => env.store.runs({ limit: Number(request.query.limit) || 50 }));
 
-    app.get<{ Querystring: { from?: string; to?: string } }>("/api/calendar/events", async (request) =>
-      env.calendar.list({ ...(request.query.from ? { from: request.query.from } : {}), ...(request.query.to ? { to: request.query.to } : {}) }),
-    );
-
     app.get("/api/overview", async () => buildOverview(env, { agents: await deps.agents() }));
 
     /* ── cases ────────────────────────────────────────────────────── */
@@ -257,10 +253,11 @@ export const workflowRoutes = (deps: {
     );
 
     /** A new workflow from a workflow template. Saved off. */
-    app.post<{ Params: { id: string }; Body: { values?: Record<string, string>; name?: string } }>(
+    app.post<{ Params: { id: string }; Body: { values?: Record<string, string>; name?: string; types?: string[] } }>(
       "/api/workflow-templates/:id/workflow",
-      guarded<{ values?: Record<string, string>; name?: string } | undefined>(async (principal, request) => {
-        const { input, template } = await templates.workflowFrom(request.params["id"]!, request.body?.values ?? {}, request.body?.name);
+      guarded<{ values?: Record<string, string>; name?: string; types?: string[] } | undefined>(async (principal, request) => {
+        const types = Array.isArray(request.body?.types) ? request.body.types.filter((one): one is string => typeof one === "string").slice(0, 50) : undefined;
+        const { input, template } = await templates.workflowFrom(request.params["id"]!, request.body?.values ?? {}, request.body?.name, types);
         const made = await workflows.create(principal, input);
         const marked = { ...made, fromTemplate: { id: template.id, version: template.version } };
         await env.store.put(marked);
@@ -284,7 +281,7 @@ export const workflowRoutes = (deps: {
     };
 
     /** The address a Wait step hands out. Another workspace's hook is not this one's, whoever sent it here. */
-    app.post<{ Params: { workspace: string; token: string }; Body: unknown }>(WORKFLOW_HOOK_ROUTE, async (request, reply) =>
+    app.post<{ Params: { workspace: string; token: string }; Body: unknown }>(WORKFLOW_HOOK_ROUTE, { config: { public: true } }, async (request, reply) =>
       request.params.workspace === env.workspaceId ? wake(request.params.token, request.body, reply) : reply.status(404).send({ error: "Unknown hook." }),
     );
 

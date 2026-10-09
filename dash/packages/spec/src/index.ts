@@ -160,7 +160,7 @@ export type {
 
 export { BASE_RESPONSE_PROMPT, composeResponsePrompt } from "./agent-prompt.js";
 
-export type { ComposeResponsePromptInput, FoundContext, ResponseChannel } from "./agent-prompt.js";
+export type { ComposeResponsePromptInput, FoundContext, ResponseChannel, SchedulingPromptInput } from "./agent-prompt.js";
 
 export {
   CASE_STATUSES,
@@ -176,7 +176,6 @@ export {
   WORKFLOW_ONCE,
   WORKFLOW_RANGES,
   WORKFLOW_STEP_MODES,
-  calendarEventSchema,
   caseAttemptSchema,
   caseDefinitionSchema,
   caseScope,
@@ -218,7 +217,6 @@ export {
 } from "./workflow.js";
 
 export type {
-  CalendarEvent,
   CaseAttempt,
   CaseDefinition,
   CaseStatus,
@@ -244,6 +242,159 @@ export type {
   WorkflowTrigger,
   WorkflowTriggerKind,
 } from "./workflow.js";
+
+export {
+  APPROVAL_MODES,
+  BLOCK_KINDS,
+  BLOCK_KIND_WORDS,
+  DEFAULT_HOURS,
+  DEFAULT_SETTINGS,
+  EMPTY_RULES,
+  FIELD_RULE_OPS,
+  FIELD_RULE_WORDS,
+  LAYER_KEYS,
+  LOCATION_KINDS,
+  LOCATION_WORDS,
+  POOL_ASSIGN,
+  POOL_ASSIGN_WORDS,
+  SETTINGS_LAYERS,
+  WEEKDAYS,
+  WHEN_UNKNOWN,
+  appointmentTypeSchema,
+  blockSchema,
+  blockSettingsSchema,
+  consolidationSchema,
+  typeEligibilitySchema,
+  describeRecurrence,
+  durationSchema,
+  factPathSchema,
+  fieldRuleSchema,
+  hoursRangeSchema,
+  localDateSchema,
+  localDateTimeSchema,
+  minutesOf,
+  partialSettingsSchema,
+  placementSchema,
+  placementTargetSchema,
+  poolSchema,
+  recurrenceSchema,
+  resolveSettings,
+  ruleSetIsEmpty,
+  ruleSetSchema,
+  schedulingProfileSchema,
+  schedulingSettingsSchema,
+  timeOfDaySchema,
+  weekdayOf,
+  weeklyHoursSchema,
+} from "./scheduling.js";
+
+export type {
+  AppointmentType,
+  TypeEligibility,
+  Block,
+  BlockKind,
+  Consolidation,
+  FieldRule,
+  FieldRuleOp,
+  HoursRange,
+  Occurrence,
+  PartialSettings,
+  Placement,
+  PlacementTarget,
+  Pool,
+  Recurrence,
+  ResolvedSettings,
+  RuleSet,
+  SchedulingProfile,
+  SchedulingSettings,
+  SettingsLayer,
+  Weekday,
+  WeeklyHours,
+} from "./scheduling.js";
+
+export {
+  CALENDAR_KINDS,
+  CALENDAR_STATUSES,
+  calendarEnd,
+  calendarEntryInputSchema,
+  calendarEventSchema,
+  calendarOverlaps,
+  calendarSortKey,
+  calendarSourceSchema,
+  calendarStart,
+  isDateOnly,
+  ownerKey,
+  upgradeCalendarEvent,
+} from "./calendar.js";
+
+export type { CalendarEntryInput, CalendarEvent, CalendarKind, CalendarSource, CalendarStatus } from "./calendar.js";
+
+export {
+  ACTIVE_BOOKING_STATUSES,
+  BOOKING_EVENTS,
+  BOOKING_EVENT_WORDS,
+  BOOKING_ORIGINS,
+  BOOKING_STATUSES,
+  BOOKING_STATUS_WORDS,
+  bookingActorSchema,
+  bookingEventSchema,
+  bookingSchema,
+  bookingSuggestionSchema,
+  dueAt,
+  holdsOf,
+  resolvedSettingsSchema,
+} from "./booking.js";
+
+export type { Booking, BookingActor, BookingEvent, BookingEventKind, BookingHold, BookingOrigin, BookingStatus, BookingSuggestion } from "./booking.js";
+
+export {
+  CONTACT_CHANNELS,
+  CONTACT_FIELD_KINDS,
+  CONTACT_ORIGINS,
+  FIELD_SOURCES,
+  MATCH_OUTCOMES,
+  RESERVED_FIELD_KEYS,
+  addressValueSchema,
+  contactFieldDefInputSchema,
+  contactFieldDefSchema,
+  contactFieldKeySchema,
+  contactFieldSchema,
+  contactFieldSourceSchema,
+  contactFieldValueSchema,
+  contactInputSchema,
+  contactKeys,
+  contactLinkSchema,
+  contactMatchRuleInputSchema,
+  contactMatchRuleSchema,
+  contactSchema,
+  contactStatsSchema,
+  fieldRefSchema,
+  fieldValueFor,
+  fieldValueOf,
+  normalizeEmail,
+  normalizePhone,
+} from "./contact.js";
+
+export type {
+  AddressValue,
+  Contact,
+  ContactChannel,
+  ContactField,
+  ContactFieldDef,
+  ContactFieldDefInput,
+  ContactFieldKind,
+  ContactFieldSource,
+  ContactFieldValue,
+  ContactInput,
+  ContactLink,
+  ContactMatchRule,
+  ContactMatchRuleInput,
+  ContactOrigin,
+  ContactStats,
+  FieldRef,
+  FieldSource,
+  MatchOutcome,
+} from "./contact.js";
 
 export {
   ACTION_BASES,

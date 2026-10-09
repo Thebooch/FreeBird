@@ -122,6 +122,12 @@ const PERSON_WAITS = new Set(["approval", "uncertain"]);
 
 const shortHash = (text: string): string => createHash("sha1").update(text).digest("hex").slice(0, 16);
 
+/** What a case is about, for a sentence: its row's title where it has one (a booking does), else its row key. */
+const rowLabel = (one: Pick<WorkflowCase, "rowKey" | "data">): string => {
+  const title = (one.data.row as Record<string, unknown> | undefined)?.["title"];
+  return typeof title === "string" && title.trim() ? title.trim() : (one.rowKey ?? "");
+};
+
 export class WorkflowEngine {
   /** Cases this process is working on now, so recovery never takes one from under itself. */
   private readonly active = new Set<string>();
@@ -426,10 +432,10 @@ export class WorkflowEngine {
         const proposed: Task = {
           ...base,
           status: "waiting_approval",
-          title: this.proposalTitle(node, settings, workflow),
+          title: this.proposalTitle(node, settings, workflow, one.data.row),
           pending: settings,
           wait,
-          reason: one.trial && node.mode === "auto" ? `In trial: "${workflow.name}" asks before every outside step for its first cases.` : `From "${workflow.name}"${one.rowKey ? ` for ${one.rowKey}` : ""}.`,
+          reason: one.trial && node.mode === "auto" ? `In trial: "${workflow.name}" asks before every outside step for its first cases.` : `From "${workflow.name}"${one.rowKey ? ` for ${rowLabel(one)}` : ""}.`,
         };
         await this.writeTask(proposed);
         this.env.onEvent?.({ type: "task.waiting", task: proposed.id, workflow: workflow.id, agent: proposed.agent });
@@ -696,7 +702,7 @@ export class WorkflowEngine {
   }
 
   /** One line for what an approval will do: "Text +1 555 0100 from Maintenance agent: …". */
-  private proposalTitle(node: WorkflowNode, settings: Record<string, unknown>, workflow: WorkflowSpec): string {
+  private proposalTitle(node: WorkflowNode, settings: Record<string, unknown>, workflow: WorkflowSpec, row: Readonly<Record<string, unknown>> = {}): string {
     const variant = actionVariant(node.action);
     if (variant && RECORD_CHANGE_VARIANTS.has(variant.id)) {
       const intent = intentFor(variant, settings, workflowReads(workflow)?.connection);
@@ -705,6 +711,10 @@ export class WorkflowEngine {
         const verb = { create: "Create", update: "Update", delete: "Delete", action: `Run ${intent.action ?? "an action"} on` }[intent.kind];
         return `${verb} ${intent.entity}${intent.id ? ` ${intent.id}` : ""} on ${this.env.connectionTitle?.(intent.connection) ?? intent.connection}${fields.length > 0 ? `: ${fields.join(", ")}` : ""}`;
       }
+    }
+    if (variant?.id === "outreach.inform") {
+      const who = text((row["contact"] as Record<string, unknown> | undefined)?.["name"]).trim() || text(settings["to"]).trim() || "them";
+      return `Tell ${who} what was decided${typeof row["title"] === "string" ? `: ${row["title"]}` : ""}`;
     }
     if (variant?.base === "outreach") return `${variant.label} ${text(settings["to"])}: ${text(settings["purpose"]).slice(0, 80)}`;
     if (variant?.id === "send.webhook") return `Send to ${text(settings["url"])}`;

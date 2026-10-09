@@ -1,0 +1,389 @@
+import { describe, expect, it } from "vitest";
+import { BookingLinks } from "../bookings/links.js";
+import { DEFAULT_BRAND, type TeamNotice } from "../bookings/notify.js";
+import { workflowBookings } from "../bookings/row.js";
+import { MemoryPublicTokenStore } from "../public/tokens.js";
+import { BookingService, bookingsAsBusy } from "../bookings/service.js";
+import { MemoryBookingStore } from "../bookings/store.js";
+import { ContactService } from "../contacts/service.js";
+import { MemoryContactStore } from "../contacts/store.js";
+import { SchedulingService } from "../scheduling/service.js";
+import { MemorySchedulingStore } from "../scheduling/store.js";
+import { BookingDispatcher } from "./booking-events.js";
+import { BOOKING_RECIPES } from "./recipes.js";
+import { WorkflowService } from "./service.js";
+import { TemplateService } from "./templates.js";
+import { T0, agentOf, fake, node, owner, workflowOf } from "./testing.js";
+
+const CHICAGO = "America/Chicago";
+const HOUR = 3_600_000;
+/** Wednesday 7 October 2026, 9:00 and 10:00 in Chicago; T0 is Tuesday 7:00 there. */
+const WED_9 = Date.parse("2026-10-07T14:00:00Z");
+const WED_10 = WED_9 + HOUR;
+const them = { kind: "contact" as const };
+const sam = { kind: "member" as const, id: "sam" };
+
+const setup = async (approval: "always" | "none" = "always") => {
+  const f = fake({ sender: true });
+  f.agents.set("maint", agentOf());
+  const now = () => f.clock.now;
+  let n = 0;
+  const contacts = new ContactService({ store: new MemoryContactStore(), now, newId: () => `c${++n}` });
+  const store = new MemoryBookingStore();
+  const scheduling = new SchedulingService({
+    store: new MemorySchedulingStore(),
+    calendar: f.env.calendar,
+    members: async () => [{ userId: "sam", email: "sam@acme.test", role: "owner" }],
+    bookings: bookingsAsBusy(store),
+    contacts,
+    now,
+  });
+  const service = new BookingService({ store, scheduling, contacts, calendar: f.env.calendar, now, newId: () => `b${++n}` });
+  const rows = workflowBookings({ service, contacts, scheduling, linkFor: async (booking) => `https://book.example/b/${booking.id}` });
+  Object.assign(f.env, { bookings: () => rows });
+  const dispatcher = new BookingDispatcher({ env: f.env, engine: f.engine, store, bookings: rows, contacts });
+  await scheduling.putProfile("sam", { displayName: "Sam", bookable: true, timezone: CHICAGO });
+  await scheduling.putType("visit", {
+    name: "Visit",
+    slug: "visit",
+    hosts: { members: ["sam"] },
+    settings: { length: "60m", slotStep: "60m", minNotice: "0m", approval, holdFor: "1d", suggestionHoldFor: "2d", cancelCutoff: "0m" },
+  });
+  const ana = await contacts.findOrCreate({ email: "ana@example.com", phone: "512-555-0142", name: "Ana Lopez", origin: "public_link" });
+  await contacts.update(ana.id, { timezone: CHICAGO }, "sam");
+  return { f, contacts, store, scheduling, service, rows, dispatcher, ana: ana.id };
+};
+
+const bookingTrigger = (events: string[], endWhenCancelled = true) => ({ kind: "booking", events, types: [], endWhenCancelled });
+
+describe("a booking's workflows", () => {
+  it("opens the approval workflow once per event, wakes it when the team answers on the booking, and tells the person", async () => {
+    const { f, service, dispatcher, ana } = await setup();
+    await f.env.store.put(
+      workflowOf({
+        id: "approval",
+        trial: 0,
+        trigger: bookingTrigger(["requested"]),
+        nodes: [node("approve", "ask.booking"), node("told", "outreach.inform", { agentId: "maint", about: "approve" }), node("told-no", "outreach.inform", { agentId: "maint", about: "approve" })],
+        edges: [
+          { id: "e1", from: "trigger", outcome: "next", to: "approve" },
+          { id: "e2", from: "approve", outcome: "approved", to: "told" },
+          { id: "e3", from: "approve", outcome: "denied", to: "told-no" },
+        ],
+      }),
+    );
+    const { booking } = await service.request({ type: "visit", contact: ana, start: WED_9, origin: "public_link", by: them });
+    expect(booking.status).toBe("pending");
+    await dispatcher.deliver();
+    await dispatcher.deliver();
+
+    const [one, ...more] = await f.env.cases.list({ workflow: "approval" });
+    expect(more).toEqual([]);
+    expect(one).toMatchObject({ status: "waiting", rowKey: booking.id, start: { kind: "booking" } });
+    expect(one!.data.row).toMatchObject({ id: booking.id, when: "Wed, Oct 7, 9:00 AM CDT", contact: { name: "Ana Lopez", phone: "+15125550142" }, type: { name: "Visit" }, host: { name: "Sam" } });
+    const [asking] = await f.env.tasks.list({ case: one!.id });
+    expect(asking).toMatchObject({ status: "waiting", body: { kind: "booking", booking: booking.id, question: expect.stringContaining("Approve") } });
+
+    /* Someone approves on the calendar: the outbox wakes the step, which reads the answer and goes on. */
+    await service.confirm(booking.id, sam, { message: "See you then" });
+    await dispatcher.deliver();
+    const after = (await f.env.cases.get(one!.id))!;
+    expect(after.status).toBe("done");
+    expect(after.data.steps["approve"]).toMatchObject({ answer: "approved", by: "sam", message: "See you then" });
+    expect(f.sent).toHaveLength(1);
+    expect(f.sent[0]).toMatchObject({ channel: "text", to: "+15125550142" });
+    expect(f.sent[0]!.text).toContain("Wed, Oct 7, 9:00 AM CDT");
+    expect(f.sent[0]!.text).not.toContain("https://book.example");
+  });
+
+  it("asks the host once with a link of their own, reminds once, and closes every link when it ends", async () => {
+    const { f, service, contacts, scheduling, store, ana } = await setup();
+    const notices: TeamNotice[] = [];
+    const tokens = new MemoryPublicTokenStore();
+    const links = new BookingLinks({
+      tokens,
+      bookings: service,
+      scheduling,
+      contacts,
+      members: async () => [{ userId: "sam", email: "sam@acme.test", role: "owner" }],
+      notifier: { notify: async (notice) => (notices.push(notice), { status: "queued" }) },
+      brand: async () => DEFAULT_BRAND,
+      workspace: "acme",
+      origin: "https://dash.example.com",
+      now: () => f.clock.now,
+    });
+    const rows = workflowBookings({ service, contacts, scheduling, linkFor: (booking) => links.bookingLink(booking), links });
+    Object.assign(f.env, { bookings: () => rows });
+    const dispatcher = new BookingDispatcher({ env: f.env, engine: f.engine, store, bookings: rows, contacts });
+    await f.env.store.put(
+      workflowOf({
+        id: "approval",
+        trial: 0,
+        trigger: bookingTrigger(["requested"]),
+        nodes: [node("approve", "ask.booking", { remindAfter: "2h" })],
+        edges: [{ id: "e1", from: "trigger", outcome: "next", to: "approve" }],
+      }),
+    );
+    const { booking } = await service.request({ type: "visit", contact: ana, start: WED_9, origin: "public_link", by: them });
+    await dispatcher.deliver();
+    await dispatcher.deliver();
+    expect(notices.map((one) => one.kind)).toEqual(["approval_request"]);
+    expect(notices[0]).toMatchObject({ member: { id: "sam", name: "Sam" }, subject: "Approve Ana Lopez: Visit, Wed, Oct 7, 9:00 AM CDT" });
+    expect(notices[0]!.html).toContain("https://dash.example.com/p/acme/approve/");
+    expect(notices[0]!.text).toContain("?choice=suggest");
+
+    const [one] = await f.env.cases.list({ workflow: "approval" });
+    expect(one!.data.row["link"]).toMatch(/^https:\/\/dash\.example\.com\/p\/acme\/book\/[A-Za-z0-9_-]{43}$/);
+    expect(one!.waiting).toMatchObject({ deadline: new Date(f.clock.now + 2 * HOUR).toISOString() });
+
+    /* Two hours on, nobody has answered: one reminder, and it waits on for the hold. */
+    f.clock.now += 2 * HOUR + 1;
+    await f.engine.timeouts();
+    expect(notices.map((one) => one.kind)).toEqual(["approval_request", "approval_reminder"]);
+    expect(notices[1]!.text).toContain("The hold runs out in 22 hours.");
+    const waiting = (await f.env.cases.get(one!.id))!;
+    expect(waiting.status).toBe("waiting");
+    expect(waiting.waiting).toMatchObject({ deadline: booking.holdUntil });
+
+    await service.deny(booking.id, sam, { message: "Not this week" });
+    await dispatcher.deliver();
+    expect((await f.env.cases.get(one!.id))!.status).toBe("done");
+    const [asking] = await f.env.tasks.list({ case: one!.id });
+    const handedOut = (await tokens.list({ task: asking!.id })).filter((token) => token.purpose === "approval");
+    expect(handedOut.length).toBeGreaterThanOrEqual(2);
+    expect(handedOut.every((token) => token.revokedAt)).toBe(true);
+    expect(notices.at(-1)).toMatchObject({ kind: "decision_recorded", subject: "You denied Visit for Ana Lopez" });
+  });
+
+  it("makes a scheduling link a later step can send", async () => {
+    const { f, service, contacts, scheduling, store, ana } = await setup();
+    const links = new BookingLinks({
+      tokens: new MemoryPublicTokenStore(),
+      bookings: service,
+      scheduling,
+      contacts,
+      members: async () => [{ userId: "sam", email: "sam@acme.test", role: "owner" }],
+      notifier: { notify: async () => ({ status: "not_sent" }) },
+      brand: async () => DEFAULT_BRAND,
+      workspace: "acme",
+      origin: "https://dash.example.com",
+      now: () => f.clock.now,
+    });
+    const rows = workflowBookings({ service, contacts, scheduling, linkFor: (booking) => links.bookingLink(booking), links });
+    Object.assign(f.env, { bookings: () => rows });
+    const dispatcher = new BookingDispatcher({ env: f.env, engine: f.engine, store, bookings: rows, contacts });
+    await f.env.store.put(
+      workflowOf({
+        id: "denied",
+        trial: 0,
+        trigger: bookingTrigger(["denied"]),
+        nodes: [node("link", "schedule.link", { contact: "{{ contact.id }}", type: "{{ type.id }}", expires: "7d" })],
+        edges: [{ id: "e1", from: "trigger", outcome: "next", to: "link" }],
+      }),
+    );
+    const { booking } = await service.request({ type: "visit", contact: ana, start: WED_9, origin: "public_link", by: them });
+    await service.deny(booking.id, sam);
+    await dispatcher.deliver();
+    const [one] = await f.env.cases.list({ workflow: "denied" });
+    expect(one!.status).toBe("done");
+    expect(String((one!.data.steps["link"] as { url?: string }).url)).toMatch(/^https:\/\/dash\.example\.com\/p\/acme\/book\/[A-Za-z0-9_-]{43}$/);
+    /* The case's own row has the person's page for the booking too; the step's link is the other one. */
+    const made = (await links.linksOf(ana)).find((one) => !one.booking);
+    expect(made).toMatchObject({ type: "visit", expiresAt: new Date(f.clock.now + 7 * 86_400_000).toISOString() });
+  });
+
+  it("offers other times and hears the person take one, telling them the time and never the team's note", async () => {
+    const { f, service, dispatcher, ana } = await setup();
+    await f.env.store.put(
+      workflowOf({
+        id: "approval",
+        trial: 0,
+        trigger: bookingTrigger(["requested"]),
+        nodes: [node("approve", "ask.booking"), node("offered", "outreach.inform", { agentId: "maint", about: "approve" }), node("pick", "wait.booking", { timeout: "2d" }), node("took", "outreach.inform", { agentId: "maint", about: "pick" })],
+        edges: [
+          { id: "e1", from: "trigger", outcome: "next", to: "approve" },
+          { id: "e2", from: "approve", outcome: "suggested", to: "offered" },
+          { id: "e3", from: "offered", outcome: "next", to: "pick" },
+          { id: "e4", from: "pick", outcome: "accepted", to: "took" },
+        ],
+      }),
+    );
+    const { booking } = await service.request({ type: "visit", contact: ana, start: WED_9, origin: "public_link", by: them });
+    await dispatcher.deliver();
+    await service.suggest(booking.id, sam, [{ start: WED_10 }], { message: "Mornings are full.", reason: "Van in the shop" });
+    await dispatcher.deliver();
+    expect(f.sent).toHaveLength(1);
+    expect(f.sent[0]!.text).toContain("Wed, Oct 7, 10:00 AM CDT");
+    expect(f.sent[0]!.text).toContain(`https://book.example/b/${booking.id}`);
+    expect(f.sent[0]!.text).not.toContain("Van in the shop");
+    const [one] = await f.env.cases.list({ workflow: "approval" });
+    expect(one!.status).toBe("waiting");
+    expect(one!.waiting).toMatchObject({ key: `booking:${booking.id}` });
+
+    await service.acceptSuggestion(booking.id, "s1", them);
+    await dispatcher.deliver();
+    expect((await f.env.cases.get(one!.id))!.status).toBe("done");
+    expect(f.sent).toHaveLength(2);
+    expect(f.sent[1]!.text).toContain("Wed, Oct 7, 10:00 AM CDT");
+  });
+
+  it("ends the approval as withdrawn when they cancel first, or stops the case when the workflow is set to", async () => {
+    const { f, service, dispatcher, ana } = await setup();
+    const flow = (id: string, endWhenCancelled: boolean) =>
+      workflowOf({ id, trial: 0, trigger: bookingTrigger(["requested"], endWhenCancelled), nodes: [node("approve", "ask.booking")], edges: [{ id: "e1", from: "trigger", outcome: "next", to: "approve" }] });
+    await f.env.store.put(flow("keeps-going", false));
+    await f.env.store.put(flow("stops", true));
+    const { booking } = await service.request({ type: "visit", contact: ana, start: WED_9, origin: "public_link", by: them });
+    await dispatcher.deliver();
+    await service.cancel(booking.id, them);
+    await dispatcher.deliver();
+
+    const [going] = await f.env.cases.list({ workflow: "keeps-going" });
+    const [stopped] = await f.env.cases.list({ workflow: "stops" });
+    expect(going!.status).toBe("done");
+    expect(going!.data.steps["approve"]).toMatchObject({ answer: "withdrawn" });
+    expect(stopped!.status).toBe("cancelled");
+  });
+
+  it("waits until a day before the appointment, following a move, and ends on a cancellation", async () => {
+    const { f, service, dispatcher, ana } = await setup("none");
+    await f.env.store.put(
+      workflowOf({
+        id: "reminders",
+        trial: 0,
+        trigger: bookingTrigger(["confirmed"], false),
+        nodes: [node("day-before", "wait.appointment", { offset: "-1d" }), node("remind", "outreach.inform", { agentId: "maint", include: "Remind them it is tomorrow." })],
+        edges: [
+          { id: "e1", from: "trigger", outcome: "next", to: "day-before" },
+          { id: "e2", from: "day-before", outcome: "next", to: "remind" },
+        ],
+      }),
+    );
+    const friday = Date.parse("2026-10-09T14:00:00Z");
+    const { booking } = await service.request({ type: "visit", contact: ana, start: friday, origin: "public_link", by: them });
+    expect(booking.status).toBe("confirmed");
+    await dispatcher.deliver();
+    const [one] = await f.env.cases.list({ workflow: "reminders" });
+    expect(one!.waiting?.deadline).toBe(new Date(friday - 24 * HOUR).toISOString());
+
+    /* Moved to Monday: the wait moves with it. */
+    const monday = Date.parse("2026-10-12T14:00:00Z");
+    await service.move(booking.id, sam, { start: monday });
+    await dispatcher.deliver();
+    expect((await f.env.cases.get(one!.id))!.waiting?.deadline).toBe(new Date(monday - 24 * HOUR).toISOString());
+
+    f.clock.now = monday - 24 * HOUR + 1;
+    await f.engine.timeouts();
+    expect((await f.env.cases.get(one!.id))!.status).toBe("done");
+    expect(f.sent).toHaveLength(1);
+    expect(f.sent[0]!.text).toContain("Mon, Oct 12, 9:00 AM CDT");
+  });
+
+  it("finds open times and holds one from any workflow, once per attempt", async () => {
+    const { f, service, ana } = await setup("none");
+    await f.env.store.put(
+      workflowOf({
+        id: "book-it",
+        trial: 0,
+        trigger: { kind: "manual" },
+        nodes: [
+          node("find", "schedule.find", { type: "visit", contact: ana, limit: 2 }),
+          node("hold", "schedule.hold", { type: "visit", contact: ana, at: "{{ steps.find.first.start }}" }),
+        ],
+        edges: [
+          { id: "e1", from: "trigger", outcome: "next", to: "find" },
+          { id: "e2", from: "find", outcome: "found", to: "hold" },
+        ],
+      }),
+    );
+    const workflow = (await f.env.store.get("book-it"))!;
+    const opened = await f.engine.open(workflow, { start: { kind: "manual" } });
+    expect(opened.status).toBe("done");
+    expect(opened.data.steps["find"]).toMatchObject({ count: 2 });
+    const held = opened.data.steps["hold"] as { booking: string; status: string };
+    expect(held.status).toBe("confirmed");
+    expect((await service.get(held.booking)).start).toBe((opened.data.steps["find"] as { first: { start: string } }).first.start);
+    expect(T0).toBeLessThan(Date.parse((await service.get(held.booking)).start));
+  });
+});
+
+describe("checking booking workflows", () => {
+  it("asks which booking a step means when the workflow isn't started by one, and checks the trigger's types", async () => {
+    const { f, scheduling } = await setup();
+    const service = new WorkflowService({
+      store: f.env.store,
+      policy: { can: () => ({ ok: true }) },
+      agents: { list: async () => [agentOf()] },
+      hasConnection: () => true,
+      appointmentTypes: async () => (await scheduling.overview()).types.map((one) => one.id),
+    });
+    const manual = await service.problems(owner, workflowOf({ trigger: { kind: "manual" }, nodes: [node("approve", "ask.booking")] }));
+    expect(manual).toEqual([expect.objectContaining({ step: "approve", field: "booking", incomplete: true })]);
+    const unknown = await service.problems(owner, workflowOf({ trigger: bookingTrigger(["requested"]), nodes: [] }));
+    expect(unknown).toEqual([]);
+    const ghost = await service.problems(owner, workflowOf({ trigger: { ...bookingTrigger(["requested"]), types: ["ghost"] }, nodes: [] }));
+    expect(ghost).toEqual([expect.objectContaining({ field: "trigger", message: 'There is no appointment type "ghost".' })]);
+  });
+
+  it("follows up once a day with someone a type turned away: tells them what to do, and tells the team", async () => {
+    const { f, service, scheduling, contacts, dispatcher, ana } = await setup("none");
+    await scheduling.putType("visit", { eligibility: { rules: { all: [{ field: "request.partySize", op: "lte", values: [8] }], any: [] }, message: "For parties of 9 or more, please call us." } });
+    const templates = new TemplateService({ templates: f.env.templates, workflows: f.env.store, newId: () => "x", builtIn: BOOKING_RECIPES });
+    const { input } = await templates.workflowFrom("recipe-turned-away", { agent: "maint", say: "Tell them to call 555-0100 to arrange it." }, undefined, ["visit"]);
+    expect(input.trigger).toEqual({ kind: "booking", events: ["turned_away"], types: ["visit"], endWhenCancelled: false });
+    /* Sent as it stands for the test: fixed wording, no approval. */
+    const nodes = (input.nodes ?? []).map((one) =>
+      one.action.startsWith("outreach.") ? { ...one, mode: "auto" as const, settings: { ...one.settings, content: "fixed", wording: "Please call us at 555-0100 to arrange it." } } : one,
+    );
+    await f.env.store.put(workflowOf({ ...input, nodes, id: "turned", trial: 0, enabled: true }));
+
+    const ask = () => service.request({ type: "visit", contact: ana, start: WED_9, origin: "agent", agent: "maint", by: { kind: "agent", id: "maint" }, answers: { partySize: "12" } });
+    await expect(ask()).rejects.toMatchObject({ status: 403, message: "For parties of 9 or more, please call us." });
+    await dispatcher.deliver();
+    await expect(ask()).rejects.toMatchObject({ status: 403 });
+    await dispatcher.deliver();
+
+    /* Once that day, however often they try. */
+    const cases = await f.env.cases.list({ workflow: "turned" });
+    expect(cases).toHaveLength(1);
+    expect(cases[0]!.status).toBe("done");
+    expect(cases[0]!.data.row).toMatchObject({
+      contact: { name: "Ana Lopez", phone: "+15125550142" },
+      type: { id: "visit", name: "Visit" },
+      request: { partySize: "12" },
+      answersText: "Party size: 12",
+      reason: "For parties of 9 or more, please call us.",
+      via: "agent",
+      viaWords: "a conversation with an agent",
+    });
+    /* They have a phone, so a text; and the team hears it. */
+    expect(f.sent).toEqual([expect.objectContaining({ channel: "text", to: "+15125550142", text: "Please call us at 555-0100 to arrange it." })]);
+    const tasks = await f.env.tasks.list({ case: cases[0]!.id });
+    expect(tasks.find((one) => one.action === "notify.team")).toMatchObject({
+      title: "Ana Lopez was turned away from Visit",
+      body: { kind: "notice", text: expect.stringContaining("Party size: 12") },
+    });
+    expect(tasks.find((one) => one.action === "notify.team")!.body).toMatchObject({ text: expect.stringContaining("They were told: For parties of 9 or more, please call us.") });
+
+    /* No phone: an email instead. And a team member booking for someone starts nothing. */
+    const ben = await contacts.findOrCreate({ email: "ben@example.com", name: "Ben", origin: "agent" });
+    await expect(service.request({ type: "visit", contact: ben.id, start: WED_9, origin: "link", by: them, answers: { partySize: "20" } })).rejects.toMatchObject({ status: 403 });
+    await expect(service.request({ type: "visit", contact: ana, start: WED_9, origin: "member", by: sam, answers: { partySize: "20" } })).rejects.toMatchObject({ status: 403 });
+    await dispatcher.deliver();
+    expect(await f.env.cases.list({ workflow: "turned" })).toHaveLength(2);
+    expect(f.sent.at(-1)).toMatchObject({ channel: "email", to: "ben@example.com" });
+  });
+
+  it("ships recipes that make sound workflows once the agent is filled in", async () => {
+    const { f } = await setup();
+    const templates = new TemplateService({ templates: f.env.templates, workflows: f.env.store, newId: () => "x", builtIn: BOOKING_RECIPES });
+    const service = new WorkflowService({ store: f.env.store, policy: { can: () => ({ ok: true }) }, agents: { list: async () => [agentOf()] }, hasConnection: () => true });
+    expect((await templates.list()).map((one) => one.id)).toEqual(["recipe-booking-approval", "recipe-booking-reminders", "recipe-booking-denied", "recipe-turned-away"]);
+    for (const recipe of BOOKING_RECIPES) {
+      const { input } = await templates.workflowFrom(recipe.id, { agent: "maint" });
+      const problems = await service.problems(owner, workflowOf({ ...input, enabled: false }));
+      expect({ recipe: recipe.id, problems }).toEqual({ recipe: recipe.id, problems: [] });
+    }
+    await expect(templates.remove("recipe-booking-approval")).rejects.toThrow(/comes with Dash/);
+  });
+});

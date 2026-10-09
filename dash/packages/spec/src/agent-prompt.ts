@@ -70,7 +70,47 @@ export interface ComposeResponsePromptInput {
   readonly workflowName?: (id: string) => string | undefined;
   /** Today, so "tomorrow" means something. */
   readonly now?: Date;
+  /** For a `schedule_appointment` tool: what it may book, and how each is offered. */
+  readonly scheduling?: SchedulingPromptInput;
 }
+
+export interface SchedulingPromptInput {
+  readonly types: ReadonlyArray<{
+    readonly id: string;
+    readonly name: string;
+    readonly minutes: number;
+    /** A link they pick from, or times offered in the conversation. */
+    readonly offer: "link" | "conversation";
+    /** In conversation, a link may still be sent when they ask for one. */
+    readonly linkOnRequest: boolean;
+  }>;
+  /** Every request this agent makes waits for the team to confirm. */
+  readonly alwaysApproval: boolean;
+  /** The person's time zone, which every time is said in. */
+  readonly timezone: string;
+}
+
+/**
+ * How an agent books in a conversation (plan B11): one time at a time, never
+ * a time no tool returned, and plainly whether it is booked or only asked for.
+ */
+const schedulingSection = (input: SchedulingPromptInput): string => {
+  const types = input.types
+    .map((one) => `- ${one.name} (${one.minutes} min, type id "${one.id}"): ${one.offer === "link" ? "send their booking link" : `offer times in the conversation${one.linkOnRequest ? "; send their booking link if they ask for one" : ""}`}.`)
+    .join("\n");
+  return section(
+    "Booking appointments",
+    `You can book these:
+${types}
+
+- When a type is offered by link: send the link with send_scheduling_link, say what it is for, and stop.
+- In the conversation: if find_times says it needs answers, ask those questions first, one at a time. Then offer ONE time: the first time find_times returned. If it does not suit them, offer the next one. After that, ask what works for them, and check what they say with check_time or find_times before agreeing to it.
+- Never state a date or time that a tool did not return in this conversation. Say every time as the tool's "when" gives it, in their time zone (${input.timezone}).
+- When they agree to a time, call request_appointment with that time. If it comes back "confirmed", say it is booked. If it comes back "pending", say it is requested and the team will confirm it, never that it is booked.${input.alwaysApproval ? " Every request you make waits for the team to confirm." : ""}
+- If a tool says notEligible, they can't book that type: tell them as its "say" describes, and don't offer times for it.
+- For a booking they already have, use appointment_status first; then respond_to_suggestion, cancel_appointment or reschedule_appointment. If a tool says it is too close to the time, tell them to contact the team.`,
+  );
+};
 
 const section = (title: string, body: string): string => `## ${title}\n${body.trim()}`;
 
@@ -83,6 +123,10 @@ const toolName = (tool: AgentTool, workflowName?: (id: string) => string | undef
 const toolLine = (tool: AgentTool, workflowName?: (id: string) => string | undefined): string => {
   const what = toolName(tool, workflowName);
   const when = tool.whenToUse.trim() ? ` Use it when: ${tool.whenToUse.trim()}` : "";
+  /* Booking has its own tools and its own section: approve means every request waits for the team, not that nothing is done. */
+  if (tool.kind === "schedule_appointment" && tool.mode !== "deny") {
+    return `- You can ${what} with your scheduling tools, as "Booking appointments" below says.${tool.mode === "approve" ? " Every request you make waits for the team to confirm it." : ""}${when}`;
+  }
   if (tool.mode === "auto") return `- You can ${what}. Do it when it is asked for, then tell them what you did.${when}`;
   if (tool.mode === "approve") {
     return `- To ${what}, ask the team: tell the person the team will look into it and get back to them. Do not say it is done or promise it will be.${when}`;
@@ -124,6 +168,10 @@ export const composeResponsePrompt = (input: ComposeResponsePromptInput): string
         : "- You can answer questions from what you know. For anything else, tell them the team will follow up.",
     ),
   );
+
+  if (input.scheduling && input.scheduling.types.length > 0 && tools.some((tool) => tool.kind === "schedule_appointment" && tool.mode !== "deny")) {
+    parts.push(schedulingSection(input.scheduling));
+  }
 
   const facts = [
     input.channel ? `You are replying by ${input.channel === "chat" ? "chat" : input.channel}.` : "",

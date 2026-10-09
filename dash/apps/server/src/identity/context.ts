@@ -1,6 +1,7 @@
 import type { Permission, Principal, Scope } from "@freebirdai/dash-spec";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Policy } from "./policy.js";
+import { installPublicRoutes, isPublicUrl } from "./public.js";
 import type { IdentityResolver } from "./resolver.js";
 
 declare module "fastify" {
@@ -11,29 +12,22 @@ declare module "fastify" {
 }
 
 /**
- * A route answered with nobody signed in, because its own request carries
- * its authority: a webhook's token. Matched on the route Fastify chose, never
- * on the address, so no other route can be reached through it.
- */
-export interface OpenRoute {
-  readonly method: string;
-  /** As registered, e.g. `/api/workflow-hooks/:workspace/:token`. */
-  readonly url: string;
-}
-
-/**
  * Give every request a principal before any route sees it.
  *
  * On the root instance, so it reaches every plugin registered after it — the
  * chat plugin included. A request nobody can be identified as is refused
- * here with a 401, which the open-source build never produces. The routes in
- * `open` alone are answered without one: nobody is asked for, and nobody is
- * attached.
+ * here with a 401, which the open-source build never produces. Only routes
+ * marked public (`identity/public.ts`) are answered without one, matched on
+ * the route Fastify chose and its address both: nobody is asked for, and
+ * nobody is attached. Anything else under a public address, a lookalike or a
+ * path no route has, wants someone signed in like every other request.
  */
-export const installIdentity = (app: FastifyInstance, identity: IdentityResolver, open: readonly OpenRoute[] = []): void => {
+export const installIdentity = (app: FastifyInstance, identity: IdentityResolver): void => {
   app.decorateRequest("principal", null);
+  installPublicRoutes(app);
   app.addHook("onRequest", async (request, reply) => {
-    if (open.some((one) => one.method === request.method && one.url === request.routeOptions.url)) return undefined;
+    /* What a public route may do comes from the token in its path. */
+    if (request.routeOptions.config?.public === true && isPublicUrl(request.url)) return undefined;
     const principal = await identity.resolve({ headers: request.headers, url: request.url });
     if (!principal) {
       return reply.status(401).send({ error: "Sign in to continue." });

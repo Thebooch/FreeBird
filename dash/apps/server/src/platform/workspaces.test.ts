@@ -10,6 +10,7 @@ import { KeyStore, LocalAesVault, scopedEvidence } from "@freebirdai/connect/hos
 import type { Policy } from "../identity/policy.js";
 import type { IdentityResolver } from "../identity/resolver.js";
 import { buildServer } from "../server.js";
+import { PUBLIC_ROUTES } from "../routes/public.js";
 import { SpecStore } from "../store.js";
 import { MemorySignalStore } from "../workflows/store.js";
 import { WorkspaceHost } from "./workspaces.js";
@@ -273,8 +274,16 @@ describe("a webhook, which another system calls with nobody signed in", () => {
       if ((await host.inject({ method, url: one.url })).statusCode !== 401) unsigned.add(`${one.method} ${one.url} at the host`);
       if ((await a.inject({ method, url: one.url })).statusCode !== 401) unsigned.add(`${one.method} ${one.url} at a's server`);
     }
-    /* The one route without a person, and only it: answered (here, "Unknown hook.") rather than refused. */
-    expect([...unsigned].sort()).toEqual(["POST /api/workflow-hooks/x1/x1 at a's server", "POST /api/workflow-hooks/x1/x1 at the host"]);
+    /*
+     * The routes without a person, and only they: the webhook's and the
+     * booking pages' (`PUBLIC_ROUTES`, each GET with the HEAD Fastify adds),
+     * answered (here, "not found") rather than refused.
+     */
+    const open = PUBLIC_ROUTES.flatMap((route) => (route.startsWith("GET ") ? [route, route.replace("GET", "HEAD")] : [route]))
+      .map((route) => route.replace(/:[^/]+/g, "x1"))
+      .flatMap((route) => [`${route} at a's server`, `${route} at the host`]);
+    expect(open).toContain("POST /api/workflow-hooks/x1/x1 at the host");
+    expect([...unsigned].sort()).toEqual(open.sort());
 
     /* Addresses that look like a hook's and are not, or are the old form, which named no workspace. */
     const lookalikes: Array<["GET" | "POST", string]> = [

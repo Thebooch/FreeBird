@@ -3,7 +3,26 @@ import type { EachAnswer, EachRequest } from "@freebirdai/dash-react";
 import type {
   AgentInput,
   AgentSpec,
+  AppointmentType,
+  Block,
+  Booking,
+  BookingStatus,
+  CalendarEntryInput,
   CalendarEvent,
+  Contact,
+  ContactFieldDef,
+  ContactFieldDefInput,
+  ContactInput,
+  ContactMatchRule,
+  ContactMatchRuleInput,
+  MatchOutcome,
+  Occurrence,
+  PartialSettings,
+  Placement,
+  Pool,
+  Principal,
+  Role,
+  SchedulingProfile,
   Task,
   TaskStatus,
   WorkflowCase,
@@ -43,6 +62,25 @@ export interface ConnectionEntity {
 }
 
 /** The connection as the server reports it — secrets replaced by a boolean. */
+/** A calendar feed, without the link itself (only its hash is kept). */
+export interface CalendarFeedInfo {
+  readonly id: string;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+}
+
+/** A booking link as the contact sheet lists it. */
+export interface BookingLinkInfo {
+  readonly id: string;
+  readonly type?: string;
+  readonly booking?: string;
+  /** Made on the public link, where anyone can type an email. */
+  readonly fromPublic: boolean;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+  readonly revokedAt?: string;
+}
+
 export interface ConnectionSummary extends ConnectionSpec {
   hasKey: boolean;
 }
@@ -133,6 +171,64 @@ const json = (body: unknown): RequestInit => ({
   headers: { "content-type": "application/json" },
   body: JSON.stringify(body),
 });
+
+/** Scheduling's setup, as `GET /api/scheduling` serves it. */
+export interface SchedulingOverview {
+  readonly defaults: PartialSettings;
+  readonly profiles: SchedulingProfile[];
+  readonly pools: Pool[];
+  readonly types: AppointmentType[];
+  readonly blocks: Block[];
+  readonly placements: Placement[];
+  readonly members: ReadonlyArray<{ readonly userId: string; readonly email: string; readonly role: Role }>;
+}
+
+/** One block occurrence on one host's calendar. */
+export interface HostOccurrence extends Occurrence {
+  readonly host: string;
+  readonly kind: Block["kind"];
+  readonly setTo?: string;
+}
+
+/** Contact field definitions and match rules, as `GET /api/contacts/setup` serves them. */
+export interface ContactSetup {
+  readonly fields: ContactFieldDef[];
+  readonly matchRules: ContactMatchRule[];
+}
+
+/** A record type a contact field can come from, with its fields and values seen in them. */
+export interface ContactSource {
+  readonly connection: string;
+  readonly title: string;
+  readonly entities: ReadonlyArray<{
+    readonly entity: string;
+    readonly name: string;
+    readonly fields: ReadonlyArray<{ readonly path: string; readonly label?: string; readonly samples: readonly string[] }>;
+  }>;
+}
+
+/** Which record a contact is linked to. */
+export interface RecordTarget {
+  readonly connection: string;
+  readonly entity: string;
+  readonly recordId: string;
+}
+
+/** Open times, as the slot engine offers them. */
+export interface SlotPreview {
+  readonly slots: ReadonlyArray<{
+    readonly start: number;
+    readonly end: number;
+    readonly approval: boolean;
+    readonly consolidated: boolean;
+    readonly options: ReadonlyArray<{ readonly host: string; readonly block?: string; readonly approval: boolean; readonly consolidated: boolean }>;
+  }>;
+  readonly needs: readonly string[];
+  readonly consolidatedOnly: boolean;
+  readonly more: boolean;
+  /** The type's "Who can book" rules don't take these facts. */
+  readonly notEligible?: boolean;
+}
 
 /** The Overview: see `buildOverview` on the server. */
 export interface AgentOverview {
@@ -1356,10 +1452,123 @@ export const api = {
   insertTemplate: (id: string, values: Record<string, string>, at: { x: number; y: number }): Promise<{ nodes: WorkflowInput["nodes"]; edges: WorkflowInput["edges"]; entry?: string; template: WorkflowTemplate }> =>
     request(`/api/workflow-templates/${encodeURIComponent(id)}/insert`, json({ values, at })),
 
-  workflowFromTemplate: (id: string, values: Record<string, string>, name?: string): Promise<WorkflowSpec> =>
-    request(`/api/workflow-templates/${encodeURIComponent(id)}/workflow`, json({ values, ...(name ? { name } : {}) })),
+  /** A new workflow from a workflow template, saved off. `types`: for a template a booking starts, only these appointment types. */
+  workflowFromTemplate: (id: string, values: Record<string, string>, name?: string, types?: readonly string[]): Promise<WorkflowSpec> =>
+    request(`/api/workflow-templates/${encodeURIComponent(id)}/workflow`, json({ values, ...(name ? { name } : {}), ...(types && types.length > 0 ? { types } : {}) })),
 
-  calendarEvents: (): Promise<CalendarEvent[]> => request("/api/calendar/events"),
+  /* ── calendar ──────────────────────────────────────────────────────── */
+
+  /** Entries overlapping [from, to), with optional owner (`agent:<id>`, `member:<id>`), kind and status filters. */
+  calendar: (filter: { from?: string; to?: string; owners?: readonly string[]; kinds?: readonly string[]; statuses?: readonly string[] } = {}): Promise<CalendarEvent[]> => {
+    const query = new URLSearchParams();
+    if (filter.from) query.set("from", filter.from);
+    if (filter.to) query.set("to", filter.to);
+    if (filter.owners && filter.owners.length > 0) query.set("owner", filter.owners.join(","));
+    if (filter.kinds && filter.kinds.length > 0) query.set("kind", filter.kinds.join(","));
+    if (filter.statuses && filter.statuses.length > 0) query.set("status", filter.statuses.join(","));
+    return request(`/api/calendar${query.size > 0 ? `?${query}` : ""}`);
+  },
+  calendarEntry: (id: string): Promise<CalendarEvent> => request(`/api/calendar/${encodeURIComponent(id)}`),
+  addCalendarEntry: (input: CalendarEntryInput): Promise<CalendarEvent> => request("/api/calendar", json(input)),
+  /** Change an entry. Sending `end` or `notes` empty clears it. */
+  updateCalendarEntry: (id: string, input: Partial<CalendarEntryInput>): Promise<CalendarEvent> =>
+    request(`/api/calendar/${encodeURIComponent(id)}`, { ...json(input), method: "PUT" }),
+  setCalendarStatus: (id: string, status: "open" | "done" | "cancelled"): Promise<CalendarEvent> =>
+    request(`/api/calendar/${encodeURIComponent(id)}/status`, json({ status })),
+  removeCalendarEntry: (id: string): Promise<{ removed: true; id: string }> =>
+    request(`/api/calendar/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  /* ── scheduling ────────────────────────────────────────────────────── */
+
+  scheduling: (): Promise<SchedulingOverview> => request("/api/scheduling"),
+  schedulingDefaults: (settings: PartialSettings): Promise<PartialSettings> => request("/api/scheduling/defaults", { ...json(settings), method: "PUT" }),
+  putProfile: (member: string, profile: Partial<SchedulingProfile>): Promise<SchedulingProfile> =>
+    request(`/api/scheduling/profiles/${encodeURIComponent(member)}`, { ...json(profile), method: "PUT" }),
+  removeProfile: (member: string): Promise<{ removed: true }> => request(`/api/scheduling/profiles/${encodeURIComponent(member)}`, { method: "DELETE" }),
+  putPool: (id: string, pool: Partial<Pool>): Promise<Pool> => request(`/api/scheduling/pools/${encodeURIComponent(id)}`, { ...json(pool), method: "PUT" }),
+  removePool: (id: string): Promise<{ removed: true }> => request(`/api/scheduling/pools/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  putType: (id: string, type: Partial<AppointmentType>): Promise<AppointmentType> => request(`/api/scheduling/types/${encodeURIComponent(id)}`, { ...json(type), method: "PUT" }),
+  removeType: (id: string): Promise<{ removed: true }> => request(`/api/scheduling/types/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  previewType: (id: string, input: { from?: string; to?: string; contact?: Record<string, unknown>; contactId?: string; request?: Record<string, unknown>; all?: boolean }): Promise<SlotPreview> =>
+    request(`/api/scheduling/types/${encodeURIComponent(id)}/preview`, json(input)),
+  putBlock: (id: string, block: Partial<Block>): Promise<Block> => request(`/api/scheduling/blocks/${encodeURIComponent(id)}`, { ...json(block), method: "PUT" }),
+  removeBlock: (id: string): Promise<{ removed: true }> => request(`/api/scheduling/blocks/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  putPlacement: (id: string, placement: Partial<Placement>): Promise<Placement> => request(`/api/scheduling/placements/${encodeURIComponent(id)}`, { ...json(placement), method: "PUT" }),
+  removePlacement: (id: string): Promise<{ removed: true }> => request(`/api/scheduling/placements/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  skipOccurrence: (id: string, date: string): Promise<Placement> => request(`/api/scheduling/placements/${encodeURIComponent(id)}/skip`, json({ date })),
+  splitPlacement: (id: string, date: string, newId: string): Promise<{ before: Placement; after: Placement }> =>
+    request(`/api/scheduling/placements/${encodeURIComponent(id)}/split`, json({ date, newId })),
+  occurrences: (from: string, to: string): Promise<HostOccurrence[]> => request(`/api/scheduling/occurrences?${new URLSearchParams({ from, to })}`),
+
+  /* ── bookings ──────────────────────────────────────────────────────── */
+
+  bookings: (query: { from?: string; to?: string; host?: string; contact?: string; status?: readonly BookingStatus[] } = {}): Promise<Booking[]> =>
+    request(
+      `/api/scheduling/bookings?${new URLSearchParams({
+        ...(query.from ? { from: query.from } : {}),
+        ...(query.to ? { to: query.to } : {}),
+        ...(query.host ? { host: query.host } : {}),
+        ...(query.contact ? { contact: query.contact } : {}),
+        ...(query.status && query.status.length > 0 ? { status: query.status.join(",") } : {}),
+      }).toString()}`,
+    ),
+  booking: (id: string): Promise<Booking> => request(`/api/scheduling/bookings/${encodeURIComponent(id)}`),
+  /** A member books for a contact. A taken time answers 409 with open times nearby as `detail.slots`. */
+  createBooking: (input: { type: string; contact: string; start: string; host?: string; approval?: "always" }): Promise<{ booking: Booking; outcome: "pending" | "confirmed" }> =>
+    request("/api/scheduling/bookings", json(input)),
+  confirmBooking: (id: string, message?: string): Promise<Booking> => request(`/api/scheduling/bookings/${encodeURIComponent(id)}/confirm`, json(message ? { message } : {})),
+  suggestBooking: (id: string, input: { times: Array<{ start: string; host?: string }>; message?: string; reason?: string; allowOutside?: boolean }): Promise<Booking> =>
+    request(`/api/scheduling/bookings/${encodeURIComponent(id)}/suggest`, json(input)),
+  denyBooking: (id: string, input: { reason?: string; message?: string }): Promise<Booking> => request(`/api/scheduling/bookings/${encodeURIComponent(id)}/deny`, json(input)),
+  cancelBooking: (id: string, reason?: string): Promise<Booking> => request(`/api/scheduling/bookings/${encodeURIComponent(id)}/cancel`, json(reason ? { reason } : {})),
+  moveBooking: (id: string, start: string, host?: string): Promise<Booking> => request(`/api/scheduling/bookings/${encodeURIComponent(id)}/move`, json({ start, ...(host ? { host } : {}) })),
+  assignBooking: (id: string, host?: string): Promise<Booking> => request(`/api/scheduling/bookings/${encodeURIComponent(id)}/assign`, json(host ? { host } : {})),
+  markBooking: (id: string, as: "completed" | "no_show"): Promise<Booking> => request(`/api/scheduling/bookings/${encodeURIComponent(id)}/mark`, json({ as })),
+  bookingSlots: (type: string, contact: string, from: string, to: string): Promise<SlotPreview> =>
+    request(`/api/scheduling/slots?${new URLSearchParams({ type, contact, from, to }).toString()}`),
+  /** Your own calendar as a feed for your phone: whether you have one, a new link (the old stops), or stop it. */
+  calendarFeed: (): Promise<{ feed: CalendarFeedInfo | null }> => request("/api/calendar/feed"),
+  makeCalendarFeed: (): Promise<{ url: string; webcal: string; feed: CalendarFeedInfo }> => request("/api/calendar/feed", json({})),
+  stopCalendarFeed: (): Promise<{ feed: null }> => request("/api/calendar/feed/stop", json({})),
+  /** Your own link to answer this booking's waiting approval from the approval page. */
+  approvalLink: (id: string): Promise<{ url: string; expiresAt: string }> => request(`/api/scheduling/bookings/${encodeURIComponent(id)}/approval-link`, json({})),
+  /** The person's own page for this booking. */
+  bookingPageLink: (id: string): Promise<{ url: string }> => request(`/api/scheduling/bookings/${encodeURIComponent(id)}/link`, json({})),
+
+  /* ── contacts ──────────────────────────────────────────────────────── */
+
+  contacts: (query: { search?: string; limit?: number; after?: string } = {}): Promise<{ contacts: Contact[]; next?: string }> =>
+    request(
+      `/api/contacts?${new URLSearchParams({
+        ...(query.search ? { search: query.search } : {}),
+        ...(query.limit ? { limit: String(query.limit) } : {}),
+        ...(query.after ? { after: query.after } : {}),
+      }).toString()}`,
+    ),
+  contact: (id: string): Promise<Contact> => request(`/api/contacts/${encodeURIComponent(id)}`),
+  /** A 409 carries the contact that already has the email or phone, as `detail.holder`. */
+  createContact: (input: ContactInput): Promise<Contact> => request("/api/contacts", json(input)),
+  updateContact: (id: string, input: ContactInput): Promise<Contact> => request(`/api/contacts/${encodeURIComponent(id)}`, { ...json(input), method: "PUT" }),
+  forgetContact: (id: string): Promise<{ ok: true }> => request(`/api/contacts/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  matchContact: (id: string): Promise<{ outcome: MatchOutcome; contact: Contact }> => request(`/api/contacts/${encodeURIComponent(id)}/match`, json({})),
+  refreshContact: (id: string): Promise<{ contact: Contact; problems: string[] }> => request(`/api/contacts/${encodeURIComponent(id)}/refresh`, json({})),
+  linkContact: (id: string, target: RecordTarget): Promise<{ contact: Contact; problems: string[] }> => request(`/api/contacts/${encodeURIComponent(id)}/link`, json(target)),
+  unlinkContact: (id: string, target: RecordTarget): Promise<Contact> => request(`/api/contacts/${encodeURIComponent(id)}/unlink`, json(target)),
+  /** A contact's booking links: never the link itself, which is shown once when made. */
+  contactLinks: (id: string): Promise<BookingLinkInfo[]> => request(`/api/contacts/${encodeURIComponent(id)}/links`),
+  makeContactLink: (id: string, type?: string): Promise<{ url: string; link: BookingLinkInfo }> => request(`/api/contacts/${encodeURIComponent(id)}/links`, json(type ? { type } : {})),
+  revokeContactLink: (id: string, link: string): Promise<BookingLinkInfo> => request(`/api/contacts/${encodeURIComponent(id)}/links/${encodeURIComponent(link)}/revoke`, json({})),
+  contactSetup: (): Promise<ContactSetup> => request("/api/contacts/setup"),
+  contactSources: (): Promise<ContactSource[]> => request("/api/contacts/sources"),
+  putContactField: (key: string, input: ContactFieldDefInput): Promise<ContactFieldDef> =>
+    request(`/api/contacts/fields/${encodeURIComponent(key)}`, { ...json(input), method: "PUT" }),
+  removeContactField: (key: string): Promise<{ ok: true }> => request(`/api/contacts/fields/${encodeURIComponent(key)}`, { method: "DELETE" }),
+  putMatchRule: (id: string | null, input: ContactMatchRuleInput): Promise<ContactMatchRule> =>
+    id ? request(`/api/contacts/match-rules/${encodeURIComponent(id)}`, { ...json(input), method: "PUT" }) : request("/api/contacts/match-rules", json(input)),
+  removeMatchRule: (id: string): Promise<{ ok: true }> => request(`/api/contacts/match-rules/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  /** Who this browser is talking as. */
+  me: (): Promise<{ principal: Principal | null; mode: "local" | "managed" }> => request("/api/me"),
 
   /** The Agent side's Overview: active workflows and completed tasks. */
   overview: (): Promise<AgentOverview> => request("/api/overview"),

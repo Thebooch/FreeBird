@@ -1,6 +1,8 @@
 import { EmptyState } from "@freebirdai/dash-components";
 import { AGENT_SECTIONS, type AgentSection, type Route } from "../route.js";
 import { AgentsSection } from "./AgentsSection.jsx";
+import { CalendarSection } from "./calendar/CalendarSection.jsx";
+import { ContactsSection } from "./contacts/ContactsSection.jsx";
 import { OverviewSection } from "./overview/OverviewSection.jsx";
 import { WorkflowsSection } from "./workflows/WorkflowsSection.jsx";
 
@@ -10,7 +12,7 @@ import { WorkflowsSection } from "./workflows/WorkflowsSection.jsx";
  * Which section shows is decided by the route (`#/agent/<section>`), so a
  * reload lands where you were and Back steps through them. A section that is
  * not built yet shows what will live there, so the slot already exists when
- * the step that fills it arrives — the calendar drops its view in here.
+ * the step that fills it arrives.
  */
 
 export const SECTION_TITLES: Readonly<Record<AgentSection, string>> = {
@@ -18,17 +20,13 @@ export const SECTION_TITLES: Readonly<Record<AgentSection, string>> = {
   workflows: "Workflows",
   agents: "Agents",
   calendar: "Calendar",
+  contacts: "Contacts",
 };
 
 export const AGENT_NAV_SECTIONS = AGENT_SECTIONS.map((id) => ({ id, title: SECTION_TITLES[id] }));
 
 /** What an unbuilt section says it will hold. */
-const COMING: Readonly<Partial<Record<AgentSection, { glyph: string; body: string }>>> = {
-  calendar: {
-    glyph: "▦",
-    body: "What your agents have scheduled and done, each entry in the colour of the agent that made it.",
-  },
-};
+const COMING: Readonly<Partial<Record<AgentSection, { glyph: string; body: string }>>> = {};
 
 export const AgentShell = ({
   route,
@@ -47,6 +45,10 @@ export const AgentShell = ({
           <AgentsSection selected={route.id ?? null} onNavigate={onNavigate} />
         ) : route.section === "workflows" ? (
           <WorkflowsSection selected={route.id ?? null} onNavigate={onNavigate} />
+        ) : route.section === "calendar" ? (
+          <CalendarSection tab={route.id ?? null} onNavigate={onNavigate} />
+        ) : route.section === "contacts" ? (
+          <ContactsSection tab={route.id ?? null} onNavigate={onNavigate} />
         ) : (
           <EmptyState
             glyph={coming?.glyph ?? "✦"}
