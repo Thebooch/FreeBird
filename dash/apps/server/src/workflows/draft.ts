@@ -83,6 +83,22 @@ export const sentenceFor = (workflow: Pick<WorkflowSpec, "trigger" | "nodes" | "
   return parts.length > 0 ? `${opening}, ${parts.join(", then ")}.` : `${opening}, nothing happens yet: it has no steps.`;
 };
 
+/** Whether a step, or one after it, is one `matches` takes. */
+const reaches = (workflow: Pick<WorkflowSpec, "nodes" | "edges">, from: string | undefined, matches: (node: WorkflowSpec["nodes"][number]) => boolean): boolean => {
+  const seen = new Set<string>();
+  const queue = from ? [from] : [];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const node = workflow.nodes.find((one) => one.id === id);
+    if (!node) continue;
+    if (matches(node)) return true;
+    for (const edge of workflow.edges) if (edge.from === id) queue.push(edge.to);
+  }
+  return false;
+};
+
 /** The suggestions a draft earns, by the catalog's rules. */
 export const suggestionsFor = (workflow: Pick<WorkflowSpec, "nodes" | "edges">): DraftQuestion[] => {
   const out: DraftQuestion[] = [];
@@ -97,6 +113,20 @@ export const suggestionsFor = (workflow: Pick<WorkflowSpec, "nodes" | "edges">):
       }
       if (rule === "outreach_on_auto" && node.mode === "auto") out.push({ kind: "suggestion", rule, step: node.id, field: "mode", question: `"${nodeName(node)}" will reach people without anyone reviewing it. Keep it on Approve?`, default: "Yes, approve" });
       if (rule === "delete_on_auto" && node.mode === "auto") out.push({ kind: "suggestion", rule, step: node.id, field: "mode", question: `"${nodeName(node)}" deletes records without review. Keep it on Approve?`, default: "Yes, approve" });
+      /* Telling the person: a booking that was offered other times or denied should hear it from someone. */
+      if (rule === "inform_after_decision") {
+        const silent = ["suggested", "denied"].filter((outcome) => {
+          const to = workflow.edges.find((edge) => edge.from === node.id && edge.outcome === outcome)?.to;
+          return !reaches(workflow, to, (one) => one.action === "outreach.inform" || one.action.startsWith("outreach."));
+        });
+        if (silent.length > 0) {
+          out.push({ kind: "suggestion", rule, step: node.id, question: `When "${nodeName(node)}" is ${silent.join(" or ")}, tell the person? Add Tell them what was decided after it?`, default: "Yes, tell them" });
+        }
+      }
+      /* Without a timed-out path the case ends quietly and the slot stays held until its hold runs out. */
+      if (rule === "booking_timeout_path" && !workflow.edges.some((edge) => edge.from === node.id && edge.outcome === "timed_out")) {
+        out.push({ kind: "suggestion", rule, step: node.id, question: `If nobody answers "${nodeName(node)}" in time, what happens? Without a path the time stays held until the hold runs out.`, default: "Cancel and tell them" });
+      }
     }
   }
   return out;

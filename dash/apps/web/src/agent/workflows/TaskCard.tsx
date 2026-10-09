@@ -3,6 +3,7 @@ import { WriteReview } from "@freebirdai/dash-react";
 import { BASE_INFO, describeDuration, type AgentSpec, type ActionBase, type Task, type WriteReviewView } from "@freebirdai/dash-spec";
 import { useState } from "react";
 import { api } from "../../api";
+import { BookingSheet } from "../calendar/BookingSheet.jsx";
 
 /**
  * One task: the record of one action in one case, shown the way its kind
@@ -110,7 +111,16 @@ export const TaskBody = ({ task }: { task: Task }): JSX.Element | null => {
       );
     case "question":
       return <p className="dash-task__text">{body.answer ? `Answer: ${body.answer}` : body.question}</p>;
+    case "booking":
+      return <p className="dash-task__text">{body.answer ? `${body.question} ${BOOKING_ANSWER_WORDS[body.answer] ?? body.answer}` : body.question}</p>;
   }
+};
+
+const BOOKING_ANSWER_WORDS: Readonly<Record<string, string>> = {
+  approved: "Approved.",
+  suggested: "Other times offered.",
+  denied: "Denied.",
+  withdrawn: "Withdrawn by them before anyone answered.",
 };
 
 export const TaskCard = ({
@@ -131,6 +141,8 @@ export const TaskCard = ({
   const [error, setError] = useState<string | null>(null);
   const status = task.uncertain && task.status === "waiting_approval" ? { label: "Did it happen?", tone: "warn" as const } : STATUS_WORDS[task.status];
   const isQuestion = task.body.kind === "question" && task.status === "waiting";
+  const bookingAsk = task.body.kind === "booking" && task.status === "waiting" ? task.body : null;
+  const [booking, setBooking] = useState<string | null>(null);
 
   const act = async (work: () => Promise<unknown>, done = true): Promise<void> => {
     setBusy(true);
@@ -255,6 +267,16 @@ export const TaskCard = ({
                 </Button>
               </>
             ))}
+          {bookingAsk && (
+            <>
+              <Button size="sm" tone="primary" busy={busy} onClick={() => void act(() => api.confirmBooking(bookingAsk.booking))} testId={`task-booking-approve-${task.id}`}>
+                Approve
+              </Button>
+              <Button size="sm" onClick={() => setBooking(bookingAsk.booking)} testId={`task-booking-open-${task.id}`}>
+                {bookingAsk.allowSuggest || bookingAsk.allowDeny ? "Open the booking" : "Details"}
+              </Button>
+            </>
+          )}
           {task.body.kind === "todo" && !task.body.done && task.status === "done" && (
             <Button size="sm" busy={busy} onClick={() => void act(() => api.completeTask(task.id))}>
               Mark done
@@ -267,6 +289,17 @@ export const TaskCard = ({
           )}
           {task.status === "done" && task.reversal && !task.reversal.available && task.reversal.reason && !compact && <span className="dash-hint">{task.reversal.reason}</span>}
         </div>
+      )}
+      {booking && (
+        <BookingSheet
+          id={booking}
+          canManage
+          onClose={() => setBooking(null)}
+          onChanged={() => {
+            setBooking(null);
+            onChanged();
+          }}
+        />
       )}
     </li>
   );

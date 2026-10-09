@@ -144,6 +144,9 @@ import { contactRoutes, type ContactSource } from "./routes/contacts.js";
 import { bookingRoutes } from "./routes/bookings.js";
 import { ContactService } from "./contacts/service.js";
 import { BookingService, bookingsAsBusy } from "./bookings/service.js";
+import { workflowBookings } from "./bookings/row.js";
+import { BookingDispatcher } from "./workflows/booking-events.js";
+import { BOOKING_RECIPES } from "./workflows/recipes.js";
 import { MemoryBookingStore, type BookingStore } from "./bookings/store.js";
 import { MemoryContactStore, type ContactStore } from "./contacts/store.js";
 import { SchedulingService, type WorkspaceMember } from "./scheduling/service.js";
@@ -169,7 +172,7 @@ import {
   type TemplateStore,
   type WorkflowStore,
 } from "./workflows/store.js";
-import { deliveryErrorOf, type OutreachSender, type WorkflowEnv } from "./workflows/env.js";
+import { deliveryErrorOf, type OutreachSender, type WorkflowBookings, type WorkflowEnv } from "./workflows/env.js";
 import { AgentService } from "./agents/service.js";
 import { MemoryAgentStore, type AgentStore } from "./agents/store.js";
 import { installIdentity } from "./identity/context.js";
@@ -988,7 +991,11 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * the write service's review, and never use an agent's reply prompt.
    */
   const catalogEntryOf = (connection: ConnectionSpec) => (connection.catalog ? (options.catalog?.get(connection.catalog) ?? undefined) : undefined);
+  /* Bookings for workflow steps, set once the booking service exists below. */
+  let bookingsForWorkflows: WorkflowBookings | undefined;
+  let bookingDispatcher: BookingDispatcher | undefined;
   const workflowEnv: WorkflowEnv = {
+    bookings: () => bookingsForWorkflows,
     workspaceId: options.workspace?.id ?? LOCAL_WORKSPACE_ID,
     store: workflowStore,
     cases: options.cases ?? new MemoryCaseStore(),
@@ -1056,9 +1063,10 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     policy,
     agents: { list: () => agentStore.list() },
     hasConnection: (id) => store.getConnection(id) !== null,
+    appointmentTypes: async () => (await scheduling.overview()).types.map((one) => one.id),
   });
   const workflowTasks = new TaskService(workflowStarter);
-  const workflowTemplates = new TemplateService({ templates: workflowEnv.templates, workflows: workflowStore, newId: () => randomUUID() });
+  const workflowTemplates = new TemplateService({ templates: workflowEnv.templates, workflows: workflowStore, newId: () => randomUUID(), builtIn: BOOKING_RECIPES });
   void app.register(agentRoutes(agents, policy, () => resolveLlm("agent"), {
     useTool: (agent, tool, inputs, conversation) =>
       startFromAgentTool(workflowStarter, { agent, tool, inputs, ...(conversation ? { conversation } : {}) }),
@@ -1146,10 +1154,27 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     now: () => Date.now(),
   });
   /* Bookings (`bookings/`): the only code that changes one; the calendar mirrors each. */
-  const bookings = new BookingService({ store: bookingStore, scheduling, contacts, calendar: workflowEnv.calendar, now: () => Date.now(), newId: () => randomUUID() });
+  const bookings = new BookingService({
+    store: bookingStore,
+    scheduling,
+    contacts,
+    calendar: workflowEnv.calendar,
+    now: () => Date.now(),
+    newId: () => randomUUID(),
+    afterChange: () => void bookingDispatcher?.deliver(),
+  });
+  bookingsForWorkflows = workflowBookings({ service: bookings, contacts, scheduling });
+  bookingDispatcher = new BookingDispatcher({ env: workflowEnv, engine: workflowEngine, store: bookingStore, bookings: bookingsForWorkflows, contacts });
   void app.register(bookingRoutes({ bookings, policy }));
   void app.register(schedulingRoutes({ scheduling, policy }));
-  const workflowRunner = new WorkflowRunner({ ...workflowStarter, log: { warn: (line) => app.log.warn(line) } });
+  const workflowRunner = new WorkflowRunner({
+    ...workflowStarter,
+    log: { warn: (line) => app.log.warn(line) },
+    passes: [
+      { name: "booking events", run: () => bookingDispatcher?.deliver() ?? Promise.resolve(0) },
+      { name: "booking holds", run: () => bookings.settleDue() },
+    ],
+  });
   if (options.workflowRunner === true) workflowRunner.start();
   app.addHook("onClose", async () => workflowRunner.stop());
 

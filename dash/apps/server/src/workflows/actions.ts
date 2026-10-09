@@ -25,6 +25,7 @@ import {
 import { z } from "zod";
 import { DeliveryError, ParkWorkflow, notConnectedSender, type WorkflowEnv } from "./env.js";
 import { mayRead, readRecordAs } from "./reads.js";
+import { SCHEDULE_EXECUTORS } from "./schedule-actions.js";
 
 /**
  * What each catalog variant does when a case reaches it.
@@ -809,6 +810,7 @@ const runEach: ActionExecutor = async ({ env, settings: s, resume, startCase, at
 };
 
 export const EXECUTORS: Readonly<Record<string, ActionExecutor>> = {
+  ...SCHEDULE_EXECUTORS,
   "create.record": recordChange,
   "create.calendar": calendar,
   "create.note": note,

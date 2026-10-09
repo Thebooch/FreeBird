@@ -51,6 +51,8 @@ export interface BookingDeps {
   readonly calendar: CalendarStore;
   readonly now: () => number;
   readonly newId: () => string;
+  /** Called after each change is written, to deliver its events now rather than on the next pass. */
+  readonly afterChange?: () => void;
 }
 
 export interface RequestInput {
@@ -253,6 +255,7 @@ export class BookingService {
     });
     if (!result) throw new BookingError("That time was just taken.", 409, await this.nearby(type, facts, input.start));
     await this.mirror(result.booking);
+    this.deps.afterChange?.();
     return result;
   }
 
@@ -295,7 +298,7 @@ export class BookingService {
             kind,
             at: iso(now),
             type: booking.type.id,
-            payload: { ...(change.payload ?? {}), previous: booking.status, by, ...(booking.approvalTask ? { approvalTask: booking.approvalTask } : {}) },
+            payload: { ...(change.payload ?? {}), previous: booking.status, by },
           });
         }
         return saved;
@@ -305,6 +308,7 @@ export class BookingService {
       });
       if (done) {
         await this.mirror(done);
+        if (done.revision !== before.revision) this.deps.afterChange?.();
         return done;
       }
     }
@@ -337,8 +341,9 @@ export class BookingService {
   }
 
   /**
-   * Offer other times instead. Each is checked as if the person were asking
-   * for it, unless a member chose to offer a time outside the open ones.
+   * Offer other times instead: for a request, or after a denial or the
+   * person declining. Each is checked as if the person were asking for it,
+   * unless a member chose to offer a time outside the open ones.
    */
   async suggest(
     id: string,
@@ -356,7 +361,8 @@ export class BookingService {
       id,
       by,
       async (booking, tx) => {
-        if (booking.status !== "pending") return this.refuse(booking, "given other times");
+        /* Pending, or turned down or declined already: the team can still offer other times. */
+        if (!["pending", "denied", "expired", "cancelled"].includes(booking.status)) return this.refuse(booking, "given other times");
         const now = this.deps.now();
         const holdUntil = iso(now + Math.max(Math.min(ms(booking.settings.suggestionHoldFor), options.holdFor ? ms(options.holdFor) : Number.POSITIVE_INFINITY), 60_000));
         const suggestions = [];
@@ -526,11 +532,6 @@ export class BookingService {
       const { change: _change, ...rest } = booking;
       return { next: { ...rest, status: as }, events: [as] };
     });
-  }
-
-  /** Links the approval task a workflow step made to the booking, so withdrawing it can reach the task. */
-  async setApprovalTask(id: string, task: string): Promise<Booking> {
-    return this.transition(id, { kind: "workflow" }, async (booking) => (booking.approvalTask === task ? "unchanged" : { next: { ...booking, approvalTask: task }, events: [] }));
   }
 
   /* ── by itself, over time ────────────────────────────────────────────── */

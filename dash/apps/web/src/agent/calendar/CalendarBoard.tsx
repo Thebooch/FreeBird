@@ -8,6 +8,7 @@ import { AgendaView } from "./AgendaView.jsx";
 import { CalendarLegend } from "./CalendarLegend.jsx";
 import { ChevronLeft, ChevronRight, Segmented } from "./controls.jsx";
 import { EntryFormSheet } from "./EntryFormSheet.jsx";
+import { BookingSheet } from "./BookingSheet.jsx";
 import { EntrySheet } from "./EntrySheet.jsx";
 import { blankForm, formOf, type EntryForm } from "./form.js";
 import { MonthView } from "./MonthView.jsx";
@@ -282,7 +283,8 @@ export const CalendarBoard = ({
         {...(hosts.length > 0 ? { blocksFor: { value: bandsFor, options: hosts.map((one) => ({ value: one.member, label: one.displayName })), onChange: setBandsFor, shown: view === "week" } } : {})}
       />
 
-      {open && (
+      {open?.booking && <BookingSheet id={open.booking} people={people} canManage={canManage} onClose={() => setOpenId(null)} onChanged={() => setToken((n) => n + 1)} />}
+      {open && !open.booking && (
         <EntrySheet
           entry={open}
           owner={owner(open)}

@@ -5,6 +5,8 @@ import type {
   AgentSpec,
   AppointmentType,
   Block,
+  Booking,
+  BookingStatus,
   CalendarEntryInput,
   CalendarEvent,
   Contact,
@@ -1460,6 +1462,33 @@ export const api = {
   splitPlacement: (id: string, date: string, newId: string): Promise<{ before: Placement; after: Placement }> =>
     request(`/api/scheduling/placements/${encodeURIComponent(id)}/split`, json({ date, newId })),
   occurrences: (from: string, to: string): Promise<HostOccurrence[]> => request(`/api/scheduling/occurrences?${new URLSearchParams({ from, to })}`),
+
+  /* ── bookings ──────────────────────────────────────────────────────── */
+
+  bookings: (query: { from?: string; to?: string; host?: string; contact?: string; status?: readonly BookingStatus[] } = {}): Promise<Booking[]> =>
+    request(
+      `/api/scheduling/bookings?${new URLSearchParams({
+        ...(query.from ? { from: query.from } : {}),
+        ...(query.to ? { to: query.to } : {}),
+        ...(query.host ? { host: query.host } : {}),
+        ...(query.contact ? { contact: query.contact } : {}),
+        ...(query.status && query.status.length > 0 ? { status: query.status.join(",") } : {}),
+      }).toString()}`,
+    ),
+  booking: (id: string): Promise<Booking> => request(`/api/scheduling/bookings/${encodeURIComponent(id)}`),
+  /** A member books for a contact. A taken time answers 409 with open times nearby as `detail.slots`. */
+  createBooking: (input: { type: string; contact: string; start: string; host?: string; approval?: "always" }): Promise<{ booking: Booking; outcome: "pending" | "confirmed" }> =>
+    request("/api/scheduling/bookings", json(input)),
+  confirmBooking: (id: string, message?: string): Promise<Booking> => request(`/api/scheduling/bookings/${encodeURIComponent(id)}/confirm`, json(message ? { message } : {})),
+  suggestBooking: (id: string, input: { times: Array<{ start: string; host?: string }>; message?: string; reason?: string; allowOutside?: boolean }): Promise<Booking> =>
+    request(`/api/scheduling/bookings/${encodeURIComponent(id)}/suggest`, json(input)),
+  denyBooking: (id: string, input: { reason?: string; message?: string }): Promise<Booking> => request(`/api/scheduling/bookings/${encodeURIComponent(id)}/deny`, json(input)),
+  cancelBooking: (id: string, reason?: string): Promise<Booking> => request(`/api/scheduling/bookings/${encodeURIComponent(id)}/cancel`, json(reason ? { reason } : {})),
+  moveBooking: (id: string, start: string, host?: string): Promise<Booking> => request(`/api/scheduling/bookings/${encodeURIComponent(id)}/move`, json({ start, ...(host ? { host } : {}) })),
+  assignBooking: (id: string, host?: string): Promise<Booking> => request(`/api/scheduling/bookings/${encodeURIComponent(id)}/assign`, json(host ? { host } : {})),
+  markBooking: (id: string, as: "completed" | "no_show"): Promise<Booking> => request(`/api/scheduling/bookings/${encodeURIComponent(id)}/mark`, json({ as })),
+  bookingSlots: (type: string, contact: string, from: string, to: string): Promise<SlotPreview> =>
+    request(`/api/scheduling/slots?${new URLSearchParams({ type, contact, from, to }).toString()}`),
 
   /* ── contacts ──────────────────────────────────────────────────────── */
 

@@ -1,5 +1,6 @@
 import { idSchema } from "@freebirdai/connect-spec";
 import { z } from "zod";
+import { BOOKING_EVENTS } from "./booking-events.js";
 import { LOCATION_KINDS, consolidationSchema, schedulingSettingsSchema } from "./scheduling.js";
 
 /**
@@ -32,37 +33,7 @@ export const BOOKING_STATUS_WORDS: Readonly<Record<BookingStatus, string>> = {
   no_show: "No-show",
 };
 
-/** What happened to a booking: what the outbox carries and a `booking` trigger listens for. */
-export const BOOKING_EVENTS = [
-  "requested",
-  "confirmed",
-  "suggested",
-  "denied",
-  "suggestion_accepted",
-  "suggestion_declined",
-  "reschedule_requested",
-  "rescheduled",
-  "cancelled",
-  "expired",
-  "completed",
-  "no_show",
-] as const;
-export type BookingEventKind = (typeof BOOKING_EVENTS)[number];
-
-export const BOOKING_EVENT_WORDS: Readonly<Record<BookingEventKind, string>> = {
-  requested: "requested",
-  confirmed: "confirmed",
-  suggested: "offered other times",
-  denied: "denied",
-  suggestion_accepted: "accepts a suggested time",
-  suggestion_declined: "declines the suggested times",
-  reschedule_requested: "asks to move",
-  rescheduled: "moved",
-  cancelled: "cancelled",
-  expired: "runs out",
-  completed: "completed",
-  no_show: "marked a no-show",
-};
+export { BOOKING_EVENTS, BOOKING_EVENT_WORDS, type BookingEventKind } from "./booking-events.js";
 
 export const BOOKING_ORIGINS = ["link", "public_link", "agent", "workflow", "member"] as const;
 export type BookingOrigin = (typeof BOOKING_ORIGINS)[number];
@@ -134,7 +105,6 @@ export const bookingSchema = z.object({
   agent: z.string().optional(),
   /** The link token it came through. */
   link: z.string().optional(),
-  approvalTask: z.string().optional(),
   reschedules: z.number().int().nonnegative().default(0),
   history: z
     .array(

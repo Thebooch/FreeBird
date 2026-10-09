@@ -29,6 +29,7 @@ export const ACTION_BASES = [
   "wait",
   "branch",
   "run_workflow",
+  "schedule",
 ] as const;
 export type ActionBase = (typeof ACTION_BASES)[number];
 
@@ -46,10 +47,11 @@ export const BASE_INFO: Readonly<Record<ActionBase, { readonly label: string; re
   wait: { label: "Wait", premise: "Pause the case: for a time, until a time, or for an event with a time limit.", steers: true },
   branch: { label: "Branch", premise: "Take a different path depending on the case.", steers: true },
   run_workflow: { label: "Run a workflow", premise: "Start another workflow with inputs from this case.", steers: false },
+  schedule: { label: "Schedule", premise: "Find, hold, book, move or release appointments.", steers: false },
 };
 
 /** How a task looks: the body shape a variant's tasks carry. */
-export const TASK_BODY_KINDS = ["notice", "change", "created", "removed", "conversation", "wait", "decision", "request", "todo", "question"] as const;
+export const TASK_BODY_KINDS = ["notice", "change", "created", "removed", "conversation", "wait", "decision", "request", "todo", "question", "booking"] as const;
 export type TaskBodyKind = (typeof TASK_BODY_KINDS)[number];
 
 /** Model tasks a variant's calls run on (`models.ts`). Every one follows the chat's model until given its own. */
@@ -104,7 +106,7 @@ export interface ActionField {
 }
 
 /** A rule the chat and the builder use to suggest something the person may have meant. */
-export type SuggestionId = "follow_up_after_outreach" | "outreach_on_auto" | "delete_on_auto" | "think_on_auto";
+export type SuggestionId = "follow_up_after_outreach" | "outreach_on_auto" | "delete_on_auto" | "think_on_auto" | "inform_after_decision" | "booking_timeout_path";
 
 export interface ActionVariant {
   /** `<base>.<variant>`. */
@@ -147,6 +149,7 @@ const TO: ActionField = { key: "to", label: "To", kind: "template", required: tr
 const PARENTS: ActionField = { key: "parents", label: "Parent ids", kind: "values", help: "For a record that lives under another: the ids of the records above it." };
 const PURPOSE: ActionField = { key: "purpose", label: "What it is for", kind: "longtext", required: true, placeholder: "Let them know the work order was received", ask: "What should the message say or be for?" };
 const TIMEOUT: ActionField = { key: "timeout", label: "Give up after", kind: "duration", required: true, default: "2d", ask: "How long should it wait before giving up?" };
+const BOOKING: ActionField = { key: "booking", label: "Booking", kind: "template", required: true, default: "{{ id }}", placeholder: "{{ id }}", help: "Default: the booking that started the workflow." };
 
 const variant = (one: Omit<ActionVariant, "available" | "reversible" | "leavesDash" | "defaultMode" | "outputs" | "interrupted"> & Partial<ActionVariant>): ActionVariant => ({
   available: true,
@@ -251,6 +254,24 @@ export const ACTION_VARIANTS: readonly ActionVariant[] = [
       suggestions: ["follow_up_after_outreach", "outreach_on_auto"],
     }),
   ),
+
+  /* Tell the person who booked what was decided, in an agent's voice. */
+  variant({
+    id: "outreach.inform", base: "outreach", label: "Tell them what was decided",
+    does: "Tell the person what an earlier step decided — approved, other times offered, denied, cancelled — in an agent's voice, with anything else the workflow wants said.",
+    fields: [
+      AGENT,
+      { key: "about", label: "About the step", kind: "step", help: "The Ask or Schedule step whose decision it reports. Default: the booking as it is now." },
+      { key: "channel", label: "By", kind: "select", default: "preferred", options: [{ value: "preferred", label: "Their preferred way" }, { value: "text", label: "Text" }, { value: "email", label: "Email" }, { value: "call", label: "Call" }] },
+      { key: "to", label: "To", kind: "template", placeholder: "Their phone or email, for that way", help: "Default: the contact's address for that channel." },
+      { key: "include", label: "Also include", kind: "longtext", placeholder: "Include the link {{ link }} so they can pick another time", help: "Instructions from the business: the agent must work this in." },
+      { key: "includeLink", label: "Their booking link", kind: "select", default: "auto", options: [{ value: "auto", label: "When they have something to pick" }, { value: "always", label: "Always" }, { value: "never", label: "Never" }] },
+      { key: "content", label: "Content", kind: "select", default: "agent", options: [{ value: "agent", label: "The agent writes it" }, { value: "fixed", label: "Fixed wording" }] },
+      { key: "wording", label: "Wording", kind: "longtext", showWhen: { key: "content", equals: "fixed" } },
+    ],
+    outcomes: ["next", "failed"], outputs: [{ name: "conversation", description: "The conversation, for a Wait for a reply" }, { name: "message", description: "What was sent" }],
+    body: "conversation", leavesDash: true, modelTask: "outreach", defaultMode: "approve",
+  }),
 
   /* ── notify ── */
   variant({
@@ -369,6 +390,112 @@ export const ACTION_VARIANTS: readonly ActionVariant[] = [
     ],
     outcomes: ["happened", "timed_out"], outputs: [{ name: "event", description: "What happened" }, { name: "hook", description: "This case's webhook address, for webhook waits" }],
     body: "wait",
+  }),
+
+  variant({
+    id: "wait.booking", base: "wait", label: "Wait for the person booking", does: "Wait for them to take an offered time, turn them down, move or cancel; up to a time limit.",
+    fields: [BOOKING, TIMEOUT],
+    outcomes: ["accepted", "declined", "rescheduled", "cancelled", "timed_out"], outputs: [{ name: "event", description: "What they did" }],
+    suggestions: ["booking_timeout_path"],
+    body: "wait",
+  }),
+  variant({
+    id: "wait.appointment", base: "wait", label: "Wait until before or after the appointment",
+    does: "Wait until a time set from the appointment — a day before, two hours before, fifteen minutes after. A move moves the wait; a cancellation ends it.",
+    fields: [BOOKING, { key: "offset", label: "When", kind: "text", required: true, default: "-1d", placeholder: "-1d, -2h, +15m", ask: "How long before (-) or after (+) the appointment?" }],
+    outcomes: ["next", "cancelled"],
+    body: "wait",
+  }),
+
+  /* ── schedule ── */
+  variant({
+    id: "ask.booking", base: "ask", label: "Approve a booking",
+    does: "Ask the team to approve a booking, offer other times, or deny it. The answer is applied to the booking at once.",
+    fields: [
+      BOOKING,
+      { key: "question", label: "Question", kind: "template", default: "Approve {{ contact.name }}: {{ type.name }}, {{ when }}?" },
+      { key: "details", label: "Details", kind: "longtext" },
+      { key: "assignee", label: "Who", kind: "text", placeholder: "the host, or anyone who manages the calendar" },
+      { key: "allowSuggest", label: "They may offer other times", kind: "boolean", default: true },
+      { key: "allowDeny", label: "They may deny it", kind: "boolean", default: true },
+      { key: "timeout", label: "Give up after", kind: "duration", help: "Default: when the booking's hold runs out." },
+    ],
+    outcomes: ["approved", "suggested", "denied", "withdrawn", "timed_out"],
+    suggestions: ["inform_after_decision", "booking_timeout_path"],
+    outputs: [
+      { name: "answer", description: "approved, suggested, denied or withdrawn" },
+      { name: "by", description: "Who answered" },
+      { name: "suggestions", description: "The times offered, each with when" },
+      { name: "message", description: "What the team said for the person" },
+      { name: "booking", description: "The booking's id" },
+    ],
+    body: "booking",
+  }),
+  variant({
+    id: "schedule.find", base: "schedule", label: "Find open times", does: "Find open times of an appointment type for a contact, consolidated first.",
+    fields: [
+      { key: "type", label: "Appointment type", kind: "template", required: true, default: "{{ type.id }}", ask: "Which appointment type?" },
+      { key: "contact", label: "Contact", kind: "template", required: true, default: "{{ contact.id }}" },
+      { key: "from", label: "From", kind: "template", help: "Default: now." },
+      { key: "within", label: "Within", kind: "duration", default: "14d" },
+      { key: "limit", label: "How many", kind: "number", default: 3 },
+    ],
+    outcomes: ["found", "none", "needs_info"],
+    outputs: [{ name: "slots", description: "The times found" }, { name: "first", description: "The first time" }, { name: "count", description: "How many" }, { name: "needs", description: "Fields that would change the times" }],
+    body: "notice",
+  }),
+  variant({
+    id: "schedule.hold", base: "schedule", label: "Hold or book a time", does: "Ask for a time for a contact: held pending approval, or booked, as the type says.",
+    fields: [
+      { key: "type", label: "Appointment type", kind: "template", required: true, default: "{{ type.id }}" },
+      { key: "contact", label: "Contact", kind: "template", required: true, default: "{{ contact.id }}" },
+      { key: "at", label: "Time", kind: "template", required: true, placeholder: "{{ steps.find.first.start }}" },
+      { key: "host", label: "With", kind: "text", help: "Default: the type's host, or the pool's rule." },
+      { key: "holdFor", label: "Hold for", kind: "duration", help: "Shorter than the type's hold, never longer." },
+      { key: "approval", label: "Approval", kind: "select", default: "type", options: [{ value: "type", label: "As the type says" }, { value: "always", label: "Always ask" }, { value: "skip", label: "Book outright" }] },
+    ],
+    outcomes: ["pending", "confirmed", "taken"],
+    outputs: [{ name: "booking", description: "The booking's id" }, { name: "when", description: "The time, in their zone" }, { name: "status", description: "pending or confirmed" }],
+    body: "created", reversible: true,
+  }),
+  variant({
+    id: "schedule.confirm", base: "schedule", label: "Confirm a booking", does: "Approve a pending booking (or a move waiting for approval).",
+    fields: [BOOKING], outcomes: ["next", "gone"], body: "notice",
+  }),
+  variant({
+    id: "schedule.suggest", base: "schedule", label: "Offer other times", does: "Offer the person other times instead, each held until they answer.",
+    fields: [
+      BOOKING,
+      { key: "times", label: "Times", kind: "template", required: true, placeholder: "{{ steps.find.slots }}" },
+      { key: "message", label: "Message for them", kind: "longtext" },
+    ],
+    outcomes: ["next", "taken"], outputs: [{ name: "suggestions", description: "The times offered" }],
+    body: "notice",
+  }),
+  variant({
+    id: "schedule.cancel", base: "schedule", label: "Cancel or release", does: "Cancel a booking, or release a pending hold.",
+    fields: [BOOKING, { key: "reason", label: "Why (team only)", kind: "template" }],
+    outcomes: ["next", "gone"], body: "notice", reversible: true,
+  }),
+  variant({
+    id: "schedule.move", base: "schedule", label: "Move a booking", does: "Move a booking to another open time.",
+    fields: [BOOKING, { key: "to", label: "To", kind: "template", required: true, placeholder: "{{ steps.find.first.start }}" }],
+    outcomes: ["next", "taken"], body: "notice", reversible: true,
+  }),
+  variant({
+    id: "schedule.assign", base: "schedule", label: "Give it to another host", does: "Give a booking to another host at the same time: one named, or the next by the pool's rule.",
+    fields: [BOOKING, { key: "to", label: "To", kind: "text", help: "A member's id. Default: the pool's rule." }],
+    outcomes: ["next", "none_free"], outputs: [{ name: "host", description: "Who has it now" }], body: "notice",
+  }),
+  variant({
+    id: "schedule.mark", base: "schedule", label: "Mark completed or no-show", does: "Record how the appointment went.",
+    fields: [BOOKING, { key: "as", label: "As", kind: "select", required: true, default: "completed", options: [{ value: "completed", label: "Completed" }, { value: "no_show", label: "No-show" }] }],
+    outcomes: ["next"], body: "notice",
+  }),
+  variant({
+    id: "schedule.link", base: "schedule", label: "Make a scheduling link", does: "A personal link where the contact picks a time.",
+    fields: [{ key: "contact", label: "Contact", kind: "template", required: true, default: "{{ contact.id }}" }, { key: "type", label: "Appointment type", kind: "template", required: true, default: "{{ type.id }}" }, { key: "expires", label: "Expires after", kind: "duration", default: "30d" }],
+    outcomes: ["next"], outputs: [{ name: "url", description: "The link" }], body: "created", available: false,
   }),
 
   /* ── branch ── */

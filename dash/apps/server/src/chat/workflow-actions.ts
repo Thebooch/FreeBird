@@ -1,6 +1,7 @@
 import type { ActionContext, ActionDefinition } from "@freebirdai/core";
 import {
   ACTION_VARIANTS,
+  BOOKING_EVENTS,
   WORKFLOW_EVERY,
   actionVariant,
   chainEdges,
@@ -53,11 +54,11 @@ export interface WorkflowChatOps {
 /** New workflows from the chat start in trial for this many cases. */
 export const CHAT_TRIAL_CASES = 5;
 
-const TRIGGER_KINDS = ["record_created", "record_changed", "schedule", "every", "agent", "manual"] as const;
+const TRIGGER_KINDS = ["record_created", "record_changed", "schedule", "every", "agent", "manual", "booking"] as const;
 const VARIANT_IDS = ACTION_VARIANTS.filter((one) => one.available).map((one) => one.id) as [string, ...string[]];
 
 const triggerFields = {
-  trigger: z.enum(TRIGGER_KINDS).describe("What starts it: record_created / record_changed (an API's records), schedule (cron), every (an interval), agent (an agent's tool), manual (by hand)."),
+  trigger: z.enum(TRIGGER_KINDS).describe("What starts it: record_created / record_changed (an API's records), schedule (cron), every (an interval), agent (an agent's tool), manual (by hand), booking (something happens to a booking)."),
   cron: z.string().optional().describe("For schedule: five cron fields, e.g. '0 7 * * 1-5'."),
   timezone: z.string().optional().describe("For schedule: an IANA time zone. Default UTC."),
   every: z.enum(WORKFLOW_EVERY).optional().describe("For every and record_*: how often. Default 15m for API triggers."),
@@ -65,6 +66,9 @@ const triggerFields = {
   record: z.string().optional().describe("For record_*: the record type it watches."),
   fields: z.array(z.string()).optional().describe("For record_changed: the fields whose change counts."),
   inputs: z.array(z.object({ name: z.string(), description: z.string(), required: z.boolean().optional() })).optional().describe("For agent: what the agent asks the person for."),
+  events: z.array(z.enum(BOOKING_EVENTS)).optional().describe("For booking: what happens to the booking, e.g. requested, confirmed, cancelled."),
+  types: z.array(z.string()).optional().describe("For booking: appointment type ids. Empty: every type."),
+  endWhenCancelled: z.boolean().optional().describe("For booking: cancelling the booking stops its cases. Default true."),
 };
 
 const stepSchema = z.object({
@@ -148,6 +152,13 @@ const triggerOf = (args: Fields, held?: WorkflowTrigger): WorkflowTrigger => {
       return { kind, inputs: (args.inputs ?? (was["inputs"] as Array<{ name: string; description: string; required?: boolean }> | undefined) ?? []).map((one) => ({ name: one.name, description: one.description, required: one.required ?? true })) };
     case "manual":
       return { kind };
+    case "booking":
+      return {
+        kind,
+        events: pick(args.events, "events") ?? ["requested"],
+        types: pick(args.types, "types") ?? [],
+        endWhenCancelled: pick(args.endWhenCancelled, "endWhenCancelled") ?? true,
+      };
   }
 };
 

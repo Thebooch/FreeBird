@@ -52,7 +52,7 @@ const useData = (reloadToken: number) => {
           workflows,
           agents,
           connections,
-          waiting: [...approvals, ...questions.filter((task) => task.body.kind === "question")],
+          waiting: [...approvals, ...questions.filter((task) => task.body.kind === "question" || task.body.kind === "booking")],
           templates,
           error: null,
           loaded: true,

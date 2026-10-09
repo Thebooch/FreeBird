@@ -52,6 +52,7 @@ export const TRIGGER_CHOICES: ReadonlyArray<{ readonly kind: WorkflowTriggerKind
   { kind: "every", label: "Every so often" },
   { kind: "agent", label: "When an agent is asked" },
   { kind: "manual", label: "By hand" },
+  { kind: "booking", label: "When a booking changes" },
 ];
 
 /** A fresh trigger of a kind, keeping the connection and record type of the one it replaces where it had them. */
@@ -70,6 +71,8 @@ export const blankTrigger = (kind: WorkflowTriggerKind, from?: WorkflowTrigger):
       return { kind, inputs: [] };
     case "manual":
       return { kind };
+    case "booking":
+      return { kind, events: ["requested"], types: [], endWhenCancelled: true };
   }
 };
 

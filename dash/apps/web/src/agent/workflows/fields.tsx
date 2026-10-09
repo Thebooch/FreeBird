@@ -1,6 +1,7 @@
 import { Button } from "@freebirdai/dash-components";
-import { WORKFLOW_EVERY, describeCron, type WorkflowInputDef, type WorkflowTrigger } from "@freebirdai/dash-spec";
-import type { ConnectionSummary } from "../../api";
+import { BOOKING_EVENTS, BOOKING_EVENT_WORDS, WORKFLOW_EVERY, describeCron, type WorkflowInputDef, type WorkflowTrigger } from "@freebirdai/dash-spec";
+import { useEffect, useState } from "react";
+import { api, type ConnectionSummary } from "../../api";
 import { TRIGGER_CHOICES, blankTrigger } from "./draft.js";
 
 /**
@@ -205,8 +206,70 @@ export const TriggerEditor = ({
       <span className="dash-hint">Give an agent a “Run a workflow” tool for this on its Tools tab. That tool decides whether it starts on its own or asks the team.</span>
     )}
     {trigger.kind === "manual" && <span className="dash-hint">Runs when someone presses Run now.</span>}
+    {trigger.kind === "booking" && <BookingTriggerEditor trigger={trigger} onChange={onChange} />}
   </div>
 );
+
+/** Which booking events start it, for which appointment types, and whether cancelling the booking ends it. */
+const BookingTriggerEditor = ({
+  trigger,
+  onChange,
+}: {
+  trigger: Extract<WorkflowTrigger, { kind: "booking" }>;
+  onChange: (next: WorkflowTrigger) => void;
+}): JSX.Element => {
+  const [types, setTypes] = useState<ReadonlyArray<{ id: string; name: string }>>([]);
+  useEffect(() => {
+    void api.scheduling().then((setup) => setTypes(setup.types.map((one) => ({ id: one.id, name: one.name }))), () => undefined);
+  }, []);
+  const toggle = <T extends string>(list: readonly T[], value: T): T[] => (list.includes(value) ? list.filter((one) => one !== value) : [...list, value]);
+  return (
+    <>
+      <fieldset className="dash-trigger-group">
+        <legend className="dash-trigger-group__title">When a booking</legend>
+        <div className="dash-trigger-checks">
+          {BOOKING_EVENTS.map((event) => (
+            <label key={event} className="dash-trigger-check">
+              <input
+                type="checkbox"
+                checked={trigger.events.includes(event)}
+                onChange={() => {
+                  const events = toggle(trigger.events, event);
+                  if (events.length > 0) onChange({ ...trigger, events });
+                }}
+              />
+              {BOOKING_EVENT_WORDS[event]}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <fieldset className="dash-trigger-group">
+        <legend className="dash-trigger-group__title">For</legend>
+        {types.length === 0 ? (
+          <span className="dash-hint">Every appointment type. Add types on the Calendar's Appointment types tab.</span>
+        ) : (
+          <div className="dash-trigger-checks">
+            <label className="dash-trigger-check">
+              <input type="checkbox" checked={trigger.types.length === 0} onChange={() => onChange({ ...trigger, types: [] })} />
+              Every type
+            </label>
+            {types.map((type) => (
+              <label key={type.id} className="dash-trigger-check">
+                <input type="checkbox" checked={trigger.types.includes(type.id)} onChange={() => onChange({ ...trigger, types: toggle(trigger.types, type.id) })} />
+                {type.name}
+              </label>
+            ))}
+          </div>
+        )}
+      </fieldset>
+      <label className="dash-trigger-check">
+        <input type="checkbox" checked={trigger.endWhenCancelled} onChange={(event) => onChange({ ...trigger, endWhenCancelled: event.target.checked })} />
+        Stop when the booking is cancelled
+      </label>
+      <span className="dash-hint">Steps read the booking as {"{{ when }}"}, {"{{ contact.name }}"}, {"{{ type.name }}"} and {"{{ link }}"}.</span>
+    </>
+  );
+};
 
 /** Fields to set on a record: path and value, each value a template. */
 export const ValuesEditor = ({ values, onChange }: { values: Record<string, string>; onChange: (next: Record<string, string>) => void }): JSX.Element => {
