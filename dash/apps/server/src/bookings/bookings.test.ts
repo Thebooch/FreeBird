@@ -51,7 +51,7 @@ const build = async (store: BookingStore = new MemoryBookingStore(), db?: DashDb
   const bookings = new BookingService({ store, scheduling, contacts, calendar, now: clock.now, newId: () => `b${++n}` });
   await contacts.putField("serviceArea", { label: "Service area", askable: true });
   await scheduling.putProfile("sam", { displayName: "Sam", bookable: true, timezone: CHICAGO });
-  await scheduling.putType("visit", { name: "Visit", slug: "visit", hosts: { members: ["sam"] }, settings: { length: "60m", slotStep: "60m", minNotice: "0m" } });
+  await scheduling.putType("visit", { name: "Visit", slug: "visit", hosts: { members: ["sam"] }, maxActivePerContact: 5, settings: { length: "60m", slotStep: "60m", minNotice: "0m" } });
   const person = async (email: string, area?: string) => {
     const one = await contacts.findOrCreate({ email, name: email.split("@")[0]!, origin: "public_link" });
     if (area) await contacts.record(one.id, "serviceArea", area, "person");
@@ -91,6 +91,18 @@ describe("asking for a time", () => {
     expect((await bookings.request({ type: "visit", contact: ana, start: TUE_9, origin: "member", by: member })).outcome).toBe("confirmed");
     asked = true;
     expect((await bookings.request({ type: "visit", contact: ana, start: TUE_10, origin: "public_link", by: them })).outcome).toBe("pending");
+  });
+
+  it("limits how many one person may hold at once, but not the team booking for them", async () => {
+    const { bookings, scheduling, person } = await build();
+    await scheduling.putType("visit", { maxActivePerContact: 1 });
+    const ana = await person("ana@example.com");
+    const first = await bookings.request({ type: "visit", contact: ana, start: TUE_9, origin: "link", by: them });
+    await expect(bookings.request({ type: "visit", contact: ana, start: TUE_10, origin: "public_link", by: them })).rejects.toThrow(/already a booking of Visit/);
+    expect((await bookings.request({ type: "visit", contact: ana, start: TUE_10, origin: "member", by: member })).outcome).toBe("confirmed");
+    await bookings.cancel(first.booking.id, { kind: "contact", id: ana });
+    await bookings.cancel((await bookings.list({ contact: ana, statuses: ["confirmed"] }))[0]!.id, member);
+    expect((await bookings.request({ type: "visit", contact: ana, start: TUE_11, origin: "link", by: them })).outcome).toBe("confirmed");
   });
 
   it("refuses a time already taken, offering what is open nearby, and finds the first booking again by its id", async () => {

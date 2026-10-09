@@ -687,7 +687,8 @@ const waitFor: ActionExecutor = async (ctx) => {
     }
     case "webhook": {
       const token = env.newId().replace(/-/g, "");
-      const hook = `${env.publicOrigin ?? ""}/api/workflow-hooks/${token}`;
+      /* The workspace in the path, so a host serving several routes it with nobody signed in. */
+      const hook = `${env.publicOrigin ?? ""}/api/workflow-hooks/${encodeURIComponent(env.workspaceId)}/${token}`;
       return waiting(`hook:${token}`, {}, { hook });
     }
     case "record_change": {

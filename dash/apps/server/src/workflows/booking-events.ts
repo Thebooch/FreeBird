@@ -18,8 +18,9 @@ import { RevisionConflict } from "./store.js";
  *    Approve a booking step reads the answer, a wait reads what they did;
  * 4. workflows whose `booking` trigger takes the event open a case, its id
  *    made from the workflow and the event, so delivering twice opens once;
- * 5. the contact's counts move (bookings, cancellations, no-shows);
- * 6. the event is marked delivered.
+ * 5. the host hears of a change they didn't make (once, by the event's id);
+ * 6. the contact's counts move (bookings, cancellations, no-shows);
+ * 7. the event is marked delivered.
  *
  * An event that fails part way is tried again on the next pass; every step
  * above is safe to repeat.
@@ -108,6 +109,9 @@ export class BookingDispatcher {
         }
       }
     }
+
+    /* At most once per event: the notifier keys it by the event's id. */
+    await bookings.links?.bookingChanged(event, booking).catch(() => undefined);
 
     /* Last, so an event handed over again is not counted twice. */
     const previous = typeof event.payload["previous"] === "string" ? event.payload["previous"] : undefined;

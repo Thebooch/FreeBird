@@ -142,12 +142,18 @@ import { CalendarService } from "./calendar/service.js";
 import { schedulingRoutes } from "./routes/scheduling.js";
 import { contactRoutes, type ContactSource } from "./routes/contacts.js";
 import { bookingRoutes } from "./routes/bookings.js";
+import { linkRoutes } from "./routes/links.js";
+import { publicRoutes } from "./routes/public.js";
 import { ContactService } from "./contacts/service.js";
 import { BookingService, bookingsAsBusy } from "./bookings/service.js";
 import { workflowBookings } from "./bookings/row.js";
 import { BookingDispatcher } from "./workflows/booking-events.js";
 import { BOOKING_RECIPES } from "./workflows/recipes.js";
 import { MemoryBookingStore, type BookingStore } from "./bookings/store.js";
+import { BookingLinks } from "./bookings/links.js";
+import { brandOf, notConnectedNotifier, type Brand, type TeamNotifier } from "./bookings/notify.js";
+import { MemoryRateLimiter, type RateLimiter } from "./public/limits.js";
+import { MemoryPublicTokenStore, type PublicTokenStore } from "./public/tokens.js";
 import { MemoryContactStore, type ContactStore } from "./contacts/store.js";
 import { SchedulingService, type WorkspaceMember } from "./scheduling/service.js";
 import { MemorySchedulingStore, type SchedulingStore } from "./scheduling/store.js";
@@ -430,6 +436,16 @@ export interface BuildServerOptions {
   readonly outreach?: OutreachSender;
   /** Where this server is reached from outside, for webhook addresses a Wait step hands out. */
   readonly publicOrigin?: string;
+  /** Hashes of the links people open without signing in: booking pages and approval links (`public/tokens.ts`). Memory unless supplied. */
+  readonly tokens?: PublicTokenStore;
+  /** Tells the team about bookings: approval requests, reminders, decisions, changes. Comms supplies it; absent, nothing is sent and every request still waits in Waiting for you. */
+  readonly notifier?: TeamNotifier;
+  /** The workspace's name and color on its public pages and in its messages. Plain defaults unless supplied. */
+  readonly brand?: () => Promise<Partial<Brand>>;
+  /** Where people open the booking and approval pages (`/p/…`): the web app's origin. Default: `publicOrigin`, else http://localhost:5400. */
+  readonly pagesOrigin?: string;
+  /** Rate limits for the public pages. One server's own count unless supplied. */
+  readonly rateLimiter?: RateLimiter;
   /**
    * The shape each endpoint was accepted in, and any change seen since
    * (`drift/`). Memory unless supplied: tests and embedders get a store that
@@ -1143,11 +1159,13 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     return out;
   };
   void app.register(contactRoutes({ contacts, policy, sources: contactSources }));
+  /* Who is in the workspace: hosts, and who may answer an approval. Without sign-in, the one person this server answers to. */
+  const workspaceMembers = options.members ?? (async () => [{ userId: LOCAL_USER_ID, email: "", role: "owner" as const }]);
   /* Scheduling: who can be booked, on what terms (`scheduling/`). */
   const scheduling = new SchedulingService({
     store: options.scheduling ?? new MemorySchedulingStore(),
     calendar: workflowEnv.calendar,
-    members: options.members ?? (async () => [{ userId: LOCAL_USER_ID, email: "", role: "owner" as const }]),
+    members: workspaceMembers,
     factKinds: () => contacts.factKinds(),
     contacts,
     bookings: bookingsAsBusy(bookingStore),
@@ -1167,9 +1185,40 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         (one) => one.enabled && !one.parked && one.trigger.kind === "booking" && one.trigger.events.includes("requested") && (one.trigger.types.length === 0 || one.trigger.types.includes(type)),
       ),
   });
-  bookingsForWorkflows = workflowBookings({ service: bookings, contacts, scheduling });
+  /* Links people open without signing in, and the notices that carry them (`bookings/links.ts`, `routes/public.ts`). */
+  const publicTokens = options.tokens ?? new MemoryPublicTokenStore();
+  const brand = async () => brandOf(await options.brand?.().catch(() => ({})));
+  const bookingLinks = new BookingLinks({
+    tokens: publicTokens,
+    bookings,
+    scheduling,
+    contacts,
+    members: workspaceMembers,
+    notifier: options.notifier ?? notConnectedNotifier,
+    brand,
+    workspace: options.workspace?.id ?? LOCAL_WORKSPACE_ID,
+    origin: (options.pagesOrigin ?? options.publicOrigin ?? "http://localhost:5400").replace(/\/+$/, ""),
+    now: () => Date.now(),
+  });
+  bookingsForWorkflows = workflowBookings({ service: bookings, contacts, scheduling, linkFor: (booking) => bookingLinks.bookingLink(booking), links: bookingLinks });
   bookingDispatcher = new BookingDispatcher({ env: workflowEnv, engine: workflowEngine, store: bookingStore, bookings: bookingsForWorkflows, contacts });
   void app.register(bookingRoutes({ bookings, policy }));
+  void app.register(linkRoutes({ links: bookingLinks, bookings, tasks: workflowEnv.tasks, policy }));
+  void app.register(
+    publicRoutes({
+      workspace: options.workspace?.id ?? LOCAL_WORKSPACE_ID,
+      bookings,
+      scheduling,
+      contacts,
+      tokens: publicTokens,
+      links: bookingLinks,
+      tasks: workflowEnv.tasks,
+      members: workspaceMembers,
+      brand,
+      limiter: options.rateLimiter ?? new MemoryRateLimiter(),
+      now: () => Date.now(),
+    }),
+  );
   void app.register(schedulingRoutes({ scheduling, policy }));
   const workflowRunner = new WorkflowRunner({
     ...workflowStarter,

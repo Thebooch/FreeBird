@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Principal } from "@freebirdai/dash-spec";
 import type { FastifyInstance, InjectOptions } from "fastify";
+import { isPublicUrl, publicWorkspaceOf } from "../identity/public.js";
 import type { IdentityResolver } from "../identity/resolver.js";
 
 /**
@@ -27,6 +28,12 @@ export interface WorkspaceHostOptions {
   readonly identity: IdentityResolver;
   /** The server for one workspace, built the first time a member of it asks. */
   readonly build: (workspace: string) => FastifyInstance | Promise<FastifyInstance>;
+  /**
+   * Whether a workspace is real, for public pages: they name their workspace
+   * in the path with nobody signed in, so a made-up name must not open a
+   * server. Absent: every well-formed name is taken as real.
+   */
+  readonly exists?: (workspace: string) => Promise<boolean>;
   /** A workspace asked nothing for this long is closed. Twenty minutes unless said. */
   readonly idleMs?: number;
   readonly now?: () => number;
@@ -74,6 +81,13 @@ export class WorkspaceHost {
     return held.app;
   }
 
+  /** A workspace a public page may name: well formed, and one this host has. */
+  private async isReal(workspace: string): Promise<boolean> {
+    if (!isWorkspaceId(workspace)) return false;
+    if (this.held.has(workspace) || !this.options.exists) return true;
+    return this.options.exists(workspace).catch(() => false);
+  }
+
   /** Who sent a request, by the host's own resolver: null when nobody can be named. */
   private async principalOf(request: {
     readonly headers: Readonly<Record<string, string | string[] | undefined>>;
@@ -85,6 +99,16 @@ export class WorkspaceHost {
   /** One request, answered by its workspace's server, streaming and all. */
   async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
+      /* A public page names its workspace in the path and is answered with no principal (`identity/public.ts`). */
+      if (isPublicUrl(request.url ?? "/")) {
+        const workspace = publicWorkspaceOf(request.url ?? "/");
+        if (!workspace || !(await this.isReal(workspace))) {
+          response.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: "Not found." }));
+          return;
+        }
+        (await this.appFor(workspace)).routing(request, response);
+        return;
+      }
       const principal = await this.principalOf({ headers: request.headers, url: request.url ?? "/" });
       if (!principal || !isWorkspaceId(principal.workspaceId)) {
         response.writeHead(401, { "content-type": "application/json" }).end(JSON.stringify({ error: "Sign in to continue." }));
@@ -102,6 +126,14 @@ export class WorkspaceHost {
   /** The same, in process: what tests and a caller without a socket use. */
   async inject(options: InjectOptions & { readonly headers?: Record<string, string> }): Promise<{ statusCode: number; json: () => unknown; body: string }> {
     const url = typeof options.url === "string" ? options.url : "/";
+    if (isPublicUrl(url)) {
+      const workspace = publicWorkspaceOf(url);
+      if (!workspace || !(await this.isReal(workspace))) {
+        const body = JSON.stringify({ error: "Not found." });
+        return { statusCode: 404, body, json: () => JSON.parse(body) as unknown };
+      }
+      return (await this.appFor(workspace)).inject(options);
+    }
     const principal = await this.principalOf({ headers: { ...options.headers }, url });
     if (!principal || !isWorkspaceId(principal.workspaceId)) {
       const body = JSON.stringify({ error: "Sign in to continue." });

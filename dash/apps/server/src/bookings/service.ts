@@ -1,4 +1,5 @@
 import {
+  ACTIVE_BOOKING_STATUSES,
   durationMs,
   holdsOf,
   type AppointmentType,
@@ -221,6 +222,13 @@ export class BookingService {
     const type = await this.typeOf(input.type);
     if (!type.active) throw new BookingError(`${type.name} isn't taking bookings.`, 409);
     const contact = await this.deps.contacts.require(input.contact);
+    /* How many a person may hold at once. The team, and workflows they set up, aren't limited. */
+    if (input.origin !== "member" && input.origin !== "workflow") {
+      const active = await this.deps.store.list({ contact: contact.id, statuses: [...ACTIVE_BOOKING_STATUSES], limit: 50 });
+      if (active.filter((one) => one.type.id === type.id).length >= type.maxActivePerContact) {
+        throw new BookingError(`There's already ${type.maxActivePerContact === 1 ? "a booking" : `${type.maxActivePerContact} bookings`} of ${type.name} for you. Change or cancel ${type.maxActivePerContact === 1 ? "it" : "one"} instead.`, 409);
+      }
+    }
     const facts = await this.factsFor(contact.id, type, input.answers);
     const slot = await this.slotAt(type, facts, input.start);
     const option = slot ? await this.pickOption(type, slot, contact.id, input.host) : null;
@@ -372,7 +380,14 @@ export class BookingService {
     id: string,
     by: BookingActor,
     times: ReadonlyArray<{ readonly start: number; readonly host?: string }>,
-    options: { readonly message?: string; readonly reason?: string; readonly holdFor?: string; readonly allowOutside?: boolean } = {},
+    options: {
+      readonly message?: string;
+      readonly reason?: string;
+      readonly holdFor?: string;
+      readonly allowOutside?: boolean;
+      /** Only from these statuses: an approval answers a request still pending, never one answered meanwhile. */
+      readonly onlyFrom?: readonly BookingStatus[];
+    } = {},
   ): Promise<Booking> {
     if (times.length === 0) throw new BookingError("Offer at least one time.");
     if (times.length > 10) throw new BookingError("Offer at most ten times.");
@@ -387,6 +402,7 @@ export class BookingService {
       async (booking, tx) => {
         /* Pending, or turned down or declined already: the team can still offer other times. */
         if (!["pending", "denied", "expired", "cancelled"].includes(booking.status)) return this.refuse(booking, "given other times");
+        if (options.onlyFrom && !options.onlyFrom.includes(booking.status)) return this.refuse(booking, "given other times");
         const now = this.deps.now();
         const holdUntil = iso(now + Math.max(Math.min(ms(booking.settings.suggestionHoldFor), options.holdFor ? ms(options.holdFor) : Number.POSITIVE_INFINITY), 60_000));
         const suggestions = [];

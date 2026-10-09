@@ -28,13 +28,15 @@ export const workflowBookings = (deps: {
   readonly scheduling: SchedulingService;
   /** The person's status page for a booking, once public pages exist. */
   readonly linkFor?: (booking: Booking) => Promise<string | undefined>;
+  readonly links?: WorkflowBookings["links"];
 }): WorkflowBookings => {
   const zoneOf = async (contact: string, fallback = "UTC") => (await deps.contacts.get(contact))?.timezone ?? fallback;
   return {
     service: deps.service,
     contact: (id) => deps.contacts.get(id),
+    ...(deps.links ? { links: deps.links } : {}),
     when: async (at, contact) => whenWords(at, await zoneOf(contact)),
-    row: async (booking) => {
+    row: async (booking, known = {}) => {
       const contact = await deps.contacts.get(booking.contact);
       const type = await deps.scheduling.findType(booking.type.id);
       const host = await deps.scheduling.findProfile(booking.host);
@@ -42,7 +44,7 @@ export const workflowBookings = (deps: {
         const best = fieldValueOf(field);
         return best ? [[key, best.value]] : [];
       }));
-      const link = (await deps.linkFor?.(booking)) ?? "";
+      const link = known.link || ((await deps.linkFor?.(booking)) ?? "");
       return {
         ...booking,
         when: whenWords(booking.start, booking.timezone),

@@ -418,6 +418,8 @@ export const ACTION_VARIANTS: readonly ActionVariant[] = [
       { key: "assignee", label: "Who", kind: "text", placeholder: "the host, or anyone who manages the calendar" },
       { key: "allowSuggest", label: "They may offer other times", kind: "boolean", default: true },
       { key: "allowDeny", label: "They may deny it", kind: "boolean", default: true },
+      { key: "maxSuggestions", label: "Most times they may offer", kind: "number", default: 3 },
+      { key: "remindAfter", label: "Remind them after", kind: "duration", help: "One reminder, then keep waiting. Default: no reminder." },
       { key: "timeout", label: "Give up after", kind: "duration", help: "Default: when the booking's hold runs out." },
     ],
     outcomes: ["approved", "suggested", "denied", "withdrawn", "timed_out"],

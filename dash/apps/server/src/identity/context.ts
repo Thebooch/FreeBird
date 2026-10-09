@@ -1,6 +1,7 @@
 import type { Permission, Principal, Scope } from "@freebirdai/dash-spec";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Policy } from "./policy.js";
+import { installPublicRoutes, isPublicUrl } from "./public.js";
 import type { IdentityResolver } from "./resolver.js";
 
 declare module "fastify" {
@@ -19,7 +20,13 @@ declare module "fastify" {
  */
 export const installIdentity = (app: FastifyInstance, identity: IdentityResolver): void => {
   app.decorateRequest("principal", null);
+  installPublicRoutes(app);
   app.addHook("onRequest", async (request, reply) => {
+    /* A public page's API answers with no principal: what it may do comes from its token. Only routes marked public. */
+    if (isPublicUrl(request.url)) {
+      if (request.routeOptions.config?.public === true) return undefined;
+      return reply.status(404).send({ error: "Not found." });
+    }
     const principal = await identity.resolve({ headers: request.headers, url: request.url });
     if (!principal) {
       return reply.status(401).send({ error: "Sign in to continue." });

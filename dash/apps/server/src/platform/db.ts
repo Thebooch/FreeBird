@@ -236,6 +236,20 @@ CREATE TABLE IF NOT EXISTS dash_booking_events (
 );
 CREATE INDEX IF NOT EXISTS dash_booking_events_pending ON dash_booking_events (workspace, at) WHERE NOT delivered;
 
+CREATE TABLE IF NOT EXISTS dash_public_tokens (
+  workspace TEXT NOT NULL,
+  id        TEXT NOT NULL,
+  hash      TEXT NOT NULL,
+  purpose   TEXT NOT NULL,
+  task      TEXT,
+  contact   TEXT,
+  record    JSONB NOT NULL,
+  PRIMARY KEY (workspace, id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS dash_public_tokens_hash ON dash_public_tokens (workspace, hash);
+CREATE INDEX IF NOT EXISTS dash_public_tokens_task ON dash_public_tokens (workspace, task) WHERE task IS NOT NULL;
+CREATE INDEX IF NOT EXISTS dash_public_tokens_contact ON dash_public_tokens (workspace, contact) WHERE contact IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS dash_invites (
   id         TEXT PRIMARY KEY,
   workspace  TEXT NOT NULL,

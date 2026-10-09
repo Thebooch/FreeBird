@@ -126,26 +126,51 @@ const askBooking: ActionExecutor = async (ctx) => {
   if (!booking) return failed("There is no booking to approve: set which one.");
   const question = text(ctx.settings["question"]).trim() || `Approve ${booking.type.name}, ${await bookings.when(booking.start, booking.contact)}?`;
   const assignee = text(ctx.settings["assignee"]).trim();
+  const held = ctx.task.body.kind === "booking" ? ctx.task.body : undefined;
+  const maxSuggestions = Math.min(Math.max(Math.round(Number(ctx.settings["maxSuggestions"])) || 3, 1), 10);
   const body = {
     kind: "booking" as const,
     booking: booking.id,
     question,
     allowSuggest: ctx.settings["allowSuggest"] !== false,
     allowDeny: ctx.settings["allowDeny"] !== false,
+    maxSuggestions,
     ...(assignee ? { assignee } : {}),
+    ...(held?.remindedAt ? { remindedAt: held.remindedAt } : {}),
+  };
+  const ask = { id: ctx.task.id, attempt: ctx.attempt.id };
+  /* Every link handed out stops answering, and those asked hear how it ended. Never fails the step. */
+  const close = async (outcome: string) => {
+    await bookings.links?.closeAsks(ask, booking, outcome).catch(() => undefined);
   };
   const settled = await decided(booking, bookings);
   if (settled) {
+    await close(settled.outcome);
     return done(
       settled.outcome,
       { status: "done", title: `${question} ${ANSWER_WORDS[settled.outcome] ?? ""}`.trim(), body: { ...body, answer: settled.outcome }, ...(settled.outputs["by"] ? { approvedBy: text(settled.outputs["by"]) } : {}) },
       settled.outputs,
     );
   }
-  if (ctx.resume?.kind === "timeout") return done("timed_out", { status: "timed_out", title: `No answer: ${question}`, body });
   const timeout = durationMs(ctx.settings["timeout"]);
   const deadline = timeout ? iso(Date.parse(ctx.task.createdAt) + timeout) : (booking.holdUntil ?? iso(ctx.env.now() + 2 * 86_400_000));
-  return { kind: "wait", wait: { kind: "ask", key: `booking:${booking.id}`, deadline }, task: { status: "waiting", title: question, body } };
+  /* One reminder, `remindAfter` in: the step waits until then, reminds, and waits again for the real deadline. */
+  const remindAfter = durationMs(ctx.settings["remindAfter"]);
+  const remindAt = remindAfter && !body.remindedAt ? Date.parse(ctx.task.createdAt) + remindAfter : null;
+  const now = ctx.env.now();
+  if (ctx.resume?.kind === "timeout") {
+    if (remindAt !== null && now < Date.parse(deadline)) {
+      await bookings.links?.remindTeam({ task: ask, booking, deadline, ...(assignee ? { assignee } : {}) }).catch(() => undefined);
+      const reminded = { ...body, remindedAt: iso(now) };
+      return { kind: "wait", wait: { kind: "ask", key: `booking:${booking.id}`, deadline }, task: { status: "waiting", title: question, body: reminded } };
+    }
+    await close("timed_out");
+    return done("timed_out", { status: "timed_out", title: `No answer: ${question}`, body });
+  }
+  /* The first time it waits, each member who may answer is sent their own link. Asked once per try of the step. */
+  await bookings.links?.askTeam({ task: ask, booking, deadline, ...(assignee ? { assignee } : {}) }).catch(() => undefined);
+  const waitUntil = remindAt !== null && remindAt < Date.parse(deadline) ? iso(Math.max(remindAt, now)) : deadline;
+  return { kind: "wait", wait: { kind: "ask", key: `booking:${booking.id}`, deadline: waitUntil }, task: { status: "waiting", title: question, body } };
 };
 
 /* ── waits ─────────────────────────────────────────────────────────────── */
@@ -338,7 +363,9 @@ const decisionFacts = async (ctx: ActionContext, bookings: WorkflowBookings, boo
   const about = aboutId ? (ctx.case.data.steps[aboutId] as Record<string, unknown> | undefined) : undefined;
   const aboutTask = about && typeof about["task"] === "string" ? await ctx.env.tasks.get(about["task"]) : null;
   const outcome = aboutTask?.outcome ?? booking.status;
-  const row = await bookings.row(booking);
+  /* The case's own booking already carries the link it was given when the case started. */
+  const caseRow = ctx.case.data.row as Record<string, unknown>;
+  const row = await bookings.row(booking, caseRow["id"] === booking.id && typeof caseRow["link"] === "string" ? { link: caseRow["link"] } : {});
   const when = text(row["when"]);
   const suggestions = (row["suggestions"] as Array<{ when: string }> | undefined) ?? [];
   const pick = booking.status === "suggested" || booking.status === "denied" || booking.status === "expired";

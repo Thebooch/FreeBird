@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { BookingLinks } from "../bookings/links.js";
+import { DEFAULT_BRAND, type TeamNotice } from "../bookings/notify.js";
 import { workflowBookings } from "../bookings/row.js";
+import { MemoryPublicTokenStore } from "../public/tokens.js";
 import { BookingService, bookingsAsBusy } from "../bookings/service.js";
 import { MemoryBookingStore } from "../bookings/store.js";
 import { ContactService } from "../contacts/service.js";
@@ -91,6 +94,65 @@ describe("a booking's workflows", () => {
     expect(f.sent[0]).toMatchObject({ channel: "text", to: "+15125550142" });
     expect(f.sent[0]!.text).toContain("Wed, Oct 7, 9:00 AM CDT");
     expect(f.sent[0]!.text).not.toContain("https://book.example");
+  });
+
+  it("asks the host once with a link of their own, reminds once, and closes every link when it ends", async () => {
+    const { f, service, contacts, scheduling, store, ana } = await setup();
+    const notices: TeamNotice[] = [];
+    const tokens = new MemoryPublicTokenStore();
+    const links = new BookingLinks({
+      tokens,
+      bookings: service,
+      scheduling,
+      contacts,
+      members: async () => [{ userId: "sam", email: "sam@acme.test", role: "owner" }],
+      notifier: { notify: async (notice) => (notices.push(notice), { status: "queued" }) },
+      brand: async () => DEFAULT_BRAND,
+      workspace: "acme",
+      origin: "https://dash.example.com",
+      now: () => f.clock.now,
+    });
+    const rows = workflowBookings({ service, contacts, scheduling, linkFor: (booking) => links.bookingLink(booking), links });
+    Object.assign(f.env, { bookings: () => rows });
+    const dispatcher = new BookingDispatcher({ env: f.env, engine: f.engine, store, bookings: rows, contacts });
+    await f.env.store.put(
+      workflowOf({
+        id: "approval",
+        trial: 0,
+        trigger: bookingTrigger(["requested"]),
+        nodes: [node("approve", "ask.booking", { remindAfter: "2h" })],
+        edges: [{ id: "e1", from: "trigger", outcome: "next", to: "approve" }],
+      }),
+    );
+    const { booking } = await service.request({ type: "visit", contact: ana, start: WED_9, origin: "public_link", by: them });
+    await dispatcher.deliver();
+    await dispatcher.deliver();
+    expect(notices.map((one) => one.kind)).toEqual(["approval_request"]);
+    expect(notices[0]).toMatchObject({ member: { id: "sam", name: "Sam" }, subject: "Approve Ana Lopez: Visit, Wed, Oct 7, 9:00 AM CDT" });
+    expect(notices[0]!.html).toContain("https://dash.example.com/p/acme/approve/");
+    expect(notices[0]!.text).toContain("?choice=suggest");
+
+    const [one] = await f.env.cases.list({ workflow: "approval" });
+    expect(one!.data.row["link"]).toMatch(/^https:\/\/dash\.example\.com\/p\/acme\/book\/[A-Za-z0-9_-]{43}$/);
+    expect(one!.waiting).toMatchObject({ deadline: new Date(f.clock.now + 2 * HOUR).toISOString() });
+
+    /* Two hours on, nobody has answered: one reminder, and it waits on for the hold. */
+    f.clock.now += 2 * HOUR + 1;
+    await f.engine.timeouts();
+    expect(notices.map((one) => one.kind)).toEqual(["approval_request", "approval_reminder"]);
+    expect(notices[1]!.text).toContain("The hold runs out in 22 hours.");
+    const waiting = (await f.env.cases.get(one!.id))!;
+    expect(waiting.status).toBe("waiting");
+    expect(waiting.waiting).toMatchObject({ deadline: booking.holdUntil });
+
+    await service.deny(booking.id, sam, { message: "Not this week" });
+    await dispatcher.deliver();
+    expect((await f.env.cases.get(one!.id))!.status).toBe("done");
+    const [asking] = await f.env.tasks.list({ case: one!.id });
+    const handedOut = (await tokens.list({ task: asking!.id })).filter((token) => token.purpose === "approval");
+    expect(handedOut.length).toBeGreaterThanOrEqual(2);
+    expect(handedOut.every((token) => token.revokedAt)).toBe(true);
+    expect(notices.at(-1)).toMatchObject({ kind: "decision_recorded", subject: "You denied Visit for Ana Lopez" });
   });
 
   it("offers other times and hears the person take one, telling them the time and never the team's note", async () => {

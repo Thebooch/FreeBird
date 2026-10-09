@@ -260,13 +260,20 @@ export const workflowRoutes = (deps: {
 
     /* ── events ───────────────────────────────────────────────────── */
 
-    /** A webhook a waiting case was given: wakes it with the body sent. */
-    app.post<{ Params: { token: string }; Body: unknown }>("/api/workflow-hooks/:token", async (request, reply) => {
-      if (!/^[a-zA-Z0-9]{16,64}$/.test(request.params.token)) return reply.status(404).send({ error: "Unknown hook." });
-      const body = request.body && typeof request.body === "object" ? (request.body as Record<string, unknown>) : {};
-      const woken = await engine.emit(`hook:${request.params.token}`, body);
+    /**
+     * A webhook a waiting case was given: wakes it with the body sent. With
+     * its workspace in the path (`/<workspace>/<token>`) a host serving many
+     * workspaces routes it without anyone signed in; the open-source build's
+     * one workspace keeps the shorter form.
+     */
+    const hook = async (token: string, body: unknown, reply: FastifyReply) => {
+      if (!/^[a-zA-Z0-9]{16,64}$/.test(token)) return reply.status(404).send({ error: "Unknown hook." });
+      const payload = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+      const woken = await engine.emit(`hook:${token}`, payload);
       return woken > 0 ? { woken } : reply.status(404).send({ error: "Nothing is waiting on this hook." });
-    });
+    };
+    app.post<{ Params: { token: string }; Body: unknown }>("/api/workflow-hooks/:token", { config: { public: true } }, async (request, reply) => hook(request.params.token, request.body, reply));
+    app.post<{ Params: { workspace: string; token: string }; Body: unknown }>("/api/workflow-hooks/:workspace/:token", { config: { public: true } }, async (request, reply) => hook(request.params.token, request.body, reply));
 
     /** Something happened that cases may wait on: `{ key, payload }`. Comms posts replies here as `reply:<conversation>`. */
     app.post<{ Body: { key?: unknown; payload?: Record<string, unknown> } }>(

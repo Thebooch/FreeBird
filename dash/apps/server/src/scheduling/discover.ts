@@ -48,7 +48,9 @@ export const discover = async (
     readonly contact?: string;
     /** Answers given for this booking. */
     readonly request?: Readonly<Record<string, unknown>>;
-    readonly range: { readonly from: number; readonly to: number };
+    readonly range: { readonly from: number; readonly to: number; readonly all?: boolean; readonly limit?: number };
+    /** Only these hosts' times: a person picking their host, or a member offering their own. */
+    readonly hosts?: readonly string[];
   },
 ): Promise<Discovery> => {
   const { type } = input;
@@ -60,7 +62,8 @@ export const discover = async (
   const defOf = (path: string) => (path.startsWith("contact.") ? defs.find((def) => def.key === path.split(".")[1]) : undefined);
 
   let facts = await factsFor();
-  let result = await deps.scheduling.slots(type, facts, input.range);
+  const options = input.hosts ? { hosts: input.hosts } : {};
+  let result = await deps.scheduling.slots(type, facts, input.range, options);
   let matched: MatchOutcome | undefined;
 
   if (input.contact && result.needs.some((path) => (defOf(path)?.sources.length ?? 0) > 0)) {
@@ -69,7 +72,7 @@ export const discover = async (
       matched = await deps.contacts.match(input.contact);
       if (matched === "linked") {
         facts = await factsFor();
-        result = await deps.scheduling.slots(type, facts, input.range);
+        result = await deps.scheduling.slots(type, facts, input.range, options);
       }
     }
   }

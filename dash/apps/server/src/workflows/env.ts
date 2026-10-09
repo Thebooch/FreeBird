@@ -2,6 +2,7 @@ import type { CommitResult, WriteIntent, WriteReview } from "@freebirdai/connect
 import type { RecordReader, WriteOnBehalfOf, WriteVia } from "@freebirdai/connect/host";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
 import type { ActionModelTask, AgentSpec, Booking, Contact, Principal, SharedAgentKnowledge } from "@freebirdai/dash-spec";
+import type { BookingLinks } from "../bookings/links.js";
 import type { BookingService } from "../bookings/service.js";
 import type { Policy } from "../identity/policy.js";
 import type { CalendarStore, CaseStore, SignalStore, TaskStore, TemplateStore, WorkflowStore } from "./store.js";
@@ -87,11 +88,13 @@ export interface WorkflowEnv {
 /** What workflow steps do with bookings (`bookings/service.ts`, `bookings/row.ts`). */
 export interface WorkflowBookings {
   readonly service: BookingService;
-  /** The booking shaped for steps: `when`, `link`, `contact.*`, `type.*`, `host.name`. */
-  row(booking: Booking): Promise<Record<string, unknown>>;
+  /** The booking shaped for steps: `when`, `link`, `contact.*`, `type.*`, `host.name`. A link already handed out is passed in rather than minted again. */
+  row(booking: Booking, known?: { readonly link?: string }): Promise<Record<string, unknown>>;
   /** A time as the contact reads it: "Tue, Oct 13, 9:00 AM CDT". */
   when(at: number | string, contact: string): Promise<string>;
   contact(id: string): Promise<Contact | null>;
+  /** Approval links and the team's notices. Absent: members answer in Waiting for you only. */
+  readonly links?: BookingLinks;
 }
 
 /**

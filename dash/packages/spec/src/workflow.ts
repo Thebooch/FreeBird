@@ -545,7 +545,11 @@ export const taskBodySchema = z.discriminatedUnion("kind", [
     answer: z.string().optional(),
     allowSuggest: z.boolean().default(true),
     allowDeny: z.boolean().default(true),
+    /** How many other times a member may offer. */
+    maxSuggestions: z.number().int().min(1).max(10).default(3),
     assignee: z.string().optional(),
+    /** When the people asked were reminded, once. */
+    remindedAt: z.string().optional(),
   }),
 ]);
 export type TaskBody = z.infer<typeof taskBodySchema>;

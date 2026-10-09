@@ -170,7 +170,14 @@ export class ContactService implements ContactDirectory {
 
   /* ── finding and making ──────────────────────────────────────────────── */
 
-  async findOrCreate(input: { readonly email?: string; readonly phone?: string; readonly name?: string; readonly origin: ContactOrigin }): Promise<Contact> {
+  async findOrCreate(input: {
+    readonly email?: string;
+    readonly phone?: string;
+    readonly name?: string;
+    readonly origin: ContactOrigin;
+    /** Typed on a public page by someone not yet verified: a contact found is used as it is, never added to. */
+    readonly unverified?: boolean;
+  }): Promise<Contact> {
     const email = input.email ? normalizeEmail(input.email) : null;
     const phone = input.phone ? normalizePhone(input.phone, this.callingCode) : null;
     if (input.email && !email) throw new ContactError("That is not an email address.");
@@ -179,7 +186,7 @@ export class ContactService implements ContactDirectory {
 
     for (let attempt = 0; attempt < 4; attempt++) {
       const found = (email ? await this.deps.store.byKey(`email:${email}`) : null) ?? (phone ? await this.deps.store.byKey(`phone:${phone}`) : null);
-      if (found) return this.fillIn(found, { email, phone, name: input.name });
+      if (found) return input.unverified ? found : this.fillIn(found, { email, phone, name: input.name });
       const now = iso(this.deps.now());
       const made: Contact = {
         id: `ct-${this.deps.newId()}`,

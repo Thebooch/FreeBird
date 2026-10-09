@@ -24,6 +24,7 @@ import { isWorkspaceId } from "./workspaces.js";
 import { DbAgentStore } from "../agents/store.js";
 import { DbCalendarStore, DbCaseStore, DbSignalStore, DbTaskStore, DbTemplateStore, DbWorkflowStore } from "../workflows/store.js";
 import { DbBookingStore } from "../bookings/store.js";
+import { DbPublicTokenStore } from "../public/tokens.js";
 import { DbContactStore } from "../contacts/store.js";
 import { DbSchedulingStore } from "../scheduling/store.js";
 import { DbSnapshotStore } from "../history/store.js";
@@ -72,6 +73,8 @@ export interface LocalPlatform {
    * workspace's are `platform` itself, with its data where it always was.
    */
   forWorkspace(workspace: string): DashPlatform;
+  /** Whether this host has a workspace by that name, for public pages that name one with nobody signed in. */
+  workspaceExists(workspace: string): Promise<boolean>;
   /** Close what was opened, on the way out: an embedded database killed open can be damaged. */
   close(): Promise<void>;
 }
@@ -154,6 +157,7 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     scheduling: new DbSchedulingStore(db, workspace),
     contacts: new DbContactStore(db, workspace),
     bookings: new DbBookingStore(db, workspace),
+    tokens: new DbPublicTokenStore(db, workspace),
   });
 
   /**
@@ -359,6 +363,9 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     ...(memberships ? { members: async () => (await memberships.members(defaultWorkspace)).map((one) => ({ userId: one.userId, email: one.email, role: one.role })) } : {}),
     /* Its rows under `local`, as they always were, whatever the workspace is called. */
     workspace: { id: defaultWorkspace, key: LOCAL_WORKSPACE_ID },
+    /* How public pages and messages look, and where people open them. */
+    brand: async () => ({ ...(process.env.DASH_BRAND_NAME ? { name: process.env.DASH_BRAND_NAME } : {}), ...(process.env.DASH_BRAND_ACCENT ? { accent: process.env.DASH_BRAND_ACCENT } : {}) }),
+    ...(process.env.DASH_PAGES_ORIGIN ? { pagesOrigin: process.env.DASH_PAGES_ORIGIN } : {}),
     // The keeper: see `keeper/keeper.ts`. On here, off in tests.
     keeper: true,
     // Workflows start by themselves on their schedules and API triggers. On here, off in tests.
@@ -404,6 +411,10 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     return {
       ...platform,
       workspace: { id: workspace, key: workspace },
+      brand: async () => {
+        const name = (await memberships?.workspace(workspace))?.name;
+        return name ? { name } : {};
+      },
       ...(memberships ? { members: async () => (await memberships.members(workspace)).map((one) => ({ userId: one.userId, email: one.email, role: one.role })) } : {}),
       store: new SpecStore(join(filesAt, "dashboards"), join(filesAt, "connections"), join(filesAt, "reports")),
       keys: new KeyStore(vault, join(stateAt, "vault.json")),
@@ -428,6 +439,7 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     ...(identity ? { identity } : {}),
     defaultWorkspace,
     forWorkspace,
+    workspaceExists: async (workspace) => workspace === defaultWorkspace || Boolean(await memberships?.workspace(workspace)),
     close: async () => {
       await chat?.close().catch(() => undefined);
       await dashDb?.close().catch(() => undefined);
