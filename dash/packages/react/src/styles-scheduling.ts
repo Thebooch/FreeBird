@@ -150,7 +150,7 @@ select.dash-sched-input { width: auto; min-width: 180px; cursor: pointer; }
 /* Chips: values in a rule, fields to group by, skipped dates. */
 .dash-sched-chips {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px; min-height: 34px; box-sizing: border-box;
-  border: 1px solid var(--dash-border-strong); border-radius: var(--dash-radius-sm); background: var(--dash-surface); width: min(100%, 420px);
+  border: 1px solid var(--dash-border-strong); border-radius: var(--dash-radius-sm); background: var(--dash-surface); width: 100%;
 }
 .dash-sched-chips:focus-within { border-color: var(--dash-accent); box-shadow: 0 0 0 3px var(--dash-ring); }
 .dash-sched-chip {

@@ -18,7 +18,7 @@
  * Communications has a place of its own (`#/comms`), because calls, texts and
  * email are a lot to watch.
  */
-export const AGENT_SECTIONS = ["overview", "workflows", "agents", "calendar"] as const;
+export const AGENT_SECTIONS = ["overview", "workflows", "agents", "calendar", "contacts"] as const;
 export type AgentSection = (typeof AGENT_SECTIONS)[number];
 /** Where an unknown section lands: the Overview, first in the list. */
 export const DEFAULT_AGENT_SECTION: AgentSection = "overview";

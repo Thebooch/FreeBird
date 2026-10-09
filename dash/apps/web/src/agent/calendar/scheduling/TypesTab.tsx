@@ -1,4 +1,4 @@
-import { LAYER_KEYS, LOCATION_KINDS, LOCATION_WORDS, resolveSettings, type AppointmentType, type WeeklyHours } from "@freebirdai/dash-spec";
+import { LAYER_KEYS, LOCATION_KINDS, LOCATION_WORDS, resolveSettings, type AppointmentType, type Contact, type WeeklyHours } from "@freebirdai/dash-spec";
 import { Badge, Button, EmptyState, ErrorState } from "@freebirdai/dash-components";
 import { useEffect, useMemo, useState } from "react";
 import { api, type SchedulingOverview, type SlotPreview } from "../../../api.js";
@@ -8,6 +8,7 @@ import { HoursEditor, SettingsEditor } from "./editors.jsx";
 import { ColorPicker, FormRow, NumberInput, SheetSection, TextInput } from "./inputs.jsx";
 import { durationWords, factLabel, newId, slugOf, typeHostsWords } from "./model.js";
 import { SetupSheet } from "./SetupSheet.jsx";
+import { useContactFields } from "./useContactFields.js";
 import { useSetup } from "./useSetup.js";
 
 /**
@@ -107,6 +108,7 @@ const TypeSheet = ({
   readonly onSaved: (stay: boolean) => Promise<void>;
 }): JSX.Element => {
   const held = setup.types.find((one) => one.id === id);
+  const fields = useContactFields();
   const [draft, setDraft] = useState<Draft>(
     held ?? {
       id,
@@ -238,6 +240,7 @@ const TypeSheet = ({
           keys={LAYER_KEYS.type.filter((key) => !["holdFor", "suggestionHoldFor", "cancelCutoff", "rescheduleCutoff", "maxReschedules", "showHostName"].includes(key))}
           value={draft.settings}
           inherited={inherited}
+          fields={fields}
           onChange={(settings) => set("settings", settings)}
         />
         <FormRow label="Only at certain times" hint="Narrows the hosts' hours for this type: consultations only in the morning." wide={Boolean(draft.hours)}>
@@ -339,7 +342,19 @@ const TypeSheet = ({
 
 const TypePreview = ({ setup, type }: { readonly setup: SchedulingOverview; readonly type: AppointmentType }): JSX.Element => {
   const [facts, setFacts] = useState<Array<{ path: string; value: string }>>([{ path: "contact.address.postalCode", value: "" }]);
+  const [mode, setMode] = useState<"facts" | "contact">("facts");
+  const [contactId, setContactId] = useState("");
+  const [query, setQuery] = useState("");
+  const [people, setPeople] = useState<Contact[]>([]);
+  const fields = useContactFields();
   const [all, setAll] = useState(false);
+
+  /* Contacts to try it as, searched as the name is typed. */
+  useEffect(() => {
+    if (mode !== "contact") return;
+    const timer = setTimeout(() => void api.contacts({ ...(query.trim() ? { search: query.trim() } : {}), limit: 20 }).then((page) => setPeople(page.contacts), () => undefined), 200);
+    return () => clearTimeout(timer);
+  }, [mode, query]);
   const [result, setResult] = useState<SlotPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -361,10 +376,14 @@ const TypePreview = ({ setup, type }: { readonly setup: SchedulingOverview; read
 
   useEffect(() => {
     let cancelled = false;
+    if (mode === "contact" && !contactId) {
+      setResult(null);
+      return undefined;
+    }
     setLoading(true);
     const timer = setTimeout(() => {
       void api
-        .previewType(type.id, { ...scope, all })
+        .previewType(type.id, mode === "contact" ? { contactId, all } : { ...scope, all })
         .then((next) => !cancelled && (setResult(next), setError(null)))
         .catch((cause: unknown) => !cancelled && setError(cause instanceof Error ? cause.message : String(cause)))
         .finally(() => !cancelled && setLoading(false));
@@ -373,7 +392,7 @@ const TypePreview = ({ setup, type }: { readonly setup: SchedulingOverview; read
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [type.id, scope, all]);
+  }, [type.id, scope, all, mode, contactId]);
 
   const days = useMemo(() => {
     const out = new Map<string, NonNullable<typeof result>["slots"][number][]>();
@@ -386,31 +405,60 @@ const TypePreview = ({ setup, type }: { readonly setup: SchedulingOverview; read
   const name = (member: string) => setup.profiles.find((one) => one.member === member)?.displayName ?? member;
 
   return (
-    <SheetSection title="Try it out" description="Type what is known about a person, and see the next two weeks as they would. Saved changes only." testId="type-preview">
-      <div className="dash-sched-facts">
-        {facts.map((fact, index) => (
-          <div key={index} className="dash-sched-facts__row">
-            <TextInput value={fact.path} placeholder="contact.category" onChange={(path) => setFacts(facts.map((one, at) => (at === index ? { ...one, path: path.trim() } : one)))} />
-            <TextInput value={fact.value} placeholder="Value" onChange={(value) => setFacts(facts.map((one, at) => (at === index ? { ...one, value } : one)))} testId="preview-value" />
-            <button type="button" className="dash-sched-rule__remove" aria-label="Remove" onClick={() => setFacts(facts.filter((_, at) => at !== index))}>
-              ✕
-            </button>
+    <SheetSection title="Try it out" description="Type what is known about a person, or pick a contact, and see the next two weeks as they would. Saved changes only." testId="type-preview">
+      <Segmented
+        label="Try it as"
+        value={mode}
+        options={[
+          { value: "facts", label: "Facts I type" },
+          { value: "contact", label: "A contact" },
+        ]}
+        onChange={setMode}
+      />
+      {mode === "contact" ? (
+        <div className="dash-sched-facts">
+          <div className="dash-sched-facts__row">
+            <TextInput value={query} placeholder="Find a contact by name, email or phone" onChange={setQuery} testId="preview-contact-search" />
+            <select className="dash-sched-input" aria-label="Contact" value={contactId} onChange={(event) => setContactId(event.target.value)} data-testid="preview-contact">
+              <option value="">{people.length === 0 ? "No contacts found" : "Pick a contact…"}</option>
+              {people.map((one) => (
+                <option key={one.id} value={one.id}>
+                  {[one.name, one.emails[0] ?? one.phones[0]].filter(Boolean).join(" · ")}
+                </option>
+              ))}
+            </select>
           </div>
-        ))}
-        <div className="dash-sched-inline">
-          <Button size="sm" tone="ghost" onClick={() => setFacts([...facts, { path: "contact.category", value: "" }])}>
-            + Fact
-          </Button>
-          <Switch checked={all} onChange={setAll} label="See all times" hint="Ignore 'only grouped times'" />
-          {loading && <span className="dash-cal__sync" role="status" aria-label="Loading" />}
+          <div className="dash-sched-inline">
+            <Switch checked={all} onChange={setAll} label="See all times" hint="Ignore 'only grouped times'" />
+            {loading && <span className="dash-cal__sync" role="status" aria-label="Loading" />}
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="dash-sched-facts">
+          {facts.map((fact, index) => (
+            <div key={index} className="dash-sched-facts__row">
+              <TextInput value={fact.path} placeholder="contact.category" onChange={(path) => setFacts(facts.map((one, at) => (at === index ? { ...one, path: path.trim() } : one)))} />
+              <TextInput value={fact.value} placeholder="Value" onChange={(value) => setFacts(facts.map((one, at) => (at === index ? { ...one, value } : one)))} testId="preview-value" />
+              <button type="button" className="dash-sched-rule__remove" aria-label="Remove" onClick={() => setFacts(facts.filter((_, at) => at !== index))}>
+                ✕
+              </button>
+            </div>
+          ))}
+          <div className="dash-sched-inline">
+            <Button size="sm" tone="ghost" onClick={() => setFacts([...facts, { path: "contact.category", value: "" }])}>
+              + Fact
+            </Button>
+            <Switch checked={all} onChange={setAll} label="See all times" hint="Ignore 'only grouped times'" />
+            {loading && <span className="dash-cal__sync" role="status" aria-label="Loading" />}
+          </div>
+        </div>
+      )}
       {error && <p className="dash-cal-form__error">{error}</p>}
       {result && (
         <div className="dash-sched-preview">
           {result.needs.length > 0 && (
             <p className="dash-cal-sheet__callout">
-              It would ask for: {result.needs.map((path) => factLabel(path)).join(", ")}.
+              {mode === "contact" ? "Not known about them yet, so these times may change" : "It would ask for"}: {result.needs.map((path) => factLabel(path, fields)).join(", ")}.
             </p>
           )}
           {result.consolidatedOnly && <p className="dash-hint">Showing only grouped times{result.more ? "; others are behind “See all times”." : "."}</p>}

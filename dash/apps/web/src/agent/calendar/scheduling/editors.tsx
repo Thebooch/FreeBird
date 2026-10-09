@@ -2,7 +2,7 @@ import { WEEKDAYS, minutesOf, type Consolidation, type PartialSettings, type Res
 import { Button } from "@freebirdai/dash-components";
 import { Segmented, Switch } from "../controls.jsx";
 import { ChipsInput, DurationInput, FormRow, NumberInput } from "./inputs.jsx";
-import { APPROVAL_WORDS, DAY_LABELS, FACT_SUGGESTIONS, LAYER_WORDS, SETTING_META, settingWords } from "./model.js";
+import { APPROVAL_WORDS, DAY_LABELS, FACT_SUGGESTIONS, LAYER_WORDS, SETTING_META, settingWords, type FieldOption } from "./model.js";
 import { RuleBuilder } from "./RuleBuilder.jsx";
 
 /* ── settings, layer by layer ──────────────────────────────────────────── */
@@ -24,7 +24,7 @@ export const SettingsEditor = ({
   readonly value: PartialSettings;
   readonly inherited: { readonly settings: ResolvedSettings; readonly from: Readonly<Record<keyof SchedulingSettings, SettingsLayer>> };
   readonly onChange: (value: PartialSettings) => void;
-  readonly fields?: ReadonlyArray<{ readonly path: string; readonly label: string }>;
+  readonly fields?: readonly FieldOption[];
 }): JSX.Element => {
   const set = (key: keyof SchedulingSettings, next: unknown) => {
     const copy: Record<string, unknown> = { ...value };
@@ -32,7 +32,7 @@ export const SettingsEditor = ({
     else copy[key] = next;
     onChange(copy as PartialSettings);
   };
-  const paths = [...fields.map((one) => one.path), ...FACT_SUGGESTIONS.map((one) => one.path)];
+  const paths = [...new Set([...fields.map((one) => one.path), ...FACT_SUGGESTIONS.map((one) => one.path)])];
 
   return (
     <div className="dash-sched-settings">

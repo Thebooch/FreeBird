@@ -9,6 +9,7 @@ import { ColorPicker, FormRow, NumberInput, SheetSection, TextInput, TimeZoneSel
 import { blockSummary, browserZone, newId, placementWords, todayIn } from "./model.js";
 import { RuleBuilder } from "./RuleBuilder.jsx";
 import { SetupSheet } from "./SetupSheet.jsx";
+import { useContactFields } from "./useContactFields.js";
 import { useSetup } from "./useSetup.js";
 
 /**
@@ -127,6 +128,7 @@ const BlockSheet = ({
   readonly onSaved: () => Promise<void>;
 }): JSX.Element => {
   const held = setup.blocks.find((one) => one.id === id);
+  const fields = useContactFields();
   const [draft, setDraft] = useState<BlockDraft>(held ?? { id, name: "", color: 3, description: "", kind: "set", rules: { all: [], any: [] }, becomes: [], whenUnknown: "exclude", settings: {} });
   const set = <K extends keyof BlockDraft>(key: K, value: BlockDraft[K]) => setDraft((prev) => ({ ...prev, [key]: value }));
   const setBlocks = setup.blocks.filter((one) => one.kind === "set" && one.id !== id);
@@ -171,7 +173,7 @@ const BlockSheet = ({
 
       {draft.kind === "set" && (
         <SheetSection title="Who may book here" description="Leave empty and anyone may. Fields come from the person's contact record, filled in from a matched record in your connections, from what they told us, or by a team member.">
-          <RuleBuilder value={draft.rules} onChange={(rules) => set("rules", rules)} testId="block-rules" />
+          <RuleBuilder value={draft.rules} fields={fields} onChange={(rules) => set("rules", rules)} testId="block-rules" />
           <FormRow label="When a field is not known" hint="Before the person has said, or a record has been matched.">
             {(field) => (
               <select id={field} className="dash-sched-input" value={draft.whenUnknown} onChange={(event) => set("whenUnknown", event.target.value as BlockDraft["whenUnknown"])}>
@@ -249,7 +251,7 @@ const BlockSheet = ({
           </FormRow>
           {draft.kind === "set" && (
             <>
-              <SettingsEditor keys={LAYER_KEYS.block} value={draft.settings} inherited={inherited} onChange={(settings) => set("settings", settings)} />
+              <SettingsEditor keys={LAYER_KEYS.block} value={draft.settings} inherited={inherited} fields={fields} onChange={(settings) => set("settings", settings)} />
               <FormRow label="Most bookings each time" hint="Per occurrence: at most four installs in each Tuesday block.">
                 {(field) => (
                   <NumberInput

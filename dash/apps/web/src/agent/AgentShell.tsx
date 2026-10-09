@@ -2,6 +2,7 @@ import { EmptyState } from "@freebirdai/dash-components";
 import { AGENT_SECTIONS, type AgentSection, type Route } from "../route.js";
 import { AgentsSection } from "./AgentsSection.jsx";
 import { CalendarSection } from "./calendar/CalendarSection.jsx";
+import { ContactsSection } from "./contacts/ContactsSection.jsx";
 import { OverviewSection } from "./overview/OverviewSection.jsx";
 import { WorkflowsSection } from "./workflows/WorkflowsSection.jsx";
 
@@ -19,6 +20,7 @@ export const SECTION_TITLES: Readonly<Record<AgentSection, string>> = {
   workflows: "Workflows",
   agents: "Agents",
   calendar: "Calendar",
+  contacts: "Contacts",
 };
 
 export const AGENT_NAV_SECTIONS = AGENT_SECTIONS.map((id) => ({ id, title: SECTION_TITLES[id] }));
@@ -45,6 +47,8 @@ export const AgentShell = ({
           <WorkflowsSection selected={route.id ?? null} onNavigate={onNavigate} />
         ) : route.section === "calendar" ? (
           <CalendarSection tab={route.id ?? null} onNavigate={onNavigate} />
+        ) : route.section === "contacts" ? (
+          <ContactsSection tab={route.id ?? null} onNavigate={onNavigate} />
         ) : (
           <EmptyState
             glyph={coming?.glyph ?? "✦"}

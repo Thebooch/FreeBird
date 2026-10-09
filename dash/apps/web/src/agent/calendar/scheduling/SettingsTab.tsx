@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "../../../api.js";
 import { SettingsEditor } from "./editors.jsx";
 import { SheetSection } from "./inputs.jsx";
+import { useContactFields } from "./useContactFields.js";
 import { useSetup } from "./useSetup.js";
 
 /**
@@ -22,6 +23,7 @@ const GROUPS: ReadonlyArray<{ readonly title: string; readonly description: stri
 
 export const SettingsTab = (): JSX.Element => {
   const { setup, error, canManage, reload } = useSetup();
+  const fields = useContactFields();
   const [draft, setDraft] = useState<PartialSettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
@@ -74,7 +76,7 @@ export const SettingsTab = (): JSX.Element => {
       <div className="dash-sched-settings-page">
         {GROUPS.map((group) => (
           <SheetSection key={group.title} title={group.title} description={group.description}>
-            <SettingsEditor keys={group.keys.filter((key) => LAYER_KEYS.workspace.includes(key))} value={draft} inherited={inherited} onChange={setDraft} />
+            <SettingsEditor keys={group.keys.filter((key) => LAYER_KEYS.workspace.includes(key))} value={draft} inherited={inherited} fields={fields} onChange={setDraft} />
           </SheetSection>
         ))}
       </div>

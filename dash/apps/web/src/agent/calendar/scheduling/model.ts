@@ -188,6 +188,15 @@ const pathWords = (path: string): string => {
   return `${head}: ${rest.map((segment) => segment.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/_/g, " ").toLowerCase()).join(" ")}`;
 };
 
+/** A contact field the workspace has set up, as rule and grouping editors offer it. */
+export interface FieldOption {
+  readonly path: string;
+  readonly label: string;
+  /** Rules on it count only a record's or a member's value by default. */
+  readonly trust?: "any" | "record";
+  readonly choices?: readonly string[];
+}
+
 export const factLabel = (path: string, extra: ReadonlyArray<{ path: string; label: string }> = []): string =>
   [...extra, ...FACT_SUGGESTIONS].find((one) => one.path === path)?.label ?? pathWords(path);
 

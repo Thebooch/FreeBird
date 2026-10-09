@@ -7,6 +7,13 @@ import type {
   Block,
   CalendarEntryInput,
   CalendarEvent,
+  Contact,
+  ContactFieldDef,
+  ContactFieldDefInput,
+  ContactInput,
+  ContactMatchRule,
+  ContactMatchRuleInput,
+  MatchOutcome,
   Occurrence,
   PartialSettings,
   Placement,
@@ -143,6 +150,30 @@ export interface HostOccurrence extends Occurrence {
   readonly host: string;
   readonly kind: Block["kind"];
   readonly setTo?: string;
+}
+
+/** Contact field definitions and match rules, as `GET /api/contacts/setup` serves them. */
+export interface ContactSetup {
+  readonly fields: ContactFieldDef[];
+  readonly matchRules: ContactMatchRule[];
+}
+
+/** A record type a contact field can come from, with its fields and values seen in them. */
+export interface ContactSource {
+  readonly connection: string;
+  readonly title: string;
+  readonly entities: ReadonlyArray<{
+    readonly entity: string;
+    readonly name: string;
+    readonly fields: ReadonlyArray<{ readonly path: string; readonly label?: string; readonly samples: readonly string[] }>;
+  }>;
+}
+
+/** Which record a contact is linked to. */
+export interface RecordTarget {
+  readonly connection: string;
+  readonly entity: string;
+  readonly recordId: string;
 }
 
 /** Open times, as the slot engine offers them. */
@@ -1419,7 +1450,7 @@ export const api = {
   removePool: (id: string): Promise<{ removed: true }> => request(`/api/scheduling/pools/${encodeURIComponent(id)}`, { method: "DELETE" }),
   putType: (id: string, type: Partial<AppointmentType>): Promise<AppointmentType> => request(`/api/scheduling/types/${encodeURIComponent(id)}`, { ...json(type), method: "PUT" }),
   removeType: (id: string): Promise<{ removed: true }> => request(`/api/scheduling/types/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  previewType: (id: string, input: { from?: string; to?: string; contact?: Record<string, unknown>; request?: Record<string, unknown>; all?: boolean }): Promise<SlotPreview> =>
+  previewType: (id: string, input: { from?: string; to?: string; contact?: Record<string, unknown>; contactId?: string; request?: Record<string, unknown>; all?: boolean }): Promise<SlotPreview> =>
     request(`/api/scheduling/types/${encodeURIComponent(id)}/preview`, json(input)),
   putBlock: (id: string, block: Partial<Block>): Promise<Block> => request(`/api/scheduling/blocks/${encodeURIComponent(id)}`, { ...json(block), method: "PUT" }),
   removeBlock: (id: string): Promise<{ removed: true }> => request(`/api/scheduling/blocks/${encodeURIComponent(id)}`, { method: "DELETE" }),
@@ -1429,6 +1460,34 @@ export const api = {
   splitPlacement: (id: string, date: string, newId: string): Promise<{ before: Placement; after: Placement }> =>
     request(`/api/scheduling/placements/${encodeURIComponent(id)}/split`, json({ date, newId })),
   occurrences: (from: string, to: string): Promise<HostOccurrence[]> => request(`/api/scheduling/occurrences?${new URLSearchParams({ from, to })}`),
+
+  /* ── contacts ──────────────────────────────────────────────────────── */
+
+  contacts: (query: { search?: string; limit?: number; after?: string } = {}): Promise<{ contacts: Contact[]; next?: string }> =>
+    request(
+      `/api/contacts?${new URLSearchParams({
+        ...(query.search ? { search: query.search } : {}),
+        ...(query.limit ? { limit: String(query.limit) } : {}),
+        ...(query.after ? { after: query.after } : {}),
+      }).toString()}`,
+    ),
+  contact: (id: string): Promise<Contact> => request(`/api/contacts/${encodeURIComponent(id)}`),
+  /** A 409 carries the contact that already has the email or phone, as `detail.holder`. */
+  createContact: (input: ContactInput): Promise<Contact> => request("/api/contacts", json(input)),
+  updateContact: (id: string, input: ContactInput): Promise<Contact> => request(`/api/contacts/${encodeURIComponent(id)}`, { ...json(input), method: "PUT" }),
+  forgetContact: (id: string): Promise<{ ok: true }> => request(`/api/contacts/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  matchContact: (id: string): Promise<{ outcome: MatchOutcome; contact: Contact }> => request(`/api/contacts/${encodeURIComponent(id)}/match`, json({})),
+  refreshContact: (id: string): Promise<{ contact: Contact; problems: string[] }> => request(`/api/contacts/${encodeURIComponent(id)}/refresh`, json({})),
+  linkContact: (id: string, target: RecordTarget): Promise<{ contact: Contact; problems: string[] }> => request(`/api/contacts/${encodeURIComponent(id)}/link`, json(target)),
+  unlinkContact: (id: string, target: RecordTarget): Promise<Contact> => request(`/api/contacts/${encodeURIComponent(id)}/unlink`, json(target)),
+  contactSetup: (): Promise<ContactSetup> => request("/api/contacts/setup"),
+  contactSources: (): Promise<ContactSource[]> => request("/api/contacts/sources"),
+  putContactField: (key: string, input: ContactFieldDefInput): Promise<ContactFieldDef> =>
+    request(`/api/contacts/fields/${encodeURIComponent(key)}`, { ...json(input), method: "PUT" }),
+  removeContactField: (key: string): Promise<{ ok: true }> => request(`/api/contacts/fields/${encodeURIComponent(key)}`, { method: "DELETE" }),
+  putMatchRule: (id: string | null, input: ContactMatchRuleInput): Promise<ContactMatchRule> =>
+    id ? request(`/api/contacts/match-rules/${encodeURIComponent(id)}`, { ...json(input), method: "PUT" }) : request("/api/contacts/match-rules", json(input)),
+  removeMatchRule: (id: string): Promise<{ ok: true }> => request(`/api/contacts/match-rules/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   /** Who this browser is talking as. */
   me: (): Promise<{ principal: Principal | null; mode: "local" | "managed" }> => request("/api/me"),

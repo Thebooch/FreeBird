@@ -344,7 +344,7 @@ describe("contact routes", () => {
 
       const twice = await editor.inject({ method: "POST", url: "/api/contacts", payload: { name: "Ana", emails: ["ana@example.com"] } });
       expect(twice.statusCode).toBe(409);
-      expect(twice.json().holder).toBe(ana.id);
+      expect(twice.json().detail.holder).toBe(ana.id);
 
       expect((await viewer.inject({ method: "GET", url: "/api/contacts?search=ana" })).json().contacts.map((one: { id: string }) => one.id)).toEqual([ana.id]);
       expect((await viewer.inject({ method: "GET", url: `/api/contacts/${ana.id}` })).json().name).toBe("Ana");

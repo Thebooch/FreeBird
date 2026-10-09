@@ -2,7 +2,7 @@ import { FIELD_RULE_OPS, type FieldRule, type RuleSet } from "@freebirdai/dash-s
 import { Button } from "@freebirdai/dash-components";
 import { useId, useState } from "react";
 import { ChipsInput } from "./inputs.jsx";
-import { FACT_SUGGESTIONS, OP_WORDS } from "./model.js";
+import { FACT_SUGGESTIONS, OP_WORDS, type FieldOption } from "./model.js";
 
 const TAKES_NO_VALUES = new Set<FieldRule["op"]>(["exists", "missing"]);
 const ONE_VALUE = new Set<FieldRule["op"]>(["equals", "not_equals", "gte", "lte"]);
@@ -22,13 +22,19 @@ export const RuleBuilder = ({
 }: {
   readonly value: RuleSet;
   readonly onChange: (rules: RuleSet) => void;
-  /** Contact fields this workspace has set up, offered first. */
-  readonly fields?: ReadonlyArray<{ readonly path: string; readonly label: string }>;
+  /** Contact fields this workspace has set up, offered first, with their trust and choices. */
+  readonly fields?: readonly FieldOption[];
   readonly testId?: string;
 }): JSX.Element => {
   const listId = useId();
   const [advanced, setAdvanced] = useState(Boolean(value.expression?.trim()));
-  const suggestions = [...fields, ...FACT_SUGGESTIONS.filter((one) => !fields.some((field) => field.path === one.path))];
+  const suggestions: readonly FieldOption[] = [...fields, ...FACT_SUGGESTIONS.filter((one) => !fields.some((field) => field.path === one.path))];
+  /** A rule on a field set to trust records starts out wanting a record's value. */
+  const ruleOn = (rule: FieldRule, field: string): FieldRule => {
+    const { trusted: _trusted, ...rest } = rule;
+    const option = suggestions.find((one) => one.path === field);
+    return { ...rest, field, ...(option?.trust === "record" || (option === undefined && rule.trusted) ? { trusted: true } : {}) };
+  };
 
   const group = (key: "all" | "any", title: string, hint: string) => {
     const rules = value[key];
@@ -48,7 +54,7 @@ export const RuleBuilder = ({
               list={listId}
               placeholder="contact.category"
               aria-label="Field"
-              onChange={(event) => set(rules.map((one, at) => (at === index ? { ...one, field: event.target.value.trim() } : one)))}
+              onChange={(event) => set(rules.map((one, at) => (at === index ? ruleOn(one, event.target.value.trim()) : one)))}
             />
             <select
               className="dash-sched-input dash-sched-rule__op"
@@ -67,6 +73,7 @@ export const RuleBuilder = ({
             ) : (
               <ChipsInput
                 values={rule.values.map(String)}
+                {...(suggestions.find((one) => one.path === rule.field)?.choices ? { suggestions: suggestions.find((one) => one.path === rule.field)!.choices! } : {})}
                 placeholder={ONE_VALUE.has(rule.op) ? "A value" : rule.op === "between" ? "From, to" : "Values: Enter after each"}
                 onChange={(values) => set(rules.map((one, at) => (at === index ? { ...one, values: ONE_VALUE.has(rule.op) ? values.slice(-1) : values } : one)))}
               />
@@ -80,7 +87,7 @@ export const RuleBuilder = ({
             </button>
           </div>
         ))}
-        <Button size="sm" tone="ghost" onClick={() => set([...rules, { field: suggestions[0]?.path ?? "contact.category", op: "in", values: [] }])} testId={`rules-add-${key}`}>
+        <Button size="sm" tone="ghost" onClick={() => set([...rules, ruleOn({ field: "", op: "in", values: [] }, suggestions[0]?.path ?? "contact.category")])} testId={`rules-add-${key}`}>
           + Add a condition
         </Button>
       </div>

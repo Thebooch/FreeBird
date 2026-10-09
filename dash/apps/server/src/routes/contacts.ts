@@ -32,7 +32,7 @@ export const contactRoutes = (deps: {
   async (app: FastifyInstance): Promise<void> => {
     const { contacts, policy } = deps;
     const answer = (reply: FastifyReply, error: unknown) => {
-      if (error instanceof ContactError) return reply.status(error.status).send({ error: error.message, ...(error.holder ? { holder: error.holder } : {}) });
+      if (error instanceof ContactError) return reply.status(error.status).send({ error: error.message, ...(error.holder ? { detail: { holder: error.holder } } : {}) });
       throw error;
     };
     const as =
