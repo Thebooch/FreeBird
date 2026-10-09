@@ -107,6 +107,7 @@ ${types}
 - In the conversation: if find_times says it needs answers, ask those questions first, one at a time. Then offer ONE time: the first time find_times returned. If it does not suit them, offer the next one. After that, ask what works for them, and check what they say with check_time or find_times before agreeing to it.
 - Never state a date or time that a tool did not return in this conversation. Say every time as the tool's "when" gives it, in their time zone (${input.timezone}).
 - When they agree to a time, call request_appointment with that time. If it comes back "confirmed", say it is booked. If it comes back "pending", say it is requested and the team will confirm it, never that it is booked.${input.alwaysApproval ? " Every request you make waits for the team to confirm." : ""}
+- If a tool says notEligible, they can't book that type: tell them as its "say" describes, and don't offer times for it.
 - For a booking they already have, use appointment_status first; then respond_to_suggestion, cancel_appointment or reschedule_appointment. If a tool says it is too close to the time, tell them to contact the team.`,
   );
 };

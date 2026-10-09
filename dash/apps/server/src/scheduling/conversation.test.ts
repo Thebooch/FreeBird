@@ -86,7 +86,7 @@ const setup = async (options: { readonly mode?: "auto" | "approve" | "deny"; rea
   const contact = (await contacts.get(ana.id))!;
   const reply = (llm: LlmAdapter, message: string, history: ReadonlyArray<{ from: "them" | "agent"; text: string }> = []) =>
     replyWithScheduling({ bookings, scheduling, contacts, links, now, llm }, { agent, tool, contact, message, history, channel: "text" });
-  return { bookings, contacts, reply, agent, ana: ana.id };
+  return { bookings, contacts, scheduling, reply, agent, ana: ana.id };
 };
 
 describe("an agent booking in a conversation", () => {
@@ -159,6 +159,21 @@ describe("an agent booking in a conversation", () => {
     expect(used[0]!.result).toMatchObject({ useLink: true });
     expect(String(used[1]!.result["link"])).toMatch(/^https:\/\/dash\.example\.com\/p\/acme\/book\/[A-Za-z0-9_-]{43}$/);
     expect(run.seen[0]!.messages[0]!.content).toContain('Home visit (60 min, type id "visit"): send their booking link.');
+  });
+
+  it("says plainly when a type doesn't take them, in the type's own words, and offers no time", async () => {
+    const { reply, scheduling } = await setup();
+    await scheduling.putType("visit", { eligibility: { rules: { all: [{ field: "request.partySize", op: "lte", values: [8] }], any: [] }, message: "For parties of 9 or more, please call us." } });
+    const run = scripted([
+      { call: [{ name: "find_times", args: { type: "visit" } }] },
+      { call: [{ name: "find_times", args: { type: "visit", answers: { "request.partySize": "12" } } }] },
+      { say: "For a party of 12, please call us and we'll arrange it." },
+    ]);
+    const out = await reply(run.llm, "Table for 12 on Friday?");
+    const used = (out as unknown as { used: Array<{ result: Record<string, unknown> }> }).used;
+    expect(used[0]!.result).toMatchObject({ needs: [expect.objectContaining({ field: "request.partySize" })] });
+    expect(used[1]!.result).toEqual({ notEligible: true, say: "Tell them, in your own words: For parties of 9 or more, please call us." });
+    expect(run.seen[0]!.messages[0]!.content).toContain("If a tool says notEligible");
   });
 
   it("follows the agent tool's mode: approve asks for every booking, deny never books", async () => {

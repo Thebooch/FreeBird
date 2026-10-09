@@ -5,6 +5,7 @@ import { api, type SchedulingOverview, type SlotPreview } from "../../../api.js"
 import { Segmented, Switch } from "../controls.jsx";
 import { colorVar } from "../model.js";
 import { HoursEditor, SettingsEditor } from "./editors.jsx";
+import { RuleBuilder } from "./RuleBuilder.jsx";
 import { ColorPicker, FormRow, NumberInput, SheetSection, TextInput } from "./inputs.jsx";
 import { durationWords, factLabel, newId, slugOf, typeHostsWords } from "./model.js";
 import { SetupSheet } from "./SetupSheet.jsx";
@@ -123,6 +124,7 @@ const TypeSheet = ({
       linkOnRequest: true,
       publicLink: false,
       intake: [],
+      eligibility: { rules: { all: [], any: [] }, whenUnknown: "exclude", message: "" },
       location: { kind: "ask" },
       maxActivePerContact: 1,
       requireVerifiedContact: false,
@@ -333,6 +335,43 @@ const TypeSheet = ({
         )}
       </SheetSection>
 
+      <SheetSection
+        title="Who can book"
+        description="Leave empty and anyone can. Rules read the person's contact fields and the answers to this type's questions, like party size is at most 8. The team's bookings follow it too: for cases a person should decide, use approval rules under Booking terms instead."
+        testId="type-eligibility"
+      >
+        <RuleBuilder
+          value={draft.eligibility.rules}
+          fields={[
+            ...draft.intake
+              .filter((question) => question.field.startsWith("request.") && question.field.length > 8)
+              .map((question) => ({ path: question.field, label: question.ask?.trim() || factLabel(question.field) })),
+            ...fields,
+          ]}
+          onChange={(rules) => set("eligibility", { ...draft.eligibility, rules })}
+          testId="type-rules"
+        />
+        <FormRow label="When an answer is not known" hint="Before they have said, or a record has been matched.">
+          {(field) => (
+            <select id={field} className="dash-sched-input" value={draft.eligibility.whenUnknown} onChange={(event) => set("eligibility", { ...draft.eligibility, whenUnknown: event.target.value as Draft["eligibility"]["whenUnknown"] })}>
+              <option value="exclude">Ask first, and offer nothing until then</option>
+              <option value="include">Let them book</option>
+              <option value="approval">Let them book, pending approval</option>
+            </select>
+          )}
+        </FormRow>
+        <FormRow label="What to tell people it doesn't take" hint="Shown on the booking page and said by agents. Leave empty for a plain “contact us”." wide>
+          {() => (
+            <TextInput
+              value={draft.eligibility.message}
+              placeholder="For parties of 9 or more, please call us and we'll arrange it."
+              onChange={(message) => set("eligibility", { ...draft.eligibility, message })}
+              testId="type-eligibility-message"
+            />
+          )}
+        </FormRow>
+      </SheetSection>
+
       {!isNew && held && <TypePreview setup={setup} type={held} />}
     </SetupSheet>
   );
@@ -462,7 +501,11 @@ const TypePreview = ({ setup, type }: { readonly setup: SchedulingOverview; read
             </p>
           )}
           {result.consolidatedOnly && <p className="dash-hint">Showing only grouped times{result.more ? "; others are behind “See all times”." : "."}</p>}
-          {days.length === 0 ? (
+          {result.notEligible ? (
+            <p className="dash-cal-sheet__callout">
+              Who can book doesn't take {mode === "contact" ? "this contact" : "these facts"}, so nothing is offered{type.eligibility.message ? `. They're told: “${type.eligibility.message}”` : "."}
+            </p>
+          ) : days.length === 0 ? (
             <p className="dash-sched-empty">No open times in the next two weeks for these facts.</p>
           ) : (
             days.map(([day, slots]) => (

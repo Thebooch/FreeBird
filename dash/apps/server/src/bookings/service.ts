@@ -16,7 +16,7 @@ import type { ContactService } from "../contacts/service.js";
 import { assignHost } from "../scheduling/assign.js";
 import { factString, type Facts } from "../scheduling/rules.js";
 import type { SchedulingService, SlotContext } from "../scheduling/service.js";
-import type { Busy, HostOption, Slot } from "../scheduling/slots.js";
+import { typeEligibility, type Busy, type HostOption, type Slot } from "../scheduling/slots.js";
 import { BookingConflict, type BookingStore, type BookingTx } from "./store.js";
 
 /**
@@ -230,6 +230,10 @@ export class BookingService {
       }
     }
     const facts = await this.factsFor(contact.id, type, input.answers);
+    /* Who can book the type at all, said plainly rather than as "that time isn't open". */
+    const who = typeEligibility(type, facts, this.deps.now());
+    if (who.verdict === "ineligible") throw new BookingError(type.eligibility.message || `${type.name} isn't something you can book.`, 403);
+    if (who.verdict === "unknown") throw new BookingError(`${type.name} needs a few answers before it can be booked.`, 409);
     const slot = await this.slotAt(type, facts, input.start);
     const option = slot ? await this.pickOption(type, slot, contact.id, input.host) : null;
     if (!option) throw new BookingError("That time isn't open.", 409, await this.nearby(type, facts, input.start));

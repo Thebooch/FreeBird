@@ -78,10 +78,15 @@ export const RuleBuilder = ({
                 onChange={(values) => set(rules.map((one, at) => (at === index ? { ...one, values: ONE_VALUE.has(rule.op) ? values.slice(-1) : values } : one)))}
               />
             )}
-            <label className="dash-sched-rule__trust" title="Count only a value from a matched record or a team member, not what the person said about themselves.">
-              <input type="checkbox" checked={rule.trusted === true} onChange={(event) => set(rules.map((one, at) => (at === index ? { ...one, trusted: event.target.checked || undefined } : one)))} />
-              From records only
-            </label>
+            {/* A booking's answers are always the person's own words: only a contact field can come from a record. */}
+            {rule.field.startsWith("request.") ? (
+              <span className="dash-sched-rule__trust" aria-hidden="true" />
+            ) : (
+              <label className="dash-sched-rule__trust" title="Count only a value from a matched record or a team member, not what the person said about themselves.">
+                <input type="checkbox" checked={rule.trusted === true} onChange={(event) => set(rules.map((one, at) => (at === index ? { ...one, trusted: event.target.checked || undefined } : one)))} />
+                From records only
+              </label>
+            )}
             <button type="button" className="dash-sched-rule__remove" aria-label="Remove this condition" onClick={() => set(rules.filter((_, at) => at !== index))}>
               ✕
             </button>

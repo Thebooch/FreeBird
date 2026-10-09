@@ -156,6 +156,33 @@ describe("a contact's booking link", () => {
     expect(JSON.stringify((await team.inject({ method: "GET", url: `/api/contacts/${ana.id}/links` })).json())).not.toContain(token);
   });
 
+  it("asks the type's questions its rules need, and tells someone it doesn't take why, offering nothing", async () => {
+    const { team, world, contact, linkFor, at } = await setup("eligibility");
+    await team.inject({
+      method: "PUT",
+      url: "/api/scheduling/types/visit",
+      payload: {
+        intake: [{ field: "request.partySize", required: true, ask: "How many in your party?" }],
+        eligibility: { rules: { all: [{ field: "request.partySize", op: "lte", values: [8] }], any: [] }, message: "For parties of 9 or more, please call us." },
+      },
+    });
+    const ana = await contact("Ana Ruiz", "ana@example.com");
+    const { token } = await linkFor(ana.id);
+    const times = (request?: Record<string, string>) =>
+      world.inject({ method: "POST", url: `/api/public/acme/book/${token}/times`, payload: { from: at(0), to: new Date(Date.parse(at(0)) + DAY).toISOString(), ...(request ? { request } : {}) } });
+
+    const unknown = (await times()).json();
+    expect(unknown.slots).toEqual([]);
+    expect(unknown.questions).toEqual([expect.objectContaining({ field: "request.partySize", question: "How many in your party?", required: true })]);
+    expect((await times({ partySize: "12" })).json()).toEqual({ slots: [], questions: [], consolidatedOnly: false, more: false, notEligible: "For parties of 9 or more, please call us." });
+    const four = (await times({ partySize: "4" })).json();
+    expect(four.slots.length).toBeGreaterThan(0);
+    expect(four.notEligible).toBeUndefined();
+    const refused = await world.inject({ method: "POST", url: `/api/public/acme/book/${token}/request`, payload: { start: four.slots[0].start, request: { partySize: "12" } } });
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json().error).toBe("For parties of 9 or more, please call us.");
+  });
+
   it("limits requests from one address and on one token", async () => {
     const { world } = await setup("limits");
     const url = `/api/public/acme/book/${"y".repeat(43)}/times`;

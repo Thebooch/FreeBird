@@ -279,6 +279,24 @@ export const LOCATION_WORDS: Readonly<Record<(typeof LOCATION_KINDS)[number], st
   ask: "Asked when booking",
 };
 
+/** What a type does when a "Who can book" rule's field has no usable value yet. */
+export const WHEN_UNKNOWN = ["exclude", "include", "approval"] as const;
+
+/**
+ * Who can book a type at all, before any time is looked at: rules over the
+ * contact's fields and this booking's answers (`request.*`, from the type's
+ * questions). "Party size is at most 8", "segment is one of members".
+ */
+export const typeEligibilitySchema = z.object({
+  /** Empty: anyone. */
+  rules: ruleSetSchema.default(EMPTY_RULES),
+  /** A field not known yet: ask first and offer nothing, let them book, or let them book pending approval. */
+  whenUnknown: z.enum(WHEN_UNKNOWN).default("exclude"),
+  /** What someone it doesn't take is told: "For parties of 9 or more, please call us." */
+  message: z.string().trim().max(300).default(""),
+});
+export type TypeEligibility = z.infer<typeof typeEligibilitySchema>;
+
 export const appointmentTypeSchema = z.object({
   id: idSchema,
   name: z.string().trim().min(1).max(80),
@@ -297,6 +315,8 @@ export const appointmentTypeSchema = z.object({
   linkOnRequest: z.boolean().default(true),
   /** A public link anyone can book from. */
   publicLink: z.boolean().default(false),
+  /** Who can book it at all. */
+  eligibility: typeEligibilitySchema.default({}),
   /** Questions asked when booking: `contact.*` or `request.*` fields. */
   intake: z.array(z.object({ field: factPathSchema, required: z.boolean().default(false), ask: z.string().max(300).optional() })).max(20).default([]),
   location: z.object({ kind: z.enum(LOCATION_KINDS), value: z.string().max(300).optional() }).default({ kind: "ask" }),
@@ -335,7 +355,7 @@ export const blockSchema = z
     /** Blank only: the set blocks it may become, first one first. */
     becomes: z.array(idSchema).max(20).default([]),
     /** Set only: what to do when a rule's field has no usable value. */
-    whenUnknown: z.enum(["exclude", "include", "approval"]).default("exclude"),
+    whenUnknown: z.enum(WHEN_UNKNOWN).default("exclude"),
     /** The types bookable here. Absent: every type the host takes. */
     types: z.array(idSchema).max(50).optional(),
     settings: blockSettingsSchema.default({}),

@@ -234,6 +234,32 @@ describe("open times", () => {
     expect(asked.needs).toEqual(["contact.address.postalCode"]);
   });
 
+  it("offers a type only to people its Who can book rules take, asking what it doesn't know", () => {
+    const upToEight = (whenUnknown: "exclude" | "include" | "approval" = "exclude") =>
+      type({ eligibility: { rules: { all: [{ field: "request.partySize", op: "between", values: [1, 8] }], any: [] }, whenUnknown, message: "For parties of 9 or more, please call us." } });
+    const party = (size: string | null) => facts({}, size === null ? {} : { request: { partySize: size } });
+
+    const four = findSlots({ now: NOW, ...tuesday, type: upToEight(), hosts: [host()], blocks: blocksOf(), facts: party("4") });
+    expect(four.slots.length).toBeGreaterThan(0);
+    expect(four.notEligible).toBeUndefined();
+    expect(four.slots.every((one) => !one.approval)).toBe(true);
+
+    /* Not taken: nothing at all, however open the day is, and said so. */
+    expect(findSlots({ now: NOW, ...tuesday, type: upToEight(), hosts: [host()], blocks: blocksOf(), facts: party("12") })).toEqual({ slots: [], needs: [], consolidatedOnly: false, more: false, notEligible: true });
+
+    /* Not known yet: asked for, and then left out, let in, or let in pending approval. */
+    expect(findSlots({ now: NOW, ...tuesday, type: upToEight(), hosts: [host()], blocks: blocksOf(), facts: party(null) })).toMatchObject({ slots: [], needs: ["request.partySize"] });
+    const included = findSlots({ now: NOW, ...tuesday, type: upToEight("include"), hosts: [host()], blocks: blocksOf(), facts: party(null) });
+    expect(included.slots.length).toBeGreaterThan(0);
+    expect(included.needs).toEqual(["request.partySize"]);
+    const pending = findSlots({ now: NOW, ...tuesday, type: upToEight("approval"), hosts: [host()], blocks: blocksOf(), facts: party(null) });
+    expect(pending.slots.length).toBeGreaterThan(0);
+    expect(pending.slots.every((one) => one.approval)).toBe(true);
+
+    /* No rules: anyone. */
+    expect(findSlots({ now: NOW, ...tuesday, type: type(), hosts: [host()], blocks: blocksOf(), facts: party("40") }).slots.length).toBeGreaterThan(0);
+  });
+
   it("needs approval always, or when the rules say, and limits each day and each block occurrence", () => {
     const always = type({ settings: { length: "60m", slotStep: "30m", minNotice: "0m", approval: "always" } });
     expect(findSlots({ now: NOW, ...tuesday, type: always, hosts: [host()], blocks: blocksOf(), facts: austin }).slots.every((one) => one.approval)).toBe(true);

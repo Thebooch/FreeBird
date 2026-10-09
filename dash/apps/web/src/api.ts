@@ -209,6 +209,8 @@ export interface SlotPreview {
   readonly needs: readonly string[];
   readonly consolidatedOnly: boolean;
   readonly more: boolean;
+  /** The type's "Who can book" rules don't take these facts. */
+  readonly notEligible?: boolean;
 }
 
 /** The Overview: see `buildOverview` on the server. */

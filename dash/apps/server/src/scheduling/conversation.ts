@@ -224,6 +224,7 @@ export const schedulingTools = (deps: ConversationDeps, input: Pick<Conversation
         const to = Math.min(instantFrom(dayEnd(args["before"]), zone) ?? from + 14 * DAY, from + 62 * DAY);
         if (to <= from) return { times: [], say: "That range is in the past or empty." };
         const found = await discover({ scheduling: deps.scheduling, contacts: deps.contacts }, { type, contact: contact.id, request, range: { from, to, limit: 400 } });
+        if (found.result.notEligible) return { notEligible: true, say: notEligibleWords(type) };
         if (found.needs.length > 0 && found.result.slots.length === 0) return { needs: found.needs.map((one) => ({ field: one.field, question: one.question, ...(one.choices ? { choices: one.choices } : {}) })), ...(problems.length ? { problems } : {}) };
         const days = new Set((args["weekdays"] as string[] | undefined) ?? []);
         const part = args["partOfDay"] as string | undefined;
@@ -248,6 +249,7 @@ export const schedulingTools = (deps: ConversationDeps, input: Pick<Conversation
         const asked = say(at);
         if (at <= deps.now()) return { open: false, asked, say: "That time has passed." };
         const result = await deps.bookings.slotsFor(type.id, contact.id, { from: Math.max(deps.now(), at - 3 * DAY), to: at + 3 * DAY, all: true });
+        if (result.notEligible) return { open: false, notEligible: true, say: notEligibleWords(type) };
         const exact = result.slots.find((slot) => slot.start === at);
         if (exact) return { open: true, ...time(exact) };
         const before = [...result.slots].reverse().find((slot) => slot.start < at);
@@ -343,6 +345,10 @@ export const schedulingTools = (deps: ConversationDeps, input: Pick<Conversation
 
   return { tools, call, returned, changed };
 };
+
+/** What the agent tells someone a type doesn't take: the type's own words, else a plain hand-off. */
+const notEligibleWords = (type: AppointmentType): string =>
+  type.eligibility.message ? `Tell them, in your own words: ${type.eligibility.message}` : `${type.name} isn't something they can book. Say so kindly, and offer to have the team follow up.`;
 
 /** "2026-10-14" as the start or end of that day; a wall time as it is. */
 const dayStart = (value: unknown): unknown => (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value.trim()) ? `${value.trim()}T00:00` : value);

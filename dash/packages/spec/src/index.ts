@@ -259,10 +259,12 @@ export {
   POOL_ASSIGN_WORDS,
   SETTINGS_LAYERS,
   WEEKDAYS,
+  WHEN_UNKNOWN,
   appointmentTypeSchema,
   blockSchema,
   blockSettingsSchema,
   consolidationSchema,
+  typeEligibilitySchema,
   describeRecurrence,
   durationSchema,
   factPathSchema,
@@ -288,6 +290,7 @@ export {
 
 export type {
   AppointmentType,
+  TypeEligibility,
   Block,
   BlockKind,
   Consolidation,

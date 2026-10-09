@@ -186,6 +186,9 @@ const Picker = ({
   const [day, setDay] = useState<string | null>(null);
   const [slot, setSlot] = useState<Slot | null>(null);
   const [advanced, setAdvanced] = useState(false);
+  /* What the times on hand were looked up for: the month and the answers. Only times for what is asked now decide anything. */
+  const wanted = JSON.stringify([month.year, month.month, all, host, request]);
+  const [timesFor, setTimesFor] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -193,6 +196,7 @@ const Picker = ({
       const range = monthRange(month.year, month.month);
       const found = await api.times({ type: type.id, ...range, all, ...(host ? { host } : {}), request });
       setTimes(found);
+      setTimesFor(JSON.stringify([month.year, month.month, all, host, request]));
       setProblem(null);
       if (found.questions.length > 0 && !asked) setStep("questions");
     } catch (error) {
@@ -219,7 +223,9 @@ const Picker = ({
 
   /* The first open day is picked for them; an empty current month moves on once by itself. */
   useEffect(() => {
-    if (loading || !times) return;
+    if (loading || !times || timesFor !== wanted) return;
+    /* Nothing is shown yet while questions wait, or when the type doesn't take them: no reason to move on. */
+    if (step !== "time" || times.notEligible) return;
     if (day && byDay.has(day)) return;
     const first = [...byDay.keys()].sort()[0] ?? null;
     setDay(first);
@@ -227,7 +233,7 @@ const Picker = ({
       setAdvanced(true);
       setMonth((held) => (held.month === 11 ? { year: held.year + 1, month: 0 } : { year: held.year, month: held.month + 1 }));
     }
-  }, [loading, times, byDay, day, advanced, month, today]);
+  }, [loading, times, timesFor, wanted, byDay, day, advanced, month, today, step]);
 
   const shift = (by: number) => {
     setDay(null);
@@ -294,7 +300,31 @@ const Picker = ({
           />
         ) : null}
 
-        {step === "time" ? (
+        {step === "time" && times?.notEligible ? (
+          <div className="pub-stack" data-gap="lg">
+            <Alert tone="info" title="This can't be booked online">
+              {times.notEligible}
+            </Alert>
+            {asked ? (
+              <div>
+                <button
+                  type="button"
+                  className="pub-link"
+                  onClick={() => {
+                    /* Asked again from the start: the answers decide what is offered. */
+                    setRequest({});
+                    setAsked(false);
+                  }}
+                >
+                  <Icon name="left" size={16} />
+                  Change my answers
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {step === "time" && !times?.notEligible ? (
           <div className="pub-stack" data-gap="lg">
             {type.hosts.length > 0 ? (
               <Field label="With" htmlFor="pub-host">

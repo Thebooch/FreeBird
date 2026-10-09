@@ -307,6 +307,8 @@ export const publicRoutes = (deps: PublicRouteDeps) =>
         if (host && !(await pickableHosts(type)).some((one) => one.id === host) && host !== token.host) throw new PublicError("That person can't be picked here.");
         const answers = requestAnswers(body);
         const found = await discover({ scheduling, contacts }, { type, contact: contact.id, request: answers, range: { from, to, all: body["all"] === true, limit: 400 }, ...(host ? { hosts: [host] } : {}) });
+        /* The type doesn't take them: say so in the type's own words, and offer nothing. */
+        if (found.result.notEligible) return { slots: [], questions: [], consolidatedOnly: false, more: false, notEligible: type.eligibility.message || `${type.name} can't be booked here. Please contact us.` };
         const held = await contacts.get(contact.id);
         const intake = type.intake
           .filter((one) => (one.field.startsWith("request.") ? !answers[one.field.slice(8)] : !held?.fields[one.field.split(".")[1] ?? ""]))

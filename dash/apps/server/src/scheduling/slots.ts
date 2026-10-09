@@ -13,7 +13,7 @@ import {
   type WeeklyHours,
 } from "@freebirdai/dash-spec";
 import { expand } from "./recurrence.js";
-import { evaluateRules, factString, type Facts } from "./rules.js";
+import { evaluateRules, factString, type Facts, type Verdict } from "./rules.js";
 import { addDays, instantOn, localDate, minuteOfDay, wallTime, weekdayOfDate } from "./zoned.js";
 
 /**
@@ -106,6 +106,8 @@ export interface FindSlotsResult {
   readonly consolidatedOnly: boolean;
   /** Other open times exist beyond the consolidated ones shown. */
   readonly more: boolean;
+  /** The type's "Who can book" rules don't take these facts: nothing is offered, whatever is open. */
+  readonly notEligible?: boolean;
 }
 
 const MINUTE = 60_000;
@@ -245,8 +247,25 @@ const termsFor = (segment: Segment, host: HostInput, input: FindSlotsInput, need
 
 /* ── the search ────────────────────────────────────────────────────────── */
 
+/**
+ * Whether a type takes these facts at all ("Who can book"), before any time
+ * is looked at. A field not known yet is asked for (`needs`), and then left
+ * out, let in, or let in pending approval, as the type says.
+ */
+export const typeEligibility = (type: AppointmentType, facts: Facts, now: number): { readonly verdict: Verdict; readonly needs: readonly string[]; readonly approval: boolean } => {
+  const eligibility = type.eligibility as AppointmentType["eligibility"] | undefined;
+  const result = evaluateRules(eligibility?.rules, facts, now);
+  if (result.verdict !== "unknown") return { verdict: result.verdict, needs: [], approval: false };
+  const needs = [...result.missing, ...result.untrusted];
+  const when = eligibility?.whenUnknown ?? "exclude";
+  return { verdict: when === "exclude" ? "unknown" : "eligible", needs, approval: when === "approval" };
+};
+
 export const findSlots = (input: FindSlotsInput): FindSlotsResult => {
   const needs = new Set<string>();
+  const who = typeEligibility(input.type, input.facts, input.now);
+  for (const path of who.needs) needs.add(path);
+  if (who.verdict !== "eligible") return { slots: [], needs: [...needs].sort(), consolidatedOnly: false, more: false, ...(who.verdict === "ineligible" ? { notEligible: true } : {}) };
   const byStart = new Map<number, HostOption[]>();
   const typeLevel = resolveSettings([
     { layer: "workspace", settings: input.workspace },
@@ -292,7 +311,7 @@ export const findSlots = (input: FindSlotsInput): FindSlotsResult => {
         if (result.verdict === "unknown") for (const path of [...result.missing, ...result.untrusted]) needs.add(path);
         approvalRules = result.verdict !== "ineligible";
       }
-      const approval = settings.approval === "always" || approvalRules || terms.approvalUnknown;
+      const approval = settings.approval === "always" || approvalRules || terms.approvalUnknown || who.approval;
       const occurrence = segment.governing.kind === "block" ? segment.governing.occurrence : undefined;
       const inOccurrence = occurrence ? bookings.filter((one) => one.placement === occurrence.placement && one.occurrence === occurrence.date).length : 0;
       if (terms.block?.maxBookings !== undefined && inOccurrence >= terms.block.maxBookings) continue;

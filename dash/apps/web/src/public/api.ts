@@ -74,6 +74,8 @@ export interface TimesResult {
   /** Only times next to a matching appointment were kept; `more` says others exist. */
   readonly consolidatedOnly: boolean;
   readonly more: boolean;
+  /** The type doesn't take them, in its own words: nothing is offered. */
+  readonly notEligible?: string;
 }
 
 export interface TypePage {

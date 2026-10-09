@@ -105,6 +105,17 @@ describe("asking for a time", () => {
     expect((await bookings.request({ type: "visit", contact: ana, start: TUE_11, origin: "link", by: them })).outcome).toBe("confirmed");
   });
 
+  it("refuses a request the type's Who can book rules don't take, in the type's own words", async () => {
+    const { bookings, scheduling, person } = await build();
+    await scheduling.putType("visit", { eligibility: { rules: { all: [{ field: "request.partySize", op: "lte", values: [8] }], any: [] }, message: "For parties of 9 or more, please call us." } });
+    const ana = await person("ana@example.com");
+    await expect(bookings.request({ type: "visit", contact: ana, start: TUE_9, origin: "link", by: them, answers: { partySize: "12" } })).rejects.toMatchObject({ status: 403, message: "For parties of 9 or more, please call us." });
+    await expect(bookings.request({ type: "visit", contact: ana, start: TUE_9, origin: "link", by: them })).rejects.toMatchObject({ status: 409, message: "Visit needs a few answers before it can be booked." });
+    /* The team's bookings follow the rule too. */
+    await expect(bookings.request({ type: "visit", contact: ana, start: TUE_9, origin: "member", by: member, answers: { partySize: "12" } })).rejects.toMatchObject({ status: 403 });
+    expect((await bookings.request({ type: "visit", contact: ana, start: TUE_9, origin: "link", by: them, answers: { partySize: "6" } })).booking).toMatchObject({ status: "confirmed", answers: { partySize: "6" } });
+  });
+
   it("refuses a time already taken, offering what is open nearby, and finds the first booking again by its id", async () => {
     const { bookings, person } = await build();
     const ana = await person("ana@example.com");

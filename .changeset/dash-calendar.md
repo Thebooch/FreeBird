@@ -18,3 +18,4 @@ The Calendar section: events, deadlines and appointments from agents, workflows 
 - Dash spec: an agent's `schedule_appointment` tool says which appointment types it may book and how it offers each (`schedule: { types, offer }`), and the reply prompt gains a "Booking appointments" section while one is on: offer one time at a time, never a time no tool returned, and say plainly whether a time is booked or only requested (`SchedulingPromptInput`). "Make a scheduling link" is available as a workflow step.
 - Dash react: the booking tool's settings in the agent editor.
 - Dash react: the calendar's Subscribe panel, for a member's own read-only calendar feed.
+- Dash spec: an appointment type can say who can book it (`eligibility`: rules over the person's contact fields and the answers to the type's own questions, such as party size, what to do while an answer isn't known, and what to tell someone it doesn't take).
