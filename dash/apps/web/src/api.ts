@@ -17,6 +17,8 @@ import type {
   CatalogEntry,
   ConnectionSpec,
   DashboardSpec,
+  EntityKind,
+  EntitySpec,
   Presentation,
   PresentationManifest,
   ResourceSpec,
@@ -24,6 +26,21 @@ import type {
   WidgetBrief,
   WidgetSpec,
 } from "@freebirdai/dash-spec";
+
+/**
+ * One record type a connection has, as `GET /api/connections/:id/entities`
+ * returns it: the catalog's name for it in both numbers, not a display string.
+ */
+export interface ConnectionEntity {
+  entity: string;
+  name: EntitySpec["name"];
+  kind: EntityKind;
+  description?: string;
+  /** Whether somebody would start a widget from these, or only reach them. */
+  starting?: boolean;
+  /** Whether anything on this connection lists them. */
+  listable?: boolean;
+}
 
 /** The connection as the server reports it — secrets replaced by a boolean. */
 export interface ConnectionSummary extends ConnectionSpec {
@@ -1231,9 +1248,7 @@ export const api = {
   connections: (): Promise<ConnectionSummary[]> => request("/api/connections"),
 
   /** The record types a connection has, for choosing what an agent may touch. */
-  connectionEntities: (
-    connection: string,
-  ): Promise<Array<{ entity: string; name: string; kind?: string; description?: string }>> =>
+  connectionEntities: (connection: string): Promise<ConnectionEntity[]> =>
     request(`/api/connections/${encodeURIComponent(connection)}/entities`),
 
   agents: (archived = false): Promise<AgentSpec[]> => request(`/api/agents${archived ? "?archived=1" : ""}`),

@@ -17,7 +17,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type ConnectionSummary, type WorkflowCheck, type WorkflowPreview } from "../../api";
 import { Canvas, outcomeLabel } from "./Canvas.jsx";
 import { NODE_H, autoLayout, blankNode, connect, fromSpec, removeNode, toInput } from "./draft.js";
-import { RecordPicker, TriggerEditor, type Entities } from "./fields.jsx";
+import { recordTypeChoices, type Entities } from "../entities.js";
+import { RecordPicker, TriggerEditor } from "./fields.jsx";
 import { StepPanel } from "./StepPanel.jsx";
 
 /**
@@ -80,7 +81,7 @@ export const WorkflowEditor = ({
       if (held[connection]) return held;
       void api
         .connectionEntities(connection)
-        .then((list) => setEntities((now) => ({ ...now, [connection]: list })))
+        .then((list) => setEntities((now) => ({ ...now, [connection]: recordTypeChoices(list) })))
         .catch(() => setEntities((now) => ({ ...now, [connection]: [] })));
       return { ...held, [connection]: [] };
     });
