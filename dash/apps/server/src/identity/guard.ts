@@ -31,6 +31,8 @@ export const GUARDED_ROUTES: readonly GuardRule[] = [
   /* Boards: saving, removing, approving a widget, writing one from a brief. */
   { methods: WRITE, path: /^\/api\/dashboards(\/|$)/, permission: "boards.edit" },
   { methods: WRITE, path: /^\/api\/briefs?(\/|$)/, permission: "boards.edit" },
+  /* Timed reports and the values they track: making, changing, previewing and sending them. */
+  { methods: WRITE, path: /^\/api\/(reports|tracked)(\/|$)/, permission: "boards.edit" },
   /* Connections and what they are made from. The query routes read, and are not here. */
   { methods: WRITE, path: /^\/api\/connections(\/|$)/, permission: "connections.manage" },
   { methods: WRITE, path: /^\/api\/catalog(\/|$)/, permission: "connections.manage" },

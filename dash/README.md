@@ -81,6 +81,23 @@ A switch at the left of the top bar flips between **Tabs** (your boards) and **A
 
 **Overview** is the first section on the Agent side. **Active workflows** lists every workflow that is on or has open cases, with the stage it is at and what it is waiting for (your approval, its schedule, a reply, a time, a record change, somebody to turn it back on), and up to six of its open cases. **Completed tasks** lists every task, newest first, by day; opening one shows the task card, with Reverse where it applies. Both filter by agent, task (base action, or approvals) and workflow. `GET /api/overview` serves it.
 
+## Timed reports
+
+**Reports** in a tab's **⋯** menu (beside Arrange) emails that tab on a schedule: the whole tab, or the widgets you tick. The pop-up lists the reports drawing from the open tab, with Send now, Edit, pause and delete, and only offers that tab's widgets. A report is sent daily, on weekdays, weekly or monthly at a time in its own time zone, to the addresses you give it, optionally from an agent (its name and colour on the email, its voice in the summary). Each email opens with a few sentences written from the numbers (the cheap `report` model task; turn it off per report, and a failed call sends without one), then each widget as it reads at send time: a number tile with its change since the last send, anything else as a short table. **Show preview** renders the exact email without sending it. Every recipient gets their own copy with their own unsubscribe link, and someone who unsubscribes is never sent that report again. Sends are logged, show in the chat's timeline, and a workflow can send a report with the **Send a report** step. A schedule is counted from the last attempt, so a server that was down sends a missed report once, and of two servers on one database one takes each turn.
+
+**Tracked values** are the smallest piece: one number kept once a day from a connection's records, narrowed by a filter to one property or client (`POST /api/tracked`: a record type or endpoint, a `filter`, and `count`, `sum`, `avg`, `min`, `max` or `latest` of a field). History starts the day it is first tracked. A report shows one with its change over 7 days, 30 days, 90 days or a year (a `value` block); there is no screen for making them yet.
+
+Sending needs an email adapter, set in `.env`:
+
+```bash
+DASH_EMAIL=smtp                      # or resend
+DASH_EMAIL_FROM="Reports <reports@example.com>"
+DASH_SMTP_URL=smtp://user:pass@smtp.example.com:587   # smtps:// for TLS; default smtp://localhost:1025 (a local Mailpit)
+RESEND_API_KEY=...                   # for DASH_EMAIL=resend
+```
+
+Without it, reports can be made and previewed but not sent, and the pop-up says why. Making, changing and sending reports needs `boards.edit`. The API is `/api/reports` (`?dashboard=` for one tab's), `POST /api/reports/preview`, `POST /api/reports/:id/send`, `GET /api/reports/:id/sends`, and `/api/tracked`, `/api/tracked/:id/history`.
+
 ## Principles
 
 **The LLM runs at configuration time, never at render time.** The authoring agent reads sample payloads and emits a deterministic, versioned artifact. That artifact is compiled once and executed by boring code forever after. An LLM in the request path means nondeterministic dashboards, unbounded cost, and no way to debug why a number changed.

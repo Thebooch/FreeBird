@@ -139,6 +139,11 @@ import { agentRoutes } from "./routes/agents.js";
 import { workflowRoutes } from "./routes/workflows.js";
 import { calendarRoutes } from "./routes/calendar.js";
 import { CalendarService } from "./calendar/service.js";
+import type { EmailAdapter } from "@freebirdai/core";
+import { reportRoutes } from "./routes/reports.js";
+import { ReportService } from "./reports/service.js";
+import { MemoryReportStore, type ReportStore } from "./reports/store.js";
+import { trackedReader, widgetReader } from "./reports/read.js";
 import { schedulingRoutes } from "./routes/scheduling.js";
 import { contactRoutes, type ContactSource } from "./routes/contacts.js";
 import { bookingRoutes } from "./routes/bookings.js";
@@ -205,6 +210,7 @@ import {
   widgetBriefSchema,
 } from "@freebirdai/dash-spec";
 import type { AgentSpec, AgentTool, ResponseChannel } from "@freebirdai/dash-spec";
+import { reportDashboards } from "@freebirdai/dash-spec";
 import { onboardingRoutes } from "./routes/onboarding.js";
 import { allocateDashboardId } from "./onboarding/materialise.js";
 import { warmTargets } from "./keeper/targets.js";
@@ -410,6 +416,14 @@ export interface BuildServerOptions {
    * in this process only; the real entry point keeps them in Dash's database.
    */
   readonly snapshots?: SnapshotStore;
+  /** Timed reports, the values they track, and the log of what was sent (`reports/`). Memory unless supplied. */
+  readonly reports?: ReportStore;
+  /**
+   * What sends reports. Absent: reports can be made and previewed but not
+   * sent, and `emailProblem` (or a default) says why.
+   */
+  readonly email?: EmailAdapter | null;
+  readonly emailProblem?: string;
   /**
    * Where this workspace's agents are kept (`agents/store.ts`). Absent means in
    * this process only; the real entry point keeps them in Dash's database.
@@ -1018,8 +1032,16 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     throw new AgentError("Booking isn't set up on this server.", 501);
   };
   let bookingDispatcher: BookingDispatcher | undefined;
+  /* Set once reports exist, below; Send a report reaches it only when it runs. */
+  let reportsForWorkflows: ReportService | undefined;
   const workflowEnv: WorkflowEnv = {
     bookings: () => bookingsForWorkflows,
+    reports: {
+      send: async (id, key) => {
+        if (!reportsForWorkflows) throw new Error("Reports aren't set up on this server.");
+        return reportsForWorkflows.send(id, "workflow", key);
+      },
+    },
     workspaceId: options.workspace?.id ?? LOCAL_WORKSPACE_ID,
     store: workflowStore,
     cases: options.cases ?? new MemoryCaseStore(),
@@ -1254,12 +1276,50 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     }),
   );
   void app.register(schedulingRoutes({ scheduling, policy }));
+
+  /*
+   * Timed reports (`reports/`): stacks of widgets, tabs and tracked values,
+   * emailed on a schedule. They read through the engine at background
+   * priority, so they share the cache with every tile; they are sent on the
+   * workflow runner's tick, and by a workflow's Send a report step.
+   */
+  const reportService = new ReportService({
+    store: options.reports ?? new MemoryReportStore(),
+    snapshots,
+    dashboards: () => store.listDashboards(),
+    hasConnection: (id) => store.getConnection(id) !== null,
+    readWidget: widgetReader({ read: engine.read, connection: (id) => store.getConnection(id), prepare: (connection) => registry.addConnection(connection) }),
+    readTracked: trackedReader(workflowEnv.read),
+    email: options.email ?? null,
+    ...(options.emailProblem ? { emailProblem: options.emailProblem } : {}),
+    llm: () => resolveLlm("report"),
+    withBudget: async (run) => {
+      enterTurnBudget(turnCeilingUsd());
+      return run();
+    },
+    agent: (id) => agentStore.get(id),
+    tokens: publicTokens,
+    brand: async () => {
+      const given = await options.brand?.().catch((): Partial<Brand> => ({}));
+      return { ...brandOf(given), name: given?.name?.trim() || "FreeBird" };
+    },
+    workspace: options.workspace?.id ?? LOCAL_WORKSPACE_ID,
+    origin: (options.pagesOrigin ?? options.publicOrigin ?? "http://localhost:5400").replace(/\/+$/, ""),
+    now: () => Date.now(),
+    newId: () => randomUUID(),
+    log: { warn: (line) => app.log.warn(line) },
+  });
+  reportsForWorkflows = reportService;
+  void app.register(reportRoutes({ reports: reportService, workspace: options.workspace?.id ?? LOCAL_WORKSPACE_ID, limiter: options.rateLimiter ?? new MemoryRateLimiter() }));
+
   const workflowRunner = new WorkflowRunner({
     ...workflowStarter,
     log: { warn: (line) => app.log.warn(line) },
     passes: [
       { name: "booking events", run: () => bookingDispatcher?.deliver() ?? Promise.resolve(0) },
       { name: "booking holds", run: () => bookings.settleDue() },
+      { name: "reports", run: () => reportService.runDue() },
+      { name: "tracked values", run: () => reportService.recordDue() },
     ],
   });
   if (options.workflowRunner === true) workflowRunner.start();
@@ -2957,10 +3017,13 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       new TopicStore(chatDb, { userId: owner.userId || LOCAL_USER_ID, tenantId: workspaceKey });
     /** Finished work for the timeline: workflow runs that ended and tasks that were done. */
     const finishedWork = async (): Promise<TimelineTask[]> => {
-      const [runs, tasks] = await Promise.all([
+      const [runs, tasks, sends, reports] = await Promise.all([
         workflowStore.runs({ limit: 500 }),
         workflowEnv.tasks.list({ status: "done", limit: 500 }),
+        reportService.sends(undefined, 500),
+        reportService.list(),
       ]);
+      const reportTab = new Map(reports.map((one) => [one.id, reportDashboards(one)[0]]));
       const link = (workflow: string | undefined) =>
         workflow ? `#/agent/workflows/${encodeURIComponent(workflow)}` : undefined;
       return [
@@ -2990,6 +3053,19 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             workflow: task.workflow,
             link: link(task.workflow),
           })),
+        ...sends.map((send) => {
+          const tab = reportTab.get(send.report);
+          return {
+            id: `report:${send.id}`,
+            kind: "report" as const,
+            at: send.at,
+            title: `Report: ${send.reportName}`,
+            detail: send.status === "failed" ? send.error : `Sent to ${send.recipients.length} ${send.recipients.length === 1 ? "person" : "people"}`,
+            status: send.status === "failed" ? "failed" : "succeeded",
+            agent: send.agentId,
+            link: tab ? `#/d/${encodeURIComponent(tab)}` : undefined,
+          };
+        }),
       ].sort((a, b) => b.at.localeCompare(a.at));
     };
     void app.register(

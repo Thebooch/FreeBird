@@ -6,6 +6,7 @@
  * only @freebirdai/dash-components has to get working controls out of one stylesheet.
  */
 import { DASH_CALENDAR_STYLES } from "./styles-calendar.js";
+import { DASH_REPORTS_STYLES } from "./styles-reports.js";
 import { DASH_CONTACTS_STYLES } from "./styles-contacts.js";
 import { DASH_SCHEDULING_STYLES } from "./styles-scheduling.js";
 
@@ -2112,4 +2113,4 @@ export const DASH_REACT_STYLES = `
 @media (max-width: 760px) {
   .dash-agents { grid-template-columns: minmax(0, 1fr); }
 }
-` + DASH_CALENDAR_STYLES + DASH_SCHEDULING_STYLES + DASH_CONTACTS_STYLES;
+` + DASH_CALENDAR_STYLES + DASH_SCHEDULING_STYLES + DASH_CONTACTS_STYLES + DASH_REPORTS_STYLES;

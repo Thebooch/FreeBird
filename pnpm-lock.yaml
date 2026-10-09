@@ -254,6 +254,12 @@ importers:
       '@freebirdai/adapters-db-postgres':
         specifier: workspace:*
         version: link:../../../guide/packages/adapters-db-postgres
+      '@freebirdai/adapters-email-resend':
+        specifier: workspace:*
+        version: link:../../../guide/packages/adapters-email-resend
+      '@freebirdai/adapters-email-smtp':
+        specifier: workspace:*
+        version: link:../../../guide/packages/adapters-email-smtp
       '@freebirdai/connect':
         specifier: workspace:*
         version: link:../../../connect/packages/connect

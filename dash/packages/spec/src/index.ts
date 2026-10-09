@@ -539,3 +539,44 @@ export type { Narrowing, NarrowingFile } from "./narrowing.js";
 export { describeMetric, metricSchema, reconcileRuleSchema } from "./metric.js";
 
 export type { MetricDefinition, ReconcileRule } from "./metric.js";
+
+export {
+  REPORT_EVERY,
+  REPORT_MAX_BLOCKS,
+  REPORT_MAX_RECIPIENTS,
+  REPORT_SEND_STATUSES,
+  REPORT_TRIGGERS,
+  REPORT_WINDOW_DAYS,
+  REPORT_WINDOWS,
+  TRACKED_AGGREGATES,
+  TRACKED_UNITS,
+  WEEKDAY_NAMES,
+  cadenceOfCron,
+  cronForCadence,
+  describeSchedule,
+  reportBlockSchema,
+  reportDashboards,
+  reportInputSchema,
+  reportScheduleSchema,
+  reportSchema,
+  reportSendSchema,
+  trackedValueInputSchema,
+  trackedValueSchema,
+} from "./report.js";
+
+export type {
+  Report,
+  ReportBlock,
+  ReportCadence,
+  ReportEvery,
+  ReportInput,
+  ReportSchedule,
+  ReportSend,
+  ReportSendStatus,
+  ReportTrigger,
+  ReportWindow,
+  TrackedAggregate,
+  TrackedUnit,
+  TrackedValue,
+  TrackedValueInput,
+} from "./report.js";

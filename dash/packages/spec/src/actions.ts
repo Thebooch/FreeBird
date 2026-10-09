@@ -69,7 +69,7 @@ export type ActionModelTask = (typeof ACTION_MODEL_TASKS)[number];
  * - `duration`: "30m", "2h", "3d", "1w".
  * - `values`: field path → template.
  * - `choices`: a list of short words (categories, options, fields).
- * - `connection`, `record_type`, `agent`, `workflow`, `step`: ids of those things.
+ * - `connection`, `record_type`, `agent`, `workflow`, `step`, `report`: ids of those things.
  */
 export const FIELD_KINDS = [
   "text",
@@ -87,6 +87,7 @@ export const FIELD_KINDS = [
   "agent",
   "workflow",
   "step",
+  "report",
 ] as const;
 export type FieldKind = (typeof FIELD_KINDS)[number];
 
@@ -357,6 +358,13 @@ export const ACTION_VARIANTS: readonly ActionVariant[] = [
     ],
     outcomes: ["next", "failed"], outputs: [{ name: "status", description: "The answer's status" }, { name: "response", description: "What came back" }],
     body: "request", leavesDash: true, defaultMode: "approve", interrupted: "review",
+  }),
+
+  variant({
+    id: "send.report", base: "send", label: "Send a report", does: "Email one of the team's timed reports now, as well as on its schedule.",
+    fields: [{ key: "report", label: "Report", kind: "report", required: true, ask: "Which report should it send?" }],
+    outcomes: ["next", "failed"], outputs: [{ name: "status", description: "sent, partial or failed" }, { name: "recipients", description: "Who it reached" }],
+    body: "notice", leavesDash: true, permission: "boards.edit",
   }),
 
   /* ── wait ── */

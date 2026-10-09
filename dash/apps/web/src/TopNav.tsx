@@ -13,7 +13,7 @@ import { ModelPicker } from "./ModelPicker.jsx";
  *
  * The bar itself is deliberately thin: tabs, the way to make one, the way to
  * rename them, and the assistant. Everything you touch once a session — add a
- * widget, arrange, connect, models, theme — sits behind the overflow menu, so
+ * widget, arrange, reports, connect, models, theme — sits behind the overflow menu, so
  * the two controls you actually navigate with are not competing with four
  * that you do not.
  *
@@ -63,6 +63,9 @@ export interface TopNavProps {
   readonly layoutEditing: boolean;
   readonly onToggleLayoutEditing: (editing: boolean) => void;
   readonly layoutEditingDisabled?: boolean;
+  /** Timed reports for the open tab: what is sent, to whom, how often. Absent hides the item. */
+  readonly onOpenReports?: () => void;
+  readonly reportsDisabled?: boolean;
   readonly chatOpen: boolean;
   readonly onToggleChat: (open: boolean) => void;
   readonly theme: "light" | "dark";
@@ -150,6 +153,8 @@ export const TopNav = ({
   layoutEditing,
   onToggleLayoutEditing,
   layoutEditingDisabled,
+  onOpenReports,
+  reportsDisabled,
   chatOpen,
   onToggleChat,
   theme,
@@ -359,6 +364,19 @@ export const TopNav = ({
               >
                 {layoutEditing ? "✓ Done arranging" : "⊞ Arrange"}
               </button>
+              {onOpenReports && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="dash-nav__item"
+                  onClick={pick(onOpenReports)}
+                  disabled={reportsDisabled || boardless}
+                  title="Email this tab, or some of its widgets, on a schedule"
+                  data-testid="open-reports"
+                >
+                  ✉ Reports
+                </button>
+              )}
               <button
                 type="button"
                 role="menuitem"
