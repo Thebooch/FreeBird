@@ -312,4 +312,31 @@ select.dash-sched-input { width: auto; min-width: 180px; cursor: pointer; }
 .dash-booking-history__what { display: flex; flex-direction: column; gap: 2px; color: var(--dash-ink); }
 .dash-booking-history__note { font-size: var(--dash-text-xs); color: var(--dash-muted); }
 .dash-booking-history__when { font-size: var(--dash-text-xs); color: var(--dash-muted); white-space: nowrap; }
+
+/* A link made and copied: the button, then what happened. */
+.dash-copylink { display: inline-flex; align-items: center; gap: var(--dash-space-2); flex-wrap: wrap; min-width: 0; }
+.dash-copylink__done { font-size: var(--dash-text-xs); color: var(--dash-good); }
+.dash-copylink__error { font-size: var(--dash-text-xs); color: var(--dash-critical); }
+.dash-copylink__field {
+  font: inherit; font-family: var(--dash-font-mono); font-size: var(--dash-text-xs); color: var(--dash-ink);
+  min-width: 0; width: min(360px, 100%); padding: 5px 8px; border-radius: var(--dash-radius-xs);
+  border: 1px solid var(--dash-accent-line); background: var(--dash-accent-wash);
+}
+
+/* A contact's booking links, on the contact sheet. */
+.dash-booklinks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--dash-space-2); }
+.dash-booklink {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--dash-space-3);
+  padding: 10px 12px; border: 1px solid var(--dash-border); border-radius: var(--dash-radius-sm); background: var(--dash-surface);
+}
+.dash-booklink[data-state="withdrawn"], .dash-booklink[data-state="expired"] { background: var(--dash-surface-sunken); }
+.dash-booklink__main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dash-booklink__title { display: inline-flex; align-items: center; gap: var(--dash-space-2); font-size: var(--dash-text-sm); font-weight: var(--dash-weight-medium); color: var(--dash-ink); }
+.dash-booklink__meta { font-size: var(--dash-text-xs); color: var(--dash-muted); }
+.dash-booklinks__make { display: flex; align-items: center; gap: var(--dash-space-2); flex-wrap: wrap; margin-top: var(--dash-space-3); }
+.dash-booklinks__make select { max-width: 260px; }
+.dash-booklinks__made { margin-top: var(--dash-space-3); display: flex; flex-direction: column; gap: 6px; padding: 12px; border-radius: var(--dash-radius-sm); background: var(--dash-accent-wash); border: 1px solid var(--dash-accent-line); }
+.dash-booklinks__made-row { display: flex; align-items: center; gap: var(--dash-space-2); }
+.dash-booklinks__made input { flex: 1; min-width: 0; font: inherit; font-family: var(--dash-font-mono); font-size: var(--dash-text-xs); padding: 6px 8px; border-radius: var(--dash-radius-xs); border: 1px solid var(--dash-border); background: var(--dash-surface); color: var(--dash-ink); }
+.dash-booklinks__made .dash-hint { margin: 0; }
 `;

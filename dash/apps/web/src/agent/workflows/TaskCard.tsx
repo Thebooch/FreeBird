@@ -4,6 +4,7 @@ import { BASE_INFO, describeDuration, type AgentSpec, type ActionBase, type Task
 import { useState } from "react";
 import { api } from "../../api";
 import { BookingSheet } from "../calendar/BookingSheet.jsx";
+import { CopyLink } from "../CopyLink.jsx";
 
 /**
  * One task: the record of one action in one case, shown the way its kind
@@ -275,6 +276,8 @@ export const TaskCard = ({
               <Button size="sm" onClick={() => setBooking(bookingAsk.booking)} testId={`task-booking-open-${task.id}`}>
                 {bookingAsk.allowSuggest || bookingAsk.allowDeny ? "Open the booking" : "Details"}
               </Button>
+              {/* Until email is connected, how a member reaches the approval page. */}
+              <CopyLink label="Copy approval link" tone="ghost" make={async () => (await api.approvalLink(bookingAsk.booking)).url} testId={`task-booking-link-${task.id}`} />
             </>
           )}
           {task.body.kind === "todo" && !task.body.done && task.status === "done" && (

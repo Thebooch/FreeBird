@@ -1,4 +1,4 @@
-import { BOOKING_STATUS_WORDS, LOCATION_WORDS, type Booking, type BookingEvent } from "@freebirdai/dash-spec";
+import { BOOKING_STATUS_WORDS, LOCATION_WORDS, fieldValueOf, type Booking, type BookingEvent, type FieldSource } from "@freebirdai/dash-spec";
 import type { ContactService } from "../contacts/service.js";
 import { mintToken, type PublicToken, type PublicTokenStore } from "../public/tokens.js";
 import type { SchedulingService, WorkspaceMember } from "../scheduling/service.js";
@@ -75,6 +75,17 @@ const timeWords = (at: number | string, zone: string): string => {
   } catch {
     return new Date(at).toISOString().slice(11, 16);
   }
+};
+
+const SOURCE_WORDS: Readonly<Record<FieldSource, string>> = { member: "set by the team", record: "from their record", person: "they said" };
+
+/** A field's value as words: an address on one line. */
+const valueWords = (value: unknown): string => {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const address = value as Record<string, unknown>;
+    return ["line1", "line2", "city", "region", "postalCode"].map((part) => address[part]).filter((part) => typeof part === "string" && part).join(", ");
+  }
+  return Array.isArray(value) ? value.join(", ") : String(value);
 };
 
 /** "in 1 day and 3 hours", "in 40 minutes". */
@@ -248,17 +259,29 @@ export class BookingLinks {
     return lines.length > 1 ? lines.join("\n") : "Nothing else booked that day.";
   }
 
-  /** What the booking's rules read about the person, and the block it came under: why it was offered, for the team only. */
+  /**
+   * What is known about the person, and where each came from, with the block
+   * the time came under: why it was offered, for the team only.
+   */
   async factLines(booking: Booking): Promise<string[]> {
-    const lines = Object.entries(booking.values)
-      .filter(([path]) => path.startsWith("contact.") || path.startsWith("request."))
-      .slice(0, 12)
-      .map(([path, value]) => `${pathWords(path)}: ${value}`);
+    const contact = await this.deps.contacts.get(booking.contact);
+    const { fields } = await this.deps.contacts.setup();
+    const lines: string[] = [];
     if (booking.block) {
       const block = (await this.deps.scheduling.overview()).blocks.find((one) => one.id === booking.block);
-      if (block) lines.unshift(`Under the ${block.name} block`);
+      if (block) lines.push(`Under the ${block.name} block`);
     }
-    return lines;
+    for (const [key, field] of Object.entries(contact?.fields ?? {})) {
+      const best = fieldValueOf(field);
+      if (!best) continue;
+      const label = fields.find((one) => one.key === key)?.label ?? pathWords(key);
+      lines.push(`${label}: ${valueWords(best.value)} (${SOURCE_WORDS[best.from]})`);
+    }
+    for (const [key, value] of Object.entries(booking.answers)) {
+      if (["notes", "where"].includes(key) || typeof value !== "string" || !value.trim()) continue;
+      lines.push(`${pathWords(key)}: ${value} (they said)`);
+    }
+    return lines.slice(0, 16);
   }
 
   private async factsOf(booking: Booking): Promise<string> {

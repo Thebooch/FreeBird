@@ -45,6 +45,18 @@ import type {
 } from "@freebirdai/dash-spec";
 
 /** The connection as the server reports it — secrets replaced by a boolean. */
+/** A booking link as the contact sheet lists it. */
+export interface BookingLinkInfo {
+  readonly id: string;
+  readonly type?: string;
+  readonly booking?: string;
+  /** Made on the public link, where anyone can type an email. */
+  readonly fromPublic: boolean;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+  readonly revokedAt?: string;
+}
+
 export interface ConnectionSummary extends ConnectionSpec {
   hasKey: boolean;
 }
@@ -1489,6 +1501,10 @@ export const api = {
   markBooking: (id: string, as: "completed" | "no_show"): Promise<Booking> => request(`/api/scheduling/bookings/${encodeURIComponent(id)}/mark`, json({ as })),
   bookingSlots: (type: string, contact: string, from: string, to: string): Promise<SlotPreview> =>
     request(`/api/scheduling/slots?${new URLSearchParams({ type, contact, from, to }).toString()}`),
+  /** Your own link to answer this booking's waiting approval from the approval page. */
+  approvalLink: (id: string): Promise<{ url: string; expiresAt: string }> => request(`/api/scheduling/bookings/${encodeURIComponent(id)}/approval-link`, json({})),
+  /** The person's own page for this booking. */
+  bookingPageLink: (id: string): Promise<{ url: string }> => request(`/api/scheduling/bookings/${encodeURIComponent(id)}/link`, json({})),
 
   /* ── contacts ──────────────────────────────────────────────────────── */
 
@@ -1509,6 +1525,10 @@ export const api = {
   refreshContact: (id: string): Promise<{ contact: Contact; problems: string[] }> => request(`/api/contacts/${encodeURIComponent(id)}/refresh`, json({})),
   linkContact: (id: string, target: RecordTarget): Promise<{ contact: Contact; problems: string[] }> => request(`/api/contacts/${encodeURIComponent(id)}/link`, json(target)),
   unlinkContact: (id: string, target: RecordTarget): Promise<Contact> => request(`/api/contacts/${encodeURIComponent(id)}/unlink`, json(target)),
+  /** A contact's booking links: never the link itself, which is shown once when made. */
+  contactLinks: (id: string): Promise<BookingLinkInfo[]> => request(`/api/contacts/${encodeURIComponent(id)}/links`),
+  makeContactLink: (id: string, type?: string): Promise<{ url: string; link: BookingLinkInfo }> => request(`/api/contacts/${encodeURIComponent(id)}/links`, json(type ? { type } : {})),
+  revokeContactLink: (id: string, link: string): Promise<BookingLinkInfo> => request(`/api/contacts/${encodeURIComponent(id)}/links/${encodeURIComponent(link)}/revoke`, json({})),
   contactSetup: (): Promise<ContactSetup> => request("/api/contacts/setup"),
   contactSources: (): Promise<ContactSource[]> => request("/api/contacts/sources"),
   putContactField: (key: string, input: ContactFieldDefInput): Promise<ContactFieldDef> =>

@@ -3,6 +3,7 @@ import { BOOKING_STATUS_WORDS, LOCATION_WORDS, type Booking, type BookingStatus,
 import { useEffect, useMemo, useState } from "react";
 import { api, type SlotPreview } from "../../api.js";
 import { contactTitle, formatPhone } from "../contacts/model.js";
+import { CopyLink } from "../CopyLink.jsx";
 import { colorVar, memberColor, type Person } from "./model.js";
 
 /**
@@ -456,6 +457,9 @@ export const BookingSheet = ({
               )}
             </div>
             <div className="dash-cal-sheet__foot-group">
+              {["pending", "confirmed", "suggested"].includes(booking.status) && (
+                <CopyLink label="Copy their link" tone="ghost" make={async () => (await api.bookingPageLink(booking.id)).url} testId="booking-copy-link" />
+              )}
               {["pending", "confirmed", "suggested"].includes(booking.status) && (
                 <Button tone="ghost" onClick={() => setPanel("cancel")} testId="booking-cancel">
                   Cancel booking
