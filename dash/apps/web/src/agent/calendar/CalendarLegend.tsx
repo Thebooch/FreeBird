@@ -14,11 +14,14 @@ export const CalendarLegend = ({
   filter,
   onFilter,
   stats,
+  blocksFor,
 }: {
   readonly owners: ReadonlyArray<OwnerInfo & { readonly count: number }>;
   readonly filter: CalendarFilter;
   readonly onFilter: (filter: CalendarFilter) => void;
   readonly stats: { readonly entries: number; readonly deadlines: number; readonly tentative: number; readonly today: number };
+  /** Whose block bands the week view shows. */
+  readonly blocksFor?: { readonly value: string; readonly options: ReadonlyArray<{ readonly value: string; readonly label: string }>; readonly onChange: (member: string) => void; readonly shown: boolean };
 }): JSX.Element => {
   const toggleOwner = (key: string) => {
     const hidden = new Set(filter.hidden);
@@ -79,6 +82,20 @@ export const CalendarLegend = ({
             owners.map((owner) => row(owner.key, owner.name, colorVar(owner.color), !filter.hidden.has(owner.key), () => toggleOwner(owner.key), owner.count))
           )}
         </div>
+        {blocksFor && (
+          <div className="dash-cal-legend__group">
+            <h3 className="dash-cal-legend__title">Blocks</h3>
+            <select className="dash-sched-input" aria-label="Show the blocks of" value={blocksFor.value} onChange={(event) => blocksFor.onChange(event.target.value)} data-testid="calendar-blocks-for">
+              <option value="">Nobody's</option>
+              {blocksFor.options.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <p className="dash-cal-legend__empty">{blocksFor.shown ? "Shown behind the week." : "Shown in the week view."}</p>
+          </div>
+        )}
         <div className="dash-cal-legend__group">
           <h3 className="dash-cal-legend__title">Show</h3>
           {(["event", "deadline", "appointment"] as const).map((kind) =>

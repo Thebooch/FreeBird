@@ -1,4 +1,5 @@
-import type { CalendarEvent } from "@freebirdai/dash-spec";
+import type { Block, CalendarEvent } from "@freebirdai/dash-spec";
+import type { HostOccurrence } from "../../api.js";
 import { useEffect, useMemo, useRef } from "react";
 import { EntryChip } from "./EntryChip.jsx";
 import { colorVar, dayKey, dayOf, entryEnd, entryStart, isAllDay, shortSpan, startOfDay, timeLabel, viewDays, type OwnerInfo } from "./model.js";
@@ -71,6 +72,8 @@ export const WeekView = ({
   ownerOf,
   onOpen,
   onAddAt,
+  bands = [],
+  blocks = [],
 }: {
   readonly anchor: number;
   readonly now: number;
@@ -78,6 +81,9 @@ export const WeekView = ({
   readonly ownerOf: (entry: CalendarEvent) => OwnerInfo;
   readonly onOpen: (entry: CalendarEvent) => void;
   readonly onAddAt?: (at: number) => void;
+  /** One person's block occurrences, drawn as bands behind the entries. */
+  readonly bands?: readonly HostOccurrence[];
+  readonly blocks?: readonly Block[];
 }): JSX.Element => {
   const days = useMemo(() => viewDays("week", anchor), [anchor]);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -152,6 +158,35 @@ export const WeekView = ({
                       />
                     );
                   })}
+                {bands
+                  .filter((band) => band.start < dayEndOf(day) && band.end > day)
+                  .map((band) => {
+                    const block = blocks.find((one) => one.id === (band.setTo ?? band.block));
+                    const blank = blocks.find((one) => one.id === band.block);
+                    const top = ((Math.max(band.start, day) - day) / 60_000) * MINUTE_PX;
+                    const height = ((Math.min(band.end, dayEndOf(day)) - Math.max(band.start, day)) / 60_000) * MINUTE_PX;
+                    const label =
+                      band.kind === "closed"
+                        ? `${blank?.name ?? "Closed"} · closed`
+                        : band.kind === "blank"
+                          ? band.setTo
+                            ? `${block?.name ?? "Block"} · set by first booking`
+                            : `Blank · becomes ${(blank?.becomes ?? []).map((id) => blocks.find((one) => one.id === id)?.name ?? id).join(" or ")}`
+                          : (block?.name ?? "Block");
+                    return (
+                      <span
+                        key={`${band.placement}-${band.date}`}
+                        className="dash-cal-week__band"
+                        data-kind={band.kind}
+                        data-set={band.setTo ? "true" : undefined}
+                        style={{ top, height, ["--cal-color" as string]: colorVar(band.kind === "blank" && !band.setTo ? 0 : (block?.color ?? 0)) }}
+                        title={label}
+                        aria-hidden="true"
+                      >
+                        <span className="dash-cal-week__band-label">{label}</span>
+                      </span>
+                    );
+                  })}
                 {layDay(timed(day), day).map(({ entry, top, height, lane, lanes }) => {
                   const owner = ownerOf(entry);
                   const width = 100 / lanes;
@@ -185,6 +220,11 @@ export const WeekView = ({
       </div>
     </div>
   );
+};
+
+const dayEndOf = (day: number): number => {
+  const date = new Date(day);
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1).getTime();
 };
 
 const entryCovers = (entry: CalendarEvent, key: string): boolean => {

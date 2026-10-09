@@ -88,7 +88,7 @@ export const FIELD_RULE_WORDS: Readonly<Record<FieldRuleOp, string>> = {
 };
 
 /** Paths a rule may read: `contact.*`, `contact.stats.*`, `request.*`, `type.*`. */
-export const factPathSchema = z.string().trim().regex(/^(contact|request|type)(\.[a-zA-Z_][a-zA-Z0-9_]*)+$/, "A field like contact.customerType or request.serviceAddress.");
+export const factPathSchema = z.string().trim().regex(/^(contact|request|type)(\.[a-zA-Z_][a-zA-Z0-9_]*)+$/, "A field like contact.category or request.serviceAddress.");
 
 export const fieldRuleSchema = z.object({
   field: factPathSchema,

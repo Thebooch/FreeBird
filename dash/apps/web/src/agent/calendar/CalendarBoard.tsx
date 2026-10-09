@@ -1,7 +1,7 @@
-import { ROLE_PERMISSIONS, type AgentSpec, type CalendarEvent, type Principal, type WorkflowSpec } from "@freebirdai/dash-spec";
+import { ROLE_PERMISSIONS, type AgentSpec, type Block, type CalendarEvent, type Principal, type SchedulingProfile, type WorkflowSpec } from "@freebirdai/dash-spec";
 import { Button, ErrorState } from "@freebirdai/dash-components";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api } from "../../api.js";
+import { api, type HostOccurrence } from "../../api.js";
 import { isTypingTarget } from "../../editing.js";
 import type { Route } from "../../route.js";
 import { AgendaView } from "./AgendaView.jsx";
@@ -63,10 +63,15 @@ const keepView = (view: CalendarView): void => {
 export const CalendarBoard = ({
   onNavigate,
   people = new Map(),
+  hosts = [],
+  blocks = [],
 }: {
   readonly onNavigate: (route: Route) => void;
   /** Members' names and colours, where the scheduling profiles know them. */
   readonly people?: ReadonlyMap<string, Person>;
+  /** The people whose blocks the week view can show. */
+  readonly hosts?: readonly SchedulingProfile[];
+  readonly blocks?: readonly Block[];
 }): JSX.Element => {
   const [view, setViewState] = useState<CalendarView>(storedView);
   const [anchor, setAnchor] = useState(() => Date.now());
@@ -81,6 +86,8 @@ export const CalendarBoard = ({
   const [openId, setOpenId] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ readonly form: EntryForm; readonly entry?: CalendarEvent } | null>(null);
   const [token, setToken] = useState(0);
+  const [bandsFor, setBandsFor] = useState<string>("");
+  const [occurrences, setOccurrences] = useState<HostOccurrence[]>([]);
 
   const setView = useCallback((next: CalendarView) => {
     setViewState(next);
@@ -116,6 +123,26 @@ export const CalendarBoard = ({
       clearTimeout(timer);
     };
   }, [view, anchor, token]);
+
+  /* Whose blocks the week shows: yours when you take bookings, else the first person who does. */
+  useEffect(() => {
+    if (bandsFor || hosts.length === 0) return;
+    setBandsFor(hosts.find((one) => one.member === me?.userId)?.member ?? hosts[0]!.member);
+  }, [hosts, me, bandsFor]);
+
+  /* The week's block occurrences, for the bands behind it. */
+  useEffect(() => {
+    if (view !== "week" || !bandsFor) {
+      setOccurrences([]);
+      return;
+    }
+    let cancelled = false;
+    const range = viewRange(view, anchor);
+    void api.occurrences(range.from, range.to).then((list) => !cancelled && setOccurrences(list), () => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [view, anchor, bandsFor, token]);
 
   const agentById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
   const workflowById = useMemo(() => new Map(workflows.map((workflow) => [workflow.id, workflow])), [workflows]);
@@ -231,14 +258,29 @@ export const CalendarBoard = ({
                 {...(canManage ? { onAdd: (day: number) => startNew(day, true) } : {})}
               />
             ) : view === "week" ? (
-              <WeekView anchor={anchor} now={now} entries={visible} ownerOf={owner} onOpen={(entry) => setOpenId(entry.id)} {...(canManage ? { onAddAt: (at: number) => startNew(at) } : {})} />
+              <WeekView
+                anchor={anchor}
+                now={now}
+                entries={visible}
+                ownerOf={owner}
+                onOpen={(entry) => setOpenId(entry.id)}
+                bands={occurrences.filter((one) => one.host === bandsFor)}
+                blocks={blocks}
+                {...(canManage ? { onAddAt: (at: number) => startNew(at) } : {})}
+              />
             ) : (
               <AgendaView anchor={anchor} now={now} entries={visible} ownerOf={owner} sourceOf={sourceOf} onOpen={(entry) => setOpenId(entry.id)} {...(canManage ? { onAdd: () => startNew(Date.now()) } : {})} />
             )}
           </>
         )}
       </div>
-      <CalendarLegend owners={legend} filter={filter} onFilter={setFilter} stats={stats} />
+      <CalendarLegend
+        owners={legend}
+        filter={filter}
+        onFilter={setFilter}
+        stats={stats}
+        {...(hosts.length > 0 ? { blocksFor: { value: bandsFor, options: hosts.map((one) => ({ value: one.member, label: one.displayName })), onChange: setBandsFor, shown: view === "week" } } : {})}
+      />
 
       {open && (
         <EntrySheet

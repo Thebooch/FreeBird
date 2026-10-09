@@ -287,7 +287,9 @@ export const DASH_CALENDAR_STYLES = `
   box-shadow: var(--dash-shadow-sm); padding: var(--dash-space-4); display: flex; flex-direction: column; gap: var(--dash-space-4);
   position: sticky; top: var(--dash-space-4);
 }
+.dash-cal-legend__groups { display: flex; flex-direction: column; gap: var(--dash-space-4); }
 .dash-cal-legend__group { display: flex; flex-direction: column; gap: 2px; }
+.dash-cal-legend__group > select.dash-sched-input { width: 100%; min-width: 0; }
 .dash-cal-legend__title {
   margin: 0 0 var(--dash-space-1); font-family: var(--dash-font-mono); font-size: var(--dash-text-micro); font-weight: var(--dash-weight-medium);
   text-transform: uppercase; letter-spacing: var(--dash-tracking-label); color: var(--dash-muted);

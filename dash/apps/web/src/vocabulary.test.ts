@@ -38,7 +38,12 @@ const BANNED = [
 const withoutComments = (source: string): string =>
   source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/^[ \t]*\/\/.*$/gm, " ");
 
-const STRINGS = /"([^"\n]{2,})"|'([^'\n]{2,})'|`([^`]{2,})`/g;
+/**
+ * Every quoted run, however short: skipping one-character strings let
+ * `glyph="▤" title="…" body="…"` pair its quotes out of step, so the text
+ * of `body` was never read.
+ */
+const STRINGS = /"([^"\n]*)"|'([^'\n]*)'|`([^`]*)`/g;
 /** JSX text: what sits between a closing bracket and the next opening tag. */
 const JSX_TEXT = />([^<>{}]{3,})</g;
 
