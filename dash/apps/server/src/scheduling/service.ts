@@ -63,6 +63,12 @@ export interface SchedulingDeps {
   readonly now: () => number;
 }
 
+/** Narrowing a search: only some hosts, and their bookings read another way. */
+export interface SlotOptions {
+  readonly hosts?: readonly string[];
+  readonly bookings?: SchedulingDeps["bookings"];
+}
+
 export interface SchedulingOverview {
   readonly defaults: PartialSettings;
   readonly profiles: readonly SchedulingProfile[];
@@ -340,8 +346,12 @@ export class SchedulingService {
     return out.sort((a, b) => a.start - b.start);
   }
 
-  /** What fills a host's time: their own timed calendar entries, and their bookings. */
-  async busyFor(member: string, from: number, to: number): Promise<Busy[]> {
+  /**
+   * What fills a host's time: their own timed calendar entries, and their
+   * bookings — read through `bookings` when given (a booking change reads
+   * them inside its lock, leaving out the booking being changed).
+   */
+  async busyFor(member: string, from: number, to: number, bookings: SchedulingDeps["bookings"] = this.deps.bookings): Promise<Busy[]> {
     const entries: CalendarEvent[] = await this.deps.calendar.list({
       from: new Date(from - DAY).toISOString(),
       to: new Date(to + DAY).toISOString(),
@@ -354,24 +364,38 @@ export class SchedulingService {
       .filter((one) => !one.allDay && one.end)
       .map((one) => ({ start: Date.parse(one.at), end: Date.parse(one.end!), kind: "entry" as const }))
       .filter((one) => Number.isFinite(one.start) && one.end > one.start);
-    return [...timed, ...((await this.deps.bookings?.(member, from - DAY, to + DAY)) ?? [])];
+    return [...timed, ...((await bookings?.(member, from - DAY, to + DAY)) ?? [])];
   }
 
   /** The hosts a type can be booked with, each with what applies to them and fills their time. */
-  async hostsFor(type: AppointmentType, from: number, to: number): Promise<HostInput[]> {
+  async hostsFor(type: AppointmentType, from: number, to: number, options: SlotOptions = {}): Promise<HostInput[]> {
     const { profiles, pools } = await this.overview();
     const members = "members" in type.hosts ? type.hosts.members : (pools.find((one) => one.id === (type.hosts as { pool: string }).pool)?.members.filter((one) => one.active).map((one) => one.member) ?? []);
     const hosts: HostInput[] = [];
     for (const member of members) {
+      if (options.hosts && !options.hosts.includes(member)) continue;
       const profile = profiles.find((one) => one.member === member);
       if (!profile) continue;
-      hosts.push({ profile, placements: await this.placementsFor([member]), busy: await this.busyFor(member, from, to) });
+      hosts.push({ profile, placements: await this.placementsFor([member]), busy: await this.busyFor(member, from, to, options.bookings ?? this.deps.bookings) });
     }
     return hosts;
   }
 
+  /** One appointment type, by its id or its booking page address. */
+  async findType(key: string): Promise<AppointmentType | null> {
+    return (await this.deps.store.get("type", key)) ?? (await this.deps.store.list("type")).find((one) => one.slug === key) ?? null;
+  }
+
+  async findPool(id: string): Promise<Pool | null> {
+    return this.deps.store.get("pool", id);
+  }
+
+  async findProfile(member: string): Promise<SchedulingProfile | null> {
+    return this.deps.store.get("profile", member);
+  }
+
   /** Open times for a type, for these facts. */
-  async slots(type: AppointmentType, facts: Facts, range: { readonly from: number; readonly to: number; readonly all?: boolean; readonly limit?: number }): Promise<FindSlotsResult> {
+  async slots(type: AppointmentType, facts: Facts, range: { readonly from: number; readonly to: number; readonly all?: boolean; readonly limit?: number }, options: SlotOptions = {}): Promise<FindSlotsResult> {
     const { defaults, blocks } = await this.overview();
     return findSlots({
       now: this.deps.now(),
@@ -379,7 +403,7 @@ export class SchedulingService {
       to: range.to,
       type,
       workspace: defaults,
-      hosts: await this.hostsFor(type, range.from, range.to),
+      hosts: await this.hostsFor(type, range.from, range.to, options),
       blocks: new Map(blocks.map((one) => [one.id, one])),
       facts,
       ...(range.all ? { all: true } : {}),

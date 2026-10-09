@@ -197,6 +197,45 @@ CREATE TABLE IF NOT EXISTS dash_contact_setup (
   PRIMARY KEY (workspace, kind, id)
 );
 
+CREATE TABLE IF NOT EXISTS dash_bookings (
+  workspace TEXT NOT NULL,
+  id        TEXT NOT NULL,
+  host      TEXT NOT NULL,
+  contact   TEXT NOT NULL,
+  status    TEXT NOT NULL,
+  start_at  TEXT NOT NULL,
+  end_at    TEXT NOT NULL,
+  due_at    TEXT,
+  revision  INTEGER NOT NULL,
+  record    JSONB NOT NULL,
+  PRIMARY KEY (workspace, id)
+);
+CREATE INDEX IF NOT EXISTS dash_bookings_host ON dash_bookings (workspace, host, start_at);
+CREATE INDEX IF NOT EXISTS dash_bookings_contact ON dash_bookings (workspace, contact);
+CREATE INDEX IF NOT EXISTS dash_bookings_due ON dash_bookings (workspace, due_at) WHERE due_at IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS dash_booking_holds (
+  workspace TEXT NOT NULL,
+  booking   TEXT NOT NULL,
+  host      TEXT NOT NULL,
+  start_at  TEXT NOT NULL,
+  end_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS dash_booking_holds_host ON dash_booking_holds (workspace, host, start_at);
+CREATE INDEX IF NOT EXISTS dash_booking_holds_booking ON dash_booking_holds (workspace, booking);
+
+CREATE TABLE IF NOT EXISTS dash_booking_events (
+  workspace TEXT NOT NULL,
+  id        TEXT NOT NULL,
+  booking   TEXT NOT NULL,
+  kind      TEXT NOT NULL,
+  at        TEXT NOT NULL,
+  record    JSONB NOT NULL,
+  delivered BOOLEAN NOT NULL DEFAULT false,
+  PRIMARY KEY (workspace, id)
+);
+CREATE INDEX IF NOT EXISTS dash_booking_events_pending ON dash_booking_events (workspace, at) WHERE NOT delivered;
+
 CREATE TABLE IF NOT EXISTS dash_invites (
   id         TEXT PRIMARY KEY,
   workspace  TEXT NOT NULL,

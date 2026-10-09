@@ -141,7 +141,10 @@ import { calendarRoutes } from "./routes/calendar.js";
 import { CalendarService } from "./calendar/service.js";
 import { schedulingRoutes } from "./routes/scheduling.js";
 import { contactRoutes, type ContactSource } from "./routes/contacts.js";
+import { bookingRoutes } from "./routes/bookings.js";
 import { ContactService } from "./contacts/service.js";
+import { BookingService, bookingsAsBusy } from "./bookings/service.js";
+import { MemoryBookingStore, type BookingStore } from "./bookings/store.js";
 import { MemoryContactStore, type ContactStore } from "./contacts/store.js";
 import { SchedulingService, type WorkspaceMember } from "./scheduling/service.js";
 import { MemorySchedulingStore, type SchedulingStore } from "./scheduling/store.js";
@@ -417,6 +420,8 @@ export interface BuildServerOptions {
   readonly members?: () => Promise<readonly WorkspaceMember[]>;
   /** Contacts, their fields and how they are matched to records (`contacts/store.ts`). Memory unless supplied. */
   readonly contacts?: ContactStore;
+  /** Bookings, the time they hold, and their events (`bookings/store.ts`). Memory unless supplied. */
+  readonly bookings?: BookingStore;
   readonly signals?: SignalStore;
   /** Sends Outreach (texts, calls, email). Comms supplies it; absent, nothing leaves Dash and tasks say so. */
   readonly outreach?: OutreachSender;
@@ -1083,6 +1088,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     const wanted = record.toLowerCase();
     return entities.find((one) => one.id === record) ?? entities.find((one) => one.name.one.toLowerCase() === wanted || one.name.many.toLowerCase() === wanted);
   };
+  const bookingStore = options.bookings ?? new MemoryBookingStore();
   const contacts = new ContactService({
     store: options.contacts ?? new MemoryContactStore(),
     reads: {
@@ -1136,8 +1142,12 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     members: options.members ?? (async () => [{ userId: LOCAL_USER_ID, email: "", role: "owner" as const }]),
     factKinds: () => contacts.factKinds(),
     contacts,
+    bookings: bookingsAsBusy(bookingStore),
     now: () => Date.now(),
   });
+  /* Bookings (`bookings/`): the only code that changes one; the calendar mirrors each. */
+  const bookings = new BookingService({ store: bookingStore, scheduling, contacts, calendar: workflowEnv.calendar, now: () => Date.now(), newId: () => randomUUID() });
+  void app.register(bookingRoutes({ bookings, policy }));
   void app.register(schedulingRoutes({ scheduling, policy }));
   const workflowRunner = new WorkflowRunner({ ...workflowStarter, log: { warn: (line) => app.log.warn(line) } });
   if (options.workflowRunner === true) workflowRunner.start();

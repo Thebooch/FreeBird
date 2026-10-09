@@ -33,6 +33,8 @@ export interface CalendarListOptions {
   /** One workflow's entries, and within it one record's. */
   readonly workflow?: string;
   readonly rowKey?: string;
+  /** Entries mirroring one booking. */
+  readonly booking?: string;
   readonly limit?: number;
 }
 
@@ -61,7 +63,8 @@ const keep = (one: CalendarEvent, options: CalendarListOptions): boolean =>
   (!options.kinds || options.kinds.length === 0 || options.kinds.includes(one.kind)) &&
   (!options.statuses || options.statuses.length === 0 || options.statuses.includes(one.status)) &&
   (options.workflow === undefined || one.workflow === options.workflow) &&
-  (options.rowKey === undefined || one.rowKey === options.rowKey);
+  (options.rowKey === undefined || one.rowKey === options.rowKey) &&
+  (options.booking === undefined || one.booking === options.booking);
 
 /* ── memory ────────────────────────────────────────────────────────────── */
 
@@ -146,6 +149,7 @@ export class DbCalendarStore implements CalendarStore {
         AND (${from}::text IS NULL OR COALESCE(ends_at, at) >= ${from})
         AND (${options.workflow ?? null}::text IS NULL OR record->>'workflow' = ${options.workflow ?? null})
         AND (${options.rowKey ?? null}::text IS NULL OR record->>'rowKey' = ${options.rowKey ?? null})
+        AND (${options.booking ?? null}::text IS NULL OR record->>'booking' = ${options.booking ?? null})
       ORDER BY at, id LIMIT 5000
     `.execute(this.db.kysely);
     return result.rows

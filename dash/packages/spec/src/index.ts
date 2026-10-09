@@ -327,6 +327,24 @@ export {
 export type { CalendarEntryInput, CalendarEvent, CalendarKind, CalendarSource, CalendarStatus } from "./calendar.js";
 
 export {
+  ACTIVE_BOOKING_STATUSES,
+  BOOKING_EVENTS,
+  BOOKING_EVENT_WORDS,
+  BOOKING_ORIGINS,
+  BOOKING_STATUSES,
+  BOOKING_STATUS_WORDS,
+  bookingActorSchema,
+  bookingEventSchema,
+  bookingSchema,
+  bookingSuggestionSchema,
+  dueAt,
+  holdsOf,
+  resolvedSettingsSchema,
+} from "./booking.js";
+
+export type { Booking, BookingActor, BookingEvent, BookingEventKind, BookingHold, BookingOrigin, BookingStatus, BookingSuggestion } from "./booking.js";
+
+export {
   CONTACT_CHANNELS,
   CONTACT_FIELD_KINDS,
   CONTACT_ORIGINS,
