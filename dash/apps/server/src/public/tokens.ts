@@ -14,9 +14,11 @@ import type { DashDb } from "../platform/db.js";
  * - An **approval** link is one member's, for one booking and the one
  *   Approve a booking step waiting on it. It expires with the step's
  *   deadline, is spent when used, and is revoked when the step finishes.
+ * - A **calendar feed** is one member's own calendar as `.ics`, read-only,
+ *   for their phone. Making a new one stops the old.
  */
 
-export const TOKEN_PURPOSES = ["booking_link", "approval"] as const;
+export const TOKEN_PURPOSES = ["booking_link", "approval", "calendar_feed"] as const;
 export type TokenPurpose = (typeof TOKEN_PURPOSES)[number];
 
 export const publicTokenSchema = z.object({
@@ -54,12 +56,19 @@ export const mintToken = (fields: Omit<PublicToken, "id" | "hash" | "createdAt">
   return { token, record: publicTokenSchema.parse({ ...fields, id: randomUUID(), hash: hashToken(token), createdAt: new Date(now).toISOString() }) };
 };
 
+export interface TokenFilter {
+  readonly task?: string;
+  readonly contact?: string;
+  readonly member?: string;
+  readonly purpose?: TokenPurpose;
+}
+
 export interface PublicTokenStore {
   put(token: PublicToken): Promise<void>;
   /** The token a presented value is, by its hash. */
   byHash(hash: string): Promise<PublicToken | null>;
-  /** Tokens of one task, or one contact. */
-  list(filter: { readonly task?: string; readonly contact?: string }): Promise<PublicToken[]>;
+  /** Tokens of one task, contact or member, and of one purpose. */
+  list(filter: TokenFilter): Promise<PublicToken[]>;
 }
 
 export class MemoryPublicTokenStore implements PublicTokenStore {
@@ -70,8 +79,14 @@ export class MemoryPublicTokenStore implements PublicTokenStore {
   async byHash(hash: string): Promise<PublicToken | null> {
     return [...this.tokens.values()].find((one) => one.hash === hash) ?? null;
   }
-  async list(filter: { readonly task?: string; readonly contact?: string }): Promise<PublicToken[]> {
-    return [...this.tokens.values()].filter((one) => (filter.task === undefined || one.task === filter.task) && (filter.contact === undefined || one.contact === filter.contact));
+  async list(filter: TokenFilter): Promise<PublicToken[]> {
+    return [...this.tokens.values()].filter(
+      (one) =>
+        (filter.task === undefined || one.task === filter.task) &&
+        (filter.contact === undefined || one.contact === filter.contact) &&
+        (filter.member === undefined || one.member === filter.member) &&
+        (filter.purpose === undefined || one.purpose === filter.purpose),
+    );
   }
 }
 
@@ -96,11 +111,13 @@ export class DbPublicTokenStore implements PublicTokenStore {
     const row = result.rows[0];
     return row ? publicTokenSchema.parse(parsed(row.record)) : null;
   }
-  async list(filter: { readonly task?: string; readonly contact?: string }): Promise<PublicToken[]> {
+  async list(filter: TokenFilter): Promise<PublicToken[]> {
     const result = await sql<{ record: unknown }>`
       SELECT record FROM dash_public_tokens WHERE workspace = ${this.workspace}
         ${filter.task !== undefined ? sql`AND task = ${filter.task}` : sql``}
         ${filter.contact !== undefined ? sql`AND contact = ${filter.contact}` : sql``}
+        ${filter.member !== undefined ? sql`AND record->>'member' = ${filter.member}` : sql``}
+        ${filter.purpose !== undefined ? sql`AND purpose = ${filter.purpose}` : sql``}
       ORDER BY id
     `.execute(this.db.kysely);
     return result.rows.map((row) => publicTokenSchema.parse(parsed(row.record)));
@@ -112,7 +129,7 @@ export const tokenProblem = (token: PublicToken | null, purpose: TokenPurpose, n
   if (!token || token.purpose !== purpose) return "This link isn't valid.";
   /* A used or closed approval link still opens, to show what was decided; it can't answer again. */
   if (purpose === "approval" && token.usedAt && options.answering) return "This link has been used.";
-  if (token.revokedAt && (options.answering || purpose === "booking_link")) return "This link was replaced or withdrawn.";
+  if (token.revokedAt && (options.answering || purpose !== "approval")) return "This link was replaced or withdrawn.";
   if (Date.parse(token.expiresAt) <= now && !options.activeBooking) return "This link has expired.";
   return null;
 };

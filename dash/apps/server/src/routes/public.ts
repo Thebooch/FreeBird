@@ -9,7 +9,8 @@ import {
   type Contact,
 } from "@freebirdai/dash-spec";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { icsCalendar } from "../bookings/ics.js";
+import { icsCalendar, type IcsEvent } from "../bookings/ics.js";
+import type { CalendarStore } from "../calendar/store.js";
 import type { BookingLinks } from "../bookings/links.js";
 import type { Brand } from "../bookings/notify.js";
 import { BookingError, type BookingService } from "../bookings/service.js";
@@ -43,6 +44,7 @@ export const PUBLIC_ROUTES = [
   "GET /api/public/:workspace/approve/:token",
   "GET /api/public/:workspace/book/:token",
   "GET /api/public/:workspace/book/:token/ics",
+  "GET /api/public/:workspace/calendar/:token",
   "GET /api/public/:workspace/types/:slug",
   "POST /api/public/:workspace/approve/:token",
   "POST /api/public/:workspace/approve/:token/times",
@@ -68,6 +70,8 @@ export interface PublicRouteDeps {
   readonly links: BookingLinks;
   readonly tasks: TaskStore;
   readonly members: () => Promise<readonly WorkspaceMember[]>;
+  /** For a member's calendar feed. */
+  readonly calendar: CalendarStore;
   readonly brand: () => Promise<Brand>;
   readonly limiter: RateLimiter;
   readonly now: () => number;
@@ -428,6 +432,46 @@ export const publicRoutes = (deps: PublicRouteDeps) =>
           { now: now(), name: brand.name },
         );
         return reply.header("Content-Type", "text/calendar; charset=utf-8").header("Content-Disposition", 'attachment; filename="booking.ics"').send(body);
+      } catch (error) {
+        return fail(reply, error);
+      }
+    });
+
+    /* ── a member's own calendar, for their phone ───────────────────────── */
+
+    /*
+     * Read-only `.ics` of one member's own entries and appointments, a month
+     * back and six ahead. The link is theirs: it stops when they make a new
+     * one, stop it, or leave the workspace.
+     */
+    app.get<{ Params: Params }>("/api/public/:workspace/calendar/:token", open, async (request, reply) => {
+      try {
+        const token = await tokenOf(request.params.token);
+        const problem = tokenProblem(token, "calendar_feed", now());
+        if (problem || !token?.member) throw new PublicError(problem ?? "This link isn't valid.", 404);
+        if (!(await deps.members()).some((one) => one.userId === token.member)) throw new PublicError("This link isn't valid.", 404);
+        const at = now();
+        const entries = await deps.calendar.list({ owners: [`member:${token.member}`], from: iso(at - 31 * DAY), to: iso(at + 183 * DAY), limit: 2000 });
+        const brand = await deps.brand();
+        const events: IcsEvent[] = entries.map((one) => {
+          const allDay = one.allDay || /^\d{4}-\d{2}-\d{2}$/.test(one.at.trim());
+          const start = allDay ? one.at.slice(0, 10) : new Date(one.at).toISOString();
+          const end = allDay ? (one.end ?? one.at).slice(0, 10) : one.end ? new Date(one.end).toISOString() : new Date(Date.parse(one.at) + 15 * 60_000).toISOString();
+          return {
+            uid: `${one.id}@freebird.dash`,
+            start,
+            end,
+            allDay,
+            summary: one.title,
+            ...(one.notes ? { description: one.notes } : {}),
+            status: one.status === "cancelled" ? "CANCELLED" : one.status === "tentative" ? "TENTATIVE" : "CONFIRMED",
+            ...(one.updatedAt ? { updatedAt: one.updatedAt } : {}),
+          };
+        });
+        return reply
+          .header("Content-Type", "text/calendar; charset=utf-8")
+          .header("Content-Disposition", 'inline; filename="calendar.ics"')
+          .send(icsCalendar(events, { now: at, name: brand.name }));
       } catch (error) {
         return fail(reply, error);
       }

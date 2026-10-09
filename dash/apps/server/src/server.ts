@@ -1245,6 +1245,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       links: bookingLinks,
       tasks: workflowEnv.tasks,
       members: workspaceMembers,
+      calendar: workflowEnv.calendar,
       brand,
       limiter: options.rateLimiter ?? new MemoryRateLimiter(),
       now: () => Date.now(),

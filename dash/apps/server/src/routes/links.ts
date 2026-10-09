@@ -62,6 +62,27 @@ export const linkRoutes = (deps: { readonly links: BookingLinks; readonly bookin
       }
     });
 
+    /*
+     * Your own calendar on your phone: `GET` says whether you have a feed,
+     * `POST` makes a new link (the old one stops), `POST …/stop` stops it.
+     * Anyone in the workspace, for their own calendar only.
+     */
+    const feedInfo = (one: PublicToken | null) => (one ? { id: one.id, createdAt: one.createdAt, expiresAt: one.expiresAt } : null);
+    app.get("/api/calendar/feed", async (request, reply) => {
+      if (!request.principal) return reply.status(401).send({ error: "Sign in to continue." });
+      return { feed: feedInfo(await links.feedOf(request.principal.userId)) };
+    });
+    app.post("/api/calendar/feed", async (request, reply) => {
+      if (!request.principal) return reply.status(401).send({ error: "Sign in to continue." });
+      const made = await links.feedLink(request.principal.userId);
+      return { url: made.url, webcal: made.webcal, feed: feedInfo(made.token) };
+    });
+    app.post("/api/calendar/feed/stop", async (request, reply) => {
+      if (!request.principal) return reply.status(401).send({ error: "Sign in to continue." });
+      await links.stopFeed(request.principal.userId);
+      return { feed: null };
+    });
+
     app.get<{ Params: { id: string } }>("/api/contacts/:id/links", async (request, reply) => {
       if (!(await requirePermission(policy, request, reply, "contacts.manage"))) return reply;
       return (await links.linksOf(request.params.id)).map(shown);

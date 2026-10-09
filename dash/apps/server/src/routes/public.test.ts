@@ -313,6 +313,44 @@ describe("the approval page", () => {
   });
 });
 
+describe("a member's calendar feed", () => {
+  it("serves their own entries and appointments as .ics, until they make a new link, stop it, or leave", async () => {
+    const { team, world, memberships, join_, contact, at } = await setup("feed");
+    const ana = await contact("Ana Ruiz", "ana@example.com");
+    await team.inject({ method: "POST", url: "/api/scheduling/bookings", payload: { type: "visit", contact: ana.id, start: at(10) } });
+    await team.inject({ method: "POST", url: "/api/calendar", payload: { title: "Team offsite", at: at(0).slice(0, 10), allDay: true } });
+
+    expect((await team.inject({ method: "GET", url: "/api/calendar/feed" })).json()).toEqual({ feed: null });
+    const made = (await team.inject({ method: "POST", url: "/api/calendar/feed" })).json() as { url: string; webcal: string; feed: { id: string } };
+    expect(made.url).toMatch(/^https:\/\/dash\.example\.com\/api\/public\/acme\/calendar\/[A-Za-z0-9_-]{43}$/);
+    expect(made.webcal.startsWith("webcal://dash.example.com/")).toBe(true);
+    expect((await team.inject({ method: "GET", url: "/api/calendar/feed" })).json()).toMatchObject({ feed: { id: made.feed.id } });
+
+    const path = new URL(made.url).pathname;
+    const feed = await world.inject({ method: "GET", url: path });
+    expect(feed.statusCode).toBe(200);
+    expect(feed.headers["content-type"]).toContain("text/calendar");
+    expect(feed.headers["cache-control"]).toBe("no-store");
+    expect(feed.body).toContain("SUMMARY:Visit");
+    expect(feed.body).toContain(`DTSTART:${at(10).replace(/[-:]/g, "").replace(/\.\d{3}/, "")}`);
+    expect(feed.body).toMatch(/DTSTART;VALUE=DATE:\d{8}\r\nDTEND;VALUE=DATE:\d{8}\r\nSUMMARY:Team offsite/);
+
+    /* A new link stops the old one. */
+    const again = (await team.inject({ method: "POST", url: "/api/calendar/feed" })).json() as { url: string };
+    expect((await world.inject({ method: "GET", url: path })).statusCode).toBe(404);
+    const second = new URL(again.url).pathname;
+    expect((await world.inject({ method: "GET", url: second })).statusCode).toBe(200);
+
+    /* Leaving the team stops it too, and so does stopping it. */
+    await memberships.removeMember("acme", "ed");
+    expect((await world.inject({ method: "GET", url: second })).statusCode).toBe(404);
+    await join_("ed", "editor");
+    expect((await world.inject({ method: "GET", url: second })).statusCode).toBe(200);
+    await team.inject({ method: "POST", url: "/api/calendar/feed/stop" });
+    expect((await world.inject({ method: "GET", url: second })).statusCode).toBe(404);
+  });
+});
+
 describe("in the hosted host", () => {
   it("routes a public request to its workspace with no principal, and a made-up workspace to nothing", async () => {
     const built: string[] = [];

@@ -87,6 +87,27 @@ export const DASH_CALENDAR_STYLES = `
   letter-spacing: -0.01em; color: var(--dash-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .dash-cal__actions { display: flex; align-items: center; gap: var(--dash-space-2); }
+
+/* Your calendar on your phone: a small panel under the Subscribe button. */
+.dash-cal-feed { position: relative; }
+.dash-cal-feed__panel {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; width: min(380px, calc(100vw - 32px));
+  display: flex; flex-direction: column; gap: var(--dash-space-3); padding: var(--dash-space-4);
+  background: var(--dash-surface-raised); border: 1px solid var(--dash-border); border-radius: var(--dash-radius);
+  box-shadow: var(--dash-shadow-md);
+}
+.dash-cal-feed__head { display: flex; flex-direction: column; gap: 4px; }
+.dash-cal-feed__head strong { font-size: var(--dash-text-sm); font-weight: var(--dash-weight-semi); color: var(--dash-ink); }
+.dash-cal-feed__head span, .dash-cal-feed__state { margin: 0; font-size: var(--dash-text-xs); line-height: 1.5; color: var(--dash-ink-secondary); }
+.dash-cal-feed__made { display: flex; flex-direction: column; gap: var(--dash-space-2); padding: var(--dash-space-3); border-radius: var(--dash-radius-sm); background: var(--dash-accent-wash); border: 1px solid var(--dash-accent-line); }
+.dash-cal-feed__made input {
+  font: inherit; font-family: var(--dash-font-mono); font-size: var(--dash-text-xs); color: var(--dash-ink);
+  padding: 6px 8px; border-radius: var(--dash-radius-xs); border: 1px solid var(--dash-border); background: var(--dash-surface); width: 100%; min-width: 0;
+}
+.dash-cal-feed__made .dash-hint { margin: 0; }
+.dash-cal-feed__row { display: flex; align-items: center; gap: var(--dash-space-2); flex-wrap: wrap; }
+.dash-cal-feed__row a.dash-btn { text-decoration: none; }
+.dash-cal-feed__foot { padding-top: var(--dash-space-2); border-top: 1px solid var(--dash-border); }
 .dash-cal__sync {
   width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--dash-axis); border-top-color: var(--dash-accent);
   flex: none; margin-left: var(--dash-space-1);

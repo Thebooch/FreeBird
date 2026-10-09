@@ -63,7 +63,8 @@ export const GUARDED_ROUTES: readonly GuardRule[] = [
  * prepare and again on commit (`WriteService`). Guarding them here as well
  * would refuse a member granted one record type on one connection.
  */
-const OWN_CHECK = [/^\/api\/writes(\/|$)/, /^\/api\/connections\/[^/]+\/writes\/prepare$/];
+/* Routes that check for themselves: writes ask the policy per record, and a calendar feed is only ever your own. */
+const OWN_CHECK = [/^\/api\/writes(\/|$)/, /^\/api\/connections\/[^/]+\/writes\/prepare$/, /^\/api\/calendar\/feed(\/stop)?$/];
 
 export const permissionFor = (method: string, url: string): Permission | null => {
   const path = url.split("?")[0] ?? url;

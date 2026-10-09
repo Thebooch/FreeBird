@@ -5,6 +5,7 @@ import { api, type HostOccurrence } from "../../api.js";
 import { isTypingTarget } from "../../editing.js";
 import type { Route } from "../../route.js";
 import { AgendaView } from "./AgendaView.jsx";
+import { CalendarFeed } from "./CalendarFeed.jsx";
 import { CalendarLegend } from "./CalendarLegend.jsx";
 import { ChevronLeft, ChevronRight, Segmented } from "./controls.jsx";
 import { EntryFormSheet } from "./EntryFormSheet.jsx";
@@ -233,6 +234,7 @@ export const CalendarBoard = ({
           </div>
           <div className="dash-cal__actions">
             <Segmented label="View" value={view} options={CALENDAR_VIEWS.map((value) => ({ value, label: VIEW_LABELS[value], hint: `${VIEW_LABELS[value]} (${value[0]!.toUpperCase()})` }))} onChange={setView} testId="calendar-view" />
+            <CalendarFeed />
             {canManage && (
               <Button tone="primary" onClick={() => startNew(Date.now())} title="New entry (N)" testId="calendar-new">
                 New entry

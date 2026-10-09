@@ -170,6 +170,29 @@ export class BookingLinks {
     return (await this.deps.tokens.list({ contact })).filter((one) => one.purpose === "booking_link").sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
+  /* ── a member's calendar feed ─────────────────────────────────────────── */
+
+  /** The member's feed, if one works: never the link itself. */
+  async feedOf(member: string): Promise<PublicToken | null> {
+    const now = this.deps.now();
+    return (await this.deps.tokens.list({ member, purpose: "calendar_feed" })).find((one) => !one.revokedAt && Date.parse(one.expiresAt) > now) ?? null;
+  }
+
+  /** Stops every feed link the member has. */
+  async stopFeed(member: string): Promise<void> {
+    const at = iso(this.deps.now());
+    for (const one of await this.deps.tokens.list({ member, purpose: "calendar_feed" })) if (!one.revokedAt) await this.deps.tokens.put({ ...one, revokedAt: at });
+  }
+
+  /** A new feed link for the member's own calendar; the old one stops. A year long. */
+  async feedLink(member: string): Promise<{ readonly url: string; readonly webcal: string; readonly token: PublicToken }> {
+    await this.stopFeed(member);
+    const minted = mintToken({ purpose: "calendar_feed", member, expiresAt: iso(this.deps.now() + 365 * DAY) }, this.deps.now());
+    await this.deps.tokens.put(minted.record);
+    const url = ownLink(`${this.deps.origin}/api/public/${encodeURIComponent(this.deps.workspace)}/calendar/${minted.token}`, this.deps.origin);
+    return { url, webcal: url.replace(/^https?:/, "webcal:"), token: minted.record };
+  }
+
   /* ── approval links ──────────────────────────────────────────────────── */
 
   private async member(id: string, fallbackZone: string): Promise<AskedMember | null> {

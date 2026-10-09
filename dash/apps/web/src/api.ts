@@ -45,6 +45,13 @@ import type {
 } from "@freebirdai/dash-spec";
 
 /** The connection as the server reports it — secrets replaced by a boolean. */
+/** A calendar feed, without the link itself (only its hash is kept). */
+export interface CalendarFeedInfo {
+  readonly id: string;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+}
+
 /** A booking link as the contact sheet lists it. */
 export interface BookingLinkInfo {
   readonly id: string;
@@ -1501,6 +1508,10 @@ export const api = {
   markBooking: (id: string, as: "completed" | "no_show"): Promise<Booking> => request(`/api/scheduling/bookings/${encodeURIComponent(id)}/mark`, json({ as })),
   bookingSlots: (type: string, contact: string, from: string, to: string): Promise<SlotPreview> =>
     request(`/api/scheduling/slots?${new URLSearchParams({ type, contact, from, to }).toString()}`),
+  /** Your own calendar as a feed for your phone: whether you have one, a new link (the old stops), or stop it. */
+  calendarFeed: (): Promise<{ feed: CalendarFeedInfo | null }> => request("/api/calendar/feed"),
+  makeCalendarFeed: (): Promise<{ url: string; webcal: string; feed: CalendarFeedInfo }> => request("/api/calendar/feed", json({})),
+  stopCalendarFeed: (): Promise<{ feed: null }> => request("/api/calendar/feed/stop", json({})),
   /** Your own link to answer this booking's waiting approval from the approval page. */
   approvalLink: (id: string): Promise<{ url: string; expiresAt: string }> => request(`/api/scheduling/bookings/${encodeURIComponent(id)}/approval-link`, json({})),
   /** The person's own page for this booking. */

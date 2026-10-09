@@ -9,6 +9,8 @@ export interface IcsEvent {
   readonly uid: string;
   readonly start: string;
   readonly end: string;
+  /** A whole day (or days): `start` and `end` are read as dates, and the end is the day after the last. */
+  readonly allDay?: boolean;
   readonly summary: string;
   readonly description?: string;
   readonly location?: string;
@@ -20,6 +22,8 @@ export interface IcsEvent {
 }
 
 const stamp = (at: string | number): string => new Date(at).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+const dateStamp = (at: string): string => at.slice(0, 10).replace(/-/g, "");
+const nextDate = (at: string): string => new Date(Date.parse(`${at.slice(0, 10)}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
 
 /** Backslash, semicolon, comma and line breaks, as the format wants them. */
 export const icsText = (value: string): string =>
@@ -57,8 +61,9 @@ export const icsCalendar = (events: readonly IcsEvent[], options: { readonly nam
       "BEGIN:VEVENT",
       `UID:${icsText(event.uid)}`,
       `DTSTAMP:${stamp(event.updatedAt ?? options.now)}`,
-      `DTSTART:${stamp(event.start)}`,
-      `DTEND:${stamp(event.end)}`,
+      ...(event.allDay
+        ? [`DTSTART;VALUE=DATE:${dateStamp(event.start)}`, `DTEND;VALUE=DATE:${dateStamp(nextDate(event.end && event.end >= event.start ? event.end : event.start))}`]
+        : [`DTSTART:${stamp(event.start)}`, `DTEND:${stamp(event.end)}`]),
       `SUMMARY:${icsText(event.summary)}`,
       ...(event.description ? [`DESCRIPTION:${icsText(event.description)}`] : []),
       ...(event.location ? [`LOCATION:${icsText(event.location)}`] : []),
