@@ -224,7 +224,10 @@ export const schedulingTools = (deps: ConversationDeps, input: Pick<Conversation
         const to = Math.min(instantFrom(dayEnd(args["before"]), zone) ?? from + 14 * DAY, from + 62 * DAY);
         if (to <= from) return { times: [], say: "That range is in the past or empty." };
         const found = await discover({ scheduling: deps.scheduling, contacts: deps.contacts }, { type, contact: contact.id, request, range: { from, to, limit: 400 } });
-        if (found.result.notEligible) return { notEligible: true, say: notEligibleWords(type) };
+        if (found.result.notEligible) {
+          await deps.bookings.turnedAway({ type, contact: contact.id, answers: request, via: "agent", agent: agent.id });
+          return { notEligible: true, say: notEligibleWords(type) };
+        }
         if (found.needs.length > 0 && found.result.slots.length === 0) return { needs: found.needs.map((one) => ({ field: one.field, question: one.question, ...(one.choices ? { choices: one.choices } : {}) })), ...(problems.length ? { problems } : {}) };
         const days = new Set((args["weekdays"] as string[] | undefined) ?? []);
         const part = args["partOfDay"] as string | undefined;
@@ -249,7 +252,10 @@ export const schedulingTools = (deps: ConversationDeps, input: Pick<Conversation
         const asked = say(at);
         if (at <= deps.now()) return { open: false, asked, say: "That time has passed." };
         const result = await deps.bookings.slotsFor(type.id, contact.id, { from: Math.max(deps.now(), at - 3 * DAY), to: at + 3 * DAY, all: true });
-        if (result.notEligible) return { open: false, notEligible: true, say: notEligibleWords(type) };
+        if (result.notEligible) {
+          await deps.bookings.turnedAway({ type, contact: contact.id, answers: {}, via: "agent", agent: agent.id });
+          return { open: false, notEligible: true, say: notEligibleWords(type) };
+        }
         const exact = result.slots.find((slot) => slot.start === at);
         if (exact) return { open: true, ...time(exact) };
         const before = [...result.slots].reverse().find((slot) => slot.start < at);

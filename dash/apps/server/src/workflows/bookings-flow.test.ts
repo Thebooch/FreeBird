@@ -325,11 +325,60 @@ describe("checking booking workflows", () => {
     expect(ghost).toEqual([expect.objectContaining({ field: "trigger", message: 'There is no appointment type "ghost".' })]);
   });
 
+  it("follows up once a day with someone a type turned away: tells them what to do, and tells the team", async () => {
+    const { f, service, scheduling, contacts, dispatcher, ana } = await setup("none");
+    await scheduling.putType("visit", { eligibility: { rules: { all: [{ field: "request.partySize", op: "lte", values: [8] }], any: [] }, message: "For parties of 9 or more, please call us." } });
+    const templates = new TemplateService({ templates: f.env.templates, workflows: f.env.store, newId: () => "x", builtIn: BOOKING_RECIPES });
+    const { input } = await templates.workflowFrom("recipe-turned-away", { agent: "maint", say: "Tell them to call 555-0100 to arrange it." }, undefined, ["visit"]);
+    expect(input.trigger).toEqual({ kind: "booking", events: ["turned_away"], types: ["visit"], endWhenCancelled: false });
+    /* Sent as it stands for the test: fixed wording, no approval. */
+    const nodes = (input.nodes ?? []).map((one) =>
+      one.action.startsWith("outreach.") ? { ...one, mode: "auto" as const, settings: { ...one.settings, content: "fixed", wording: "Please call us at 555-0100 to arrange it." } } : one,
+    );
+    await f.env.store.put(workflowOf({ ...input, nodes, id: "turned", trial: 0, enabled: true }));
+
+    const ask = () => service.request({ type: "visit", contact: ana, start: WED_9, origin: "agent", agent: "maint", by: { kind: "agent", id: "maint" }, answers: { partySize: "12" } });
+    await expect(ask()).rejects.toMatchObject({ status: 403, message: "For parties of 9 or more, please call us." });
+    await dispatcher.deliver();
+    await expect(ask()).rejects.toMatchObject({ status: 403 });
+    await dispatcher.deliver();
+
+    /* Once that day, however often they try. */
+    const cases = await f.env.cases.list({ workflow: "turned" });
+    expect(cases).toHaveLength(1);
+    expect(cases[0]!.status).toBe("done");
+    expect(cases[0]!.data.row).toMatchObject({
+      contact: { name: "Ana Lopez", phone: "+15125550142" },
+      type: { id: "visit", name: "Visit" },
+      request: { partySize: "12" },
+      answersText: "Party size: 12",
+      reason: "For parties of 9 or more, please call us.",
+      via: "agent",
+      viaWords: "a conversation with an agent",
+    });
+    /* They have a phone, so a text; and the team hears it. */
+    expect(f.sent).toEqual([expect.objectContaining({ channel: "text", to: "+15125550142", text: "Please call us at 555-0100 to arrange it." })]);
+    const tasks = await f.env.tasks.list({ case: cases[0]!.id });
+    expect(tasks.find((one) => one.action === "notify.team")).toMatchObject({
+      title: "Ana Lopez was turned away from Visit",
+      body: { kind: "notice", text: expect.stringContaining("Party size: 12") },
+    });
+    expect(tasks.find((one) => one.action === "notify.team")!.body).toMatchObject({ text: expect.stringContaining("They were told: For parties of 9 or more, please call us.") });
+
+    /* No phone: an email instead. And a team member booking for someone starts nothing. */
+    const ben = await contacts.findOrCreate({ email: "ben@example.com", name: "Ben", origin: "agent" });
+    await expect(service.request({ type: "visit", contact: ben.id, start: WED_9, origin: "link", by: them, answers: { partySize: "20" } })).rejects.toMatchObject({ status: 403 });
+    await expect(service.request({ type: "visit", contact: ana, start: WED_9, origin: "member", by: sam, answers: { partySize: "20" } })).rejects.toMatchObject({ status: 403 });
+    await dispatcher.deliver();
+    expect(await f.env.cases.list({ workflow: "turned" })).toHaveLength(2);
+    expect(f.sent.at(-1)).toMatchObject({ channel: "email", to: "ben@example.com" });
+  });
+
   it("ships recipes that make sound workflows once the agent is filled in", async () => {
     const { f } = await setup();
     const templates = new TemplateService({ templates: f.env.templates, workflows: f.env.store, newId: () => "x", builtIn: BOOKING_RECIPES });
     const service = new WorkflowService({ store: f.env.store, policy: { can: () => ({ ok: true }) }, agents: { list: async () => [agentOf()] }, hasConnection: () => true });
-    expect((await templates.list()).map((one) => one.id)).toEqual(["recipe-booking-approval", "recipe-booking-reminders", "recipe-booking-denied"]);
+    expect((await templates.list()).map((one) => one.id)).toEqual(["recipe-booking-approval", "recipe-booking-reminders", "recipe-booking-denied", "recipe-turned-away"]);
     for (const recipe of BOOKING_RECIPES) {
       const { input } = await templates.workflowFrom(recipe.id, { agent: "maint" });
       const problems = await service.problems(owner, workflowOf({ ...input, enabled: false }));

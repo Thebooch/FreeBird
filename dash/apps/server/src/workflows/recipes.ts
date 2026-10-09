@@ -10,6 +10,9 @@ import { workflowTemplateSchema, type WorkflowTemplate } from "@freebirdai/dash-
  * 2. Confirmation and reminders: confirm, remind the day before and two
  *    hours before, then ask whether they showed.
  * 3. Denied, so offer other times: find open times and offer them.
+ * 4. Follow up with people turned away: text them (or email them, with no
+ *    phone) what to do instead, in the words the team gives, and tell the
+ *    team.
  *
  * Every one is saved switched off, as any workflow from a template is.
  */
@@ -120,6 +123,45 @@ const RECIPES: unknown[] = [
     edges: [edge("trigger", "next", "find"), edge("find", "found", "offer"), edge("offer", "next", "offered"), edge("find", "none", "none"), edge("find", "needs_info", "none")],
     entry: "find",
     workflow: { name: "Denied, so offer other times", description: "Offer the next open times after a denial.", trigger: { kind: "booking", events: ["denied"], types: [], endWhenCancelled: true }, once: "per-row", guardrails: "" },
+  },
+  {
+    id: "recipe-turned-away",
+    kind: "workflow",
+    name: "Follow up with people turned away",
+    description: "When a type's Who can book rules turn someone away, text them (or email them) what to do instead, and tell the team.",
+    blanks: [
+      AGENT_BLANK,
+      { name: "say", label: "What to tell them", default: "Let them know this can't be booked online, and that they can call us to arrange it." },
+    ],
+    nodes: [
+      node("has_phone", "branch.if", { condition: 'contact.phone != ""' }, 0, 0),
+      node("text_them", "outreach.text", { agentId: "{{ blank.agent }}", to: "{{ contact.phone }}", purpose: "{{ blank.say }}", content: "agent" }, -200, 160),
+      node("email_them", "outreach.email", { agentId: "{{ blank.agent }}", to: "{{ contact.email }}", subject: "About your {{ type.name }} request", purpose: "{{ blank.say }}", content: "agent" }, 200, 160),
+      node(
+        "tell_team",
+        "notify.team",
+        { title: "{{ contact.name }} was turned away from {{ type.name }}", text: "They asked on {{ viaWords }}, {{ when }}.\n{{ answersText }}\nThey were told: {{ reason }}", to: "everyone" },
+        0,
+        320,
+      ),
+    ],
+    edges: [
+      edge("trigger", "next", "has_phone"),
+      edge("has_phone", "yes", "text_them"),
+      edge("has_phone", "no", "email_them"),
+      edge("text_them", "next", "tell_team"),
+      edge("text_them", "failed", "tell_team"),
+      edge("email_them", "next", "tell_team"),
+      edge("email_them", "failed", "tell_team"),
+    ],
+    entry: "has_phone",
+    workflow: {
+      name: "Follow up with people turned away",
+      description: "Tell people a type turned away what to do instead, and tell the team.",
+      trigger: { kind: "booking", events: ["turned_away"], types: [], endWhenCancelled: false },
+      once: "per-row",
+      guardrails: "",
+    },
   },
 ];
 

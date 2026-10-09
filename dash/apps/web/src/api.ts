@@ -1437,8 +1437,9 @@ export const api = {
   insertTemplate: (id: string, values: Record<string, string>, at: { x: number; y: number }): Promise<{ nodes: WorkflowInput["nodes"]; edges: WorkflowInput["edges"]; entry?: string; template: WorkflowTemplate }> =>
     request(`/api/workflow-templates/${encodeURIComponent(id)}/insert`, json({ values, at })),
 
-  workflowFromTemplate: (id: string, values: Record<string, string>, name?: string): Promise<WorkflowSpec> =>
-    request(`/api/workflow-templates/${encodeURIComponent(id)}/workflow`, json({ values, ...(name ? { name } : {}) })),
+  /** A new workflow from a workflow template, saved off. `types`: for a template a booking starts, only these appointment types. */
+  workflowFromTemplate: (id: string, values: Record<string, string>, name?: string, types?: readonly string[]): Promise<WorkflowSpec> =>
+    request(`/api/workflow-templates/${encodeURIComponent(id)}/workflow`, json({ values, ...(name ? { name } : {}), ...(types && types.length > 0 ? { types } : {}) })),
 
   /* ── calendar ──────────────────────────────────────────────────────── */
 

@@ -247,10 +247,11 @@ export const workflowRoutes = (deps: {
     );
 
     /** A new workflow from a workflow template. Saved off. */
-    app.post<{ Params: { id: string }; Body: { values?: Record<string, string>; name?: string } }>(
+    app.post<{ Params: { id: string }; Body: { values?: Record<string, string>; name?: string; types?: string[] } }>(
       "/api/workflow-templates/:id/workflow",
-      guarded<{ values?: Record<string, string>; name?: string } | undefined>(async (principal, request) => {
-        const { input, template } = await templates.workflowFrom(request.params["id"]!, request.body?.values ?? {}, request.body?.name);
+      guarded<{ values?: Record<string, string>; name?: string; types?: string[] } | undefined>(async (principal, request) => {
+        const types = Array.isArray(request.body?.types) ? request.body.types.filter((one): one is string => typeof one === "string").slice(0, 50) : undefined;
+        const { input, template } = await templates.workflowFrom(request.params["id"]!, request.body?.values ?? {}, request.body?.name, types);
         const made = await workflows.create(principal, input);
         const marked = { ...made, fromTemplate: { id: template.id, version: template.version } };
         await env.store.put(marked);

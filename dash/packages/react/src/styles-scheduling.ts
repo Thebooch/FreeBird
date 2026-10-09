@@ -313,6 +313,15 @@ select.dash-sched-input { width: auto; min-width: 180px; cursor: pointer; }
 .dash-booking-history__note { font-size: var(--dash-text-xs); color: var(--dash-muted); }
 .dash-booking-history__when { font-size: var(--dash-text-xs); color: var(--dash-muted); white-space: nowrap; }
 
+/* An appointment type's follow-ups for people turned away. */
+.dash-followups { display: flex; flex-direction: column; gap: var(--dash-space-2); width: 100%; }
+.dash-followups__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.dash-followups__item { display: flex; align-items: center; gap: var(--dash-space-2); padding: 8px 10px; border: 1px solid var(--dash-border); border-radius: var(--dash-radius-sm); background: var(--dash-surface); }
+.dash-followups__name { flex: 1; min-width: 0; font-size: var(--dash-text-sm); font-weight: var(--dash-weight-medium); color: var(--dash-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-followups__form { display: flex; flex-direction: column; gap: var(--dash-space-3); padding: var(--dash-space-3); border: 1px solid var(--dash-border); border-radius: var(--dash-radius-sm); background: var(--dash-surface-sunken); }
+.dash-followups__field { display: flex; flex-direction: column; gap: 4px; font-size: var(--dash-text-xs); color: var(--dash-ink-secondary); font-weight: var(--dash-weight-medium); }
+.dash-followups__field textarea { resize: vertical; min-height: 64px; font: inherit; font-size: var(--dash-text-sm); }
+
 /* A link made and copied: the button, then what happened. */
 .dash-copylink { display: inline-flex; align-items: center; gap: var(--dash-space-2); flex-wrap: wrap; min-width: 0; }
 .dash-copylink__done { font-size: var(--dash-text-xs); color: var(--dash-good); }

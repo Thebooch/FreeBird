@@ -22,6 +22,17 @@ export const whenWords = (at: number | string, zone: string): string => {
   }
 };
 
+/** Where someone was turned away, as a sentence ends: "They asked on …". */
+export const TURNED_AWAY_VIA = ["booking_page", "public_link", "agent"] as const;
+export type TurnedAwayVia = (typeof TURNED_AWAY_VIA)[number];
+const VIA_WORDS: Readonly<Record<TurnedAwayVia, string>> = { booking_page: "their booking page", public_link: "the public booking page", agent: "a conversation with an agent" };
+
+/** "partySize" → "Party size". */
+const keyWords = (key: string): string => {
+  const words = key.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ").toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+};
+
 export const workflowBookings = (deps: {
   readonly service: BookingService;
   readonly contacts: ContactService;
@@ -31,9 +42,43 @@ export const workflowBookings = (deps: {
   readonly links?: WorkflowBookings["links"];
 }): WorkflowBookings => {
   const zoneOf = async (contact: string, fallback = "UTC") => (await deps.contacts.get(contact))?.timezone ?? fallback;
+  /** The contact as a step reads it: their fields, then who they are. */
+  const contactRow = async (id: string) => {
+    const contact = await deps.contacts.get(id);
+    const fields = Object.fromEntries(Object.entries(contact?.fields ?? {}).flatMap(([key, field]) => {
+      const best = fieldValueOf(field);
+      return best ? [[key, best.value]] : [];
+    }));
+    return { contact, row: { ...fields, id, name: contact?.name || contact?.emails[0] || "", email: contact?.emails[0] ?? "", phone: contact?.phones[0] ?? "" } };
+  };
   return {
     service: deps.service,
     contact: (id) => deps.contacts.get(id),
+    turnedAwayRow: async (event) => {
+      const payload = event.payload;
+      const { contact, row: person } = await contactRow(String(payload["contact"] ?? ""));
+      const type = await deps.scheduling.findType(event.type);
+      const answers = payload["answers"] && typeof payload["answers"] === "object" ? (payload["answers"] as Record<string, unknown>) : {};
+      const via = (TURNED_AWAY_VIA as readonly string[]).includes(String(payload["via"])) ? (payload["via"] as TurnedAwayVia) : "booking_page";
+      const answersText = Object.entries(answers)
+        .filter(([, value]) => value !== undefined && value !== null && String(value).trim())
+        .map(([key, value]) => `${keyWords(key)}: ${String(value)}`)
+        .join("\n");
+      return {
+        id: event.booking,
+        title: `${type?.name ?? event.type} · ${person.name || "someone"}`,
+        when: whenWords(event.at, contact?.timezone ?? "UTC"),
+        contact: person,
+        type: { id: event.type, name: type?.name ?? event.type, slug: type?.slug ?? "", description: type?.description ?? "" },
+        request: answers,
+        answersText: answersText || "No answers given.",
+        /* What the person was told: the type's own words. */
+        reason: type?.eligibility.message ?? "",
+        via,
+        viaWords: VIA_WORDS[via],
+        ...(typeof payload["agent"] === "string" ? { agent: payload["agent"] } : {}),
+      };
+    },
     ...(deps.links ? { links: deps.links } : {}),
     when: async (at, contact) => whenWords(at, await zoneOf(contact)),
     row: async (booking, known = {}) => {

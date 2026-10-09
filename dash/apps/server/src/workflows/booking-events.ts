@@ -17,7 +17,9 @@ import { RevisionConflict } from "./store.js";
  * 3. every case waiting on `booking:<id>` is woken with the event — an
  *    Approve a booking step reads the answer, a wait reads what they did;
  * 4. workflows whose `booking` trigger takes the event open a case, its id
- *    made from the workflow and the event, so delivering twice opens once;
+ *    made from the workflow and the event, so delivering twice opens once
+ *    (someone turned away has no booking: only this step applies, with
+ *    the person and their answers as the row);
  * 5. the host hears of a change they didn't make (once, by the event's id);
  * 6. the contact's counts move (bookings, cancellations, no-shows);
  * 7. the event is marked delivered.
@@ -64,14 +66,41 @@ export class BookingDispatcher {
     return delivered;
   }
 
+  /** Enabled workflows a booking trigger starts. */
+  private async bookingWorkflows() {
+    return (await this.deps.env.store.list()).filter(
+      (one): one is WorkflowSpec & { trigger: Extract<WorkflowSpec["trigger"], { kind: "booking" }> } => one.trigger.kind === "booking" && one.enabled && !one.parked,
+    );
+  }
+
+  /** Opens a case for each workflow the event starts, its id made from the workflow and the event, so delivering twice opens once. */
+  private async start(event: BookingEvent, workflows: Awaited<ReturnType<BookingDispatcher["bookingWorkflows"]>>, row: () => Promise<Record<string, unknown>>, rowKey: string): Promise<void> {
+    const { engine } = this.deps;
+    const starting = workflows.filter((one) => one.trigger.events.includes(event.kind) && (one.trigger.types.length === 0 || one.trigger.types.includes(event.type)));
+    if (starting.length === 0) return;
+    const shaped = await row();
+    for (const workflow of starting) {
+      const id = `bk-${shortHash(`${workflow.id}:${event.id}`)}`;
+      try {
+        await engine.create(workflow, { id, row: shaped, rowKey, start: { kind: "booking", bookingEvent: event.id } });
+        await engine.advance(id);
+      } catch (error) {
+        if (!(error instanceof CaseBusy) && !(error instanceof RevisionConflict)) throw error;
+      }
+    }
+  }
+
   private async one(event: BookingEvent): Promise<void> {
     const { env, engine, store, bookings, contacts } = this.deps;
+    /* Someone turned away has no booking: only workflows set to follow up hear it. */
+    if (event.kind === "turned_away") {
+      await this.start(event, await this.bookingWorkflows(), () => bookings.turnedAwayRow(event), event.booking);
+      return;
+    }
     const booking = await store.get(event.booking);
     if (!booking) return;
     await bookings.service.mirror(booking);
-    const workflows = (await env.store.list()).filter(
-      (one): one is WorkflowSpec & { trigger: Extract<WorkflowSpec["trigger"], { kind: "booking" }> } => one.trigger.kind === "booking" && one.enabled && !one.parked,
-    );
+    const workflows = await this.bookingWorkflows();
 
     /* Cancelled: the cases of workflows set to stop then end first, so nothing below wakes them. A workflow that cancelled it itself goes on. */
     if (event.kind === "cancelled") {
@@ -96,19 +125,7 @@ export class BookingDispatcher {
       await engine.advance(one.id, { resume: { kind: "event", payload } });
     }
 
-    const starting = workflows.filter((one) => one.trigger.events.includes(event.kind) && (one.trigger.types.length === 0 || one.trigger.types.includes(event.type)));
-    if (starting.length > 0) {
-      const row = await bookings.row(booking);
-      for (const workflow of starting) {
-        const id = `bk-${shortHash(`${workflow.id}:${event.id}`)}`;
-        try {
-          await engine.create(workflow, { id, row, rowKey: booking.id, start: { kind: "booking", bookingEvent: event.id } });
-          await engine.advance(id);
-        } catch (error) {
-          if (!(error instanceof CaseBusy) && !(error instanceof RevisionConflict)) throw error;
-        }
-      }
-    }
+    await this.start(event, workflows, () => bookings.row(booking), booking.id);
 
     /* At most once per event: the notifier keys it by the event's id. */
     await bookings.links?.bookingChanged(event, booking).catch(() => undefined);

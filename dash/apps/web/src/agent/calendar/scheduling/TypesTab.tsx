@@ -1,7 +1,8 @@
-import { LAYER_KEYS, LOCATION_KINDS, LOCATION_WORDS, resolveSettings, type AppointmentType, type Contact, type WeeklyHours } from "@freebirdai/dash-spec";
+import { LAYER_KEYS, LOCATION_KINDS, LOCATION_WORDS, resolveSettings, type AgentSpec, type AppointmentType, type Contact, type WeeklyHours, type WorkflowSpec } from "@freebirdai/dash-spec";
 import { Badge, Button, EmptyState, ErrorState } from "@freebirdai/dash-components";
 import { useEffect, useMemo, useState } from "react";
 import { api, type SchedulingOverview, type SlotPreview } from "../../../api.js";
+import { navigate } from "../../../route.js";
 import { Segmented, Switch } from "../controls.jsx";
 import { colorVar } from "../model.js";
 import { HoursEditor, SettingsEditor } from "./editors.jsx";
@@ -370,10 +371,135 @@ const TypeSheet = ({
             />
           )}
         </FormRow>
+        {!isNew && held ? <TurnedAwayFollowUp type={held} /> : null}
       </SheetSection>
 
       {!isNew && held && <TypePreview setup={setup} type={held} />}
     </SetupSheet>
+  );
+};
+
+/* ── after someone is turned away ──────────────────────────────────────── */
+
+const FOLLOW_UP_TEMPLATE = "recipe-turned-away";
+
+/**
+ * What happens besides the message: the workflows a turn-away starts, or one
+ * made here from the "Follow up with people turned away" template, scoped to
+ * this type and saved off until someone reviews it and turns it on.
+ */
+const TurnedAwayFollowUp = ({ type }: { readonly type: AppointmentType }): JSX.Element => {
+  const [flows, setFlows] = useState<WorkflowSpec[] | null>(null);
+  const [agents, setAgents] = useState<AgentSpec[]>([]);
+  const [making, setMaking] = useState(false);
+  const [agent, setAgent] = useState("");
+  const [say, setSay] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+
+  const load = async () => {
+    const all = await api.workflows();
+    setFlows(all.filter((one) => one.trigger.kind === "booking" && one.trigger.events.includes("turned_away") && (one.trigger.types.length === 0 || one.trigger.types.includes(type.id))));
+  };
+  useEffect(() => {
+    void load().catch((cause: unknown) => setFailed(cause instanceof Error ? cause.message : String(cause)));
+    void api.agents().then(
+      (list) => {
+        setAgents(list);
+        setAgent((held) => held || list[0]?.id || "");
+      },
+      () => undefined,
+    );
+  }, [type.id]);
+
+  const make = async () => {
+    if (!agent) {
+      setFailed("Pick the agent who tells them. Make one under Agents first.");
+      return;
+    }
+    setBusy(true);
+    setFailed(null);
+    try {
+      const made = await api.workflowFromTemplate(FOLLOW_UP_TEMPLATE, { agent, ...(say.trim() ? { say: say.trim() } : {}) }, `Follow up: turned away from ${type.name}`, [type.id]);
+      await load();
+      setMaking(false);
+      setNote(`Made “${made.name}”, switched off. Review it and turn it on under Workflows.`);
+    } catch (cause) {
+      setFailed(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <FormRow label="When someone is turned away" hint="Besides the message: a workflow can text them what to do instead, tell the team, or do anything else a workflow does." wide>
+      {() => (
+        <div className="dash-followups" data-testid="type-followups">
+          {flows === null ? <span className="dash-hint">Loading…</span> : null}
+          {flows && flows.length > 0 ? (
+            <ul className="dash-followups__list">
+              {flows.map((one) => (
+                <li key={one.id} className="dash-followups__item">
+                  <span className="dash-followups__name">{one.name}</span>
+                  <Badge tone={one.enabled ? "accent" : "neutral"}>{one.enabled ? "On" : "Off"}</Badge>
+                  <Button size="sm" tone="ghost" onClick={() => navigate({ kind: "agent", section: "workflows", id: one.id })}>
+                    Open
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {flows && flows.length === 0 && !making ? <span className="dash-hint">Nothing else happens yet: they only see the message.</span> : null}
+          {making ? (
+            <div className="dash-followups__form">
+              <label className="dash-followups__field">
+                <span>The agent who tells them</span>
+                <select className="dash-sched-input" value={agent} onChange={(event) => setAgent(event.target.value)}>
+                  {agents.length === 0 ? <option value="">No agents yet</option> : null}
+                  {agents.map((one) => (
+                    <option key={one.id} value={one.id}>
+                      {one.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="dash-followups__field">
+                <span>What to tell them</span>
+                <textarea
+                  className="dash-sched-input"
+                  rows={3}
+                  value={say}
+                  placeholder="Tell them we can't book this online, and to call us at (555) 123-4567 to arrange it."
+                  onChange={(event) => setSay(event.target.value)}
+                />
+              </label>
+              <span className="dash-hint">It texts them (or emails them, with no phone) in the agent's voice, then tells the team. Once a day per person, however often they try.</span>
+              <div className="dash-sched-inline">
+                <Button size="sm" tone="primary" busy={busy} onClick={() => void make()} testId="type-followup-make">
+                  Make the workflow
+                </Button>
+                <Button size="sm" tone="ghost" onClick={() => setMaking(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <Button size="sm" onClick={() => (setMaking(true), setNote(null))} testId="type-followup-start">
+                {flows && flows.length > 0 ? "Add another follow-up" : "Set up a follow-up"}
+              </Button>
+            </div>
+          )}
+          {note ? <span className="dash-hint" role="status">{note}</span> : null}
+          {failed ? (
+            <span className="dash-cal-form__error" role="alert">
+              {failed}
+            </span>
+          ) : null}
+        </div>
+      )}
+    </FormRow>
   );
 };
 

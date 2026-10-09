@@ -86,7 +86,7 @@ const setup = async (options: { readonly mode?: "auto" | "approve" | "deny"; rea
   const contact = (await contacts.get(ana.id))!;
   const reply = (llm: LlmAdapter, message: string, history: ReadonlyArray<{ from: "them" | "agent"; text: string }> = []) =>
     replyWithScheduling({ bookings, scheduling, contacts, links, now, llm }, { agent, tool, contact, message, history, channel: "text" });
-  return { bookings, contacts, scheduling, reply, agent, ana: ana.id };
+  return { bookings, contacts, scheduling, store, reply, agent, ana: ana.id };
 };
 
 describe("an agent booking in a conversation", () => {
@@ -162,7 +162,7 @@ describe("an agent booking in a conversation", () => {
   });
 
   it("says plainly when a type doesn't take them, in the type's own words, and offers no time", async () => {
-    const { reply, scheduling } = await setup();
+    const { reply, scheduling, store } = await setup();
     await scheduling.putType("visit", { eligibility: { rules: { all: [{ field: "request.partySize", op: "lte", values: [8] }], any: [] }, message: "For parties of 9 or more, please call us." } });
     const run = scripted([
       { call: [{ name: "find_times", args: { type: "visit" } }] },
@@ -174,6 +174,10 @@ describe("an agent booking in a conversation", () => {
     expect(used[0]!.result).toMatchObject({ needs: [expect.objectContaining({ field: "request.partySize" })] });
     expect(used[1]!.result).toEqual({ notEligible: true, say: "Tell them, in your own words: For parties of 9 or more, please call us." });
     expect(run.seen[0]!.messages[0]!.content).toContain("If a tool says notEligible");
+    /* Turned away in conversation: recorded for workflows that follow up, with what they said. */
+    expect((await store.undelivered(10)).filter((one) => one.kind === "turned_away")).toEqual([
+      expect.objectContaining({ type: "visit", payload: { contact: expect.any(String), answers: { partySize: "12" }, via: "agent", agent: "maint" } }),
+    ]);
   });
 
   it("follows the agent tool's mode: approve asks for every booking, deny never books", async () => {

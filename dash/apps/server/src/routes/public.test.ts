@@ -157,7 +157,7 @@ describe("a contact's booking link", () => {
   });
 
   it("asks the type's questions its rules need, and tells someone it doesn't take why, offering nothing", async () => {
-    const { team, world, contact, linkFor, at } = await setup("eligibility");
+    const { team, world, shared, contact, linkFor, at } = await setup("eligibility");
     await team.inject({
       method: "PUT",
       url: "/api/scheduling/types/visit",
@@ -166,6 +166,17 @@ describe("a contact's booking link", () => {
         eligibility: { rules: { all: [{ field: "request.partySize", op: "lte", values: [8] }], any: [] }, message: "For parties of 9 or more, please call us." },
       },
     });
+    /* A workflow that follows up on people turned away. */
+    await shared.workflows.put(
+      workflowOf({
+        id: "turned",
+        trial: 0,
+        enabledBy: editorOf,
+        trigger: { kind: "booking", events: ["turned_away"], types: [], endWhenCancelled: false },
+        nodes: [node("tell", "notify.team", { title: "{{ contact.name }} was turned away ({{ answersText }})" })],
+        edges: [{ id: "e1", from: "trigger", outcome: "next", to: "tell" }],
+      }),
+    );
     const ana = await contact("Ana Ruiz", "ana@example.com");
     const { token } = await linkFor(ana.id);
     const times = (request?: Record<string, string>) =>
@@ -181,6 +192,17 @@ describe("a contact's booking link", () => {
     const refused = await world.inject({ method: "POST", url: `/api/public/acme/book/${token}/request`, payload: { start: four.slots[0].start, request: { partySize: "12" } } });
     expect(refused.statusCode).toBe(403);
     expect(refused.json().error).toBe("For parties of 9 or more, please call us.");
+
+    /* Turned away three times that day: the follow-up runs once, from the booking page. */
+    let cases: Awaited<ReturnType<typeof shared.cases.list>> = [];
+    for (let i = 0; i < 100 && cases.length === 0; i++) {
+      cases = await shared.cases.list({ workflow: "turned" });
+      if (cases.length === 0) await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    cases = await shared.cases.list({ workflow: "turned" });
+    expect(cases).toHaveLength(1);
+    expect(cases[0]!.data.row).toMatchObject({ contact: { name: "Ana Ruiz" }, request: { partySize: "12" }, via: "booking_page" });
   });
 
   it("limits requests from one address and on one token", async () => {

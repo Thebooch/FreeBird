@@ -14,9 +14,11 @@ import {
 import type { CalendarStore } from "../calendar/store.js";
 import type { ContactService } from "../contacts/service.js";
 import { assignHost } from "../scheduling/assign.js";
+import { localDate } from "../scheduling/zoned.js";
 import { factString, type Facts } from "../scheduling/rules.js";
 import type { SchedulingService, SlotContext } from "../scheduling/service.js";
 import { typeEligibility, type Busy, type HostOption, type Slot } from "../scheduling/slots.js";
+import type { TurnedAwayVia } from "./row.js";
 import { BookingConflict, type BookingStore, type BookingTx } from "./store.js";
 
 /**
@@ -232,7 +234,12 @@ export class BookingService {
     const facts = await this.factsFor(contact.id, type, input.answers);
     /* Who can book the type at all, said plainly rather than as "that time isn't open". */
     const who = typeEligibility(type, facts, this.deps.now());
-    if (who.verdict === "ineligible") throw new BookingError(type.eligibility.message || `${type.name} isn't something you can book.`, 403);
+    if (who.verdict === "ineligible") {
+      if (input.origin === "link" || input.origin === "public_link" || input.origin === "agent") {
+        await this.turnedAway({ type, contact: contact.id, answers: input.answers ?? {}, via: input.origin === "link" ? "booking_page" : input.origin, ...(input.agent ? { agent: input.agent } : {}) });
+      }
+      throw new BookingError(type.eligibility.message || `${type.name} isn't something you can book.`, 403);
+    }
     if (who.verdict === "unknown") throw new BookingError(`${type.name} needs a few answers before it can be booked.`, 409);
     const slot = await this.slotAt(type, facts, input.start);
     const option = slot ? await this.pickOption(type, slot, contact.id, input.host) : null;
@@ -292,6 +299,28 @@ export class BookingService {
     await this.mirror(result.booking);
     this.deps.afterChange?.();
     return result;
+  }
+
+  /**
+   * Someone the type's "Who can book" rules turned away, for workflows that
+   * follow up. Kept once a day (their day) per person and type: trying
+   * again, or reloading the page, starts nothing new.
+   */
+  async turnedAway(input: { readonly type: AppointmentType; readonly contact: string; readonly answers: Readonly<Record<string, unknown>>; readonly via: TurnedAwayVia; readonly agent?: string }): Promise<void> {
+    const now = this.deps.now();
+    const zone = (await this.deps.contacts.get(input.contact))?.timezone ?? "UTC";
+    const key = `turned-away:${input.contact}:${input.type.id}:${localDate(now, zone)}`;
+    await this.deps.store.withHosts([], async (tx) => {
+      await tx.event({
+        id: key,
+        booking: key,
+        kind: "turned_away",
+        at: iso(now),
+        type: input.type.id,
+        payload: { contact: input.contact, answers: { ...input.answers }, via: input.via, ...(input.agent ? { agent: input.agent } : {}) },
+      });
+    });
+    this.deps.afterChange?.();
   }
 
   /* ── changing one ────────────────────────────────────────────────────── */

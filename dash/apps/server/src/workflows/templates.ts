@@ -205,16 +205,23 @@ export class TemplateService {
   }
 
   /** A whole workflow from a workflow template: the input to save it with. */
-  async workflowFrom(id: string, values: Readonly<Record<string, string>>, name?: string): Promise<{ readonly input: WorkflowInput; readonly template: WorkflowTemplate }> {
+  async workflowFrom(
+    id: string,
+    values: Readonly<Record<string, string>>,
+    name?: string,
+    /** For a template a booking starts: only these appointment types. */
+    bookingTypes?: readonly string[],
+  ): Promise<{ readonly input: WorkflowInput; readonly template: WorkflowTemplate }> {
     const inserted = await this.insert(id, values);
     if (inserted.template.kind !== "workflow" || !inserted.template.workflow) throw new TemplateError(`"${inserted.template.name}" is not a whole workflow.`, 400);
     const rest = inserted.template.workflow as Partial<WorkflowSpec>;
+    const trigger = rest.trigger ?? { kind: "manual" as const };
     return {
       template: inserted.template,
       input: {
         ...(rest as object),
         name: name ?? rest.name ?? inserted.template.name,
-        trigger: rest.trigger ?? { kind: "manual" },
+        trigger: trigger.kind === "booking" && bookingTypes && bookingTypes.length > 0 ? { ...trigger, types: [...bookingTypes] } : trigger,
         nodes: inserted.nodes,
         edges: inserted.edges,
         enabled: false,

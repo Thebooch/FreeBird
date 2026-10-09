@@ -242,6 +242,11 @@ const BookingTriggerEditor = ({
             </label>
           ))}
         </div>
+        {trigger.events.includes("turned_away") && (
+          <span className="dash-hint">
+            Turned away: someone a type's Who can book rules don't take, once a day per person and type. There's no booking, so its steps read the person, the type and their answers (contact, type, request, answersText, reason, viaWords), and steps that change a booking don't apply.
+          </span>
+        )}
       </fieldset>
       <fieldset className="dash-trigger-group">
         <legend className="dash-trigger-group__title">For</legend>

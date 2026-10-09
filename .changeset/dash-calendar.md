@@ -19,3 +19,4 @@ The Calendar section: events, deadlines and appointments from agents, workflows 
 - Dash react: the booking tool's settings in the agent editor.
 - Dash react: the calendar's Subscribe panel, for a member's own read-only calendar feed.
 - Dash spec: an appointment type can say who can book it (`eligibility`: rules over the person's contact fields and the answers to the type's own questions, such as party size, what to do while an answer isn't known, and what to tell someone it doesn't take).
+- Dash spec: a booking trigger can start on someone being turned away (`turned_away`), once a day per person and type, with the person, the type and their answers to work with.

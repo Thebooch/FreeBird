@@ -16,6 +16,8 @@ export const BOOKING_EVENTS = [
   "expired",
   "completed",
   "no_show",
+  /** Not a booking's: someone the type's "Who can book" rules turned away, once a day per person and type. */
+  "turned_away",
 ] as const;
 export type BookingEventKind = (typeof BOOKING_EVENTS)[number];
 
@@ -33,4 +35,5 @@ export const BOOKING_EVENT_WORDS: Readonly<Record<BookingEventKind, string>> = {
   expired: "runs out",
   completed: "is completed",
   no_show: "is marked a no-show",
+  turned_away: "is turned away",
 };
