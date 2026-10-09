@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/connect-sandbox",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "FreeBird Connect add-on: runs generated connector code in QuickJS compiled to WebAssembly, one worker thread per run.",
   "license": "MIT",
   "repository": {
