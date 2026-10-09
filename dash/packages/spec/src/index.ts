@@ -160,7 +160,7 @@ export type {
 
 export { BASE_RESPONSE_PROMPT, composeResponsePrompt } from "./agent-prompt.js";
 
-export type { ComposeResponsePromptInput, FoundContext, ResponseChannel } from "./agent-prompt.js";
+export type { ComposeResponsePromptInput, FoundContext, ResponseChannel, SchedulingPromptInput } from "./agent-prompt.js";
 
 export {
   CASE_STATUSES,

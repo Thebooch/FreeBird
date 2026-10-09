@@ -5,6 +5,7 @@ import {
   reachCovers,
   type AgentReach,
   type AgentTool,
+  type AppointmentType,
   type AgentToolKind,
   type AgentToolMode,
 } from "@freebirdai/dash-spec";
@@ -35,6 +36,75 @@ const MODES: ReadonlyArray<{ readonly id: AgentToolMode; readonly label: string;
   { id: "deny", label: "Deny", hint: "Declines, answering the way you say below." },
 ];
 
+
+const BOOKING_MODE_HINTS: Readonly<Record<AgentToolMode, string>> = {
+  auto: "Finds times and books them in the conversation, as each appointment type says.",
+  approve: "Books every time as a request the team confirms, even for types that don't need approval.",
+  deny: "Declines, answering the way you say below.",
+};
+
+/**
+ * What a booking tool may book, and how it offers each: times in the
+ * conversation, or a link to the person's own page to pick from.
+ */
+const BookingSettings = ({ tool, onChange }: { tool: AgentTool; onChange: (next: AgentTool) => void }): JSX.Element => {
+  const [types, setTypes] = useState<AppointmentType[] | null>(null);
+  useEffect(() => {
+    void api.scheduling().then(
+      (overview) => setTypes(overview.types.filter((one) => one.active)),
+      () => setTypes([]),
+    );
+  }, []);
+  const settings = tool.schedule ?? { types: [], offer: {} };
+  const set = (next: Partial<typeof settings>) => onChange({ ...tool, schedule: { ...settings, ...next } });
+  const every = settings.types.length === 0;
+
+  return (
+    <div className="dash-tool-book" data-testid={`agent-tool-booking-${tool.id}`}>
+      <div className="dash-tool-book__head">
+        <span className="dash-tool-book__label">What it may book</span>
+        <label className="dash-tool-book__check">
+          <input type="checkbox" checked={every} onChange={(event) => set({ types: event.target.checked ? [] : (types ?? []).map((one) => one.id) })} />
+          Every appointment type
+        </label>
+      </div>
+      {types === null ? <span className="dash-hint">Loading appointment types…</span> : null}
+      {types && types.length === 0 ? <span className="dash-hint">No appointment types yet. Make one under Calendar, Scheduling.</span> : null}
+      {types && types.length > 0 ? (
+        <ul className="dash-tool-book__types">
+          {types.map((type) => {
+            const on = every || settings.types.includes(type.id);
+            const { [type.id]: own, ...others } = settings.offer;
+            return (
+              <li key={type.id} className="dash-tool-book__type" data-off={on ? undefined : "true"}>
+                <label className="dash-tool-book__check">
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    disabled={every}
+                    onChange={(event) => set({ types: event.target.checked ? [...settings.types, type.id] : settings.types.filter((one) => one !== type.id) })}
+                  />
+                  <span className="dash-tool-book__name">{type.name}</span>
+                </label>
+                <select
+                  aria-label={`How it offers ${type.name}`}
+                  value={own ?? ""}
+                  disabled={!on}
+                  onChange={(event) => set({ offer: event.target.value ? { ...others, [type.id]: event.target.value as "link" | "conversation" } : others })}
+                >
+                  <option value="">{type.offer === "link" ? "As the type says (a link)" : "As the type says (in conversation)"}</option>
+                  <option value="conversation">Offer times in conversation</option>
+                  <option value="link">Send a link to pick from</option>
+                </select>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+      {every && types && types.length > 0 ? <span className="dash-hint">Includes types added later.</span> : null}
+    </div>
+  );
+};
 
 const ToolRow = ({
   tool,
@@ -97,7 +167,8 @@ const ToolRow = ({
       </div>
 
       <div className="dash-tool__body">
-        <span className="dash-hint">{MODES.find((mode) => mode.id === tool.mode)?.hint}</span>
+        <span className="dash-hint">{tool.kind === "schedule_appointment" ? BOOKING_MODE_HINTS[tool.mode] : MODES.find((mode) => mode.id === tool.mode)?.hint}</span>
+        {tool.kind === "schedule_appointment" && tool.mode !== "deny" && <BookingSettings tool={tool} onChange={onChange} />}
         {tool.kind === "run_workflow" && (
           <>
             <select

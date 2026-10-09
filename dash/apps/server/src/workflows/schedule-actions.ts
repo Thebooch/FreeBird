@@ -173,6 +173,24 @@ const askBooking: ActionExecutor = async (ctx) => {
   return { kind: "wait", wait: { kind: "ask", key: `booking:${booking.id}`, deadline: waitUntil }, task: { status: "waiting", title: question, body } };
 };
 
+/* ── a scheduling link ─────────────────────────────────────────────────── */
+
+/** A link to the contact's own booking page, for a later step to send: `{{ steps.<id>.url }}`. */
+const makeLink: ActionExecutor = async (ctx) => {
+  const bookings = ctx.env.bookings?.();
+  if (!bookings?.links) return failed("Scheduling links can't be made on this server.");
+  const contact = text(ctx.settings["contact"]).trim();
+  const type = text(ctx.settings["type"]).trim();
+  if (!contact) return failed("Say whose link it is.");
+  try {
+    const lifetime = durationMs(ctx.settings["expires"]);
+    const made = await bookings.links.contactLink(contact, { ...(type ? { type } : {}), ...(lifetime ? { lifetime } : {}) });
+    return done("next", { status: "done", title: "Made a scheduling link", body: { kind: "created", what: "Scheduling link", link: made.url } }, { url: made.url });
+  } catch (error) {
+    return failed(error instanceof Error ? error.message : String(error));
+  }
+};
+
 /* ── waits ─────────────────────────────────────────────────────────────── */
 
 const WAIT_OUTCOMES: Readonly<Record<string, string>> = {
@@ -487,5 +505,6 @@ export const SCHEDULE_EXECUTORS: Readonly<Record<string, ActionExecutor>> = {
   "schedule.move": moveBooking,
   "schedule.assign": assignBooking,
   "schedule.mark": markBooking,
+  "schedule.link": makeLink,
   "outreach.inform": inform,
 };

@@ -151,6 +151,7 @@ import { BookingDispatcher } from "./workflows/booking-events.js";
 import { BOOKING_RECIPES } from "./workflows/recipes.js";
 import { MemoryBookingStore, type BookingStore } from "./bookings/store.js";
 import { BookingLinks } from "./bookings/links.js";
+import { replyWithScheduling } from "./scheduling/conversation.js";
 import { brandOf, notConnectedNotifier, type Brand, type TeamNotifier } from "./bookings/notify.js";
 import { MemoryRateLimiter, type RateLimiter } from "./public/limits.js";
 import { MemoryPublicTokenStore, type PublicTokenStore } from "./public/tokens.js";
@@ -179,7 +180,7 @@ import {
   type WorkflowStore,
 } from "./workflows/store.js";
 import { deliveryErrorOf, type OutreachSender, type WorkflowBookings, type WorkflowEnv } from "./workflows/env.js";
-import { AgentService } from "./agents/service.js";
+import { AgentError, AgentService } from "./agents/service.js";
 import { MemoryAgentStore, type AgentStore } from "./agents/store.js";
 import { installIdentity } from "./identity/context.js";
 import { ownerPolicy, type Policy } from "./identity/policy.js";
@@ -203,6 +204,7 @@ import {
   fieldPathSchema,
   widgetBriefSchema,
 } from "@freebirdai/dash-spec";
+import type { AgentSpec, AgentTool, ResponseChannel } from "@freebirdai/dash-spec";
 import { onboardingRoutes } from "./routes/onboarding.js";
 import { allocateDashboardId } from "./onboarding/materialise.js";
 import { warmTargets } from "./keeper/targets.js";
@@ -1009,6 +1011,10 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   const catalogEntryOf = (connection: ConnectionSpec) => (connection.catalog ? (options.catalog?.get(connection.catalog) ?? undefined) : undefined);
   /* Bookings for workflow steps, set once the booking service exists below. */
   let bookingsForWorkflows: WorkflowBookings | undefined;
+  /* Set once bookings exist, below; an agent's tool reaches it only when used. */
+  let scheduleInConversation: (agent: AgentSpec, tool: AgentTool, inputs: Record<string, unknown>) => Promise<unknown> = async () => {
+    throw new AgentError("Booking isn't set up on this server.", 501);
+  };
   let bookingDispatcher: BookingDispatcher | undefined;
   const workflowEnv: WorkflowEnv = {
     bookings: () => bookingsForWorkflows,
@@ -1084,8 +1090,10 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   const workflowTasks = new TaskService(workflowStarter);
   const workflowTemplates = new TemplateService({ templates: workflowEnv.templates, workflows: workflowStore, newId: () => randomUUID(), builtIn: BOOKING_RECIPES });
   void app.register(agentRoutes(agents, policy, () => resolveLlm("agent"), {
-    useTool: (agent, tool, inputs, conversation) =>
-      startFromAgentTool(workflowStarter, { agent, tool, inputs, ...(conversation ? { conversation } : {}) }),
+    useTool: async (agent, tool, inputs, conversation) => {
+      if (tool.kind === "schedule_appointment") return scheduleInConversation(agent, tool, inputs);
+      return startFromAgentTool(workflowStarter, { agent, tool, inputs, ...(conversation ? { conversation } : {}) });
+    },
   }));
   void app.register(
     workflowRoutes({
@@ -1201,6 +1209,29 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     now: () => Date.now(),
   });
   bookingsForWorkflows = workflowBookings({ service: bookings, contacts, scheduling, linkFor: (booking) => bookingLinks.bookingLink(booking), links: bookingLinks });
+  /*
+   * An agent booking in a conversation: its reply to one message, using its
+   * scheduling tools. `inputs`: `contact` (an id), `message`, and optionally
+   * `history` ([{ from: "them" | "agent", text }]) and `channel`.
+   */
+  scheduleInConversation = async (agent, tool, inputs) => {
+    const contactId = typeof inputs["contact"] === "string" ? inputs["contact"].trim() : "";
+    const message = typeof inputs["message"] === "string" ? inputs["message"].trim().slice(0, 4000) : "";
+    if (!contactId || !message) throw new AgentError("Say who is writing (contact) and what they said (message).", 400);
+    const contact = await contacts.get(contactId);
+    if (!contact) throw new AgentError(`There is no contact "${contactId}".`, 404);
+    const history = Array.isArray(inputs["history"])
+      ? (inputs["history"] as unknown[]).flatMap((one) => {
+          const line = one as { from?: unknown; text?: unknown } | null;
+          return line && (line.from === "them" || line.from === "agent") && typeof line.text === "string" ? [{ from: line.from as "them" | "agent", text: line.text.slice(0, 4000) }] : [];
+        }).slice(-30)
+      : [];
+    const channel = ["text", "call", "email", "chat"].includes(String(inputs["channel"])) ? (inputs["channel"] as ResponseChannel) : undefined;
+    return replyWithScheduling(
+      { bookings, scheduling, contacts, links: bookingLinks, now: () => Date.now(), llm: resolveLlm("agent-reply") },
+      { agent, tool, contact, message, history, ...(channel ? { channel } : {}), shared: await agents.shared().catch(() => null) },
+    );
+  };
   bookingDispatcher = new BookingDispatcher({ env: workflowEnv, engine: workflowEngine, store: bookingStore, bookings: bookingsForWorkflows, contacts });
   void app.register(bookingRoutes({ bookings, policy }));
   void app.register(linkRoutes({ links: bookingLinks, bookings, tasks: workflowEnv.tasks, policy }));

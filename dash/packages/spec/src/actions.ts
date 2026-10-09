@@ -497,7 +497,7 @@ export const ACTION_VARIANTS: readonly ActionVariant[] = [
   variant({
     id: "schedule.link", base: "schedule", label: "Make a scheduling link", does: "A personal link where the contact picks a time.",
     fields: [{ key: "contact", label: "Contact", kind: "template", required: true, default: "{{ contact.id }}" }, { key: "type", label: "Appointment type", kind: "template", required: true, default: "{{ type.id }}" }, { key: "expires", label: "Expires after", kind: "duration", default: "30d" }],
-    outcomes: ["next"], outputs: [{ name: "url", description: "The link" }], body: "created", available: false,
+    outcomes: ["next"], outputs: [{ name: "url", description: "The link" }], body: "created",
   }),
 
   /* ── branch ── */

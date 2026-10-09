@@ -155,6 +155,43 @@ describe("a booking's workflows", () => {
     expect(notices.at(-1)).toMatchObject({ kind: "decision_recorded", subject: "You denied Visit for Ana Lopez" });
   });
 
+  it("makes a scheduling link a later step can send", async () => {
+    const { f, service, contacts, scheduling, store, ana } = await setup();
+    const links = new BookingLinks({
+      tokens: new MemoryPublicTokenStore(),
+      bookings: service,
+      scheduling,
+      contacts,
+      members: async () => [{ userId: "sam", email: "sam@acme.test", role: "owner" }],
+      notifier: { notify: async () => ({ status: "not_sent" }) },
+      brand: async () => DEFAULT_BRAND,
+      workspace: "acme",
+      origin: "https://dash.example.com",
+      now: () => f.clock.now,
+    });
+    const rows = workflowBookings({ service, contacts, scheduling, linkFor: (booking) => links.bookingLink(booking), links });
+    Object.assign(f.env, { bookings: () => rows });
+    const dispatcher = new BookingDispatcher({ env: f.env, engine: f.engine, store, bookings: rows, contacts });
+    await f.env.store.put(
+      workflowOf({
+        id: "denied",
+        trial: 0,
+        trigger: bookingTrigger(["denied"]),
+        nodes: [node("link", "schedule.link", { contact: "{{ contact.id }}", type: "{{ type.id }}", expires: "7d" })],
+        edges: [{ id: "e1", from: "trigger", outcome: "next", to: "link" }],
+      }),
+    );
+    const { booking } = await service.request({ type: "visit", contact: ana, start: WED_9, origin: "public_link", by: them });
+    await service.deny(booking.id, sam);
+    await dispatcher.deliver();
+    const [one] = await f.env.cases.list({ workflow: "denied" });
+    expect(one!.status).toBe("done");
+    expect(String((one!.data.steps["link"] as { url?: string }).url)).toMatch(/^https:\/\/dash\.example\.com\/p\/acme\/book\/[A-Za-z0-9_-]{43}$/);
+    /* The case's own row has the person's page for the booking too; the step's link is the other one. */
+    const made = (await links.linksOf(ana)).find((one) => !one.booking);
+    expect(made).toMatchObject({ type: "visit", expiresAt: new Date(f.clock.now + 7 * 86_400_000).toISOString() });
+  });
+
   it("offers other times and hears the person take one, telling them the time and never the team's note", async () => {
     const { f, service, dispatcher, ana } = await setup();
     await f.env.store.put(

@@ -134,6 +134,17 @@ export const agentToolSchema = z.object({
   whenToUse: z.string().max(1000).default(""),
   /** For `deny`: how to answer instead, in plain words. */
   denyReply: z.string().max(1000).default(""),
+  /**
+   * For `schedule_appointment`: the appointment types it may book (empty:
+   * every active one), and how it offers each where that differs from the
+   * type's own `offer` — a link to pick from, or times in the conversation.
+   */
+  schedule: z
+    .object({
+      types: z.array(idSchema).max(50).default([]),
+      offer: z.record(z.enum(["link", "conversation"])).default({}),
+    })
+    .optional(),
 });
 export type AgentTool = z.infer<typeof agentToolSchema>;
 

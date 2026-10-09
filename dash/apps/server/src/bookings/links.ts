@@ -122,7 +122,15 @@ export class BookingLinks {
   /** A new link to one contact's page, optionally for one type, host or record. */
   async contactLink(
     contact: string,
-    options: { readonly type?: string; readonly host?: string; readonly subject?: PublicToken["subject"]; readonly booking?: string; readonly fromPublic?: boolean } = {},
+    options: {
+      readonly type?: string;
+      readonly host?: string;
+      readonly subject?: PublicToken["subject"];
+      readonly booking?: string;
+      readonly fromPublic?: boolean;
+      /** How long it works when no booking on it is active. Thirty days unless said. */
+      readonly lifetime?: number;
+    } = {},
   ): Promise<{ readonly url: string; readonly path: string; readonly token: PublicToken; readonly raw: string }> {
     await this.deps.contacts.require(contact);
     const minted = mintToken(
@@ -134,7 +142,7 @@ export class BookingLinks {
         ...(options.subject ? { subject: options.subject } : {}),
         ...(options.booking ? { booking: options.booking } : {}),
         ...(options.fromPublic ? { fromPublic: true } : {}),
-        expiresAt: iso(this.deps.now() + BOOKING_LINK_LIFETIME),
+        expiresAt: iso(this.deps.now() + Math.min(Math.max(options.lifetime ?? BOOKING_LINK_LIFETIME, 3_600_000), 90 * DAY)),
       },
       this.deps.now(),
     );

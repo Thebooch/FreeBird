@@ -1887,6 +1887,18 @@ export const DASH_REACT_STYLES = `
   border: 1px solid var(--dash-border); background: var(--dash-surface); color: var(--dash-ink); width: 100%;
 }
 .dash-tool__warn { color: var(--dash-warning); }
+/* A booking tool: what it may book, and how each is offered. */
+.dash-tool-book { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--dash-border); border-radius: var(--dash-radius-sm); background: var(--dash-surface-sunken); }
+.dash-tool-book__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.dash-tool-book__label { font-size: var(--dash-text-xs); font-weight: var(--dash-weight-semi); color: var(--dash-ink-secondary); text-transform: uppercase; letter-spacing: 0.04em; }
+.dash-tool-book__types { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.dash-tool-book__type { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 290px); align-items: center; gap: 10px; }
+.dash-tool-book__check { display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: var(--dash-text-sm); color: var(--dash-ink); cursor: pointer; }
+.dash-tool-book__check input { accent-color: var(--dash-accent); margin: 0; }
+.dash-tool-book__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-tool-book__type[data-off="true"] .dash-tool-book__name { color: var(--dash-muted); }
+.dash-tool-book__type select { width: 100%; }
+@media (max-width: 560px) { .dash-tool-book__type { grid-template-columns: 1fr; } }
 .dash-agent-editor select {
   font: inherit; font-size: var(--dash-text-sm); padding: 6px 8px; border-radius: var(--dash-radius-sm);
   border: 1px solid var(--dash-border); background: var(--dash-surface); color: var(--dash-ink);
