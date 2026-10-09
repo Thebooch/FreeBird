@@ -687,7 +687,7 @@ const waitFor: ActionExecutor = async (ctx) => {
     }
     case "webhook": {
       const token = env.newId().replace(/-/g, "");
-      /* The workspace in the path, so a host serving several routes it with nobody signed in. */
+      /* It names its workspace: what calls it signs nobody in, so a host holding several hands it to this one by its address. */
       const hook = `${env.publicOrigin ?? ""}/api/workflow-hooks/${encodeURIComponent(env.workspaceId)}/${token}`;
       return waiting(`hook:${token}`, {}, { hook });
     }

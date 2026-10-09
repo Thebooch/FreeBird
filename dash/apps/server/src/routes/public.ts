@@ -56,7 +56,6 @@ export const PUBLIC_ROUTES = [
   "POST /api/public/:workspace/book/:token/reschedule",
   "POST /api/public/:workspace/book/:token/times",
   "POST /api/public/:workspace/types/:slug/start",
-  "POST /api/workflow-hooks/:token",
   "POST /api/workflow-hooks/:workspace/:token",
 ] as const;
 

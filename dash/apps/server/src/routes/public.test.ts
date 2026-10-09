@@ -101,7 +101,8 @@ describe("public routes", () => {
     /* The same workspace's private routes still want someone signed in, and another workspace's name reaches nothing. */
     expect((await world.inject({ method: "GET", url: "/api/scheduling/bookings" })).statusCode).toBe(401);
     expect((await world.inject({ method: "GET", url: "/api/public/other/types/visit" })).statusCode).toBe(404);
-    expect((await world.inject({ method: "GET", url: "/api/public/acme/unknown" })).statusCode).toBe(404);
+    /* A path under the public prefix that no public route has wants someone signed in, like any other. */
+    expect((await world.inject({ method: "GET", url: "/api/public/acme/unknown" })).statusCode).toBe(401);
   });
 });
 
@@ -406,7 +407,7 @@ describe("in the hosted host", () => {
     const identity: IdentityResolver = { resolve: () => null };
     const host = new WorkspaceHost({
       identity,
-      exists: async (workspace) => workspace === "acme",
+      holds: (workspace) => workspace === "acme",
       build: (workspace) => {
         built.push(workspace);
         return buildServer({

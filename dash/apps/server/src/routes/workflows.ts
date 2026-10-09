@@ -20,9 +20,15 @@ import { TemplateError, type TemplateService } from "../workflows/templates.js";
  * A change to an account also needs the person's own permission for it, which
  * the write service asks when it prepares and commits.
  *
- * `POST /api/workflow-hooks/:token` is the one route without a person: the
- * token, minted for one waiting case, is the authority.
+ * `POST /api/workflow-hooks/:workspace/:token` is the one route here without
+ * a person: the token, minted for one waiting case, is the authority. Its
+ * address names its workspace, so a host holding several hands it to that
+ * workspace's server with nobody signed in (`platform/workspaces.ts`), and
+ * the identity hook lets it through without a principal because it is marked
+ * public, as the booking pages' API is (`identity/public.ts`).
  */
+export const WORKFLOW_HOOK_ROUTE = "/api/workflow-hooks/:workspace/:token";
+
 export const workflowRoutes = (deps: {
   readonly workflows: WorkflowService;
   readonly tasks: TaskService;
@@ -261,20 +267,26 @@ export const workflowRoutes = (deps: {
 
     /* ── events ───────────────────────────────────────────────────── */
 
-    /**
-     * A webhook a waiting case was given: wakes it with the body sent. With
-     * its workspace in the path (`/<workspace>/<token>`) a host serving many
-     * workspaces routes it without anyone signed in; the open-source build's
-     * one workspace keeps the shorter form.
+    /*
+     * A webhook a waiting case was given: wakes it with the body sent. Anyone
+     * may call it, so a call nothing waits on is not kept.
      */
-    const hook = async (token: string, body: unknown, reply: FastifyReply) => {
+    const wake = async (token: string, sent: unknown, reply: FastifyReply) => {
       if (!/^[a-zA-Z0-9]{16,64}$/.test(token)) return reply.status(404).send({ error: "Unknown hook." });
-      const payload = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
-      const woken = await engine.emit(`hook:${token}`, payload);
+      const key = `hook:${token}`;
+      if ((await env.cases.waitingOn(key)).length === 0) return reply.status(404).send({ error: "Nothing is waiting on this hook." });
+      const body = sent && typeof sent === "object" ? (sent as Record<string, unknown>) : {};
+      const woken = await engine.emit(key, body);
       return woken > 0 ? { woken } : reply.status(404).send({ error: "Nothing is waiting on this hook." });
     };
-    app.post<{ Params: { token: string }; Body: unknown }>("/api/workflow-hooks/:token", { config: { public: true } }, async (request, reply) => hook(request.params.token, request.body, reply));
-    app.post<{ Params: { workspace: string; token: string }; Body: unknown }>("/api/workflow-hooks/:workspace/:token", { config: { public: true } }, async (request, reply) => hook(request.params.token, request.body, reply));
+
+    /** The address a Wait step hands out. Another workspace's hook is not this one's, whoever sent it here. */
+    app.post<{ Params: { workspace: string; token: string }; Body: unknown }>(WORKFLOW_HOOK_ROUTE, { config: { public: true } }, async (request, reply) =>
+      request.params.workspace === env.workspaceId ? wake(request.params.token, request.body, reply) : reply.status(404).send({ error: "Unknown hook." }),
+    );
+
+    /** The address before it named its workspace: still answered by a server of one workspace, which needs no name. */
+    app.post<{ Params: { token: string }; Body: unknown }>("/api/workflow-hooks/:token", async (request, reply) => wake(request.params.token, request.body, reply));
 
     /** Something happened that cases may wait on: `{ key, payload }`. Comms posts replies here as `reply:<conversation>`. */
     app.post<{ Body: { key?: unknown; payload?: Record<string, unknown> } }>(

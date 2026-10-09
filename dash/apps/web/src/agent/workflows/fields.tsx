@@ -2,14 +2,13 @@ import { Button } from "@freebirdai/dash-components";
 import { BOOKING_EVENTS, BOOKING_EVENT_WORDS, WORKFLOW_EVERY, describeCron, type WorkflowInputDef, type WorkflowTrigger } from "@freebirdai/dash-spec";
 import { useEffect, useState } from "react";
 import { api, type ConnectionSummary } from "../../api";
+import type { Entities } from "../entities.js";
 import { TRIGGER_CHOICES, blankTrigger } from "./draft.js";
 
 /**
  * The editing pieces the workflow editor and the step panel share: a record
  * type picker, a trigger, an agent trigger's inputs, and field/value pairs.
  */
-
-export type Entities = Record<string, Array<{ entity: string; name: string }>>;
 
 const EVERY_LABEL: Readonly<Record<(typeof WORKFLOW_EVERY)[number], string>> = {
   "5m": "every 5 minutes",

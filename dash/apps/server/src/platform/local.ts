@@ -68,13 +68,17 @@ export interface LocalPlatform {
   /** The workspace the open-source build, or a host's first workspace, keeps its data under. */
   readonly defaultWorkspace: string;
   /**
+   * Whether a workspace is held here: the default one, or one the members
+   * store knows. A host asks before it opens a workspace for a webhook's
+   * call or a booking page, which name their workspace with nobody signed in.
+   */
+  holds(workspace: string): Promise<boolean>;
+  /**
    * One workspace's server options: its own folders, its own key in every
    * database store, its own chat tenant. The default
    * workspace's are `platform` itself, with its data where it always was.
    */
   forWorkspace(workspace: string): DashPlatform;
-  /** Whether this host has a workspace by that name, for public pages that name one with nobody signed in. */
-  workspaceExists(workspace: string): Promise<boolean>;
   /** Close what was opened, on the way out: an embedded database killed open can be damaged. */
   close(): Promise<void>;
 }
@@ -428,6 +432,10 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     };
   };
 
+  const holds = async (workspace: string): Promise<boolean> =>
+    workspace === defaultWorkspace ||
+    (memberships !== undefined && ((await memberships.workspace(workspace)) !== null || (await memberships.members(workspace)).length > 0));
+
   return {
     platform,
     root,
@@ -438,8 +446,8 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     search,
     ...(identity ? { identity } : {}),
     defaultWorkspace,
+    holds,
     forWorkspace,
-    workspaceExists: async (workspace) => workspace === defaultWorkspace || Boolean(await memberships?.workspace(workspace)),
     close: async () => {
       await chat?.close().catch(() => undefined);
       await dashDb?.close().catch(() => undefined);

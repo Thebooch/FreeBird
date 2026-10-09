@@ -16,17 +16,18 @@ declare module "fastify" {
  *
  * On the root instance, so it reaches every plugin registered after it — the
  * chat plugin included. A request nobody can be identified as is refused
- * here with a 401, which the open-source build never produces.
+ * here with a 401, which the open-source build never produces. Only routes
+ * marked public (`identity/public.ts`) are answered without one, matched on
+ * the route Fastify chose and its address both: nobody is asked for, and
+ * nobody is attached. Anything else under a public address, a lookalike or a
+ * path no route has, wants someone signed in like every other request.
  */
 export const installIdentity = (app: FastifyInstance, identity: IdentityResolver): void => {
   app.decorateRequest("principal", null);
   installPublicRoutes(app);
   app.addHook("onRequest", async (request, reply) => {
-    /* A public page's API answers with no principal: what it may do comes from its token. Only routes marked public. */
-    if (isPublicUrl(request.url)) {
-      if (request.routeOptions.config?.public === true) return undefined;
-      return reply.status(404).send({ error: "Not found." });
-    }
+    /* What a public route may do comes from the token in its path. */
+    if (request.routeOptions.config?.public === true && isPublicUrl(request.url)) return undefined;
     const principal = await identity.resolve({ headers: request.headers, url: request.url });
     if (!principal) {
       return reply.status(401).send({ error: "Sign in to continue." });

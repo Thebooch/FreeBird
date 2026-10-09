@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Principal } from "@freebirdai/dash-spec";
 import type { FastifyInstance, InjectOptions } from "fastify";
-import { isPublicUrl, publicWorkspaceOf } from "../identity/public.js";
+import { publicWorkspaceOf } from "../identity/public.js";
 import type { IdentityResolver } from "../identity/resolver.js";
 
 /**
@@ -20,6 +20,15 @@ import type { IdentityResolver } from "../identity/resolver.js";
  * can never reach another workspace's server by any route. A workspace nobody
  * has asked anything of for a while is closed, and built again when asked.
  *
+ * Some requests name their workspace themselves, because they come with
+ * nobody signed in and a token in the path is their authority: a webhook's
+ * call (`POST /api/workflow-hooks/<workspace>/<token>`) and the booking and
+ * approval pages' API (`/api/public/<workspace>/…`). The host hands each to
+ * the workspace its address names, resolving and attaching no principal, and
+ * only when that workspace is held here. The server it reaches lets the routes
+ * marked public through without a principal, and nothing else
+ * (`identity/public.ts`).
+ *
  * The open-source build has one workspace and does not use this: it runs one
  * server, as it always has.
  */
@@ -29,11 +38,11 @@ export interface WorkspaceHostOptions {
   /** The server for one workspace, built the first time a member of it asks. */
   readonly build: (workspace: string) => FastifyInstance | Promise<FastifyInstance>;
   /**
-   * Whether a workspace is real, for public pages: they name their workspace
-   * in the path with nobody signed in, so a made-up name must not open a
-   * server. Absent: every well-formed name is taken as real.
+   * Whether a workspace by this id is held here. Asked before a request that
+   * names its workspace with nobody signed in (a webhook's call, a booking
+   * page) opens its server: a name nobody vouches for opens nothing.
    */
-  readonly exists?: (workspace: string) => Promise<boolean>;
+  readonly holds: (workspace: string) => boolean | Promise<boolean>;
   /** A workspace asked nothing for this long is closed. Twenty minutes unless said. */
   readonly idleMs?: number;
   readonly now?: () => number;
@@ -44,6 +53,8 @@ export interface WorkspaceHostOptions {
 const WORKSPACE_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 
 export const isWorkspaceId = (id: string): boolean => WORKSPACE_ID.test(id);
+
+type Routed = { readonly app: FastifyInstance } | { readonly status: number; readonly error: string };
 
 const IDLE_MS = 20 * 60_000;
 
@@ -81,13 +92,6 @@ export class WorkspaceHost {
     return held.app;
   }
 
-  /** A workspace a public page may name: well formed, and one this host has. */
-  private async isReal(workspace: string): Promise<boolean> {
-    if (!isWorkspaceId(workspace)) return false;
-    if (this.held.has(workspace) || !this.options.exists) return true;
-    return this.options.exists(workspace).catch(() => false);
-  }
-
   /** Who sent a request, by the host's own resolver: null when nobody can be named. */
   private async principalOf(request: {
     readonly headers: Readonly<Record<string, string | string[] | undefined>>;
@@ -96,26 +100,31 @@ export class WorkspaceHost {
     return this.options.identity.resolve({ headers: request.headers, url: request.url });
   }
 
+  /** Which workspace's server answers: the signed-in member's, or the one a public request names. */
+  private async route(request: {
+    readonly method: string;
+    readonly headers: Readonly<Record<string, string | string[] | undefined>>;
+    readonly url: string;
+  }): Promise<Routed> {
+    const named = publicWorkspaceOf(request.method, request.url);
+    if (named !== null) {
+      if (!isWorkspaceId(named) || !(await this.options.holds(named))) return { status: 404, error: "Not found." };
+      return { app: await this.appFor(named) };
+    }
+    const principal = await this.principalOf(request);
+    if (!principal || !isWorkspaceId(principal.workspaceId)) return { status: 401, error: "Sign in to continue." };
+    return { app: await this.appFor(principal.workspaceId) };
+  }
+
   /** One request, answered by its workspace's server, streaming and all. */
   async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
-      /* A public page names its workspace in the path and is answered with no principal (`identity/public.ts`). */
-      if (isPublicUrl(request.url ?? "/")) {
-        const workspace = publicWorkspaceOf(request.url ?? "/");
-        if (!workspace || !(await this.isReal(workspace))) {
-          response.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: "Not found." }));
-          return;
-        }
-        (await this.appFor(workspace)).routing(request, response);
+      const routed = await this.route({ method: request.method ?? "GET", headers: request.headers, url: request.url ?? "/" });
+      if (!("app" in routed)) {
+        response.writeHead(routed.status, { "content-type": "application/json" }).end(JSON.stringify({ error: routed.error }));
         return;
       }
-      const principal = await this.principalOf({ headers: request.headers, url: request.url ?? "/" });
-      if (!principal || !isWorkspaceId(principal.workspaceId)) {
-        response.writeHead(401, { "content-type": "application/json" }).end(JSON.stringify({ error: "Sign in to continue." }));
-        return;
-      }
-      const app = await this.appFor(principal.workspaceId);
-      app.routing(request, response);
+      routed.app.routing(request, response);
     } catch (error) {
       this.options.log?.(`a request could not be answered: ${error instanceof Error ? error.message : String(error)}`);
       if (!response.headersSent) response.writeHead(500, { "content-type": "application/json" });
@@ -126,20 +135,12 @@ export class WorkspaceHost {
   /** The same, in process: what tests and a caller without a socket use. */
   async inject(options: InjectOptions & { readonly headers?: Record<string, string> }): Promise<{ statusCode: number; json: () => unknown; body: string }> {
     const url = typeof options.url === "string" ? options.url : "/";
-    if (isPublicUrl(url)) {
-      const workspace = publicWorkspaceOf(url);
-      if (!workspace || !(await this.isReal(workspace))) {
-        const body = JSON.stringify({ error: "Not found." });
-        return { statusCode: 404, body, json: () => JSON.parse(body) as unknown };
-      }
-      return (await this.appFor(workspace)).inject(options);
+    const routed = await this.route({ method: options.method ?? "GET", headers: { ...options.headers }, url });
+    if (!("app" in routed)) {
+      const body = JSON.stringify({ error: routed.error });
+      return { statusCode: routed.status, body, json: () => JSON.parse(body) as unknown };
     }
-    const principal = await this.principalOf({ headers: { ...options.headers }, url });
-    if (!principal || !isWorkspaceId(principal.workspaceId)) {
-      const body = JSON.stringify({ error: "Sign in to continue." });
-      return { statusCode: 401, body, json: () => JSON.parse(body) as unknown };
-    }
-    return (await this.appFor(principal.workspaceId)).inject(options);
+    return routed.app.inject(options);
   }
 
   /** A server that listens, for a hosted build: every request through `handle`. */

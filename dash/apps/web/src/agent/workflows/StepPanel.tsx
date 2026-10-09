@@ -11,7 +11,8 @@ import {
   type WorkflowSpec,
 } from "@freebirdai/dash-spec";
 import type { ConnectionSummary } from "../../api";
-import { type Entities, ValuesEditor } from "./fields.jsx";
+import type { Entities } from "../entities.js";
+import { ValuesEditor } from "./fields.jsx";
 
 /**
  * The settings of one step, drawn from its catalog variant: each field the

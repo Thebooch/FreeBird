@@ -2,34 +2,37 @@ import type { FastifyInstance } from "fastify";
 
 /**
  * Paths anyone may reach without signing in: the booking and approval
- * pages' APIs, and workflow webhooks. Each names its workspace in the path,
- * so a host serving many workspaces routes it without a principal:
+ * pages' APIs, and a workflow webhook's call. Each names its workspace in the
+ * path, so a host serving many workspaces routes it without a principal:
  *
  * - `/api/public/<workspace>/…`
  * - `/p/<workspace>/…` (the pages themselves, where the server serves them)
- * - `/api/workflow-hooks/<workspace>/<token>` (and, on the open-source
- *   build's one workspace, the older `/api/workflow-hooks/<token>`)
+ * - `POST /api/workflow-hooks/<workspace>/<token>`, exactly that shape. The
+ *   older `/api/workflow-hooks/<token>` names no workspace and is not public:
+ *   it still wakes a case on a one-workspace server, where everyone is the
+ *   owner, and through a host it needs sign-in like everything else.
  *
- * Nothing else is reachable this way: identity is skipped only for routes
- * under these prefixes registered with `config: { public: true }`, and a
- * test pins that set (`PUBLIC_ROUTES` in `routes/public.ts`).
+ * Nothing else is reachable this way: identity is skipped only for routes at
+ * these addresses registered with `config: { public: true }`, and a test pins
+ * that set (`PUBLIC_ROUTES` in `routes/public.ts`).
  */
-const PUBLIC_PREFIXES = ["/api/public/", "/p/", "/api/workflow-hooks/"] as const;
+const PUBLIC_PAGES = /^\/(?:api\/public|p)\/([^/]+)\//;
+const HOOK_CALL = /^\/api\/workflow-hooks\/([^/]+)\/[^/]+$/;
 
-const pathOf = (url: string): string => url.split("?")[0] ?? url;
+const pathOf = (url: string): string => url.split(/[?#]/)[0] ?? url;
 
 export const isPublicUrl = (url: string): boolean => {
   const path = pathOf(url);
-  return PUBLIC_PREFIXES.some((prefix) => path.startsWith(prefix));
+  return PUBLIC_PAGES.test(path) || HOOK_CALL.test(path);
 };
 
-/** The workspace a public path names, or null when it names none. */
-export const publicWorkspaceOf = (url: string): string | null => {
+/** The workspace a public request names, or null when it is not one: a hook is a POST, or it is nothing. */
+export const publicWorkspaceOf = (method: string, url: string): string | null => {
   const path = pathOf(url);
-  const parts = path.split("/").filter(Boolean);
-  if (path.startsWith("/api/public/") || path.startsWith("/p/")) return (path.startsWith("/p/") ? parts[1] : parts[2]) ?? null;
-  if (path.startsWith("/api/workflow-hooks/")) return parts.length >= 4 ? (parts[2] ?? null) : null;
-  return null;
+  const page = PUBLIC_PAGES.exec(path);
+  if (page) return page[1] ?? null;
+  if (method.toUpperCase() !== "POST") return null;
+  return HOOK_CALL.exec(path)?.[1] ?? null;
 };
 
 declare module "fastify" {

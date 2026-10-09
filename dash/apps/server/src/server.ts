@@ -661,7 +661,9 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * Every request carries who sent it, before any route runs. The open-source
    * build always answers "the owner"; the point is that every place a change
    * happens can already ask, so a managed build answers differently rather
-   * than hunting for those places.
+   * than hunting for those places. Only the routes marked public need nobody:
+   * a webhook's call and the booking pages' API, whose tokens are their
+   * authority (`identity/public.ts`).
    */
   installIdentity(app, options.identity ?? localOwner());
   /*
