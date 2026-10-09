@@ -34,6 +34,7 @@ import type {
   WidgetBrief,
 } from "@freebirdai/dash-spec";
 import {
+  readField,
   connectionKeyRefs,
   connectionNeedsAuthSetup,
   dashboardSchema,
@@ -139,6 +140,9 @@ import { workflowRoutes } from "./routes/workflows.js";
 import { calendarRoutes } from "./routes/calendar.js";
 import { CalendarService } from "./calendar/service.js";
 import { schedulingRoutes } from "./routes/scheduling.js";
+import { contactRoutes, type ContactSource } from "./routes/contacts.js";
+import { ContactService } from "./contacts/service.js";
+import { MemoryContactStore, type ContactStore } from "./contacts/store.js";
 import { SchedulingService, type WorkspaceMember } from "./scheduling/service.js";
 import { MemorySchedulingStore, type SchedulingStore } from "./scheduling/store.js";
 import { explainDraft } from "./workflows/draft.js";
@@ -411,6 +415,8 @@ export interface BuildServerOptions {
   readonly scheduling?: SchedulingStore;
   /** Who is in the workspace, for scheduling's hosts. Absent: the one person this server answers to. */
   readonly members?: () => Promise<readonly WorkspaceMember[]>;
+  /** Contacts, their fields and how they are matched to records (`contacts/store.ts`). Memory unless supplied. */
+  readonly contacts?: ContactStore;
   readonly signals?: SignalStore;
   /** Sends Outreach (texts, calls, email). Comms supplies it; absent, nothing leaves Dash and tasks say so. */
   readonly outreach?: OutreachSender;
@@ -1066,11 +1072,70 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   /* The calendar: what agents, workflows, bookings and people put on it (`calendar/`). */
   const calendar = new CalendarService({ store: workflowEnv.calendar, now: () => Date.now(), newId: () => randomUUID() });
   void app.register(calendarRoutes({ calendar, policy }));
+  /*
+   * Contacts (`contacts/`): who books, and the facts block rules read about
+   * them. Matching and Refresh read a connection's records as a person who
+   * may read it, through the same reader and policy workflows use.
+   */
+  const entitySpecOf = (connectionId: string, record: string) => {
+    const connection = store.getConnection(connectionId);
+    const entities = connection ? (catalogEntryOf(connection)?.entities ?? []) : [];
+    const wanted = record.toLowerCase();
+    return entities.find((one) => one.id === record) ?? entities.find((one) => one.name.one.toLowerCase() === wanted || one.name.many.toLowerCase() === wanted);
+  };
+  const contacts = new ContactService({
+    store: options.contacts ?? new MemoryContactStore(),
+    reads: {
+      read: async (as, target, fresh) => {
+        const may = await policy.can(as, "records.read", { connection: target.connection });
+        if (!may.ok) return { refused: may.reason };
+        const answer = await workflowEnv.read(target.connection, { record: target.entity, fresh, waitMs: 30_000 }, Priority.Background);
+        return { rows: answer.rows, complete: answer.complete };
+      },
+      idField: (connection, entity) => workflowEnv.rowKeyField?.(connection, entity),
+      label: (connection, entity, row) => {
+        const title = entitySpecOf(connection, entity)?.display?.title ?? [];
+        const text = title.map((path) => readField(row, path)).filter((value) => typeof value === "string" || typeof value === "number").join(" ").trim();
+        return text || undefined;
+      },
+      describe: (connection, entity) => `${store.getConnection(connection)?.title ?? connection}'s ${(entitySpecOf(connection, entity)?.name.many ?? entity).toLowerCase()}`,
+    },
+    now: () => Date.now(),
+    newId: () => randomUUID(),
+  });
+  /** The record types a person may read, with their fields and values seen in them, for choosing where a contact field comes from. */
+  const contactSources = async (principal: Principal): Promise<ContactSource[]> => {
+    const out: ContactSource[] = [];
+    for (const connection of store.listConnections()) {
+      if (!(await policy.can(principal, "records.read", { connection: connection.id })).ok) continue;
+      const entities = catalogEntryOf(connection)?.entities ?? [];
+      if (entities.length === 0) continue;
+      const seen = await seenFor(connection, entities);
+      out.push({
+        connection: connection.id,
+        title: connection.title,
+        entities: entities.map((entity) => {
+          const fields = new Map<string, { path: string; label?: string; samples: string[] }>();
+          for (const field of entity.fields) fields.set(field.path, { path: field.path, ...(field.label ? { label: field.label } : {}), samples: [...field.values].slice(0, 12) });
+          for (const [path, values] of Object.entries(seen[entity.id]?.fields ?? {})) {
+            const held = fields.get(path);
+            fields.set(path, { ...(held ?? { path }), samples: [...new Set([...(held?.samples ?? []), ...values])].slice(0, 12) });
+          }
+          for (const path of seen[entity.id]?.unique ?? []) if (!fields.has(path)) fields.set(path, { path, samples: [] });
+          return { entity: entity.id, name: entity.name.one, fields: [...fields.values()].sort((a, b) => a.path.localeCompare(b.path)) };
+        }),
+      });
+    }
+    return out;
+  };
+  void app.register(contactRoutes({ contacts, policy, sources: contactSources }));
   /* Scheduling: who can be booked, on what terms (`scheduling/`). */
   const scheduling = new SchedulingService({
     store: options.scheduling ?? new MemorySchedulingStore(),
     calendar: workflowEnv.calendar,
     members: options.members ?? (async () => [{ userId: LOCAL_USER_ID, email: "", role: "owner" as const }]),
+    factKinds: () => contacts.factKinds(),
+    contacts,
     now: () => Date.now(),
   });
   void app.register(schedulingRoutes({ scheduling, policy }));

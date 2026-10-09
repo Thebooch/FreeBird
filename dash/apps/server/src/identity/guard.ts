@@ -47,6 +47,10 @@ export const GUARDED_ROUTES: readonly GuardRule[] = [
   { methods: WRITE, path: /^\/api\/calendar(\/|$)/, permission: "calendar.manage" },
   /* Scheduling's setup: hosts, pools, appointment types, blocks and where they are placed. */
   { methods: WRITE, path: /^\/api\/scheduling(\/|$)/, permission: "calendar.manage" },
+  /* Contacts: reading them is reading records; changing, linking and setting up how they are filled is its own. */
+  { methods: ["GET"], path: /^\/api\/contacts\/sources$/, permission: "contacts.manage" },
+  { methods: ["GET"], path: /^\/api\/contacts(\/|$)/, permission: "records.read" },
+  { methods: WRITE, path: /^\/api\/contacts(\/|$)/, permission: "contacts.manage" },
   /* The parts a board is built from, and which models do what. */
   { methods: ["PUT", "DELETE"], path: /^\/api\/parts(\/|$)/, permission: "boards.edit" },
   { methods: ["PUT"], path: /^\/api\/models(\/|$)/, permission: "connections.manage" },

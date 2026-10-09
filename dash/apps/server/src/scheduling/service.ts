@@ -58,6 +58,8 @@ export interface SchedulingDeps {
   readonly bookings?: (member: string, from: number, to: number) => Promise<readonly Busy[]>;
   /** Each contact field's kind, by path, for comparing values. */
   readonly factKinds?: () => Promise<ReadonlyMap<string, FactKind>>;
+  /** A contact's facts, for previewing what one real contact would be offered. */
+  readonly contacts?: { facts(id: string): Promise<Facts> };
   readonly now: () => number;
 }
 
@@ -390,10 +392,16 @@ export class SchedulingService {
     const type = await this.deps.store.get("type", typeId);
     if (!type) throw new SchedulingError(`There is no type "${typeId}".`, 404);
     const given = body(input);
-    const scope = { contact: body(given["contact"]), request: body(given["request"]), type: { id: type.id, name: type.name } };
-    const trusted = new Set<string>([...Object.keys(scope.contact).map((key) => `contact.${key}`), ...Object.keys(scope.request).map((key) => `request.${key}`)]);
     const from = typeof given["from"] === "string" && Number.isFinite(Date.parse(given["from"])) ? Date.parse(given["from"]) : this.deps.now();
     const to = typeof given["to"] === "string" && Number.isFinite(Date.parse(given["to"])) ? Date.parse(given["to"]) : from + 14 * DAY;
-    return this.slots(type, { scope, trusted, kinds: (await this.deps.factKinds?.()) ?? new Map([["contact.address", "address" as const]]) }, { from, to, all: given["all"] === true, limit: 300 });
+    const range = { from, to, all: given["all"] === true, limit: 300 };
+    /* One real contact: what they hold, trusted only where it came from a record or a member. */
+    if (typeof given["contactId"] === "string" && this.deps.contacts) {
+      const facts = await this.deps.contacts.facts(given["contactId"]);
+      return this.slots(type, { ...facts, scope: { ...facts.scope, request: body(given["request"]), type: { id: type.id, name: type.name } } }, range);
+    }
+    const scope = { contact: body(given["contact"]), request: body(given["request"]), type: { id: type.id, name: type.name } };
+    const trusted = new Set<string>([...Object.keys(scope.contact).map((key) => `contact.${key}`), ...Object.keys(scope.request).map((key) => `request.${key}`)]);
+    return this.slots(type, { scope, trusted, kinds: new Map<string, FactKind>([["contact.address", "address"], ...((await this.deps.factKinds?.()) ?? [])]) }, range);
   }
 }

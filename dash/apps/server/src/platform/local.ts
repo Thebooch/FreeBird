@@ -23,6 +23,7 @@ import { LOCAL_WORKSPACE_ID, type IdentityResolver } from "../identity/resolver.
 import { isWorkspaceId } from "./workspaces.js";
 import { DbAgentStore } from "../agents/store.js";
 import { DbCalendarStore, DbCaseStore, DbSignalStore, DbTaskStore, DbTemplateStore, DbWorkflowStore } from "../workflows/store.js";
+import { DbContactStore } from "../contacts/store.js";
 import { DbSchedulingStore } from "../scheduling/store.js";
 import { DbSnapshotStore } from "../history/store.js";
 import { defaultModelId, llmForModel, modelForTask } from "../llm.js";
@@ -150,6 +151,7 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     templates: new DbTemplateStore(db, workspace),
     signals: new DbSignalStore(db, workspace),
     scheduling: new DbSchedulingStore(db, workspace),
+    contacts: new DbContactStore(db, workspace),
   });
 
   /**

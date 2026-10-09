@@ -1,4 +1,4 @@
-import { passes, type FieldRule, type RuleSet } from "@freebirdai/dash-spec";
+import { normalizePhone, passes, type FieldRule, type RuleSet } from "@freebirdai/dash-spec";
 
 /**
  * Who may book: a block's rules over a contact's facts.
@@ -98,7 +98,8 @@ export const addressForms = (value: unknown): string[] => {
   return [...new Set(forms.map((form) => form.replace(/\s+/g, " ").trim()).filter(Boolean))];
 };
 
-const phone = (value: unknown): string => String(value).replace(/[^\d+]/g, "").replace(/^00/, "+");
+/** E.164 when it can be told, else the digits: "(512) 555-0142" and "+1 512 555 0142" compare equal. */
+const phone = (value: unknown): string => normalizePhone(value) ?? String(value).replace(/[^\d+]/g, "").replace(/^00/, "+");
 
 /** A fact as one comparable string, by its kind: what consolidation and stacking compare. */
 export const normalizeFact = (value: unknown, kind: FactKind = "text"): string | undefined => {

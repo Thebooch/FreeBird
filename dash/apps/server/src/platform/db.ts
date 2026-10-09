@@ -171,6 +171,32 @@ CREATE TABLE IF NOT EXISTS dash_scheduling (
   PRIMARY KEY (workspace, kind, id)
 );
 
+CREATE TABLE IF NOT EXISTS dash_contacts (
+  workspace  TEXT NOT NULL,
+  id         TEXT NOT NULL,
+  revision   INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  record     JSONB NOT NULL,
+  PRIMARY KEY (workspace, id)
+);
+CREATE INDEX IF NOT EXISTS dash_contacts_recent ON dash_contacts (workspace, updated_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS dash_contact_keys (
+  workspace TEXT NOT NULL,
+  key       TEXT NOT NULL,
+  contact   TEXT NOT NULL,
+  PRIMARY KEY (workspace, key)
+);
+CREATE INDEX IF NOT EXISTS dash_contact_keys_contact ON dash_contact_keys (workspace, contact);
+
+CREATE TABLE IF NOT EXISTS dash_contact_setup (
+  workspace TEXT NOT NULL,
+  kind      TEXT NOT NULL,
+  id        TEXT NOT NULL,
+  record    JSONB NOT NULL,
+  PRIMARY KEY (workspace, kind, id)
+);
+
 CREATE TABLE IF NOT EXISTS dash_invites (
   id         TEXT PRIMARY KEY,
   workspace  TEXT NOT NULL,
