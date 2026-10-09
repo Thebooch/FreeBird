@@ -11,6 +11,7 @@ import {
 import { useEffect, useState } from "react";
 import { api, type ConnectionSummary } from "../api";
 import type { WorkflowSpec } from "@freebirdai/dash-spec";
+import type { Entities } from "./entities.js";
 import { newToolId } from "./ids.js";
 
 /**
@@ -26,8 +27,6 @@ import { newToolId } from "./ids.js";
  * A record tool can only act within what the agent may touch (the Access
  * tab); one that would act beyond it is flagged here and refused on save.
  */
-
-type Entities = Record<string, Array<{ entity: string; name: string }>>;
 
 const MODES: ReadonlyArray<{ readonly id: AgentToolMode; readonly label: string; readonly hint: string }> = [
   { id: "auto", label: "Auto", hint: "Does it, then tells them what it did." },

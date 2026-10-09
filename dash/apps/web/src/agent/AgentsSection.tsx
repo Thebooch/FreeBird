@@ -12,6 +12,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type ConnectionSummary } from "../api";
 import type { Route } from "../route.js";
+import { recordTypeChoices, type Entities } from "./entities.js";
 import { GenerateField } from "./GenerateField.jsx";
 import { usableRules } from "./ids.js";
 import { KnowledgeEditor } from "./KnowledgeEditor.jsx";
@@ -45,8 +46,6 @@ import { ToolsEditor } from "./ToolsEditor.jsx";
  * (`create_agent`, `update_agent`, `archive_agent`), because a thing you can
  * click and cannot ask for is a thing the chat will be blamed for not doing.
  */
-
-type Entities = Record<string, Array<{ entity: string; name: string }>>;
 
 const NEW = "new";
 
@@ -242,7 +241,7 @@ const Editor = ({
       if (held[connection]) return held;
       void api
         .connectionEntities(connection)
-        .then((list) => setEntities((now) => ({ ...now, [connection]: list })))
+        .then((list) => setEntities((now) => ({ ...now, [connection]: recordTypeChoices(list) })))
         .catch(() => setEntities((now) => ({ ...now, [connection]: [] })));
       return { ...held, [connection]: [] };
     });
