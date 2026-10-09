@@ -46,6 +46,7 @@ export const workflowBookings = (deps: {
       return {
         ...booking,
         when: whenWords(booking.start, booking.timezone),
+        title: `${booking.type.name} · ${contact?.name || contact?.emails[0] || "someone"}`,
         link,
         contact: {
           ...fields,

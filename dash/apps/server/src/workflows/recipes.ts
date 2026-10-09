@@ -29,7 +29,7 @@ const node = (id: string, action: string, settings: Record<string, unknown>, x: 
 
 const edge = (from: string, outcome: string, to: string) => ({ id: `e-${from}-${outcome}-${to}`.slice(0, 64), from, outcome, to });
 
-const AGENT_BLANK = { name: "agent", label: "The agent who tells them (its id)" };
+const AGENT_BLANK = { name: "agent", label: "The agent who tells them" };
 
 const tell = (id: string, about: string, include: string, x: number, y: number) =>
   node(id, "outreach.inform", { agentId: "{{ blank.agent }}", about, channel: "preferred", includeLink: "auto", content: "agent", ...(include ? { include } : {}) }, x, y);
@@ -123,4 +123,4 @@ const RECIPES: unknown[] = [
   },
 ];
 
-export const BOOKING_RECIPES: readonly WorkflowTemplate[] = RECIPES.map((one) => workflowTemplateSchema.parse({ version: 1, createdAt: AT, updatedAt: AT, ...(one as object) }));
+export const BOOKING_RECIPES: readonly WorkflowTemplate[] = RECIPES.map((one) => workflowTemplateSchema.parse({ version: 1, createdAt: AT, updatedAt: AT, builtIn: true, ...(one as object) }));

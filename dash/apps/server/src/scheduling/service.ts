@@ -69,6 +69,19 @@ export interface SlotOptions {
   readonly bookings?: SchedulingDeps["bookings"];
 }
 
+/**
+ * Everything a slot search reads except bookings, read once. A booking
+ * change reads this before it takes its locks, then searches inside them
+ * with only the bookings read fresh: inside a transaction on a database with
+ * one connection, nothing else may be read.
+ */
+export interface SlotContext {
+  readonly type: AppointmentType;
+  readonly defaults: PartialSettings;
+  readonly blocks: ReadonlyMap<string, Block>;
+  readonly hosts: readonly HostInput[];
+}
+
 export interface SchedulingOverview {
   readonly defaults: PartialSettings;
   readonly profiles: readonly SchedulingProfile[];
@@ -379,6 +392,28 @@ export class SchedulingService {
       hosts.push({ profile, placements: await this.placementsFor([member]), busy: await this.busyFor(member, from, to, options.bookings ?? this.deps.bookings) });
     }
     return hosts;
+  }
+
+  /** What a search over these hosts and this window reads, bookings aside. */
+  async context(type: AppointmentType, from: number, to: number, hosts?: readonly string[]): Promise<SlotContext> {
+    const { defaults, blocks } = await this.overview();
+    const inputs = await this.hostsFor(type, from, to, { ...(hosts ? { hosts } : {}), bookings: async () => [] });
+    return { type, defaults, blocks: new Map(blocks.map((one) => [one.id, one])), hosts: inputs };
+  }
+
+  /** A search over a context, with each host's bookings as given. Reads nothing. */
+  slotsIn(context: SlotContext, facts: Facts, range: { readonly from: number; readonly to: number; readonly all?: boolean }, bookings: ReadonlyMap<string, readonly Busy[]>): FindSlotsResult {
+    return findSlots({
+      now: this.deps.now(),
+      from: range.from,
+      to: range.to,
+      type: context.type,
+      workspace: context.defaults,
+      hosts: context.hosts.map((host) => ({ ...host, busy: [...host.busy, ...(bookings.get(host.profile.member) ?? [])] })),
+      blocks: context.blocks,
+      facts,
+      ...(range.all ? { all: true } : {}),
+    });
   }
 
   /** One appointment type, by its id or its booking page address. */

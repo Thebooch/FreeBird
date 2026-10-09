@@ -1162,6 +1162,10 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     now: () => Date.now(),
     newId: () => randomUUID(),
     afterChange: () => void bookingDispatcher?.deliver(),
+    approvalAsked: async (type) =>
+      (await workflowStore.list()).some(
+        (one) => one.enabled && !one.parked && one.trigger.kind === "booking" && one.trigger.events.includes("requested") && (one.trigger.types.length === 0 || one.trigger.types.includes(type)),
+      ),
   });
   bookingsForWorkflows = workflowBookings({ service: bookings, contacts, scheduling });
   bookingDispatcher = new BookingDispatcher({ env: workflowEnv, engine: workflowEngine, store: bookingStore, bookings: bookingsForWorkflows, contacts });

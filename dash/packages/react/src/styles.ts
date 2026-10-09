@@ -2028,7 +2028,17 @@ export const DASH_REACT_STYLES = `
 .dash-cases th, .dash-cases td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--dash-border); }
 .dash-cases th { font-size: var(--dash-text-xs); color: var(--dash-muted); font-weight: var(--dash-weight-semi); }
 .dash-cases tr[data-status="failed"] td:nth-child(2) { color: var(--dash-critical); }
-.dash-template-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 2px; font-size: var(--dash-text-sm); }
+.dash-template-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 2px; flex-wrap: wrap; font-size: var(--dash-text-sm); }
+.dash-template-row__name { min-width: 0; }
+.dash-template-row__blanks {
+  flex-basis: 100%; display: flex; flex-direction: column; gap: 8px; margin-top: 4px; padding: 10px;
+  border: 1px solid var(--dash-border); border-radius: var(--dash-radius-sm); background: var(--dash-surface-sunken);
+}
+.dash-template-row__blank { display: flex; flex-direction: column; gap: 3px; }
+.dash-template-row__blank select, .dash-template-row__blank input {
+  font: inherit; font-size: var(--dash-text-sm); padding: 6px 8px; border-radius: var(--dash-radius-sm);
+  border: 1px solid var(--dash-border-strong); background: var(--dash-surface); color: var(--dash-ink);
+}
 
 /* Tasks: one record per action, shaped by what it did. */
 .dash-task { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--dash-border); border-radius: var(--dash-radius-sm); background: var(--dash-surface); list-style: none; }

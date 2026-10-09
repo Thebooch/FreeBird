@@ -665,6 +665,8 @@ export const workflowTemplateSchema = z.object({
   entry: z.string().optional(),
   /** For a workflow template: everything but its steps. */
   workflow: z.record(z.unknown()).optional(),
+  /** Shipped with Dash: it can be used, not changed or removed. */
+  builtIn: z.boolean().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

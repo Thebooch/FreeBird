@@ -4,16 +4,16 @@ import { join } from "node:path";
 import { KeyStore, LocalAesVault } from "@freebirdai/connect/host";
 import type { Principal } from "@freebirdai/dash-spec";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { MemoryCalendarStore } from "../calendar/store.js";
+import { DbCalendarStore, MemoryCalendarStore } from "../calendar/store.js";
 import { MemoryMembershipStore } from "../identity/members.js";
 import { rolePolicy } from "../identity/policy.js";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
 import { ContactService } from "../contacts/service.js";
-import { MemoryContactStore } from "../contacts/store.js";
+import { DbContactStore, MemoryContactStore } from "../contacts/store.js";
 import { openDashDb, type DashDb } from "../platform/db.js";
 import { SchedulingService } from "../scheduling/service.js";
-import { MemorySchedulingStore } from "../scheduling/store.js";
+import { DbSchedulingStore, MemorySchedulingStore } from "../scheduling/store.js";
 import { BookingService, bookingsAsBusy } from "./service.js";
 import { DbBookingStore, MemoryBookingStore, type BookingStore } from "./store.js";
 
@@ -29,14 +29,15 @@ const TUE_11 = TUE_9 + 2 * HOUR;
 const member = { kind: "member" as const, id: "sam" };
 const them = { kind: "contact" as const };
 
-const build = async (store: BookingStore = new MemoryBookingStore()) => {
+/** Memory stores, or every store on one database: as the local build runs, one connection for all. */
+const build = async (store: BookingStore = new MemoryBookingStore(), db?: DashDb) => {
   let now = START;
   let n = 0;
   const clock = { now: () => now, set: (at: number) => (now = at) };
-  const calendar = new MemoryCalendarStore();
-  const contacts = new ContactService({ store: new MemoryContactStore(), now: clock.now, newId: () => `c${++n}` });
+  const calendar = db ? new DbCalendarStore(db, "acme") : new MemoryCalendarStore();
+  const contacts = new ContactService({ store: db ? new DbContactStore(db, "acme") : new MemoryContactStore(), now: clock.now, newId: () => `c${++n}` });
   const scheduling = new SchedulingService({
-    store: new MemorySchedulingStore(),
+    store: db ? new DbSchedulingStore(db, "acme") : new MemorySchedulingStore(),
     calendar,
     members: async () => [
       { userId: "sam", email: "sam@acme.test", role: "owner" },
@@ -77,6 +78,19 @@ describe("asking for a time", () => {
     expect(forThem.outcome).toBe("confirmed");
 
     expect((await store.undelivered(10)).map((one) => one.kind)).toEqual(["confirmed", "requested", "confirmed"]);
+  });
+
+  it("refuses a request that needs approval when nobody is set to approve it, but not one the team makes", async () => {
+    const built = await build();
+    let asked = false;
+    let n = 0;
+    const bookings = new BookingService({ store: built.store, scheduling: built.scheduling, contacts: built.contacts, calendar: built.calendar, now: built.clock.now, newId: () => `x${++n}`, approvalAsked: async () => asked });
+    await built.scheduling.putType("visit", { settings: { length: "60m", slotStep: "60m", minNotice: "0m", approval: "always" } });
+    const ana = await built.person("ana@example.com");
+    await expect(bookings.request({ type: "visit", contact: ana, start: TUE_9, origin: "public_link", by: them })).rejects.toThrow(/nobody is set to approve/);
+    expect((await bookings.request({ type: "visit", contact: ana, start: TUE_9, origin: "member", by: member })).outcome).toBe("confirmed");
+    asked = true;
+    expect((await bookings.request({ type: "visit", contact: ana, start: TUE_10, origin: "public_link", by: them })).outcome).toBe("pending");
   });
 
   it("refuses a time already taken, offering what is open nearby, and finds the first booking again by its id", async () => {
@@ -219,7 +233,7 @@ describe("bookings in the database", () => {
 
   it("holds the last place for one, keeps held time beside each booking, and delivers each event once", async () => {
     const store = new DbBookingStore(db, "acme");
-    const { bookings, person } = await build(store);
+    const { bookings, person } = await build(store, db);
     const people = await Promise.all(["a", "b", "c"].map((name) => person(`${name}@example.com`)));
     const results = await Promise.allSettled(people.map((contact) => bookings.request({ type: "visit", contact, start: TUE_9, origin: "public_link", by: them })));
     expect(results.filter((one) => one.status === "fulfilled")).toHaveLength(1);

@@ -14,7 +14,7 @@ import type { CalendarStore } from "../calendar/store.js";
 import type { ContactService } from "../contacts/service.js";
 import { assignHost } from "../scheduling/assign.js";
 import { factString, type Facts } from "../scheduling/rules.js";
-import type { SchedulingService } from "../scheduling/service.js";
+import type { SchedulingService, SlotContext } from "../scheduling/service.js";
 import type { Busy, HostOption, Slot } from "../scheduling/slots.js";
 import { BookingConflict, type BookingStore, type BookingTx } from "./store.js";
 
@@ -53,6 +53,11 @@ export interface BookingDeps {
   readonly newId: () => string;
   /** Called after each change is written, to deliver its events now rather than on the next pass. */
   readonly afterChange?: () => void;
+  /**
+   * Whether anyone will be asked to approve a request of this type: an
+   * enabled workflow that starts on its requests. Absent: not checked.
+   */
+  readonly approvalAsked?: (type: string) => Promise<boolean>;
 }
 
 export interface RequestInput {
@@ -170,10 +175,21 @@ export class BookingService {
     return this.deps.scheduling.slots(type, await this.factsFor(contact, type), { ...range, limit: 300 });
   }
 
-  /** The open slot starting exactly then, if any; read through `bookings` when given. */
-  private async slotAt(type: AppointmentType, facts: Facts, start: number, options: { hosts?: readonly string[]; bookings?: ReturnType<typeof busyIn> } = {}): Promise<Slot | undefined> {
-    const result = await this.deps.scheduling.slots(type, facts, { from: start, to: start + DAY, all: true }, options);
+  /** The open slot starting exactly then, if any. */
+  private async slotAt(type: AppointmentType, facts: Facts, start: number): Promise<Slot | undefined> {
+    const result = await this.deps.scheduling.slots(type, facts, { from: start, to: start + DAY, all: true });
     return result.slots.find((slot) => slot.start === start);
+  }
+
+  /**
+   * Whether a host is open at exactly that time, inside a change's locks:
+   * the context was read before the locks, and only bookings are read here,
+   * through the transaction.
+   */
+  private async openIn(tx: BookingTx, context: SlotContext, facts: Facts, start: number, host: string, leaveOut?: string): Promise<HostOption | undefined> {
+    const busy = await busyIn(tx, leaveOut)(host, start - DAY, start + 2 * DAY);
+    const result = this.deps.scheduling.slotsIn(context, facts, { from: start, to: start + DAY, all: true }, new Map([[host, busy]]));
+    return result.slots.find((slot) => slot.start === start)?.options.find((one) => one.host === host);
   }
 
   /** Open times near one that was taken, to offer instead. */
@@ -210,11 +226,18 @@ export class BookingService {
     const option = slot ? await this.pickOption(type, slot, contact.id, input.host) : null;
     if (!option) throw new BookingError("That time isn't open.", 409, await this.nearby(type, facts, input.start));
 
+    /* A request that needs approval with nobody to ask would sit until its hold ran out: refused instead, for anyone but the team. */
+    const asked = input.origin !== "member" && input.approval !== "skip" && (input.approval === "always" || option.approval);
+    if (asked && this.deps.approvalAsked && !(await this.deps.approvalAsked(type.id))) {
+      throw new BookingError(`${type.name} needs approval, and nobody is set to approve it right now. Try again later, or contact the team.`, 409);
+    }
     const id = input.id ?? `bk-${this.deps.newId()}`;
+    const context = await this.deps.scheduling.context(type, input.start, input.start + DAY, [option.host]);
+    const timezone = input.timezone ?? contact.timezone ?? (await this.deps.scheduling.findProfile(option.host))?.timezone ?? "UTC";
     const result = await this.deps.store.withHosts([option.host], async (tx) => {
       const held = await tx.get(id);
       if (held) return { booking: held, outcome: held.status === "pending" ? ("pending" as const) : ("confirmed" as const) };
-      const fresh = (await this.slotAt(type, facts, input.start, { hosts: [option.host], bookings: busyIn(tx) }))?.options.find((one) => one.host === option.host);
+      const fresh = await this.openIn(tx, context, facts, input.start, option.host);
       if (!fresh) return null;
       const needsApproval = input.approval === "skip" ? false : input.approval === "always" ? true : input.origin === "member" ? false : fresh.approval;
       const now = this.deps.now();
@@ -233,7 +256,7 @@ export class BookingService {
         ...(fresh.block ? { block: fresh.block } : {}),
         ...(fresh.placement ? { placement: fresh.placement } : {}),
         ...(fresh.occurrence ? { occurrence: fresh.occurrence } : {}),
-        timezone: input.timezone ?? contact.timezone ?? (await this.deps.scheduling.findProfile(option.host))?.timezone ?? "UTC",
+        timezone,
         location: type.location,
         status,
         ...(needsApproval ? { holdUntil: iso(now + Math.max(hold, 60_000)) } : {}),
@@ -357,6 +380,7 @@ export class BookingService {
     const hosts = times.map((one) => one.host ?? current.host);
     const type = await this.typeOf(current.type.id);
     const facts = await this.factsFor(current.contact, type, current.answers);
+    const contexts = await Promise.all(times.map((time, index) => this.deps.scheduling.context(type, time.start, time.start + DAY, [hosts[index]!])));
     return this.transition(
       id,
       by,
@@ -368,7 +392,7 @@ export class BookingService {
         const suggestions = [];
         for (const [index, time] of times.entries()) {
           const host = hosts[index]!;
-          const open = (await this.slotAt(type, facts, time.start, { hosts: [host], bookings: busyIn(tx, booking.id) }))?.options.some((one) => one.host === host);
+          const open = Boolean(await this.openIn(tx, contexts[index]!, facts, time.start, host, booking.id));
           if (!open && !options.allowOutside) throw new BookingError(`${new Date(time.start).toISOString()} isn't open for that host.`, 409);
           suggestions.push({ id: `s${index + 1}`, start: iso(time.start), end: iso(time.start + ms(booking.settings.length)), host, holdUntil });
         }
@@ -450,6 +474,7 @@ export class BookingService {
     const slot = await this.slotAt(type, facts, to.start);
     const option = slot ? ((to.host ? slot.options.find((one) => one.host === to.host) : slot.options.find((one) => one.host === current.host)) ?? (await this.pickOption(type, slot, current.contact))) : null;
     if (!option) throw new BookingError("That time isn't open.", 409, await this.nearby(type, facts, to.start));
+    const context = await this.deps.scheduling.context(type, to.start, to.start + DAY, [option.host]);
     return this.transition(
       id,
       by,
@@ -460,7 +485,7 @@ export class BookingService {
           if (Date.parse(booking.start) - now < ms(booking.settings.rescheduleCutoff)) throw new BookingError("It's too close to the time to move it online. Contact the team.", 409);
           if (booking.reschedules >= booking.settings.maxReschedules) throw new BookingError("It has been moved as many times as it can be online. Contact the team.", 409);
         }
-        const fresh = (await this.slotAt(type, facts, to.start, { hosts: [option.host], bookings: busyIn(tx, booking.id) }))?.options.find((one) => one.host === option.host);
+        const fresh = await this.openIn(tx, context, facts, to.start, option.host, booking.id);
         if (!fresh) throw new BookingError("That time was just taken.", 409);
         const needsApproval = options.approval === "skip" ? false : options.approval === "always" ? true : by.kind === "member" ? false : fresh.approval;
         const start = iso(to.start);
@@ -505,12 +530,13 @@ export class BookingService {
     const others = slot ? { ...slot, options: slot.options.filter((one) => one.host !== current.host) } : undefined;
     const option = others ? (toHost ? (others.options.find((one) => one.host === toHost) ?? null) : await this.pickOption(type, others, current.contact)) : null;
     if (!option) throw new BookingError(toHost ? "They aren't free then." : "Nobody else is free then.", 409);
+    const context = await this.deps.scheduling.context(type, start, start + DAY, [option.host]);
     return this.transition(
       id,
       by,
       async (booking, tx) => {
         if (!["pending", "confirmed"].includes(booking.status)) return this.refuse(booking, "given to someone else");
-        const fresh = (await this.slotAt(type, facts, start, { hosts: [option.host], bookings: busyIn(tx, booking.id) }))?.options.find((one) => one.host === option.host);
+        const fresh = await this.openIn(tx, context, facts, start, option.host, booking.id);
         if (!fresh) throw new BookingError("They were just booked then.", 409);
         const { block: _block, placement: _placement, occurrence: _occurrence, ...rest } = booking;
         return {
