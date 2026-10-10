@@ -94,7 +94,7 @@ import type {
 import type { ChatDb } from "./chat/db.js";
 import { resolveChatLlm } from "./chat/llm-bridge.js";
 import { LOOK_UP_TOOL, lookUpEndpoint, lookUpSchema } from "./chat/concierge-actions.js";
-import { buildChatRegistry } from "./chat/registry.js";
+import { buildChatRegistry, type BuildChatRegistryInput } from "./chat/registry.js";
 import { TopicStore, withTopicContext } from "./chat/topics.js";
 import { chatTopicRoutes, type TimelineTask } from "./routes/chat-topics.js";
 import { buildConciergeContext } from "./concierge/context.js";
@@ -3572,44 +3572,12 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
        */
       registry: async (auth) => {
         const dashboard = dashboardFor(auth);
-        if (!dashboard) {
-          // Parsed rather than cast, so schema defaults fill themselves in and
-          // this cannot drift when the dashboard schema gains a field.
-          return buildChatRegistry({
-            dashboard: dashboardSchema.parse({
-              id: "none",
-              title: "No dashboard",
-              widgets: [],
-              layout: { cells: [] },
-            }),
-            reports: [],
-            board: { getDashboard: () => null, putDashboard: () => {} },
-          });
-        }
-
-        const reports = store.listReports();
-
         /*
-         * Which connections have actually been read. `stale` is the third
-         * state and it matters: a report that no longer matches the endpoints
-         * is not the same as never having read one, and the assistant should
-         * be able to say which.
+         * What the chat can do anywhere in the app, board or no board: agents,
+         * workflows, and the calendar's and contacts' screens. A workspace
+         * with no dashboard yet still has all of them.
          */
-        const connections = store.listConnections().map((connection) => {
-          const report = store.getReport(connection.id);
-          const stale = report !== null && isStale(report, connection);
-          return {
-            id: connection.id,
-            title: connection.title,
-            read: report !== null && !stale,
-            stale,
-          };
-        });
-
-        return buildChatRegistry({
-          dashboard,
-          reports,
-          connections,
+        const appWide: Pick<BuildChatRegistryInput, "agents" | "workflows" | "screens"> = {
           /*
            * Changes to connected accounts, proposed here and approved on the
            * card. Every hook takes who is asking from the turn itself — this
@@ -3660,6 +3628,47 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             setup: await scheduling.overview(),
             contactSetup: await contacts.setup(),
           }),
+        };
+        if (!dashboard) {
+          // Parsed rather than cast, so schema defaults fill themselves in and
+          // this cannot drift when the dashboard schema gains a field.
+          return buildChatRegistry({
+            dashboard: dashboardSchema.parse({
+              id: "none",
+              title: "No dashboard",
+              widgets: [],
+              layout: { cells: [] },
+            }),
+            reports: [],
+            board: { getDashboard: () => null, putDashboard: () => {} },
+            ...appWide,
+          });
+        }
+
+        const reports = store.listReports();
+
+        /*
+         * Which connections have actually been read. `stale` is the third
+         * state and it matters: a report that no longer matches the endpoints
+         * is not the same as never having read one, and the assistant should
+         * be able to say which.
+         */
+        const connections = store.listConnections().map((connection) => {
+          const report = store.getReport(connection.id);
+          const stale = report !== null && isStale(report, connection);
+          return {
+            id: connection.id,
+            title: connection.title,
+            read: report !== null && !stale,
+            stale,
+          };
+        });
+
+        return buildChatRegistry({
+          dashboard,
+          reports,
+          connections,
+          ...appWide,
           changes: {
             prepare: (principal, intent, sessionId) =>
               writes.prepare(principal, intent, { via: "chat", sessionId }),

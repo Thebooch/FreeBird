@@ -69,6 +69,8 @@ export const DASH_CHAT_CARD_STYLES = `
 .dash-once__close:hover { background: var(--dash-wash); color: var(--dash-ink); }
 .dash-once__close:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--dash-ring); }
 .dash-once__note { margin: 0; font-size: var(--dash-text-xs); color: var(--dash-muted); line-height: 1.45; }
+.dash-once__field { display: flex; flex-direction: column; gap: 4px; }
+.dash-once__label { font-size: var(--dash-text-2xs, 11px); font-weight: var(--dash-weight-medium); color: var(--dash-ink-secondary); }
 .dash-once__row { display: flex; align-items: center; gap: var(--dash-space-2); }
 .dash-once__value {
   flex: 1 1 auto; min-width: 0; box-sizing: border-box; min-height: 32px; padding: 6px 10px;

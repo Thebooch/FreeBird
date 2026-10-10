@@ -2,6 +2,7 @@ import {
   APPROVAL_MODES,
   LAYER_KEYS,
   consolidationSchema,
+  durationMs,
   durationSchema,
   factPathSchema,
   ruleSetSchema,
@@ -81,8 +82,25 @@ export const settingsInherit = (layer: keyof typeof LAYER_KEYS) =>
 const APPROVAL_WORDS: Readonly<Record<(typeof APPROVAL_MODES)[number], string>> = { none: "Not needed", always: "Always", rules: "When its rules say" };
 
 /** One setting's value as it reads on the screen. */
+const DURATION_KEYS: ReadonlySet<SettingKey> = new Set(["length", "buffer", "slotStep", "minNotice", "horizon", "holdFor", "suggestionHoldFor", "cancelCutoff", "rescheduleCutoff"]);
+
+/** "30 min", "2 h", "1 day", "2 weeks": a duration as the screens write it. */
+export const durationWords = (value: string): string => {
+  const ms = durationMs(value);
+  if (ms === null) return value;
+  if (ms === 0) return "None";
+  const units = [
+    { ms: 604_800_000, one: "week", many: "weeks" },
+    { ms: 86_400_000, one: "day", many: "days" },
+    { ms: 3_600_000, one: "h", many: "h" },
+  ];
+  for (const unit of units) if (ms % unit.ms === 0) return `${ms / unit.ms} ${ms === unit.ms ? unit.one : unit.many}`;
+  return `${Math.round(ms / 60_000)} min`;
+};
+
 export const settingWords = (key: SettingKey) => (value: unknown): string => {
   if (value === null) return key === "maxPerDay" ? "No limit" : "Off";
+  if (DURATION_KEYS.has(key) && typeof value === "string") return durationWords(value);
   if (key === "approval" && typeof value === "string") return APPROVAL_WORDS[value as (typeof APPROVAL_MODES)[number]] ?? value;
   if (key === "approvalWhen") return rulesInWords(value as z.infer<typeof ruleSetSchema>);
   if (key === "consolidate" && value && typeof value === "object") {

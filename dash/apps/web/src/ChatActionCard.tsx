@@ -101,6 +101,13 @@ export const ChatActionCard = ({
   );
 };
 
+/** What each value handed over once is for, when there is more than one. */
+const ONCE_LABELS: Readonly<Record<string, string>> = {
+  link: "Link",
+  calendar: "For calendar apps",
+  web: "Web address",
+};
+
 /**
  * A value the chat hands over once and keeps nowhere — a link that is itself
  * a key. Shown here until dismissed, with a way to copy it; gone on reload.
@@ -122,14 +129,20 @@ export const OnceCard = ({ title, values, onDismiss }: { readonly title: string;
         </button>
       </header>
       <p className="dash-once__note">Shown once and not kept in the conversation. Copy it now.</p>
-      {Object.entries(values).map(([key, value]) => (
-        <div key={key} className="dash-once__row">
-          <input className="dash-once__value" readOnly value={value} onFocus={(event) => event.currentTarget.select()} aria-label={key === "link" ? "Link" : key} />
-          <Button size="sm" tone={copied === key ? "default" : "primary"} onClick={() => copy(key, value)} testId={`chat-once-copy-${key}`}>
-            {copied === key ? "Copied" : "Copy"}
-          </Button>
-        </div>
-      ))}
+      {Object.entries(values).map(([key, value], _index, all) => {
+        const label = ONCE_LABELS[key] ?? key;
+        return (
+          <div key={key} className="dash-once__field">
+            {all.length > 1 && <span className="dash-once__label">{label}</span>}
+            <div className="dash-once__row">
+              <input className="dash-once__value" readOnly value={value} onFocus={(event) => event.currentTarget.select()} aria-label={label} />
+              <Button size="sm" onClick={() => copy(key, value)} testId={`chat-once-copy-${key}`}>
+                {copied === key ? "Copied" : "Copy"}
+              </Button>
+            </div>
+          </div>
+        );
+      })}
     </section>
   );
 };

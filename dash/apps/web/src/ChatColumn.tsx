@@ -956,7 +956,7 @@ const ChatBody = ({
               ? "The assistant is unavailable — see the server console"
               : keyless
                 ? "No AI model is configured"
-                : "Ask about this dashboard…"
+                : "Ask anything, or say what to change…"
           }
           disabled={keyless || unavailable}
           data-testid="chat-input"

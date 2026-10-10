@@ -16,6 +16,7 @@ import { agentOf } from "../../workflows/testing.js";
 import { MemoryTaskStore } from "../../workflows/store.js";
 import { buildChatRegistry } from "../registry.js";
 import { SCREENS, buildScreens } from "./index.js";
+import { durationWords } from "./settings-words.js";
 
 const CHICAGO = "America/Chicago";
 /** Monday 12 October 2026, 6:00 in Chicago. */
@@ -131,12 +132,18 @@ describe("the calendar's and contacts' screens, as the chat's components", () =>
   });
 });
 
+describe("durations on the card", () => {
+  it("read as the screens write them", () => {
+    expect(["15m", "90m", "60m", "2h", "1d", "3d", "1w", "2w", "0m"].map(durationWords)).toEqual(["15 min", "90 min", "1 h", "2 h", "1 day", "3 days", "1 week", "2 weeks", "None"]);
+  });
+});
+
 describe("appointment types from the chat", () => {
   it("shows a change as before → after, applies only that, and says where it landed", async () => {
     const { card, run, scheduling, changed } = await world();
     const preview = await card("calendar-types", "update_type", { type: "showing", approval: "always", length: "45m" });
     expect(preview.title).toBe('Change "Showing"');
-    expect(preview.rows).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Length", value: "30m → 45m" }), expect.objectContaining({ label: "Needs approval", value: "Always" })]));
+    expect(preview.rows).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Length", value: "30 min → 45 min" }), expect.objectContaining({ label: "Needs approval", value: "Always" })]));
 
     const done = await run("calendar-types", "update_type", { type: "Showing", approval: "always", length: "45m" });
     expect(done.kind).toBe("executed");

@@ -90,13 +90,21 @@ describe("ChatActionCard", () => {
 describe("OnceCard", () => {
   it("shows each value with a way to copy it, and says it is not kept", () => {
     const html = renderToStaticMarkup(
-      createElement(OnceCard, { title: "Make your calendar feed link", values: { link: "webcal://x/feed", web: "https://x/feed" }, onDismiss: () => undefined }),
+      createElement(OnceCard, { title: "Make your calendar feed link", values: { calendar: "webcal://x/feed", web: "https://x/feed" }, onDismiss: () => undefined }),
     );
     expect(html).toContain("Make your calendar feed link");
     expect(html).toContain("not kept");
     expect(html).toContain('value="webcal://x/feed"');
     expect(html).toContain('value="https://x/feed"');
-    expect(html).toContain('data-testid="chat-once-copy-link"');
+    expect(html).toContain('data-testid="chat-once-copy-calendar"');
+    expect(html).toContain("For calendar apps");
+    expect(html).toContain("Web address");
+  });
+
+  it("needs no label for a single value", () => {
+    const html = renderToStaticMarkup(createElement(OnceCard, { title: "Booking page link", values: { link: "https://x/p/1" }, onDismiss: () => undefined }));
+    expect(html).not.toContain("dash-once__label");
+    expect(html).toContain('aria-label="Link"');
   });
 });
 

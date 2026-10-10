@@ -230,7 +230,7 @@ export const calendarScreen = (deps: CalendarDeps): ComponentDefinition => {
     preview: () => ({ title: "Make your calendar feed link", summary: "Add it to your phone's calendar app. A link you had before stops working.", rows: [] }),
     handler: async (_args, ctx) => {
       const made = await deps.links.feedLink(actor(ctx).userId);
-      return withTransient(landed({ made: true }, SCREEN, { title: "Subscribe", item: "feed", summary: "Made your calendar feed link. It is shown once, to copy into your phone's calendar app; a link you had before stops working." }), { link: made.webcal, web: made.url });
+      return withTransient(landed({ made: true }, SCREEN, { title: "Subscribe", item: "feed", summary: "Made your calendar feed link. It is shown once, to copy into your phone's calendar app; a link you had before stops working." }), { calendar: made.webcal, web: made.url });
     },
   };
 
