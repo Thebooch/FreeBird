@@ -88,7 +88,7 @@ useEffect(() => {
 
 ## Key APIs
 
-- Hooks: `useFreeBird`, `useSession`, `useChat`, `useLayout`, `useCustomTabs`, `useActionState`, `useActionJournal`, `useActionEvents`, `useNavigationRequests` (where the person asked the chat to take them: open its `page`, then `revealElement(selector)` scrolls to it and sets `data-freebird-revealed` briefly)
+- Hooks: `useFreeBird`, `useSession`, `useChat`, `useLayout`, `useCustomTabs`, `useActionState`, `useActionJournal`, `useActionEvents`, `useNavigationRequests` (where the person asked the chat to take them, citation-shaped: follow it with `activateCitation` from `@freebirdai/core`, as a chip click is)
 - Components: `ChatPanel.Root/Messages/Message/Form/Input/Submit/Citations`, `DynamicGrid`, `LockToggle`, `InfoTrigger`, `CustomTabBar.*`, `ActionPreview`, `ActionJournal`, `FreeBirdNavLinks`
 - Provider props: `registry`, `transport` (from `createFetchTransport` for custom baseUrl/auth), initial state
 - Re-exported types: `ActionDefinition`, `ActionState`, `ActionRecord`, `PendingAction`, `ActionEvent`, `ComponentCitation`

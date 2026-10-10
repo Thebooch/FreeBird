@@ -28,11 +28,7 @@ export {
   useActionEvents,
   type UseActionStateReturn,
 } from "./hooks/useActionState.js";
-export {
-  useNavigationRequests,
-  revealElement,
-  type RevealElementOptions,
-} from "./navigation.js";
+export { useNavigationRequests } from "./navigation.js";
 export {
   useActionJournal,
   type UseActionJournalReturn,

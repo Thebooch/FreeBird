@@ -356,8 +356,9 @@ LLM summary call that `requireAssistantReply` would otherwise run.
   set active (the behaviour before on-screen became context). Off by default.
 - `navigation: { enabled: true }` gives the model an `open_component` tool over
   the components with a `domAnchor`, for "take me to …". It emits a `navigate`
-  event; the client opens the page (`useNavigationRequests` in React,
-  `onNavigate` on the store). Off by default.
+  event carrying a citation-shaped target; the client follows it like a chip
+  (`useNavigationRequests` in React, `onNavigate` on the store, then
+  `activateCitation`). Off by default.
 
 ## Showing what changed (`withCitation`)
 
@@ -382,13 +383,12 @@ handler: async (args) => {
 ```
 
 The chip is a `ComponentCitation` in the message's `toolPayload.citations`, the
-same as any citation, so it navigates with your existing citation handling.
-`revealElement(selector)` in `@freebirdai/react` waits for the page to draw the
-element, scrolls to it and sets `data-freebird-revealed` on it for a moment,
-for your CSS to show. `revealSelector` builds selectors over the attributes
-the embed scanner reads: `data-freebird-component` on a component's region,
-`data-freebird-item` on one thing listed in it, and `data-freebird-field` on
-one setting.
+same as any citation, so it navigates with your existing citation handling
+(`activateCitation` / `replayPendingCitation` from `@freebirdai/core`: open the
+page, wait for the element, scroll to it and pulse it). `revealSelector` builds
+selectors over the attributes the embed scanner reads:
+`data-freebird-component` on a component's region, `data-freebird-item` on one
+thing listed in it, and `data-freebird-field` on one setting.
 
 ## Server endpoints (added automatically)
 
@@ -413,7 +413,7 @@ code yourself.
 | Journal UI         | `<ActionJournal>` render-prop          | `<FreeBirdActionJournal>` scoped slot     | `<fb-action-journal><ng-template …>`                           |
 | Audit subscription | `useActionEvents(fn)`                  | `useActionEvents(fn)`                     | `inject(FreeBirdService).onActionEvent(fn)`                    |
 | On screen          | `setActiveComponentIds`, `setFocus`    | `setActiveComponentIds`, `setFocus`       | `FreeBirdService.setActiveComponentIds`, `.setFocus`           |
-| "Take me to …"     | `useNavigationRequests(fn)`, `revealElement` | `useFreeBird().onNavigate(fn)`      | `FreeBirdService.onNavigate(fn)`                               |
+| "Take me to …"     | `useNavigationRequests(fn)` → `activateCitation` | `useFreeBird().onNavigate(fn)` → `activateCitation` | `FreeBirdService.onNavigate(fn)` → `activateCitation` |
 
 ## What FreeBird *does not* do
 

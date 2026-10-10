@@ -140,8 +140,8 @@ the most ubiquitous behaviour and can be opted out of per-host.
   item open) tell the model what "this" means; every action stays offered.
   `narrowToActive: true` restores the old filter.
 - **`navigation: { enabled }`** *(default off)* — an `open_component` tool for
-  "take me to …", emitting a `navigate` event the client acts on
-  (`useNavigationRequests`).
+  "take me to …", emitting a citation-shaped `navigate` event the client
+  follows like a chip (`useNavigationRequests` → `activateCitation`).
 
 Actions say where their change can be seen with `withCitation(result, { title,
 page, selector, summary })` (`revealSelector` builds selectors over
