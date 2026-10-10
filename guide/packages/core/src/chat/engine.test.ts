@@ -1131,3 +1131,38 @@ describe("ChatEngine — taking the person somewhere", () => {
     expect(events.some((event) => event.kind === "navigate")).toBe(false);
   });
 });
+
+describe("ChatEngine — what preflight fills in reaches the card", () => {
+  it("re-derives the preview from the resolved arguments", async () => {
+    const registry = createComponentRegistry();
+    registry.register({
+      id: "types",
+      title: "Appointment types",
+      description: "What people can book",
+      grid: { minW: 4, minH: 3 },
+      actions: [
+        {
+          id: "update_type",
+          description: "Change an appointment type",
+          schema: z.object({ type: z.string(), approval: z.enum(["none", "always"]), current: z.string().optional() }),
+          preflight: async (args) => ({ ok: true, resolvedArgs: { type: args.type.toLowerCase(), current: "none" } }),
+          preview: (args) => ({ title: `Change ${args.type}`, summary: "", rows: [{ label: "Approval", value: `${args.current ?? "?"} → ${args.approval}` }] }),
+          handler: async () => ({}),
+        },
+      ],
+    });
+    const db = new MemoryDb();
+    const llm = new FakeLlm([
+      { kind: "toolCall", name: "start_action__types__update_type", args: { type: "Showing", approval: "always" } },
+      { kind: "text", text: "Ready." },
+    ]);
+    const knowledge = createKnowledgeGraph(registry);
+    const { sessionId, pendingState } = await startCollecting(llm, db);
+    const engine = new ChatEngine({ db, llm, registry, knowledge });
+    const events = await collect(engine.send({ sessionId, text: "make showings need approval", actionState: pendingState }, auth));
+    const updated = events.filter((event) => event.kind === "action_args_updated").pop() as unknown as { action: { args: Record<string, unknown>; preview?: { title: string; rows: Array<{ value: string }> } } };
+    expect(updated.action.args).toEqual({ type: "showing", current: "none" });
+    expect(updated.action.preview?.title).toBe("Change showing");
+    expect(updated.action.preview?.rows[0]?.value).toBe("none → always");
+  });
+});

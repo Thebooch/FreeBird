@@ -1288,6 +1288,7 @@ export class ChatEngine {
                 merged,
                 this.pendingMissingOpts(),
               );
+              /* What preflight filled in (an id for a name, what is there now) shows on the card too. */
               const resolvedEv: ChatStreamEvent = {
                 kind: "action_args_updated",
                 action: {
@@ -1296,6 +1297,10 @@ export class ChatEngine {
                   actionId: actionState.pending.actionId,
                   args: pf.resolvedArgs,
                   missing,
+                  preview: deriveActionPreview(def, merged, {
+                    componentId: actionState.pending.componentId,
+                    label: actionState.pending.label,
+                  }),
                 },
               };
               yield resolvedEv;
@@ -1439,6 +1444,10 @@ export class ChatEngine {
                 actionId: pendingAt4f.actionId,
                 args: pf.resolvedArgs,
                 missing,
+                preview: deriveActionPreview(def, merged, {
+                  componentId: pendingAt4f.componentId,
+                  label: pendingAt4f.label,
+                }),
               },
             };
             yield resolvedEv;
