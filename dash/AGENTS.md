@@ -122,7 +122,7 @@ The `LlmAdapter` / `LlmTool` / `LlmStreamChunk` interfaces in `@freebirdai/dash-
 ## Gotchas (paid for elsewhere, don't rediscover)
 
 - **Vitest runs serial** (`--fileParallelism=false`). Parallel workers flake on the OneDrive filesystem.
-- **`zod-to-json-schema` chokes on refinements, records, and unions.** The tool schema handed to the LLM must be flat; the real zod schema validates *after* mapping.
+- **`zod-to-json-schema` chokes on refinements, records, and unions.** So Dash's adapters use their own `toJsonSchema` (`apps/server/src/llm.ts`), which maps each shape it knows on purpose (scalars, enums, objects, arrays, and for the chat's screens nullable, record, union, refinements as their plain shape, and open objects) and throws on anything else. Zod still validates the arguments when they come back. A new tool shape goes into `toJsonSchema` with a test; `screens.test.ts` sends every screen action through it.
 - **The Anthropic adapter defaults `maxOutputTokens` to 1024.** Set it explicitly.
 - **Vite proxy keys are plain prefixes.** Use a regex key (`"^/api/"`) or it swallows app routes.
 - **Escapes in a Python-heredoc edit script are read twice.** Writing `.join("\n\n")` from inside a `python - <<'EOF'` block lands a literal newline in the file, not the two characters. `HEAD` carried a broken `server.ts` for exactly this reason — a mangled `join` that made the whole file unparseable, so `apps/server` did not typecheck. Build such strings with `chr(92)` rather than trusting the escape, and check the exit code: a loop ending in `; echo ok` reports success it did not verify. A `\b` in a regex fares worse: it lands as a backspace byte (0x08) that no editor shows, so grep a file for `\x08` after such an edit.

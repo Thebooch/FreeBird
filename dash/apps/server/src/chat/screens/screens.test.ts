@@ -1,6 +1,7 @@
-import { argumentNames, citationOf, createComponentRegistry, deriveActionPreview, runAction, transientOf, withoutTransient } from "@freebirdai/core";
+import { argumentNames, buildHarnessTurn, citationOf, createComponentRegistry, deriveActionPreview, runAction, transientOf, withoutTransient } from "@freebirdai/core";
 import type { AgentSpec, Principal } from "@freebirdai/dash-spec";
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { BookingLinks } from "../../bookings/links.js";
 import { DEFAULT_BRAND, notConnectedNotifier } from "../../bookings/notify.js";
 import { BookingService, bookingsAsBusy } from "../../bookings/service.js";
@@ -14,6 +15,7 @@ import { SchedulingService } from "../../scheduling/service.js";
 import { MemorySchedulingStore } from "../../scheduling/store.js";
 import { agentOf } from "../../workflows/testing.js";
 import { MemoryTaskStore } from "../../workflows/store.js";
+import { toJsonSchema } from "../../llm.js";
 import { buildChatRegistry } from "../registry.js";
 import { SCREENS, buildScreens } from "./index.js";
 import { durationWords } from "./settings-words.js";
@@ -129,6 +131,47 @@ describe("the calendar's and contacts' screens, as the chat's components", () =>
     expect(ids).toContain("calendar");
     expect(ids).toContain("calendar--ops");
     expect(registry.get("calendar")?.title).toBe("Calendar");
+  });
+});
+
+describe("what the model is sent", () => {
+  it("every screen action goes through Dash's adapters: in the catalog, and once picked", async () => {
+    const { build } = await world();
+    const registry = createComponentRegistry();
+    for (const screen of await build()) registry.register(screen);
+    const send = (turn: ReturnType<typeof buildHarnessTurn>) => Object.values(turn.tools).map((tool) => toJsonSchema(tool.schema as never));
+
+    const idle = buildHarnessTurn({ registry, actionState: { phase: "idle", pending: null, journal: [], workflowStack: [] } as never, argsMode: "catalog" });
+    expect(() => send(idle)).not.toThrow();
+    /* `args` stays open: the picked action's own fields go in it. */
+    const args = toJsonSchema(idle.tools["start_action"]!.schema as never).properties?.["args"];
+    expect(args).toMatchObject({ type: "object" });
+    expect(args?.additionalProperties).toBeUndefined();
+
+    for (const component of registry.list()) {
+      for (const action of component.actions ?? []) {
+        const pending = { recordId: "r1", componentId: component.id, actionId: action.id, args: {}, missing: [], requiresConfirmation: "preview", startedAt: new Date() };
+        const turn = buildHarnessTurn({ registry, actionState: { phase: "collecting", pending, journal: [], workflowStack: [] } as never, argsMode: "catalog" });
+        expect(() => send(turn), `${component.id}:${action.id}`).not.toThrow();
+      }
+    }
+  });
+
+  it("maps the shapes a setting needs: cleared, a map, one of several, a checked string", () => {
+    const schema = toJsonSchema(
+      z.object({
+        hours: z.object({ from: z.string() }).nullable().optional(),
+        answers: z.record(z.string()),
+        target: z.union([z.object({ members: z.array(z.string()) }), z.object({ pool: z.string() })]),
+        length: z.string().refine((value) => value.length > 0),
+      }),
+    );
+    expect(schema.properties?.["hours"]).toEqual({ anyOf: [{ type: "object", properties: { from: { type: "string" } }, required: ["from"], additionalProperties: false }, { type: "null" }] });
+    expect(schema.properties?.["answers"]).toEqual({ type: "object", additionalProperties: { type: "string" } });
+    expect(schema.properties?.["target"]?.anyOf).toHaveLength(2);
+    expect(schema.properties?.["length"]).toEqual({ type: "string" });
+    expect(schema.required).toEqual(["answers", "target", "length"]);
+    expect(() => toJsonSchema(z.function() as never)).toThrow(/shapes toJsonSchema maps/);
   });
 });
 

@@ -23,21 +23,28 @@ import { RATES_AS_OF, costOf, formatUsd } from "./pricing.js";
  */
 
 interface JsonSchema {
-  type: string;
+  type?: string;
   description?: string;
   properties?: Record<string, JsonSchema>;
   required?: string[];
   items?: JsonSchema;
-  additionalProperties?: boolean;
+  additionalProperties?: boolean | JsonSchema;
   enum?: readonly (string | number)[];
+  anyOf?: readonly JsonSchema[];
 }
 
 /**
- * A zod→JSON Schema converter for the flat subset the proposal tool uses:
- * objects of strings and arrays of flat objects, plus `optional` and
- * `describe`. This is exactly why the tool schema is constrained to be dull —
- * no refinements, records or unions means no dependency on
+ * A zod→JSON Schema converter, hand-rolled so there is no dependency on
  * `zod-to-json-schema` and none of its failure modes.
+ *
+ * Every shape it knows is mapped on purpose, one case each: scalars, enums,
+ * objects and arrays, and the few the chat's screens need to say what a
+ * setting takes — a value that may be cleared (`nullable`), a map (`record`),
+ * one of several shapes (`union`), a checked string (a refinement, sent as
+ * its plain shape; zod still checks it when the arguments come back), and an
+ * open object (`passthrough`, for `start_action`'s `args`). Anything else
+ * throws, so a tool nobody can send fails here and in tests rather than
+ * inside a provider call.
  */
 export const toJsonSchema = (schema: z.ZodTypeAny): JsonSchema => {
   const def = schema._def as { typeName: string; [key: string]: unknown };
@@ -46,6 +53,20 @@ export const toJsonSchema = (schema: z.ZodTypeAny): JsonSchema => {
     case "ZodOptional":
     case "ZodDefault":
       return toJsonSchema(def.innerType as z.ZodTypeAny);
+    case "ZodEffects":
+      return toJsonSchema(def.schema as z.ZodTypeAny);
+    case "ZodNullable":
+      return { anyOf: [toJsonSchema(def.innerType as z.ZodTypeAny), { type: "null" }] };
+    case "ZodNull":
+      return { type: "null" };
+    case "ZodUnknown":
+    case "ZodAny":
+      return {};
+    case "ZodRecord":
+      return { type: "object", additionalProperties: toJsonSchema(def.valueType as z.ZodTypeAny) };
+    case "ZodUnion":
+    case "ZodDiscriminatedUnion":
+      return { anyOf: (def.options as readonly z.ZodTypeAny[]).map(toJsonSchema) };
     case "ZodString":
       return { type: "string" };
     case "ZodNumber":
@@ -73,12 +94,16 @@ export const toJsonSchema = (schema: z.ZodTypeAny): JsonSchema => {
         properties[name] = description ? { ...inner, description } : inner;
         if (!field.isOptional()) required.push(name);
       }
-      return { type: "object", properties, required, additionalProperties: false };
+      // Closed unless the schema says otherwise: `args` on `start_action`
+      // passes through whatever the picked action takes.
+      return def.unknownKeys === "passthrough"
+        ? { type: "object", properties, required }
+        : { type: "object", properties, required, additionalProperties: false };
     }
     default:
-      // Anything outside the flat subset is a bug in the tool definition, not
+      // A shape not mapped above is a bug in the tool definition, not
       // something to paper over with `{}` and debug at runtime.
-      throw new Error(`tool schemas must stay flat; got ${def.typeName}`);
+      throw new Error(`tool schemas use only the shapes toJsonSchema maps; got ${def.typeName}`);
   }
 };
 
