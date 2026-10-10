@@ -7,7 +7,7 @@ import { FakeLlm, type FakeLlmResponse } from "../testing/fakeLlm.js";
 import { MemoryDb } from "../testing/memoryDb.js";
 import type { AuthContext } from "../types.js";
 import type { ActionState } from "../actions/types.js";
-import type { LlmAdapter } from "../adapters/llm.js";
+import type { LlmAdapter, LlmGenerateOptions, LlmStreamChunk, LlmTool } from "../adapters/llm.js";
 
 const auth: AuthContext = { userId: "u1" };
 
@@ -1023,5 +1023,111 @@ describe("createCiteStripper", () => {
    */
   it("releases an unterminated marker on flush, matching what gets persisted", () => {
     expect(run(["text [[cite:unfinis"])).toBe("text [[cite:unfinis");
+  });
+});
+
+describe("ChatEngine — the whole app from one conversation", () => {
+  /** A fake model that also keeps what each step was sent. */
+  class RecordingLlm extends FakeLlm {
+    readonly seen: Array<{ tools: string[]; messages: string }> = [];
+    override async *stream<TTools extends Record<string, LlmTool> = {}>(opts: LlmGenerateOptions<TTools>): AsyncIterable<LlmStreamChunk> {
+      this.seen.push({ tools: Object.keys(opts.tools ?? {}).sort(), messages: JSON.stringify(opts.messages) });
+      yield* super.stream(opts);
+    }
+  }
+
+  it("tells the model what is on screen and what is open, and still offers every other action", async () => {
+    const { registry, db, knowledge } = setup();
+    const llm = new RecordingLlm([{ kind: "text", text: "Sure." }]);
+    const { sessionId, pendingState } = await startCollecting(llm, db);
+    const engine = new ChatEngine({ db, llm, registry, knowledge });
+    await collect(
+      engine.send(
+        { sessionId, text: "make this weekly", activeComponentIds: ["digest"], focus: { componentId: "digest", itemId: "monday", label: "Monday digest" }, actionState: pendingState },
+        auth,
+      ),
+    );
+    expect(llm.seen[0]?.messages).toContain("On screen now.");
+    expect(llm.seen[0]?.messages).toContain("Digest (`digest`): Email digest");
+    expect(llm.seen[0]?.messages).toContain("Open in Digest: Monday digest (`monday`).");
+    expect(llm.seen[0]?.tools).toContain("start_action__settings__set_theme");
+    expect(llm.seen[0]?.tools).toContain("start_action__digest__configure_digest");
+  });
+
+  it("in catalog mode, keeps an action collecting while a value does not fit, with the reason, until it is corrected", async () => {
+    const { registry, db, knowledge } = setup();
+    const llm = new RecordingLlm([
+      { kind: "toolCall", name: "start_action", args: { action: "digest:configure_digest", args: { email: "a@b.co", frequency: "fortnightly", cadence: "x" } } },
+      { kind: "toolCall", name: "update_action_args", args: { args: { frequency: "weekly" } } },
+      { kind: "text", text: "Ready for you to approve." },
+    ]);
+    const { sessionId, pendingState } = await startCollecting(llm, db);
+    const engine = new ChatEngine({ db, llm, registry, knowledge, harnessArgsMode: "catalog" });
+    const events = await collect(engine.send({ sessionId, text: "weekly digest to a@b.co", actionState: pendingState }, auth));
+
+    expect(llm.seen[0]?.tools).toEqual(expect.arrayContaining(["start_action"]));
+    expect(llm.seen[0]?.tools.some((name) => name.startsWith("start_action__"))).toBe(false);
+    const started = events.find((event) => event.kind === "action_started") as unknown as { action: { args: Record<string, unknown>; missing: string[] } };
+    expect(started.action.args).toEqual({ email: "a@b.co", frequency: "fortnightly" });
+    expect(started.action.missing.join("\n")).toContain("cadence: not an argument of this action");
+    expect(started.action.missing.join("\n")).toMatch(/frequency: Invalid enum value/);
+    /* The collecting step showed what was wrong, and the corrected value cleared it. */
+    expect(llm.seen[1]?.messages).toContain("frequency: Invalid enum value");
+    const updated = events.find((event) => event.kind === "action_args_updated") as unknown as { action: { missing: string[] } };
+    expect(updated.action.missing).toEqual([]);
+  });
+
+  it("hands what a search found to the next step, when a host sets a budget that defers the tools", async () => {
+    const { registry, db, knowledge } = setup();
+    const llm = new RecordingLlm([
+      { kind: "toolCall", name: "tool_search", args: { query: "digest" } },
+      { kind: "toolCall", name: "start_action", args: { action: "digest:configure_digest", args: { email: "a@b.co", frequency: "weekly" } } },
+      { kind: "text", text: "Here is the change to approve." },
+    ]);
+    const { sessionId, pendingState } = await startCollecting(llm, db);
+    const engine = new ChatEngine({ db, llm, registry, knowledge, toolBudgetBytes: 10 });
+    const events = await collect(engine.send({ sessionId, text: "Send me the digest weekly", actionState: pendingState }, auth));
+
+    expect(llm.seen[0]?.tools).toContain("tool_search");
+    expect(llm.seen[1]?.messages).toContain("digest:configure_digest");
+    expect(llm.seen[1]?.messages).toContain("You looked actions up above.");
+    expect(events.find((event) => event.kind === "action_started")).toMatchObject({ action: { componentId: "digest", actionId: "configure_digest" } });
+  });
+});
+
+describe("ChatEngine — taking the person somewhere", () => {
+  const anchored = () => {
+    const { registry, db, knowledge } = setup();
+    registry.upsert({ ...registry.get("digest")!, domAnchor: { selector: '[data-freebird-component="digest"]', page: "#/digest" } });
+    return { registry, db, knowledge };
+  };
+
+  it("opens a component when asked, with navigation on, and says so", async () => {
+    const { registry, db, knowledge } = anchored();
+    const llm = new FakeLlm([
+      { kind: "toolCall", name: "open_component", args: { componentId: "digest", itemId: "monday" } },
+      { kind: "text", text: "Opened the digest." },
+    ]);
+    const { sessionId, pendingState } = await startCollecting(llm, db);
+    const engine = new ChatEngine({ db, llm, registry, knowledge, navigation: { enabled: true } });
+    const events = await collect(engine.send({ sessionId, text: "take me to the digest", actionState: pendingState }, auth));
+    expect(events.find((event) => event.kind === "navigate")?.navigation).toEqual({
+      componentId: "digest",
+      title: "Digest",
+      directive: "scroll-to",
+      kind: "component",
+      page: "#/digest",
+      selector: '[data-freebird-component="digest"] [data-freebird-item="monday"]',
+    });
+    expect((events.find((event) => event.kind === "assistant_saved")?.assistantMessage?.content ?? "")).toContain("Opened the digest.");
+  });
+
+  it("offers no such tool unless the host turns navigation on", async () => {
+    const { registry, db, knowledge } = anchored();
+    const llm = new FakeLlm([{ kind: "toolCall", name: "open_component", args: { componentId: "digest" } }, { kind: "text", text: "ok" }]);
+    const { sessionId, pendingState } = await startCollecting(llm, db);
+    const engine = new ChatEngine({ db, llm, registry, knowledge });
+    const events = await collect(engine.send({ sessionId, text: "take me to the digest", actionState: pendingState }, auth));
+    expect(events.some((event) => event.kind === "navigate")).toBe(false);
   });
 });

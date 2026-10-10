@@ -1,5 +1,8 @@
 import type { ActionState, AuthContext, ChatEngine, ChatMessage, ChatSession, ComponentRegistry, CustomTab, CustomTabsService, DbAdapter, DigestConfig, GridCell, KnowledgeGraph, LayoutPlan, LlmTool } from "@freebirdai/core";
 import {
+  citationOf,
+  deriveActionPreview,
+  toComponentCitation,
   validateActionArgs,
   runAction,
   runActionPreflight,
@@ -8,7 +11,15 @@ import {
   stampTicket,
   resolveMode,
 } from "@freebirdai/core";
-import type { ModeInput, QuestionAnswer, StateNotice } from "@freebirdai/core";
+import type { ModeInput, QuestionAnswer, ScreenFocus, StateNotice } from "@freebirdai/core";
+
+/** A focus from the request body, as far as its shape goes: strings, short ones. */
+const isScreenFocus = (value: unknown): value is ScreenFocus => {
+  if (!value || typeof value !== "object") return false;
+  const { componentId, itemId, label } = value as Record<string, unknown>;
+  const short = (one: unknown) => typeof one === "string" && one.length > 0 && one.length <= 200;
+  return short(componentId) && (itemId === undefined || short(itemId)) && (label === undefined || short(label));
+};
 import type { ActionBlocker, SupportSink, Ticket } from "@freebirdai/core";
 
 /**
@@ -207,6 +218,8 @@ export interface ChatBody {
   lockedCells?: GridCell[];
   actionState?: ActionState;
   activeComponentIds?: string[];
+  /** The one thing the person has open, within the active components. */
+  focus?: ScreenFocus;
   /** Answers to questions the assistant asked on an earlier turn. */
   answers?: QuestionAnswer[];
   /** Tier-1 notices accumulated on the client since the last reply. */
@@ -239,6 +252,7 @@ export const handleChat = (
       answers: body.answers,
       notices: body.notices,
       activeComponentIds: body.activeComponentIds,
+      ...(isScreenFocus(body.focus) ? { focus: body.focus } : {}),
       supportContext: body.supportContext,
       // Always eligible, unlike the processing-tool catalog, which is exposed
       // only when a component or pending action names it.
@@ -310,7 +324,43 @@ export interface ConfirmActionResponse {
   blocked?: boolean;
   message?: string;
   blockers?: ActionBlocker[];
+  /**
+   * The chat's line about what changed, already saved to the conversation:
+   * present when the action's result carried a citation (`withCitation`), so
+   * the client shows it, chip and all, without reloading.
+   */
+  outcomeMessage?: ChatMessage;
 }
+
+/**
+ * Save the chat's line about an approved change, carrying where it can be
+ * seen as a citation chip. Nothing moves on its own: the person follows the
+ * chip if they want to. A failure to save is not the action's failure.
+ */
+const persistOutcomeMessage = async (
+  deps: HandlerDeps,
+  auth: AuthContext,
+  input: { sessionId: string; componentId: string; actionId: string; args: Record<string, unknown>; result: unknown },
+): Promise<ChatMessage | undefined> => {
+  const citation = citationOf(input.result);
+  if (!citation) return undefined;
+  const def = deps.registry.getAction(input.componentId, input.actionId);
+  const title = def ? deriveActionPreview(def, input.args, { componentId: input.componentId }).title : input.actionId;
+  try {
+    return await deps.db.appendMessage(
+      {
+        sessionId: input.sessionId,
+        role: "assistant",
+        content: citation.summary ?? `Done: ${title}.`,
+        toolPayload: { citations: [toComponentCitation(input.componentId, citation)] },
+      },
+      auth,
+    );
+  } catch (err) {
+    console.error("[freebird] could not save the outcome message:", err);
+    return undefined;
+  }
+};
 
 const emitActionEvent = async (
   deps: HandlerDeps,
@@ -629,6 +679,13 @@ export const handleConfirmAction = async (
         },
         req.auth,
       );
+      const outcomeMessage = await persistOutcomeMessage(deps, req.auth, {
+        sessionId: body.sessionId,
+        componentId: body.componentId,
+        actionId: body.actionId,
+        args: outcome.args,
+        result: outcome.result,
+      });
       return {
         kind: "json",
         status: 200,
@@ -638,6 +695,7 @@ export const handleConfirmAction = async (
           result: outcome.result,
           before: outcome.before,
           changed: outcome.changed,
+          ...(outcomeMessage ? { outcomeMessage } : {}),
         },
       };
   }

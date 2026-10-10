@@ -113,13 +113,16 @@ actions, read these in order:
 
 ## Harness UX knobs (chat engine)
 
-Three `createChatEngine` options shape a single LLM turn. All default to
+These `createChatEngine` options shape a single LLM turn. All default to
 the most ubiquitous behaviour and can be opted out of per-host.
 
-- **`harnessArgsMode: "typed" | "loose"`** *(default `"typed"`)* —
-  `start_action`/`update_action_args` get a discriminated union with the
-  pending action's actual Zod schema. Use `"loose"` if your provider
-  adapter struggles with discriminated unions.
+- **`harnessArgsMode: "per_action" | "catalog" | "typed" | "loose"`**
+  *(default `"per_action"`)* — how actions reach the model. `"per_action"`
+  is a tool per action with its schema; `"catalog"` is one `start_action`
+  for the whole app, with every action listed a line each, the picked
+  action's exact schema on `update_action_args`, and values that do not fit
+  kept collecting with the reason. No tool budget unless `toolBudgetBytes` is
+  set.
 - **`maxToolSteps: number`** *(default `3`)* — when a turn produces only
   tool calls and lands in `collecting`/`awaiting_confirmation`, the
   engine runs another LLM step in the same SSE stream so the model can
@@ -133,7 +136,18 @@ the most ubiquitous behaviour and can be opted out of per-host.
   results). Default `null`: the engine's built-in summaries apply, so a
   visible assistant message is always persisted either way.
 
-See [`ACTIONS.md#harness-ux-knobs-chat-engine`](ACTIONS.md#harness-ux-knobs-chat-engine)
+- **On screen is context** — `activeComponentIds` (and `setFocus` for the one
+  item open) tell the model what "this" means; every action stays offered.
+  `narrowToActive: true` restores the old filter.
+- **`navigation: { enabled }`** *(default off)* — an `open_component` tool for
+  "take me to …", emitting a `navigate` event the client acts on
+  (`useNavigationRequests`).
+
+Actions say where their change can be seen with `withCitation(result, { title,
+page, selector, summary })` (`revealSelector` builds selectors over
+`data-freebird-*`): the server saves a line with a citation chip, and the person
+follows it if they want to. See
+[`ACTIONS.md#harness-ux-knobs-chat-engine`](ACTIONS.md#harness-ux-knobs-chat-engine)
 for full details.
 
 ## LLM usage / cost (OpenAI)

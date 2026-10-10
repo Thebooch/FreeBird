@@ -69,10 +69,13 @@ registry.register({
 | `requiresConfirmation`  | no       | `"preview"` (default), `"none"` (auto-apply), `"strict"` (reserved for future re-prompt flow). |
 | `previewStrategy`       | no       | How `<ActionPreview />` should render: `"text"`, `"component"` (default), or a custom id.      |
 
-## Step 2 — Tell FreeBird which components are active
+## Step 2 — Tell FreeBird what is on screen
 
-The harness only offers actions for components currently on screen. This
-prevents the LLM from invoking things the user can't see.
+The chat can do anything the app can, from any page: every registered action
+is offered on every turn. What is on screen is context. It tells the model
+what "this" and "here" mean, so "make this one weekly" needs no follow-up
+question. `setFocus` names the one thing open within those components, when
+there is one.
 
 ```tsx
 // React
@@ -84,12 +87,17 @@ const Page = () => {
     fb.setActiveComponentIds(["settings", "profile"]);
     return () => fb.setActiveComponentIds([]);
   }, [fb]);
-  // …
+  // …and while an item is open:
+  // fb.setFocus({ componentId: "settings", itemId: "digest", label: "Weekly digest" });
 };
 ```
 
-> Vue exposes `fb.setActiveComponentIds(ids)` from `useFreeBird()`.
-> Angular exposes the same on `FreeBirdService`.
+> Vue exposes `fb.setActiveComponentIds(ids)` and `fb.setFocus(focus)` from
+> `useFreeBird()`. Angular exposes the same on `FreeBirdService`.
+
+A host that wants the chat to offer only what is on screen builds the engine
+with `narrowToActive: true`. Either way it is not a security boundary;
+`authorize` is.
 
 ## Step 3 — Drop in the confirmation UI
 
@@ -169,8 +177,8 @@ app.use(
 
 ## Securing actions (`authorize`)
 
-`setActiveComponentIds` controls what the LLM can *see*, not what the
-host can *do*. A determined caller can hit `POST /freebird/actions/confirm`
+`setActiveComponentIds` tells the model what the person is looking at; it
+never decides what the host can *do*. A determined caller can hit `POST /freebird/actions/confirm`
 directly. Use `authorize` to enforce row-level / role-based permissions
 on every action.
 
@@ -257,8 +265,8 @@ this — the system messages and tools are injected automatically.
 
 ## Harness UX knobs (chat engine)
 
-Three options on `createChatEngine` shape how the harness drives a single
-turn. All three default to the most ubiquitous behaviour — set them to
+These options on `createChatEngine` shape how the harness drives a single
+turn. Each defaults to the most ubiquitous behaviour — set them to
 opt out or out-of-the-box specialise.
 
 ```ts
@@ -267,8 +275,8 @@ import { createChatEngine } from "@freebirdai/core";
 const chat = createChatEngine({
   db, llm, registry, knowledge,
 
-  // 1. Typed args (default: "typed")
-  harnessArgsMode: "typed",
+  // 1. How actions are offered (default: "per_action")
+  harnessArgsMode: "catalog",
 
   // 2. Auto-loop (default: 3 — set to 1 to disable)
   maxToolSteps: 3,
@@ -278,22 +286,30 @@ const chat = createChatEngine({
 });
 ```
 
-### 1. `harnessArgsMode: "typed" | "loose"`
+### 1. `harnessArgsMode: "per_action" | "catalog" | "typed" | "loose"`
 
-In `"typed"` mode (default), `start_action` is shaped as a discriminated
-union — one variant per registered action ref, each with the action's
-own Zod schema for `args`. Likewise, `update_action_args` is scoped to
-the **pending** action's schema. The LLM no longer has to remember
-"label vs args" or "what fields does this action take" — its tool schema
-*is* the action's schema.
+How the actions reach the model. Whatever the mode, once an action is picked
+`update_action_args` is scoped to that **pending** action's schema (except
+`"loose"`).
 
-| Mode      | `start_action.args`                                              | `update_action_args.args`           |
-| --------- | ---------------------------------------------------------------- | ----------------------------------- |
-| `"typed"` | `discriminatedUnion("action", per-ref objects with .partial())`  | `pending.schema.partial()`          |
-| `"loose"` | `z.record(z.unknown())`                                           | `z.record(z.unknown())`             |
+| Mode                     | Tools sent                                   | Grows with each action by            |
+| ------------------------ | -------------------------------------------- | ------------------------------------ |
+| `"per_action"` (default) | one `start_action__<component>__<action>` each, its fields at the top level | a tool and its whole schema |
+| `"catalog"`              | one `start_action`; a system message lists every action with its argument names | about one line |
+| `"typed"`                | one `start_action`, a discriminated union of every action's schema | its whole schema |
+| `"loose"`                | one `start_action` with untyped `args`        | a line in its description            |
 
-Use `"loose"` only if your provider adapter struggles to convert
-discriminated unions to its tool-schema format.
+`"catalog"` is for an app the chat should run end to end: one tool whatever
+its size, typed where it matters. A value that does not fit, or a name the
+action does not take, keeps the action collecting with the reason, so the
+model corrects it with the typed `update_action_args` before the person sees
+anything to approve. `"per_action"` sends every schema up front, which helps
+small apps and small models. Use `"loose"` only if your provider adapter
+struggles with discriminated unions.
+
+There is no tool budget unless you set one: `toolBudgetBytes` defers the
+tools behind `tool_search` / `tool_describe` / `start_action` above that many
+bytes.
 
 ### 2. `maxToolSteps: number` (default `3`)
 
@@ -334,6 +350,46 @@ information, e.g. an error) wins over the host phrase; the host phrase
 wins over the engine's generic summaries and suppresses the extra
 LLM summary call that `requireAssistantReply` would otherwise run.
 
+### 4. `narrowToActive` and `navigation`
+
+- `narrowToActive: true` offers only the actions of the components the page
+  set active (the behaviour before on-screen became context). Off by default.
+- `navigation: { enabled: true }` gives the model an `open_component` tool over
+  the components with a `domAnchor`, for "take me to …". It emits a `navigate`
+  event; the client opens the page (`useNavigationRequests` in React,
+  `onNavigate` on the store). Off by default.
+
+## Showing what changed (`withCitation`)
+
+A change approved in the chat happened somewhere. The action says where in its
+result. `@freebirdai/server` then saves a short line in the conversation with
+that place as a citation chip, and returns it from `/actions/confirm` so the
+client shows it at once. Nothing moves on its own: the person follows the chip
+if they want to.
+
+```ts
+import { revealSelector, withCitation } from "@freebirdai/core";
+
+handler: async (args) => {
+  const saved = await settings.save(args);
+  return withCitation(saved, {
+    title: "Weekly digest",
+    summary: "The digest goes out weekly now.",
+    page: "#/settings/notifications",
+    selector: revealSelector({ component: "notifications", item: "digest", field: "frequency" }),
+  });
+},
+```
+
+The chip is a `ComponentCitation` in the message's `toolPayload.citations`, the
+same as any citation, so it navigates with your existing citation handling.
+`revealElement(selector)` in `@freebirdai/react` waits for the page to draw the
+element, scrolls to it and sets `data-freebird-revealed` on it for a moment,
+for your CSS to show. `revealSelector` builds selectors over the attributes
+the embed scanner reads: `data-freebird-component` on a component's region,
+`data-freebird-item` on one thing listed in it, and `data-freebird-field` on
+one setting.
+
 ## Server endpoints (added automatically)
 
 `@freebirdai/server` adds these alongside the existing chat routes:
@@ -356,6 +412,8 @@ code yourself.
 | Confirm UI         | `<ActionPreview>` render-prop          | `<FreeBirdActionPreview>` scoped slot     | `<fb-action-preview><ng-template …>`                           |
 | Journal UI         | `<ActionJournal>` render-prop          | `<FreeBirdActionJournal>` scoped slot     | `<fb-action-journal><ng-template …>`                           |
 | Audit subscription | `useActionEvents(fn)`                  | `useActionEvents(fn)`                     | `inject(FreeBirdService).onActionEvent(fn)`                    |
+| On screen          | `setActiveComponentIds`, `setFocus`    | `setActiveComponentIds`, `setFocus`       | `FreeBirdService.setActiveComponentIds`, `.setFocus`           |
+| "Take me to …"     | `useNavigationRequests(fn)`, `revealElement` | `useFreeBird().onNavigate(fn)`      | `FreeBirdService.onNavigate(fn)`                               |
 
 ## What FreeBird *does not* do
 

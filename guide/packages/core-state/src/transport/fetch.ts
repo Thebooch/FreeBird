@@ -230,6 +230,7 @@ export class FetchTransport implements FreeBirdTransport {
     lockedCells?: GridCell[];
     actionState?: ActionState;
     activeComponentIds?: string[];
+    focus?: import("@freebirdai/core").ScreenFocus;
     supportContext?: {
       subject?: Record<string, unknown>;
       transcriptExcerpt?: string;
@@ -245,6 +246,7 @@ export class FetchTransport implements FreeBirdTransport {
         lockedCells: input.lockedCells,
         actionState: input.actionState,
         activeComponentIds: input.activeComponentIds,
+        ...(input.focus ? { focus: input.focus } : {}),
         supportContext: input.supportContext,
       },
       input.signal,

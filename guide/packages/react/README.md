@@ -88,8 +88,10 @@ All visual decisions are yours. Every primitive stamps `data-freebird-*` attribu
 
 ### Tell FreeBird which components are active
 
-Actions are only offered for components currently on screen. Set the list
-on mount; clear it on unmount.
+Tell the chat what is on screen, so "this" and "here" need no follow-up
+question. Every action stays offered either way (unless the engine was built
+with `narrowToActive`). Set the list on mount; clear it on unmount;
+`fb.setFocus(...)` names the one item open, when there is one.
 
 ```tsx
 const fb = useFreeBird();

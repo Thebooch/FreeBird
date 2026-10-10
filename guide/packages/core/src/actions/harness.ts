@@ -5,7 +5,6 @@ import type { LlmMessage, LlmTool } from "../adapters/llm.js";
 import type { ActionRecord, ActionState } from "./types.js";
 import { allowsActions, type PermissionMode } from "../permissions/index.js";
 import {
-  DEFAULT_TOOL_BUDGET_BYTES,
   buildDeferredStartActionTool,
   buildToolDescribeTool,
   buildToolSearchTool,
@@ -31,8 +30,8 @@ export interface HarnessTurn {
 }
 
 /**
- * How the harness shapes the `args` field on `start_action` /
- * `update_action_args`:
+ * How the harness offers actions and shapes their arguments on
+ * `start_action` / `update_action_args`:
  *
  * - `"typed"` (default) — emits a discriminated union per action ref so
  *   the LLM gets the action's actual Zod schema as a tool parameter.
@@ -42,12 +41,21 @@ export interface HarnessTurn {
  * - `"loose"` — `args: z.record(z.unknown())` with the per-action schema
  *   buried in the description. Use as an escape hatch if your provider
  *   adapter struggles with discriminated unions.
- * - `"per_action"` (recommended) — one LLM tool per candidate action
+ * - `"per_action"` (the default) — one LLM tool per candidate action
  *   (`start_action__<componentId>__<actionId>`) whose parameters are that
  *   action's partial Zod object at the top level. Avoids root-level `oneOf`
  *   (OpenAI) and `const` literals (small models) while keeping typed fields.
+ *   Every action is a tool and every schema goes out on every step.
+ * - `"catalog"` — one `start_action` tool for the whole app. Its `action` is
+ *   an enum of refs, and a system message lists each action with its argument
+ *   names (`*` = required) and description, a line each, so an app of any
+ *   size is one tool. Once an action is picked, `update_action_args` carries
+ *   that action's exact schema. Values that do not fit (a wrong value, a name
+ *   the action does not take) keep the action collecting, with the reason, so
+ *   the model corrects them with the typed tool rather than the person
+ *   approving something that cannot run.
  */
-export type HarnessArgsMode = "typed" | "loose" | "per_action";
+export type HarnessArgsMode = "typed" | "loose" | "per_action" | "catalog";
 
 /** Prefix for per-action start tools. */
 export const PER_ACTION_START_PREFIX = "start_action__";
@@ -77,8 +85,19 @@ export const resolvePerActionStartToolName = (
 export interface BuildHarnessTurnInput {
   registry: ComponentRegistry<any, any>;
   actionState: ActionState;
-  /** Component ids the user can currently see / interact with. */
+  /**
+   * Component ids the user can currently see. Context, not a limit: every
+   * registered action is offered whatever is on screen, unless
+   * `narrowToActive` is set.
+   */
   activeComponentIds?: string[];
+  /**
+   * Offer only the active components' actions (the behaviour before
+   * `activeComponentIds` became context). Off by default: the chat can do
+   * anything the app can, from any page. Never a security boundary;
+   * `authorize` is.
+   */
+  narrowToActive?: boolean;
   /** @default "per_action" */
   argsMode?: HarnessArgsMode;
   /**
@@ -92,13 +111,23 @@ export interface BuildHarnessTurnInput {
    */
   permissionMode?: PermissionMode;
   /**
-   * Byte budget for this turn's action tools before they are deferred behind
-   * `tool_search`. Set to `Infinity` to keep every schema inline.
-   *
-   * @default 24576
+   * A byte budget for this turn's action tools, above which they are
+   * deferred behind `tool_search`. No budget unless one is set: how much an
+   * app sends is the developer's call. `"catalog"` mode keeps an app of any
+   * size to one tool without one.
    */
   toolBudgetBytes?: number;
 }
+
+/** The actions a turn offers: all of them, or the active components' under `narrowToActive`. */
+export const offeredActions = (
+  registry: ComponentRegistry<any, any>,
+  activeComponentIds: readonly string[] | undefined,
+  narrowToActive = false,
+): ReturnType<ComponentRegistry<any, any>["listActions"]> =>
+  registry.listActions(
+    narrowToActive && activeComponentIds && activeComponentIds.length > 0 ? { componentIds: [...activeComponentIds] } : undefined,
+  );
 
 /**
  * Build the action-layer slice of a chat turn.
@@ -106,7 +135,8 @@ export interface BuildHarnessTurnInput {
  * Tool gating by phase:
  *
  *   idle / error
- *     - start_action          (only for active components with actions[])
+ *     - start_action          (every registered action; only the active
+ *                              components' under `narrowToActive`)
  *     - resume_action         (only when a paused journal record exists)
  *
  *   collecting
@@ -140,18 +170,12 @@ export const buildHarnessTurn = (
     return { tools: {}, systemMessages: [], phase, activeActionIds: [] };
   }
 
-  const candidateActions = registry
-    .listActions(
-      activeComponentIds && activeComponentIds.length > 0
-        ? { componentIds: activeComponentIds }
-        : undefined,
-    )
-    .map((entry) => ({
-      ref: `${entry.componentId}:${entry.action.id}`,
-      componentId: entry.componentId,
-      actionId: entry.action.id,
-      description: entry.action.description,
-    }));
+  const candidateActions = offeredActions(registry, activeComponentIds, input.narrowToActive).map((entry) => ({
+    ref: `${entry.componentId}:${entry.action.id}`,
+    componentId: entry.componentId,
+    actionId: entry.action.id,
+    description: entry.action.description,
+  }));
 
   const pausedRecords = actionState.journal.filter((r) => r.status === "paused");
 
@@ -169,8 +193,8 @@ export const buildHarnessTurn = (
        * them tells you that. The tools are thrown away when over budget,
        * which is cheap; guessing wrong is not.
        */
-      const budget = input.toolBudgetBytes ?? DEFAULT_TOOL_BUDGET_BYTES;
-      if (serializedToolBytes(tools) > budget) {
+      const budget = input.toolBudgetBytes;
+      if (budget !== undefined && serializedToolBytes(tools) > budget) {
         for (const name of Object.keys(tools)) delete tools[name];
         systemMessages.length = 0;
         for (const tool of [
@@ -294,7 +318,63 @@ const mergeStartActionTools = (
     });
     return;
   }
+  if (mode === "catalog") {
+    tools.start_action = buildCatalogStartTool(candidates);
+    systemMessages.push({ role: "system", content: renderActionCatalog(candidates, registry) });
+    return;
+  }
   tools.start_action = buildStartActionTool(candidates, registry, mode);
+};
+
+/** Catalog mode's one starter: the actions are listed once, in the catalog message, not again here. */
+const buildCatalogStartTool = (candidates: ReadonlyArray<{ ref: string }>): LlmTool => ({
+  name: "start_action",
+  description:
+    "Start one of the actions in the catalog of everything this app can do. Pass its ref as `action` and the " +
+    "values you know in `args`, under its argument names. The system asks for anything missing and shows the " +
+    "person a preview to approve before anything changes.",
+  schema: z.object({
+    action: (candidates.length > 0 ? z.enum(candidates.map((c) => c.ref) as [string, ...string[]]) : z.string().min(1)).describe(
+      "The action's ref, `componentId:actionId`, from the catalog.",
+    ),
+    label: labelField(),
+    args: looseObjectSchema().optional().describe("The values you know, under the action's argument names."),
+  }),
+});
+
+/** An argument list from an action's schema: `type*, changes, notes`. Object schemas only. */
+export const argumentNames = (schema: unknown): string => {
+  let current = schema as z.ZodTypeAny;
+  for (let depth = 0; depth < 8 && current instanceof z.ZodEffects; depth += 1) current = current._def.schema;
+  if (!(current instanceof z.ZodObject)) return "";
+  return Object.entries(current.shape as Record<string, z.ZodTypeAny>)
+    .map(([key, field]) => (field.isOptional() ? key : `${key}*`))
+    .join(", ");
+};
+
+/**
+ * Every action, a line each: what to pass as `action`, its argument names
+ * and what it does. The whole app in one tool's worth of words.
+ */
+const renderActionCatalog = (
+  candidates: ReadonlyArray<{ ref: string; componentId: string; actionId: string; description: string }>,
+  registry: ComponentRegistry<any, any>,
+): string => {
+  const byComponent = new Map<string, string[]>();
+  for (const c of candidates) {
+    const names = argumentNames(registry.getAction(c.componentId, c.actionId)?.schema);
+    const lines = byComponent.get(c.componentId) ?? [];
+    lines.push(`- ${c.ref}(${names}): ${c.description}`);
+    byComponent.set(c.componentId, lines);
+  }
+  const sections = [...byComponent.entries()].map(([id, lines]) => `${registry.get(id)?.title ?? id}:\n${lines.join("\n")}`);
+  return (
+    "Everything you can do in this app, by screen. To do one, call `start_action` with its ref as `action` and the " +
+    "values you know in `args`, under the argument names shown (`*` = required). Once started, `update_action_args` " +
+    "shows that action's exact fields: use it to fill or correct anything, and ask the person only for what you " +
+    "cannot know. Nothing runs before they approve it.\n\n" +
+    sections.join("\n\n")
+  );
 };
 
 const buildPerActionStartTool = (
@@ -432,7 +512,7 @@ const buildUpdateArgsTool = (
   });
 
   let schema: z.ZodTypeAny = looseSchema;
-  if ((mode === "typed" || mode === "per_action") && actionState.pending) {
+  if ((mode === "typed" || mode === "per_action" || mode === "catalog") && actionState.pending) {
     try {
       const def = registry.getAction(
         actionState.pending.componentId,

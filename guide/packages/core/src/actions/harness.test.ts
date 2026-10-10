@@ -81,11 +81,21 @@ describe("buildHarnessTurn — phase=idle", () => {
     ]);
   });
 
-  it("filters start_action candidates by activeComponentIds", () => {
+  it("treats activeComponentIds as context: every action stays a candidate", () => {
     const turn = buildHarnessTurn({
       registry: makeRegistry(),
       actionState: stateOf(),
       activeComponentIds: ["settings"],
+    });
+    expect(turn.activeActionIds.sort()).toEqual(["profile:set_handle", "settings:set_theme"]);
+  });
+
+  it("filters start_action candidates by activeComponentIds under narrowToActive", () => {
+    const turn = buildHarnessTurn({
+      registry: makeRegistry(),
+      actionState: stateOf(),
+      activeComponentIds: ["settings"],
+      narrowToActive: true,
     });
     expect(turn.activeActionIds).toEqual(["settings:set_theme"]);
   });
@@ -105,11 +115,12 @@ describe("buildHarnessTurn — phase=idle", () => {
     expect(withOmitted.activeActionIds.sort()).toEqual(expected);
   });
 
-  it("omits start tools when no active components have actions", () => {
+  it("omits start tools when no active components have actions, under narrowToActive", () => {
     const turn = buildHarnessTurn({
       registry: makeRegistry(),
       actionState: stateOf(),
       activeComponentIds: ["calendar"],
+      narrowToActive: true,
     });
     expect(
       Object.keys(turn.tools).some((k) => k.startsWith("start_action")),

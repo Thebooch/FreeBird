@@ -70,7 +70,7 @@ function Chrome() {
 }
 ```
 
-3. If using actions, scope them per page and add the confirmation UI:
+3. If using actions, tell the chat what is on screen (context for "this"; every action stays offered) and add the confirmation UI:
 
 ```tsx
 const fb = useFreeBird();
@@ -88,7 +88,7 @@ useEffect(() => {
 
 ## Key APIs
 
-- Hooks: `useFreeBird`, `useSession`, `useChat`, `useLayout`, `useCustomTabs`, `useActionState`, `useActionJournal`, `useActionEvents`
+- Hooks: `useFreeBird`, `useSession`, `useChat`, `useLayout`, `useCustomTabs`, `useActionState`, `useActionJournal`, `useActionEvents`, `useNavigationRequests` (where the person asked the chat to take them: open its `page`, then `revealElement(selector)` scrolls to it and sets `data-freebird-revealed` briefly)
 - Components: `ChatPanel.Root/Messages/Message/Form/Input/Submit/Citations`, `DynamicGrid`, `LockToggle`, `InfoTrigger`, `CustomTabBar.*`, `ActionPreview`, `ActionJournal`, `FreeBirdNavLinks`
 - Provider props: `registry`, `transport` (from `createFetchTransport` for custom baseUrl/auth), initial state
 - Re-exported types: `ActionDefinition`, `ActionState`, `ActionRecord`, `PendingAction`, `ActionEvent`, `ComponentCitation`
@@ -104,7 +104,7 @@ useEffect(() => {
 - **Client/server id drift** → the client and server registries must register the same component ids; use `freebird check` (create-freebird) or a shared ids module to enforce.
 - **Next.js: provider in a Server Component** → the provider and registry file need `"use client"`.
 - **Chat resets on route change** → keep `FreeBirdProvider` (and the ChatPanel) mounted in a layout above your routes.
-- **Actions never offered** → `setActiveComponentIds` was never called with the relevant component ids (or was cleared by an unmount).
+- **Actions never offered** → the engine runs with `narrowToActive: true` and `setActiveComponentIds` was never called with the relevant component ids (or was cleared by an unmount).
 - **Citations chips don't navigate** → pass `onCitationNavigate` to `ChatPanel.Citations` to route via your router; default is `location.assign`.
 
 ## Verify

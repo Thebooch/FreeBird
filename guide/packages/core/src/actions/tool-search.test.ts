@@ -158,7 +158,7 @@ describe("tool budget", () => {
   it("leaves a small registry exactly as it was", () => {
     const registry = makeRegistry(5);
     const ids = allComponentIds(5);
-    const withFeature = buildHarnessTurn({ registry, actionState: idle, activeComponentIds: ids });
+    const withFeature = buildHarnessTurn({ registry, actionState: idle, activeComponentIds: ids, toolBudgetBytes: DEFAULT_TOOL_BUDGET_BYTES });
     const unbounded = buildHarnessTurn({
       registry,
       actionState: idle,
@@ -169,12 +169,13 @@ describe("tool budget", () => {
     expect(withFeature.tools[TOOL_SEARCH_NAME]).toBeUndefined();
   });
 
-  it("keeps a large registry under budget", () => {
+  it("keeps a large registry under a budget the host sets", () => {
     const registry = makeRegistry(200);
     const turn = buildHarnessTurn({
       registry,
       actionState: idle,
       activeComponentIds: allComponentIds(200),
+      toolBudgetBytes: DEFAULT_TOOL_BUDGET_BYTES,
     });
     // The assertion that matters: bytes, not behaviour.
     expect(serializedToolBytes(turn.tools)).toBeLessThan(DEFAULT_TOOL_BUDGET_BYTES);
@@ -242,6 +243,7 @@ describe("tool budget", () => {
       registry: makeRegistry(200),
       actionState: idle,
       activeComponentIds: allComponentIds(200),
+      toolBudgetBytes: DEFAULT_TOOL_BUDGET_BYTES,
     });
     // Listing 200 tool names in a system message would defeat the point.
     expect(turn.systemMessages).toEqual([]);
@@ -255,7 +257,74 @@ describe("tool budget", () => {
       actionState: idle,
       activeComponentIds: allComponentIds(200),
       permissionMode: "readonly",
+      toolBudgetBytes: DEFAULT_TOOL_BUDGET_BYTES,
     });
     expect(turn.tools).toEqual({});
+  });
+
+  it("sets no budget of its own: how much an app sends is the developer's call", () => {
+    const turn = buildHarnessTurn({ registry: makeRegistry(200), actionState: idle });
+    expect(turn.tools[TOOL_SEARCH_NAME]).toBeUndefined();
+    expect(Object.keys(turn.tools)).toHaveLength(200);
+  });
+});
+
+describe("what is on screen", () => {
+  it("is context: every action is offered whatever the page has set active", () => {
+    const turn = buildHarnessTurn({ registry: makeRegistry(3), actionState: idle, activeComponentIds: ["component0"] });
+    expect(Object.keys(turn.tools).sort()).toEqual(["start_action__component0__action0", "start_action__component1__action1", "start_action__component2__action2"]);
+  });
+
+  it("narrows the actions only for a host that asks for it", () => {
+    const turn = buildHarnessTurn({ registry: makeRegistry(3), actionState: idle, activeComponentIds: ["component0"], narrowToActive: true });
+    expect(Object.keys(turn.tools)).toEqual(["start_action__component0__action0"]);
+  });
+});
+
+describe("catalog mode", () => {
+  const typed = () => {
+    const registry = makeRegistry(200);
+    registry.register({
+      id: "types",
+      title: "Appointment types",
+      description: "What people can book",
+      grid: { minW: 4, minH: 3 },
+      actions: [
+        {
+          id: "update_type",
+          description: "Change an appointment type",
+          schema: z.object({ type: z.string(), changes: z.object({ approval: z.enum(["none", "always"]) }).partial(), note: z.string().optional() }),
+          handler: async () => ({}),
+        },
+      ],
+    });
+    return registry;
+  };
+
+  it("is one tool for the whole app, however many actions it has", () => {
+    const turn = buildHarnessTurn({ registry: typed(), actionState: idle, argsMode: "catalog" });
+    expect(Object.keys(turn.tools)).toEqual(["start_action"]);
+    expect(serializedToolBytes(turn.tools)).toBeLessThan(serializedToolBytes(buildHarnessTurn({ registry: typed(), actionState: idle }).tools) / 10);
+  });
+
+  it("lists every action by screen, with its argument names, required ones starred", () => {
+    const turn = buildHarnessTurn({ registry: typed(), actionState: idle, argsMode: "catalog" });
+    const catalog = turn.systemMessages.map((message) => message.content).join("\n");
+    expect(catalog).toContain("Appointment types:\n- types:update_type(type*, changes*, note): Change an appointment type");
+    expect(catalog).toContain("- component199:action199(value*): Do the number 199 thing to a record");
+  });
+
+  it("gives the picked action's exact fields once it is collecting", () => {
+    const collecting: ActionState = {
+      phase: "collecting",
+      pending: { recordId: "r", componentId: "types", actionId: "update_type", args: {}, missing: ["type"], requiresConfirmation: "preview", startedAt: new Date() },
+      journal: [],
+      workflowStack: [],
+    };
+    const turn = buildHarnessTurn({ registry: typed(), actionState: collecting, argsMode: "catalog" });
+    expect(JSON.stringify(serializedToolBytes({ u: turn.tools.update_action_args! }))).toBeDefined();
+    const schema = turn.tools.update_action_args!.schema as z.ZodTypeAny;
+    expect(schema.safeParse({ args: { changes: { approval: "always" } } }).success).toBe(true);
+    expect(schema.safeParse({ args: { changes: { approval: "sometimes" } } }).success).toBe(false);
   });
 });

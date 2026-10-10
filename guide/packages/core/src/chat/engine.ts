@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { DbAdapter } from "../adapters/db.js";
 import type { LlmAdapter, LlmMessage, LlmTokenUsage, LlmTool } from "../adapters/llm.js";
 import type { ComponentRegistry } from "../components/registry.js";
@@ -14,11 +15,13 @@ import {
 import {
   buildHarnessTurn,
   resolvePerActionStartToolName,
+  offeredActions,
   type HarnessArgsMode,
 } from "../actions/harness.js";
 import { deriveActionPreview } from "../actions/preview.js";
 import type { ActionBlocker } from "../actions/types.js";
 import { buildPlanLayoutTool } from "../layout/tool.js";
+import { OPEN_COMPONENT_TOOL_NAME, buildOpenComponentTool, resolveNavigation } from "./navigation.js";
 import { solveLayout } from "../layout/solver.js";
 import { resolveReferences } from "./references.js";
 import { resolveProcessingToolsForTurn } from "./processingTools.js";
@@ -65,6 +68,7 @@ import type {
   LayoutIntent,
   LayoutPlan,
   Reference,
+  ScreenFocus,
   WorkspaceCitation,
 } from "../types.js";
 
@@ -126,6 +130,19 @@ export interface ChatEngineOptions {
    * `"loose"` uses generic `args` records.
    */
   harnessArgsMode?: HarnessArgsMode;
+  /**
+   * Offer only the actions of the components the page has set active. Off by
+   * default: `activeComponentIds` is context (what "this" means), and every
+   * registered action can be asked for from any page. Not a security
+   * boundary; `authorize` is.
+   */
+  narrowToActive?: boolean;
+  /**
+   * A byte budget for a turn's action tools, above which they are deferred
+   * behind `tool_search` / `tool_describe` / `start_action`. None unless set.
+   * `harnessArgsMode: "catalog"` keeps any app to one tool without one.
+   */
+  toolBudgetBytes?: number;
   /**
    * If a turn produces only tool calls (no user-visible text) and the
    * action layer lands in `collecting` or `awaiting_confirmation`, the
@@ -274,6 +291,12 @@ export interface ChatEngineOptions {
    */
   citations?: { enabled?: boolean };
   /**
+   * Let the chat take a person to a part of the app when they ask: an
+   * `open_component` tool over the components with a `domAnchor`, emitting a
+   * `navigate` event the client acts on. Off by default.
+   */
+  navigation?: { enabled?: boolean };
+  /**
    * When enabled (default), injects a system message listing registered
    * component knowledge so the LLM can answer from site facts and cite them.
    *
@@ -345,8 +368,14 @@ export interface SendMessageInput {
    * which action tools are exposed and inject phase-aware system messages.
    */
   actionState?: ActionState;
-  /** Components currently visible on the page. */
+  /**
+   * Components currently visible on the page: context for the turn ("this",
+   * "here"), and which skills and processing tools apply. Every action stays
+   * offered unless the engine was built with `narrowToActive`.
+   */
   activeComponentIds?: string[];
+  /** The one thing the person has open within those, when there is one. */
+  focus?: ScreenFocus;
   /** Overrides the LLM adapter default model for this turn. */
   model?: string;
   /**
@@ -445,7 +474,8 @@ export interface ChatStreamEvent {
     | "ticket_drafted"
     | "ticket_created"
     | "ticket_failed"
-    | "question_asked";
+    | "question_asked"
+    | "navigate";
   userMessage?: ChatMessage;
   textDelta?: string;
   assistantMessage?: ChatMessage;
@@ -467,6 +497,8 @@ export interface ChatStreamEvent {
   ticket?: TicketStreamPayload;
   /** For `question_asked`: what the client should render and answer. */
   question?: PendingQuestion;
+  /** For `navigate`: where the person asked to be taken (`navigation: { enabled }`). */
+  navigation?: ComponentCitation;
 }
 
 /**
@@ -491,6 +523,8 @@ export class ChatEngine {
   private readonly maxHistory: number;
   private readonly maxToolSteps: number;
   private readonly harnessArgsMode: HarnessArgsMode;
+  private readonly narrowToActive: boolean;
+  private readonly toolBudgetBytes: number | undefined;
   private readonly fallbackToolOnlyPhrase: ChatEngineOptions["fallbackToolOnlyPhrase"];
   private readonly emitLlmUsage: boolean;
   private readonly onLlmUsage: ChatEngineOptions["onLlmUsage"];
@@ -510,6 +544,7 @@ export class ChatEngine {
   private readonly reviewEnabled: boolean;
   private readonly enablePlanLayout: boolean;
   private readonly citationsEnabled: boolean;
+  private readonly navigationEnabled: boolean;
   private readonly skillsEnabled: boolean;
   private readonly skillsMaxChars: number;
   private readonly skillProvider: SkillProvider | undefined;
@@ -529,6 +564,8 @@ export class ChatEngine {
     this.maxHistory = opts.maxHistoryMessages ?? 30;
     this.maxToolSteps = Math.max(1, opts.maxToolSteps ?? 3);
     this.harnessArgsMode = opts.harnessArgsMode ?? "per_action";
+    this.narrowToActive = opts.narrowToActive ?? false;
+    this.toolBudgetBytes = opts.toolBudgetBytes;
     this.fallbackToolOnlyPhrase = opts.fallbackToolOnlyPhrase ?? null;
     this.emitLlmUsage = opts.emitLlmUsage ?? false;
     this.onLlmUsage = opts.onLlmUsage;
@@ -547,6 +584,7 @@ export class ChatEngine {
     this.reviewEnabled = opts.review?.enabled !== false;
     this.enablePlanLayout = opts.enablePlanLayout !== false;
     this.citationsEnabled = opts.citations?.enabled === true;
+    this.navigationEnabled = opts.navigation?.enabled === true;
     // Enabled by default *when a provider is given*; no provider means the
     // whole feature is inert, which is the open-source default.
     this.skillsEnabled = opts.skills?.enabled !== false;
@@ -720,6 +758,8 @@ export class ChatEngine {
           baseMessages.push({ role: "system", content: knowledgePrompt });
         }
       }
+      const onScreen = renderOnScreen(registry, input.activeComponentIds, input.focus);
+      if (onScreen) baseMessages.push({ role: "system", content: onScreen });
       /*
        * Skills, after the facts and before the citation rules.
        *
@@ -841,6 +881,9 @@ export class ChatEngine {
        */
       const askUserTool = this.askUserEnabled ? buildAskUserTool() : null;
 
+      /** Whether the step before only looked actions up, so the next one should act on what it found. */
+      let lastStepSearched = false;
+      const openComponentTool = this.navigationEnabled ? buildOpenComponentTool(registry) : null;
       for (let step = 0; step < this.maxToolSteps; step += 1) {
         // 4a. Tools + harness system messages for this step.
         const tools: Record<string, LlmTool> = { ...turnExtraTools };
@@ -862,11 +905,14 @@ export class ChatEngine {
         // model could stack cards the user has to answer in an order nobody
         // specified.
         if (askUserTool && !pendingQuestion) tools[ASK_USER_TOOL_NAME] = askUserTool;
+        if (openComponentTool) tools[OPEN_COMPONENT_TOOL_NAME] = openComponentTool;
         const harness = buildHarnessTurn({
           registry,
           actionState,
           activeComponentIds: input.activeComponentIds,
           argsMode: this.harnessArgsMode,
+          narrowToActive: this.narrowToActive,
+          ...(this.toolBudgetBytes !== undefined ? { toolBudgetBytes: this.toolBudgetBytes } : {}),
           permissionMode,
         });
         Object.assign(tools, harness.tools);
@@ -899,6 +945,7 @@ export class ChatEngine {
             content: renderInnerStepHint(actionState, {
               layoutCaptured: layoutIntent !== undefined,
               extraToolsRan: executedExtraTools.length > 0,
+              searched: lastStepSearched,
               forceTextOnly: forceTextOnlyStep,
             }),
           });
@@ -916,6 +963,10 @@ export class ChatEngine {
         // Searching or describing is never the end of a turn: the model asked
         // a question of the registry and needs another step to act on it.
         let ranSearchTool = false;
+        /** What this step's searches and descriptions answered, for the next step to read. */
+        const stepRegistryLookups: Array<{ name: string; args: unknown; result: unknown }> = [];
+        /** Where this step took the person, to say so in the next. */
+        const stepOpened: string[] = [];
 
         for await (const chunk of llm.stream({
           messages,
@@ -958,6 +1009,7 @@ export class ChatEngine {
               deriveActionReadiness: this.deriveActionReadiness,
               sanitizeActionArgs: this.sanitizeActionArgs,
               permissionMode,
+              strictArgs: this.harnessArgsMode === "catalog",
             });
             if (handled) {
               stepActionEvents.push(handled);
@@ -998,11 +1050,7 @@ export class ChatEngine {
                 chunk.toolCall.name === TOOL_SEARCH_NAME
                   ? {
                       actions: searchActions(
-                        registry.listActions(
-                          input.activeComponentIds && input.activeComponentIds.length > 0
-                            ? { componentIds: input.activeComponentIds }
-                            : undefined,
-                        ).map((entry) => ({
+                        offeredActions(registry, input.activeComponentIds, this.narrowToActive).map((entry) => ({
                           ref: `${entry.componentId}:${entry.action.id}`,
                           componentId: entry.componentId,
                           actionId: entry.action.id,
@@ -1020,7 +1068,17 @@ export class ChatEngine {
                 result,
               });
               extraToolResults.push({ name: chunk.toolCall.name, args: chunk.toolCall.args });
+              stepRegistryLookups.push({ name: chunk.toolCall.name, args: chunk.toolCall.args, result });
               ranSearchTool = true;
+            } else if (chunk.toolCall.name === OPEN_COMPONENT_TOOL_NAME && openComponentTool) {
+              const navigation = resolveNavigation(registry, chunk.toolCall.args);
+              if (navigation) {
+                stepActionEvents.push({ kind: "navigate", navigation });
+                stepOpened.push(`Opened ${navigation.title} for them.`);
+              } else {
+                stepOpened.push("That is not somewhere in the app that can be opened.");
+              }
+              extraToolResults.push({ name: chunk.toolCall.name, args: chunk.toolCall.args });
             } else if (chunk.toolCall.name === ASK_USER_TOOL_NAME) {
               /*
                * The turn stops here.
@@ -1043,6 +1101,23 @@ export class ChatEngine {
           }
         }
 
+        /*
+         * A search or a description is only worth the step it cost if the next
+         * step can read it. Without this the loop went round on `ranSearchTool`
+         * with the answer dropped, and the model was told results were "above"
+         * that were not.
+         */
+        if (stepRegistryLookups.length > 0) {
+          stepContinuationMessages.push({ role: "system", content: renderRegistryLookupContinuation(stepRegistryLookups) });
+        }
+        if (stepOpened.length > 0) {
+          stepContinuationMessages.push({
+            role: "system",
+            content: `${stepOpened.join(" ")} Say so in a few words, and do whatever else they asked; do not open it again.`,
+          });
+        }
+
+        lastStepSearched = stepRegistryLookups.length > 0 && stepExtraToolCalls.length === 0;
         let ranExtraTools = false;
         if (stepExtraToolCalls.length > 0 && this.executeExtraTool) {
           for (const tc of stepExtraToolCalls) {
@@ -1271,7 +1346,7 @@ export class ChatEngine {
         // A question outranks every reason to loop: the next thing that
         // happens is a person clicking, not another model call.
         if (pendingQuestion) break;
-        const shouldLoopForExtraTools = (ranExtraTools || ranSearchTool) && !stepLayoutCalled;
+        const shouldLoopForExtraTools = (ranExtraTools || ranSearchTool || stepOpened.length > 0) && !stepLayoutCalled;
         const shouldLoop =
           shouldLoopForExtraTools ||
           (stepText.trim().length === 0 && madeProgress && !stepLayoutCalled && phaseIsLoopable);
@@ -1751,6 +1826,8 @@ const renderInnerStepHint = (
   ctx?: {
     layoutCaptured?: boolean;
     extraToolsRan?: boolean;
+    /** The step before only searched or described actions. */
+    searched?: boolean;
     forceTextOnly?: boolean;
   },
 ): string => {
@@ -1763,6 +1840,13 @@ const renderInnerStepHint = (
   }
   const p = state.pending;
   if (!p) {
+    if (ctx?.searched) {
+      return (
+        "You looked actions up above. If one is what the person asked for, start it with " +
+        "`start_action` (call `tool_describe` first if you do not know its arguments). If none " +
+        "fits, reply in plain text and say so."
+      );
+    }
     if (ctx?.extraToolsRan) {
       return (
         "Processing tools already returned results above. Reply in plain " +
@@ -2023,6 +2107,48 @@ const collectWorkspaceCitations = (
  * The full result is untouched either way. It reaches the final step through
  * `executedExtraTools`, which is where the writing happens.
  */
+/** At most this many on-screen components are described; a page rarely shows more. */
+const ON_SCREEN_LISTED = 12;
+
+/**
+ * What the person is looking at, so "this", "here" and "it" resolve without
+ * asking. Context only: it narrows nothing the model may do.
+ */
+const renderOnScreen = (
+  registry: ComponentRegistry<any, any>,
+  activeComponentIds: readonly string[] | undefined,
+  focus: ScreenFocus | undefined,
+): string => {
+  const shown = (activeComponentIds ?? [])
+    .map((id) => registry.get(id))
+    .filter((component): component is NonNullable<typeof component> => component !== undefined)
+    .slice(0, ON_SCREEN_LISTED);
+  if (shown.length === 0) return "";
+  const lines = shown.map((component) => `- ${component.title} (\`${component.id}\`): ${component.description}`);
+  const focused = focus && registry.get(focus.componentId);
+  const open = focused
+    ? `\nOpen in ${focused.title}: ${focus.label ?? focus.itemId ?? "one item"}${focus.itemId ? ` (\`${focus.itemId}\`)` : ""}.`
+    : "";
+  return (
+    "On screen now. When the person says \"this\", \"here\" or \"it\" without naming something, they mean what is " +
+    "shown here; anything else in the app is still yours to do when they ask for it.\n" +
+    lines.join("\n") +
+    open
+  );
+};
+
+/**
+ * What `tool_search` and `tool_describe` answered, for the step after. Unlike a
+ * processing tool's result this is not an answer to reply with: it is how to
+ * reach the action, so the next move is usually a call.
+ */
+const renderRegistryLookupContinuation = (
+  lookups: Array<{ name: string; args: unknown; result: unknown }>,
+): string =>
+  lookups.map((one) => `Tool \`${one.name}\` returned:\n${JSON.stringify(one.result, null, 2)}`).join("\n\n") +
+  "\n\nIf one of these is what the person asked for, call `tool_describe` for its arguments if you have not, then " +
+  "`start_action` with its ref and the values you know. If none fits, say so plainly.";
+
 const renderExtraToolContinuation = (
   results: Array<{ name: string; args: unknown; result: unknown }>,
   brief = false,
@@ -2230,7 +2356,8 @@ const simulateActionState = (
         const a = ev.action;
         if (!a) break;
         const args = (a.args ?? {}) as Record<string, unknown>;
-        const missing = computePendingMissing(
+        /* The event's own list when it has one: it carries catalog mode's argument problems, which the schema alone does not. */
+        const missing = a.missing ?? computePendingMissing(
           registry,
           a.componentId,
           a.actionId,
@@ -2265,7 +2392,7 @@ const simulateActionState = (
           ...next.pending.args,
           ...(ev.action?.args ?? {}),
         } as Record<string, unknown>;
-        const missing = computePendingMissing(
+        const missing = ev.action?.missing ?? computePendingMissing(
           registry,
           next.pending.componentId,
           next.pending.actionId,
@@ -2413,7 +2540,46 @@ interface HandleActionToolContext {
   sanitizeActionArgs?: ChatEngineOptions["sanitizeActionArgs"];
   /** Resolved for this turn. Absent means `"full"`. */
   permissionMode?: PermissionMode;
+  /**
+   * Catalog mode: the model chose argument names from a list, so a value that
+   * does not fit or a name the action does not take keeps it collecting, with
+   * the reason, instead of reaching the person's approval as something that
+   * cannot run.
+   */
+  strictArgs?: boolean;
 }
+
+/**
+ * What in `args` an action cannot take: names it has no field for (set aside,
+ * so the rest can be used) and values its schema refuses. Each comes back as
+ * `field: reason`, beside the missing fields, so the action keeps collecting.
+ */
+export const argumentProblems = (
+  schema: unknown,
+  args: Record<string, unknown>,
+): { kept: Record<string, unknown>; problems: string[] } => {
+  let current = schema as z.ZodTypeAny;
+  for (let depth = 0; depth < 8 && current instanceof z.ZodEffects; depth += 1) current = current._def.schema;
+  const problems: string[] = [];
+  let kept = args;
+  if (current instanceof z.ZodObject) {
+    const known = new Set(Object.keys(current.shape as Record<string, unknown>));
+    kept = {};
+    for (const [key, value] of Object.entries(args)) {
+      if (known.has(key)) kept[key] = value;
+      else problems.push(`${key}: not an argument of this action (set aside; use the names update_action_args shows)`);
+    }
+  }
+  const parsed = (schema as z.ZodTypeAny).safeParse?.(kept);
+  if (parsed && !parsed.success) {
+    for (const issue of parsed.error.issues) {
+      const absent = issue.code === "invalid_type" && (issue as { received?: string }).received === "undefined";
+      if (absent) continue;
+      problems.push(`${issue.path.join(".") || "args"}: ${issue.message}`);
+    }
+  }
+  return { kept, problems: [...new Set(problems)] };
+};
 
 /**
  * Fold an LLM action tool call into a {@link ChatStreamEvent}, when it is
@@ -2445,11 +2611,16 @@ const buildStartedActionPayload = (
   if (!allowsActions(mode)) return null;
   const requiresConfirmation = clampConfirmation(mode, def.requiresConfirmation ?? "preview");
   const mergedInitial = { ...initial };
-  const args = ctx.sanitizeActionArgs?.(componentId, actionId, mergedInitial) ?? mergedInitial;
-  const missing = computePendingMissing(registry, componentId, actionId, args, {
-    deriveActionReadiness: ctx.deriveActionReadiness,
-    sanitizeActionArgs: ctx.sanitizeActionArgs,
-  });
+  const sanitized = ctx.sanitizeActionArgs?.(componentId, actionId, mergedInitial) ?? mergedInitial;
+  const checked = ctx.strictArgs ? argumentProblems(def.schema, sanitized) : { kept: sanitized, problems: [] };
+  const args = checked.kept;
+  const missing = [
+    ...computePendingMissing(registry, componentId, actionId, args, {
+      deriveActionReadiness: ctx.deriveActionReadiness,
+      sanitizeActionArgs: ctx.sanitizeActionArgs,
+    }),
+    ...checked.problems,
+  ];
   const preview = deriveActionPreview(def, args, {
     componentId,
     label,
@@ -2513,12 +2684,16 @@ const handleActionToolCall = (
         ...actionState.pending.args,
         ...patch,
       };
-      const merged =
+      const sanitizedMerge =
         ctx.sanitizeActionArgs?.(
           actionState.pending.componentId,
           actionState.pending.actionId,
           mergedRaw,
         ) ?? mergedRaw;
+      const pendingDef = registry.getAction(actionState.pending.componentId, actionState.pending.actionId);
+      const checked =
+        ctx.strictArgs && pendingDef ? argumentProblems(pendingDef.schema, sanitizedMerge) : { kept: sanitizedMerge, problems: [] as string[] };
+      const merged = checked.kept;
       const argsDelta: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(merged)) {
         if (
@@ -2528,19 +2703,22 @@ const handleActionToolCall = (
           argsDelta[k] = v;
         }
       }
-      const missing = computePendingMissing(
-        registry,
-        actionState.pending.componentId,
-        actionState.pending.actionId,
-        merged,
-        ctx.deriveActionReadiness
-          ? {
-              deriveActionReadiness: ctx.deriveActionReadiness,
-              sanitizeActionArgs: ctx.sanitizeActionArgs,
-            }
-          : undefined,
-      );
-      const def = registry.getAction(actionState.pending.componentId, actionState.pending.actionId);
+      const missing = [
+        ...computePendingMissing(
+          registry,
+          actionState.pending.componentId,
+          actionState.pending.actionId,
+          merged,
+          ctx.deriveActionReadiness
+            ? {
+                deriveActionReadiness: ctx.deriveActionReadiness,
+                sanitizeActionArgs: ctx.sanitizeActionArgs,
+              }
+            : undefined,
+        ),
+        ...checked.problems,
+      ];
+      const def = pendingDef;
       const preview = def
         ? deriveActionPreview(def, merged, {
             componentId: actionState.pending.componentId,

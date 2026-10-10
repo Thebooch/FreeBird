@@ -1,11 +1,13 @@
 import type {
   ChatMessage,
   ChatStreamEvent,
+  ComponentCitation,
   CustomTab,
   GridCell,
   LayoutPlan,
   LlmUsagePayload,
   Reference,
+  ScreenFocus,
   Ticket,
   FileTicketBody,
 } from "@freebirdai/core";
@@ -54,11 +56,13 @@ export interface FreeBirdState {
   /** Action layer: phase + pending args + journal of past records. */
   actionState: ActionState;
   /**
-   * Component ids the host considers "active" right now (e.g. visible on
-   * screen). Sent on every chat turn so the harness can scope `start_action`
-   * to actions it can actually invoke.
+   * Component ids the host considers "active" right now (visible on screen).
+   * Sent on every chat turn as context: what "this" and "here" mean. Every
+   * action stays offered unless the engine was built with `narrowToActive`.
    */
   activeComponentIds: string[];
+  /** The one thing open within them (a row, a record being edited), when there is one. */
+  focus: ScreenFocus | null;
   /**
    * Latest token usage from the chat stream (when the host enables
    * `emitLlmUsage` on {@link ChatEngine}). Useful for dev / admin HUDs.
@@ -88,6 +92,8 @@ export interface FreeBirdState {
 
 export type FreeBirdListener = (state: FreeBirdState) => void;
 export type ExplainListener = (componentId: string) => void;
+/** Where the person asked to be taken: a citation-shaped target (`navigate` events). */
+export type NavigateListener = (target: ComponentCitation) => void;
 
 /**
  * Framework-agnostic state container for a FreeBird client.
@@ -125,6 +131,7 @@ export class FreeBirdStore {
   private listeners = new Set<FreeBirdListener>();
   private explainListeners = new Set<ExplainListener>();
   private actionListeners = new Set<ActionEventListener>();
+  private navigateListeners = new Set<NavigateListener>();
   private supportListeners = new Set<SupportEventListener>();
   private abortController: AbortController | null = null;
   /** Tier-1 notices waiting for a turn to ride along with. */
@@ -149,6 +156,7 @@ export class FreeBirdStore {
       latestReferences: initial.latestReferences ?? [],
       actionState: initial.actionState ?? initialActionState,
       activeComponentIds: initial.activeComponentIds ?? [],
+      focus: initial.focus ?? null,
       lastChatError: null,
       pendingQuestion: initial.pendingQuestion ?? null,
       lastLlmUsage: initial.lastLlmUsage ?? null,
@@ -360,6 +368,22 @@ export class FreeBirdStore {
 
   setActiveComponentIds(ids: string[]): void {
     this.setState({ activeComponentIds: ids });
+  }
+
+  /** What the person has open within the active components, or null when nothing in particular. */
+  setFocus(focus: ScreenFocus | null): void {
+    this.setState({ focus });
+  }
+
+  /**
+   * Hear where the person asked the chat to take them (`navigation` on the
+   * engine). The host opens the page; `selector` is what to bring into view.
+   */
+  onNavigate(fn: NavigateListener): () => void {
+    this.navigateListeners.add(fn);
+    return () => {
+      this.navigateListeners.delete(fn);
+    };
   }
 
   /**
@@ -603,6 +627,8 @@ export class FreeBirdStore {
           changed: res.changed,
           at: new Date(),
         });
+        /* The chat's line about the change, with its citation chip: already saved, shown now. */
+        if (res.outcomeMessage) this.addMessage(res.outcomeMessage);
       } else if (res.blocked && res.blockers && res.message) {
         this.applyActionTransition({
           type: "block",
@@ -770,6 +796,7 @@ export class FreeBirdStore {
           lockedCells: this.getLockedCells(),
           actionState: this.state.actionState,
           activeComponentIds: this.state.activeComponentIds,
+          ...(this.state.focus ? { focus: this.state.focus } : {}),
           ...(opts?.answers ? { answers: opts.answers } : {}),
           ...(notices.length > 0 ? { notices } : {}),
           supportContext: opts?.supportContext,
@@ -935,6 +962,17 @@ export class FreeBirdStore {
             break;
           case "layout_ready":
             if (event.layout) this.setLayout(event.layout);
+            break;
+          case "navigate":
+            if (event.navigation) {
+              for (const fn of this.navigateListeners) {
+                try {
+                  fn(event.navigation);
+                } catch (err) {
+                  console.error("[freebird] onNavigate listener threw:", err);
+                }
+              }
+            }
             break;
           case "assistant_saved":
             if (event.assistantMessage) this.addMessage(event.assistantMessage);

@@ -25,6 +25,8 @@ export interface ConfirmActionResult {
   blocked?: boolean;
   message?: string;
   blockers?: import("@freebirdai/core").ActionBlocker[];
+  /** The chat's line about what changed, already saved, when the action cited where it can be seen. */
+  outcomeMessage?: ChatMessage;
 }
 
 /**
@@ -46,8 +48,10 @@ export interface FreeBirdTransport {
      * when collecting). Optional for backwards-compat.
      */
     actionState?: ActionState;
-    /** Component ids currently visible. Scopes `start_action` candidates. */
+    /** Component ids currently visible: what "this" means for the turn. */
     activeComponentIds?: string[];
+    /** The one thing open within them, when there is one. */
+    focus?: import("@freebirdai/core").ScreenFocus;
     /** Answers to questions asked on an earlier turn. */
     answers?: QuestionAnswer[];
     /** Tier-1 notices accumulated since the last reply. */

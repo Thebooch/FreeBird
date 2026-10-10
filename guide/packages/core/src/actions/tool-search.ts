@@ -27,7 +27,8 @@ export const TOOL_SEARCH_NAME = "tool_search";
 export const TOOL_DESCRIBE_NAME = "tool_describe";
 
 /**
- * Default budget for the whole turn's tool map.
+ * A suggested budget for the whole turn's tool map, for a host that sets
+ * `toolBudgetBytes`. None applies unless one is set.
  *
  * Bytes rather than a count of actions, because bytes are the actual cost: a
  * dozen actions with deeply nested argument schemas outweigh eighty flat ones,

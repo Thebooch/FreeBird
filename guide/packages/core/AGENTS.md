@@ -75,9 +75,11 @@ for await (const event of fb.chat.send(
 
 - `createComponentRegistry()` → `register/upsert/get/list/getAction/listActions/setKnowledge/listKnowledge`
 - `createFreeBird({ db, llm, email?, registry })` → `{ chat, tabs, digest, knowledge, registry }`
-- `ChatEngine` options (pass via `createFreeBird` or `new ChatEngine`): `maxToolSteps` (default 3), `harnessArgsMode` (`"typed"`), `fallbackToolOnlyPhrase`, `citations: { enabled }`, `knowledgeContext: { enabled, maxChars, retrieve }`, `emitLlmUsage`, `onLlmUsage`, `enablePlanLayout`, `review: { enabled }`, `support`
+- `ChatEngine` options (pass via `createFreeBird` or `new ChatEngine`): `maxToolSteps` (default 3), `harnessArgsMode` (`"per_action"`; `"catalog"` is one tool for the whole app), `toolBudgetBytes` (none unless set), `narrowToActive` (off: on-screen is context), `navigation: { enabled }` (`open_component`), `fallbackToolOnlyPhrase`, `citations: { enabled }`, `knowledgeContext: { enabled, maxChars, retrieve }`, `emitLlmUsage`, `onLlmUsage`, `enablePlanLayout`, `review: { enabled }`, `support`
 - `solveLayout(registry, intent, { locked })` — deterministic 12-column packer
 - Action pipeline: `validateActionArgs`, `runAction`, `runAuthorize`, `runActionPreflight`
+- `domAnchor` on a component: where citations and `open_component` land
+- Showing a change: `withCitation(result, { title, page?, selector?, summary? })` (the server saves a line with a citation chip), `citationOf(result)`, `revealSelector({ component, item?, field? })` over `data-freebird-*` attributes
 - Adapter interfaces to implement for BYO infra: `DbAdapter`, `LlmAdapter`, `EmailAdapter` (in `@freebirdai/core` — see `src/adapters/`)
 - Test doubles: `@freebirdai/core/testing` → `MemoryDb`, `FakeLlm`, `FakeEmail`
 
@@ -90,7 +92,7 @@ for await (const event of fb.chat.send(
 
 ## Common pitfalls
 
-- **Actions silently unavailable** → the client's `activeComponentIds` doesn't include the component. Empty array = ALL actions exposed (that's intentional for cross-page navigation).
+- **Actions silently unavailable** → the engine was built with `narrowToActive: true` and the client's `activeComponentIds` doesn't include the component. By default every action is offered and `activeComponentIds` is only context.
 - **`authorize` missing on a sensitive action** → `setActiveComponentIds` is UX scoping, not security. Every action that mutates must have `authorize(args, ctx)`; it runs on every execution path (HTTP, chat, MCP).
 - **Empty assistant bubbles** → don't handle this client-side; the engine always persists a message. Customize wording with `fallbackToolOnlyPhrase` (it wins over the generic summary, loses to tool-result summaries).
 - **Grid validation errors** → a component needs either `sizes[]` or both `minW` and `minH`.
