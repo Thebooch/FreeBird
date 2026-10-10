@@ -27,6 +27,12 @@ export interface HarnessTurn {
   systemMessages: LlmMessage[];
   phase: ActionState["phase"];
   activeActionIds: string[];
+  /**
+   * How many of `systemMessages`, from the first, read the same on every
+   * turn (the list of actions), as opposed to describing this turn's state.
+   * The engine puts its cache point after them.
+   */
+  stableMessages: number;
 }
 
 /**
@@ -167,7 +173,7 @@ export const buildHarnessTurn = (
    * instead of a condition repeated in every phase branch.
    */
   if (!allowsActions(mode)) {
-    return { tools: {}, systemMessages: [], phase, activeActionIds: [] };
+    return { tools: {}, systemMessages: [], phase, activeActionIds: [], stableMessages: 0 };
   }
 
   const candidateActions = offeredActions(registry, activeComponentIds, input.narrowToActive).map((entry) => ({
@@ -181,6 +187,7 @@ export const buildHarnessTurn = (
 
   const tools: Record<string, LlmTool> = {};
   const systemMessages: LlmMessage[] = [];
+  let stableMessages = 0;
 
   if (phase === "idle" || phase === "error") {
     if (candidateActions.length > 0) {
@@ -205,6 +212,8 @@ export const buildHarnessTurn = (
           tools[tool.name] = tool;
         }
       }
+      // The list of actions; what follows (paused work) is this turn's own.
+      stableMessages = systemMessages.length;
     }
     if (pausedRecords.length > 0) {
       tools.resume_action = buildResumeActionTool(pausedRecords);
@@ -264,6 +273,7 @@ export const buildHarnessTurn = (
     systemMessages,
     phase,
     activeActionIds: candidateActions.map((c) => c.ref),
+    stableMessages,
   };
 };
 

@@ -4,6 +4,16 @@ export interface LlmMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
   toolCallId?: string;
+  /**
+   * Everything up to and including this message — the tools, then the
+   * messages before it — is the same from one call to the next, so a provider
+   * may cache it. A hint, never a requirement: an adapter whose provider caches
+   * only when asked (Anthropic) marks its cache point here; one whose provider
+   * caches a repeated prefix by itself (OpenAI, and servers such as vLLM,
+   * SGLang or llama.cpp) or not at all ignores it, and the request is the same
+   * either way. At most one message in a call carries it.
+   */
+  cachePoint?: boolean;
 }
 
 /**

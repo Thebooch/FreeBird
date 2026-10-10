@@ -939,8 +939,9 @@ export class ChatEngine {
         if (step > 0 || forceTextOnlyStep) {
           // Nudge the model that we're now in an inner step continuation —
           // it should respond with a brief plain-text turn (a question or
-          // confirmation summary) rather than re-emitting tool calls.
-          messages.splice(1, 0, {
+          // confirmation summary) rather than re-emitting tool calls. After
+          // the list of actions, which reads the same on every step.
+          messages.splice(1 + harness.stableMessages, 0, {
             role: "system",
             content: renderInnerStepHint(actionState, {
               layoutCaptured: layoutIntent !== undefined,
@@ -950,6 +951,15 @@ export class ChatEngine {
             }),
           });
         }
+
+        /*
+         * The cache point. The tools, the system prompt and the list of
+         * actions read the same from turn to turn; everything this turn adds
+         * comes after them. Providers that cache a repeated prefix by
+         * themselves reuse it without being told; an adapter whose provider
+         * caches only when asked marks it here. Nothing else changes.
+         */
+        messages[harness.stableMessages] = { ...messages[harness.stableMessages]!, cachePoint: true };
 
         // 4b. Stream this step.
         let stepText = "";
@@ -1802,9 +1812,12 @@ export class ChatEngine {
       typeof this.finalReplyLlm === "function"
         ? this.finalReplyLlm()
         : (this.finalReplyLlm ?? ctx.llm);
+    const [first, ...rest] = ctx.baseMessages;
     for await (const chunk of llm.stream({
       messages: [
-        ...ctx.baseMessages,
+        // The system prompt is the same on every reply: the cache point.
+        ...(first ? [{ ...first, cachePoint: true }] : []),
+        ...rest,
         {
           role: "system",
           content: prompt,

@@ -139,6 +139,12 @@ the most ubiquitous behaviour and can be opted out of per-host.
 - **On screen is context** — `activeComponentIds` (and `setFocus` for the one
   item open) tell the model what "this" means; every action stays offered.
   `narrowToActive: true` restores the old filter.
+- **Prompt caching** — each step opens with what reads the same every turn
+  (tools, system prompt, the list of actions), so providers that cache a
+  repeated prefix by themselves reuse it; `LlmMessage.cachePoint` marks the
+  end for adapters whose provider caches only when asked (Anthropic,
+  `promptCache` option). Nothing depends on it: without caching the request
+  is the same.
 - **`navigation: { enabled }`** *(default off)* — an `open_component` tool for
   "take me to …", emitting a citation-shaped `navigate` event the client
   follows like a chip (`useNavigationRequests` → `activateCitation`).

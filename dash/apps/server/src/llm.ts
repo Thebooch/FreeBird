@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { LlmAdapter, LlmTokenUsage, LlmTool } from "@freebirdai/dash-agent";
+import type { LlmAdapter, LlmMessage, LlmTokenUsage, LlmTool } from "@freebirdai/dash-agent";
 import { z } from "zod";
 import {
   DEFAULT_MODEL_BY_PROVIDER,
@@ -438,6 +438,36 @@ export const openAiAdapter = (
   return { defaultModel, stream, generate };
 };
 
+/** Between system messages, as the provider reads them. */
+const SYSTEM_JOIN = "\n\n";
+
+type AnthropicSystemBlock = { type: "text"; text: string; cache_control?: { type: "ephemeral" } };
+
+/**
+ * The system prompt as Anthropic takes it.
+ *
+ * Anthropic caches only where a request asks it to, so a message's
+ * `cachePoint` (`@freebirdai/contracts`) splits the system prompt in two
+ * blocks: up to and including that message, marked for the cache, and the
+ * rest. The tools come before the system prompt, so they are cached with it.
+ * With no cache point it is the one string it always was, and the model reads
+ * the same words either way.
+ */
+export const anthropicSystem = (messages: readonly LlmMessage[]): string | AnthropicSystemBlock[] | undefined => {
+  const system = messages.filter((message) => message.role === "system");
+  const joined = (part: readonly LlmMessage[]) => part.map((message) => message.content).join(SYSTEM_JOIN);
+  const point = system.findIndex((message) => message.cachePoint);
+  const stable = joined(system.slice(0, point + 1));
+  if (point < 0 || !stable) return joined(system) || undefined;
+  const rest = joined(system.slice(point + 1));
+  // The separator opens the second block, so the cached one reads the same
+  // whatever follows it.
+  return [
+    { type: "text", text: stable, cache_control: { type: "ephemeral" } },
+    ...(rest ? [{ type: "text" as const, text: SYSTEM_JOIN + rest }] : []),
+  ];
+};
+
 export const anthropicAdapter = (
   apiKey: string,
   options: { model?: string } = {},
@@ -448,10 +478,7 @@ export const anthropicAdapter = (
     const tools = toolPayloads(opts.tools);
     const model = opts.model ?? defaultModel;
     const { supportsTemperature } = capabilitiesFor(model);
-    const system = opts.messages
-      .filter((message) => message.role === "system")
-      .map((message) => message.content)
-      .join("\n\n");
+    const system = anthropicSystem(opts.messages);
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -561,10 +588,7 @@ export const anthropicAdapter = (
     const tools = toolPayloads(opts.tools);
     const model = opts.model ?? defaultModel;
     const { supportsTemperature } = capabilitiesFor(model);
-    const system = opts.messages
-      .filter((message) => message.role === "system")
-      .map((message) => message.content)
-      .join("\n\n");
+    const system = anthropicSystem(opts.messages);
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",

@@ -81,6 +81,7 @@ for await (const event of fb.chat.send(
 - `domAnchor` on a component: where citations and `open_component` land
 - Showing a change: `withCitation(result, { title, page?, selector?, summary? })` (the server saves a line with a citation chip), `citationOf(result)`, `revealSelector({ component, item?, field? })` over `data-freebird-*` attributes
 - Adapter interfaces to implement for BYO infra: `DbAdapter`, `LlmAdapter`, `EmailAdapter` (in `@freebirdai/core` — see `src/adapters/`)
+- Prompt caching, with or without the provider's help: every step opens with what reads the same each turn (tools, system prompt, the list of actions), so a provider that caches a repeated prefix by itself (OpenAI, vLLM, SGLang, llama.cpp) reuses it, and the last of those messages carries `cachePoint: true` for an adapter whose provider caches only when asked (Anthropic). An `LlmAdapter` for a provider without caching ignores it. Keep anything that changes per turn out of `systemPrompt`.
 - Test doubles: `@freebirdai/core/testing` → `MemoryDb`, `FakeLlm`, `FakeEmail`
 
 ## Works with

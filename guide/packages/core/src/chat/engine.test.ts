@@ -7,7 +7,7 @@ import { FakeLlm, type FakeLlmResponse } from "../testing/fakeLlm.js";
 import { MemoryDb } from "../testing/memoryDb.js";
 import type { AuthContext } from "../types.js";
 import type { ActionState } from "../actions/types.js";
-import type { LlmAdapter, LlmGenerateOptions, LlmStreamChunk, LlmTool } from "../adapters/llm.js";
+import type { LlmAdapter, LlmGenerateOptions, LlmMessage, LlmStreamChunk, LlmTool } from "../adapters/llm.js";
 
 const auth: AuthContext = { userId: "u1" };
 
@@ -1092,6 +1092,69 @@ describe("ChatEngine — the whole app from one conversation", () => {
     expect(llm.seen[1]?.messages).toContain("digest:configure_digest");
     expect(llm.seen[1]?.messages).toContain("You looked actions up above.");
     expect(events.find((event) => event.kind === "action_started")).toMatchObject({ action: { componentId: "digest", actionId: "configure_digest" } });
+  });
+});
+
+describe("ChatEngine — a prefix a provider can cache", () => {
+  /** A fake model that keeps every message list it was sent. */
+  class KeepingLlm extends FakeLlm {
+    readonly calls: LlmMessage[][] = [];
+    override async *stream<TTools extends Record<string, LlmTool> = {}>(opts: LlmGenerateOptions<TTools>): AsyncIterable<LlmStreamChunk> {
+      this.calls.push(opts.messages.map((message) => ({ ...message })));
+      yield* super.stream(opts);
+    }
+  }
+  const pointsOf = (messages: LlmMessage[]) => messages.flatMap((message, index) => (message.cachePoint ? [index] : []));
+
+  it("marks the end of what reads the same every turn: the system prompt, then the list of actions", async () => {
+    const { registry, db, knowledge } = setup();
+    const llm = new KeepingLlm([
+      { kind: "text", text: "One." },
+      { kind: "text", text: "Two." },
+    ]);
+    const { sessionId, pendingState } = await startCollecting(llm, db);
+    const engine = new ChatEngine({ db, llm, registry, knowledge, harnessArgsMode: "catalog", systemPrompt: "You help." });
+    await collect(engine.send({ sessionId, text: "hi", actionState: pendingState, activeComponentIds: ["digest"] }, auth));
+    await collect(engine.send({ sessionId, text: "and the settings?", actionState: pendingState, activeComponentIds: ["settings"] }, auth));
+
+    const [first, second] = llm.calls;
+    expect(pointsOf(first!)).toEqual([1]);
+    expect(first![0]!.content).toBe("You help.");
+    expect(first![1]!.content).toContain("Everything you can do in this app");
+    /* A different question on a different screen: the same prefix, word for word. */
+    expect(second!.slice(0, 2)).toEqual(first!.slice(0, 2));
+    expect(second!.slice(2)).not.toEqual(first!.slice(2));
+  });
+
+  it("marks only the system prompt while an action is under way, and keeps a step's hint after the list", async () => {
+    const { registry, db, knowledge } = setup();
+    const llm = new KeepingLlm([
+      { kind: "toolCall", name: "start_action", args: { action: "digest:configure_digest", args: { email: "a@b.co" } } },
+      { kind: "text", text: "Which frequency?" },
+    ]);
+    const { sessionId, pendingState } = await startCollecting(llm, db);
+    const engine = new ChatEngine({ db, llm, registry, knowledge, harnessArgsMode: "catalog", systemPrompt: "You help." });
+    await collect(engine.send({ sessionId, text: "digest to a@b.co", actionState: pendingState }, auth));
+
+    expect(pointsOf(llm.calls[0]!)).toEqual([1]);
+    /* Collecting: the list is gone, so the point is the system prompt, and the step's hint comes after it. */
+    expect(pointsOf(llm.calls[1]!)).toEqual([0]);
+    expect(llm.calls[1]![0]!.content).toBe("You help.");
+  });
+
+  it("marks the system prompt of the written reply, and leaves the conversation unmarked", async () => {
+    const { registry, db, knowledge } = setup();
+    const llm = new KeepingLlm([
+      { kind: "text", text: "Draft." },
+      { kind: "text", text: "Final." },
+    ]);
+    const { sessionId, pendingState } = await startCollecting(llm, db);
+    const engine = new ChatEngine({ db, llm, registry, knowledge, systemPrompt: "You help.", finalReply: { mode: "always" } });
+    await collect(engine.send({ sessionId, text: "hi", actionState: pendingState }, auth));
+
+    const reply = llm.calls.at(-1)!;
+    expect(pointsOf(reply)).toEqual([0]);
+    expect(reply.filter((message) => message.role !== "system").some((message) => message.cachePoint)).toBe(false);
   });
 });
 
