@@ -30,9 +30,13 @@ export const DASH_REPORTS_STYLES = `
 .dash-reports__form textarea { min-height: 64px; }
 .dash-reports__widgets {
   margin: 0; padding: var(--dash-space-2) var(--dash-space-3); border: 1px solid var(--dash-border); border-radius: var(--dash-radius-sm);
-  display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow: auto;
+  display: flex; flex-direction: column; gap: 6px; max-height: 360px; overflow: auto;
 }
 .dash-reports__widgets legend { padding: 0 4px; }
+.dash-reports__widget { display: flex; flex-direction: column; gap: 6px; }
+.dash-reports__widget[data-picked="true"] { padding-bottom: 4px; }
+.dash-reports__emphasis-line { margin-left: 26px; font: inherit; font-size: var(--dash-text-xs); }
+.dash-reports .dash-reports__emphasis { min-height: 56px; }
 .dash-reports__check { display: flex; align-items: center; gap: var(--dash-space-2); font-size: var(--dash-text-sm); color: var(--dash-ink); cursor: pointer; }
 .dash-reports__preview {
   position: sticky; top: 0; display: flex; flex-direction: column; gap: var(--dash-space-2);

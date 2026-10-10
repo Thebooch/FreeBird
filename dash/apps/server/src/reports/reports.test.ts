@@ -22,7 +22,7 @@ import { openDashDb } from "../platform/db.js";
 import { MemoryPublicTokenStore } from "../public/tokens.js";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
-import { TRACKED_DASHBOARD } from "./build.js";
+import { TRACKED_DASHBOARD, visualOf } from "./build.js";
 import { aggregateRows, type TrackedReader, type WidgetReader, type WidgetReading } from "./read.js";
 import { ReportError, ReportService } from "./service.js";
 import { DbReportStore, MemoryReportStore, type ReportStore } from "./store.js";
@@ -160,8 +160,10 @@ describe("building a report", () => {
     expect(preview.subject).toBe("Monday properties · Monday, October 12, 2026");
     expect(preview.html.indexOf("Vacancies")).toBeLessThan(preview.html.indexOf("Vacant units"));
     expect(preview.html).toContain("Vacancies are at <strong>3</strong>, up from 2.");
-    expect(preview.text).toContain("Vacancies: 3 (+1 (+50%) since Oct 5)");
-    expect(preview.text).toContain("1A | 1200");
+    expect(preview.text).toContain("Vacancies\n  3 (+1 (+50%) since Oct 5)");
+    /* The table becomes how many there are and the first few, not a copy of the table. */
+    expect(preview.text).toContain("Vacant units\n  2 records\n  - 1A");
+    expect(preview.text.indexOf("PROPERTIES")).toBeLessThan(preview.text.indexOf("Vacancies are at 3"));
     expect(preview.text).toContain("Every Monday at 08:00 (America/Chicago)");
     expect(preview.html).toContain("https://dash.acme.test/#/d/props");
   });
@@ -170,7 +172,7 @@ describe("building a report", () => {
     const llm = { generate: async () => Promise.reject(new Error("model down")) } as unknown as ReturnType<typeof fakeLlm>;
     const { service } = setup({ llm });
     const preview = await service.preview(weekly);
-    expect(preview.warnings.join(" ")).toMatch(/summary could not be written/);
+    expect(preview.warnings.join(" ")).toMatch(/summaries could not be written/);
     expect(preview.html).toContain("Vacant units");
   });
 
@@ -186,6 +188,52 @@ describe("building a report", () => {
     } as never;
     await service.preview({ ...weekly, summary: "none", blocks: [{ kind: "widget", dashboard: "props", widget: "units" }, { kind: "tab", dashboard: "props" }] });
     expect(reads).toBe(2);
+  });
+});
+
+describe("a report of picked widgets", () => {
+  it("gives each widget its own summary, answering what its reader asked, then its picture", async () => {
+    const llm = fakeLlm([{ text: `{"p1": "Yes: **3** units are vacant, one more than last week.", "p2": "Two units are listed; 1A rents for 1200."}` }]);
+    const { service } = setup({ llm });
+    const preview = await service.preview({
+      ...weekly,
+      blocks: [
+        { kind: "widget", dashboard: "props", widget: "vacant", emphasis: "Did vacancies go up?" },
+        { kind: "widget", dashboard: "props", widget: "units" },
+      ],
+    });
+    const text = preview.text;
+    expect(text.indexOf("Yes: 3 units")).toBeGreaterThan(text.indexOf("Vacancies"));
+    expect(text.indexOf("  3")).toBeGreaterThan(text.indexOf("Yes: 3 units"));
+    expect(text.indexOf("Two units are listed")).toBeGreaterThan(text.indexOf("Vacant units"));
+    const asked = JSON.stringify(llm.calls[0]?.messages);
+    expect(asked).toContain("Did vacancies go up?");
+    expect(asked).toContain("readerWantsToKnow");
+  });
+});
+
+describe("report pictures", () => {
+  const show = (value: unknown) => String(value);
+  it("draw values by category as bars, largest first, and count the rest", () => {
+    const widget = { ...board.widgets[0]!, component: "bar", roles: { category: "status", value: "n" } } as never;
+    const rows = ["a", "b", "c", "d", "e", "f", "g"].map((status, index) => ({ status, n: index + 1 }));
+    const { visual } = visualOf(widget, { rows, columns: [], warnings: [] }, show);
+    expect(visual).toMatchObject({ kind: "bars", more: 1, moreText: "1" });
+    expect(visual.kind === "bars" && visual.bars.map((bar) => bar.label)).toEqual(["g", "f", "e", "d", "c", "b"]);
+  });
+
+  it("draw a series over time as a trend with its change", () => {
+    const widget = { ...board.widgets[0]!, component: "timeseries", roles: { time: "day", value: "n" } } as never;
+    const rows = [{ day: "2026-10-01", n: 4 }, { day: "2026-10-02", n: 6 }, { day: "2026-10-02", n: 2 }];
+    const { visual } = visualOf(widget, { rows, columns: [], warnings: [] }, show);
+    expect(visual).toMatchObject({ kind: "trend", latest: "8", change: { direction: "up" } });
+  });
+
+  it("count a board's records by their group", () => {
+    const widget = { ...board.widgets[0]!, component: "board", roles: { group: "status", title: "name" } } as never;
+    const rows = [{ status: "open" }, { status: "open" }, { status: "done" }];
+    const { visual } = visualOf(widget, { rows, columns: [], warnings: [] }, show);
+    expect(visual.kind === "bars" && visual.bars).toEqual([{ label: "open", value: 2, text: "2" }, { label: "done", value: 1, text: "1" }]);
   });
 });
 
@@ -312,7 +360,7 @@ describe("tracked values", () => {
     expect((await service.trackedHistory(tracked.id)).since).toBe("2026-10-12");
 
     const preview = await service.preview({ ...weekly, summary: "none", blocks: [{ kind: "value", tracked: tracked.id, window: "7d" }] });
-    expect(preview.text).toContain("Open work orders at 123 Main: 6 (+2 (+50%) since Oct 12)");
+    expect(preview.text).toContain("Open work orders at 123 Main\n  6 (+2 (+50%) since Oct 12)");
 
     const report = await service.create(principal, { ...weekly, blocks: [{ kind: "value", tracked: tracked.id, window: "7d" }] });
     await expect(service.removeTracked(tracked.id)).rejects.toThrow(/still shows/);

@@ -886,11 +886,11 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * assistant's `create_dashboard` — and two id rules would eventually
    * disagree about what "Finance" is called.
    */
-  const createDashboardSpec = (title: string): DashboardSpec => {
+  const createDashboardSpec = (title: string, bar?: number): DashboardSpec => {
     /* The same slug rule onboarding reserves its board ids by. */
     const id = allocateDashboardId(title, new Set(store.listDashboards().map((board) => board.id)));
 
-    const parsed = dashboardSchema.safeParse({ id, title, widgets: [] });
+    const parsed = dashboardSchema.safeParse({ id, title, widgets: [], ...(bar ? { bar } : {}) });
     if (!parsed.success) {
       throw new Error(
         `invalid dashboard: ${parsed.error.issues
@@ -2512,6 +2512,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       id: dashboard.id,
       title: dashboard.title,
       description: dashboard.description,
+      /* Which tab bar it sits on: the first, unless it was made on another. */
+      bar: dashboard.bar ?? 0,
       widgets: dashboard.widgets.length,
       updatedAt: dashboard.updatedAt,
     })),
@@ -2817,11 +2819,13 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * to invent an id — and then two callers (the nav and the assistant) invent
    * them differently and collide. Slugify here, suffix on collision, one rule.
    */
-  app.post<{ Body: { title?: string } }>("/api/dashboards", async (request, reply) => {
+  app.post<{ Body: { title?: string; bar?: unknown } }>("/api/dashboards", async (request, reply) => {
     const title = (request.body?.title ?? "").trim();
     if (!title) return reply.status(400).send({ error: "a title is required" });
+    const bar = request.body?.bar;
+    if (bar !== undefined && !(Number.isInteger(bar) && (bar as number) >= 0 && (bar as number) <= 999)) return reply.status(400).send({ error: "bar is a whole number from 0 to 999" });
     try {
-      const created = createDashboardSpec(title);
+      const created = createDashboardSpec(title, bar as number | undefined);
       // The stored copy, so the caller leaves with the version to quote in its
       // next `If-Match`. Returning the pre-write spec meant every new board
       // started with no version and its first save could not be guarded.

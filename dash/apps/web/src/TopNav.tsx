@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ModelPicker } from "./ModelPicker.jsx";
+import { barFor, barOf, barsOf, stepBar } from "./tabBars.js";
 
 /**
  * The workspace nav: which board you are on, and everywhere you can go next.
@@ -24,6 +25,8 @@ import { ModelPicker } from "./ModelPicker.jsx";
 export interface NavTab {
   readonly id: string;
   readonly title: string;
+  /** Which tab bar it sits on (`tabBars.ts`). Absent: the first. */
+  readonly bar?: number | undefined;
 }
 
 /** Which half of the app the bar is for: the user's own boards, or the agent's fixed sections. */
@@ -46,7 +49,8 @@ export interface TopNavProps {
   readonly tabs: readonly NavTab[];
   readonly activeId: string | null;
   readonly onSelect: (id: string) => void;
-  readonly onCreate: () => void;
+  /** Make a tab on this bar. */
+  readonly onCreate: (bar: number) => void;
   readonly onRename: (id: string, title: string) => void;
   readonly onDelete: (id: string) => void;
   readonly onConnect: () => void;
@@ -174,10 +178,39 @@ export const TopNav = ({
   const railRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // Nothing to edit once the last board is gone.
+  /*
+   * Which tab bar is showing. It follows the open tab, and the arrows move it
+   * without opening anything: a bar is browsed, then a tab on it is picked.
+   */
+  const bars = barsOf(tabs);
+  const [shownBar, setShownBar] = useState(() => barFor(tabs, activeId));
+  /* When the open tab, or its bar, changes: a rename or a new tab elsewhere leaves the bar being browsed. */
+  const activeBar = barFor(tabs, activeId);
+  useEffect(() => setShownBar(activeBar), [activeId, activeBar]);
+  const onBar = tabs.filter((tab) => barOf(tab) === shownBar);
+  const barIndex = Math.max(0, bars.indexOf(shownBar));
+
+  /* Arrows at the rail's ends while its tabs are wider than it. */
+  const [overflow, setOverflow] = useState({ left: false, right: false });
   useEffect(() => {
-    if (tabs.length === 0) setEditing(false);
-  }, [tabs.length]);
+    const rail = railRef.current;
+    if (!rail) return undefined;
+    const measure = () => setOverflow({ left: rail.scrollLeft > 1, right: rail.scrollLeft + rail.clientWidth < rail.scrollWidth - 1 });
+    measure();
+    rail.addEventListener("scroll", measure, { passive: true });
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(rail);
+    return () => {
+      rail.removeEventListener("scroll", measure);
+      observer?.disconnect();
+    };
+  }, [onBar.length, shownBar, editing, mode]);
+  const scrollRail = (direction: 1 | -1) => railRef.current?.scrollBy({ left: direction * Math.max(160, (railRef.current?.clientWidth ?? 0) * 0.6), behavior: "smooth" });
+
+  // Nothing to edit once the last board on this bar is gone.
+  useEffect(() => {
+    if (onBar.length === 0) setEditing(false);
+  }, [onBar.length]);
 
   // Click away or press Escape to dismiss, the way every other menu behaves.
   useEffect(() => {
@@ -239,6 +272,12 @@ export const TopNav = ({
         )}
       </span>
 
+      <div className="dash-nav__tabs">
+      {overflow.left && (
+        <button type="button" className="dash-nav__scroll" data-side="left" onClick={() => scrollRail(-1)} aria-label="Scroll tabs left" data-testid="nav-scroll-left">
+          ‹
+        </button>
+      )}
       <div
         className="dash-nav__rail"
         ref={railRef}
@@ -260,14 +299,14 @@ export const TopNav = ({
               {section.title}
             </button>
           ))
-        ) : tabs.length === 0 ? (
-          <span className="dash-nav__hint">No dashboards yet</span>
+        ) : onBar.length === 0 ? (
+          <span className="dash-nav__hint">{tabs.length === 0 ? "No dashboards yet" : "An empty bar: add a tab to start it"}</span>
         ) : editing ? (
-          tabs.map((tab) => (
+          onBar.map((tab) => (
             <EditableTab key={tab.id} tab={tab} onRename={onRename} onDelete={onDelete} />
           ))
         ) : (
-          tabs.map((tab) => (
+          onBar.map((tab) => (
             <button
               key={tab.id}
               type="button"
@@ -282,21 +321,49 @@ export const TopNav = ({
             </button>
           ))
         )}
-
-        {!boardless && (
-          <button
-            type="button"
-            className="dash-nav__add"
-            onClick={onCreate}
-            data-testid="nav-new-tab"
-          >
-            ＋ New tab
-          </button>
-        )}
+      </div>
+      {overflow.right && (
+        <button type="button" className="dash-nav__scroll" data-side="right" onClick={() => scrollRail(1)} aria-label="Scroll tabs right" data-testid="nav-scroll-right">
+          ›
+        </button>
+      )}
       </div>
 
+      {/* Fixed at the rail's right edge, whatever the tabs do: a new tab on this bar, and the bars above and below. */}
+      {!boardless && (
+        <div className="dash-nav__bars">
+          <button type="button" className="dash-nav__add" onClick={() => onCreate(shownBar)} data-testid="nav-new-tab">
+            ＋ New tab
+          </button>
+          <span className="dash-nav__barnav" role="group" aria-label={`Tab bar ${barIndex + 1} of ${bars.length}`}>
+            <button
+              type="button"
+              className="dash-nav__barstep"
+              onClick={() => setShownBar(stepBar(bars, shownBar, 1))}
+              disabled={barIndex >= bars.length - 1}
+              title={barIndex === bars.length - 2 ? "The empty bar, to start a new one" : "Next tab bar"}
+              aria-label="Next tab bar"
+              data-testid="nav-bar-up"
+            >
+              <svg viewBox="0 0 12 8" aria-hidden="true"><path d="M1.5 6.5 6 2l4.5 4.5" /></svg>
+            </button>
+            <button
+              type="button"
+              className="dash-nav__barstep"
+              onClick={() => setShownBar(stepBar(bars, shownBar, -1))}
+              disabled={barIndex <= 0}
+              title="Previous tab bar"
+              aria-label="Previous tab bar"
+              data-testid="nav-bar-down"
+            >
+              <svg viewBox="0 0 12 8" aria-hidden="true"><path d="M1.5 1.5 6 6l4.5-4.5" /></svg>
+            </button>
+          </span>
+        </div>
+      )}
+
       <div className="dash-nav__actions">
-        {!boardless && tabs.length > 0 && (
+        {!boardless && onBar.length > 0 && (
           <button
             type="button"
             className="dash-nav__icon"

@@ -52,6 +52,8 @@ import { writesApi, type ConnectionWrites } from "./writes.js";
 export interface DashboardSummary {
   id: string;
   title: string;
+  /** Which tab bar it sits on (`tabBars.ts`). Absent: the first. */
+  bar?: number;
 }
 
 /**
@@ -531,11 +533,11 @@ const App = (): JSX.Element => {
   const reload = (): void => setReloadToken((token) => token + 1);
 
   /** Create a board and land on it, so the click has a visible result. */
-  const createDashboard = async (): Promise<void> => {
+  const createDashboard = async (bar = 0): Promise<void> => {
     const response = await fetch("/api/dashboards", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title: "New tab" }),
+      body: JSON.stringify({ title: "New tab", ...(bar > 0 ? { bar } : {}) }),
     });
     if (!response.ok) return;
     const created = (await response.json()) as DashboardSummary;
@@ -1226,7 +1228,7 @@ const App = (): JSX.Element => {
       tabs={live.available}
       activeId={live.dashboard?.id ?? null}
       onSelect={(id) => navigate({ kind: "board", dashboardId: id })}
-      onCreate={() => void createDashboard()}
+      onCreate={(bar) => void createDashboard(bar)}
       onRename={(id, title) => void renameDashboard(id, title)}
       onDelete={(id) => void deleteDashboard(id)}
       onConnect={() => setConnectionsOpen(true)}

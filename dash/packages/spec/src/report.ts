@@ -60,13 +60,24 @@ export type TrackedValue = z.infer<typeof trackedValueSchema>;
 export const trackedValueInputSchema = trackedValueSchema.omit({ id: true, createdAt: true, updatedAt: true });
 export type TrackedValueInput = z.input<typeof trackedValueInputSchema>;
 
+/**
+ * What the reader cares about most, in their words ("Did a leak come up?"):
+ * the summary for that block answers it first. Optional.
+ */
+const emphasisSchema = z.string().trim().max(500).optional();
+
+/**
+ * A report is read as parts. A whole tab is one part: one summary, then each
+ * widget as a picture of its numbers. A widget picked on its own, or a
+ * tracked value, is a part of its own: its summary, then its picture.
+ */
 export const reportBlockSchema = z.discriminatedUnion("kind", [
   /** A tracked value: where it is now, and how it moved over the window. */
-  z.object({ kind: z.literal("value"), tracked: z.string().min(1), window: z.enum(REPORT_WINDOWS).default("30d") }),
-  /** One widget, as it reads at send time. */
-  z.object({ kind: z.literal("widget"), dashboard: z.string().min(1), widget: z.string().min(1) }),
-  /** A whole tab: every widget on it, in the order the tab shows them. */
-  z.object({ kind: z.literal("tab"), dashboard: z.string().min(1) }),
+  z.object({ kind: z.literal("value"), tracked: z.string().min(1), window: z.enum(REPORT_WINDOWS).default("30d"), emphasis: emphasisSchema }),
+  /** One widget, as it reads at send time, with a summary of its own. */
+  z.object({ kind: z.literal("widget"), dashboard: z.string().min(1), widget: z.string().min(1), emphasis: emphasisSchema }),
+  /** A whole tab: one summary, then every widget on it in the order the tab shows them. */
+  z.object({ kind: z.literal("tab"), dashboard: z.string().min(1), emphasis: emphasisSchema }),
   /** A note in the report's own words. */
   z.object({ kind: z.literal("text"), markdown: z.string().trim().min(1).max(4000) }),
 ]);
