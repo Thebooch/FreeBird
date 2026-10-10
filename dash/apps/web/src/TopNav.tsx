@@ -300,7 +300,7 @@ export const TopNav = ({
             </button>
           ))
         ) : onBar.length === 0 ? (
-          <span className="dash-nav__hint">{tabs.length === 0 ? "No dashboards yet" : "An empty bar: add a tab to start it"}</span>
+          <span className="dash-nav__hint">{tabs.length === 0 ? "No dashboards yet" : "Add a tab to start a new bar"}</span>
         ) : editing ? (
           onBar.map((tab) => (
             <EditableTab key={tab.id} tab={tab} onRename={onRename} onDelete={onDelete} />
