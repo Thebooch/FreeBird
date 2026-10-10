@@ -1,6 +1,7 @@
 import { Badge, Button } from "@freebirdai/dash-components";
+import { useScreenChanged } from "../chatScreen.js";
 import { CONTACT_CHANNELS, fieldValueOf, type Contact, type ContactChannel, type ContactFieldDef } from "@freebirdai/dash-spec";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type ContactSource, type RecordTarget } from "../../api.js";
 import { colorVar } from "../calendar/model.js";
 import { Segmented } from "../calendar/controls.jsx";
@@ -44,6 +45,8 @@ const draftOf = (contact: Contact): Draft => ({
   ),
 });
 
+const SHEET_SCREENS = ["contacts"] as const;
+
 export const ContactSheet = ({
   id,
   fields,
@@ -70,6 +73,9 @@ export const ContactSheet = ({
   const [notes, setNotes] = useState<string[]>([]);
   const zones = useMemo(() => timeZones(), []);
 
+  /* A change the chat made to this contact shows here at once. */
+  const [revision, setRevision] = useState(0);
+  useScreenChanged(SHEET_SCREENS, useCallback(() => setRevision((n) => n + 1), []));
   useEffect(() => {
     void api.contact(id).then(
       (one) => {
@@ -78,7 +84,7 @@ export const ContactSheet = ({
       },
       (cause) => setFailed(cause instanceof Error ? cause.message : String(cause)),
     );
-  }, [id]);
+  }, [id, revision]);
 
   /** Runs one of the actions that change the contact at once, keeping what was typed. */
   const act = async (what: string, run: () => Promise<{ contact: Contact; problems?: readonly string[] } | Contact>) => {

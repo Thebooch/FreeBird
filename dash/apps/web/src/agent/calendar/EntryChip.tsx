@@ -1,5 +1,6 @@
 import type { CalendarEvent } from "@freebirdai/dash-spec";
 import { KIND_LABELS, STATUS_LABELS, colorVar, isAllDay, shortTime, timeLabel, type OwnerInfo } from "./model.js";
+import { itemAttrs } from "../chatScreen.js";
 
 /**
  * One entry, as the month grid shows it: its owner's colour down the left,
@@ -33,6 +34,7 @@ export const EntryChip = ({
       title={label}
       aria-label={label}
       data-testid="calendar-chip"
+      {...itemAttrs(entry.booking ?? entry.id)}
     >
       {entry.kind === "deadline" && (
         <span className="dash-cal-chip__flag" aria-hidden="true">

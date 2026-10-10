@@ -11,6 +11,7 @@ import { RuleBuilder } from "./RuleBuilder.jsx";
 import { SetupSheet } from "./SetupSheet.jsx";
 import { useContactFields } from "./useContactFields.js";
 import { useSetup } from "./useSetup.js";
+import { itemAttrs, screenAttrs, useChatFocus } from "../../chatScreen.js";
 
 /**
  * Blocks: named sets of rules and settings, placed on calendars.
@@ -26,6 +27,8 @@ export const BlocksTab = (): JSX.Element => {
   const { setup, error, canManage, reload } = useSetup();
   const [editing, setEditing] = useState<{ readonly id: string; readonly isNew: boolean } | null>(null);
   const [placing, setPlacing] = useState<{ readonly id: string; readonly block: string; readonly isNew: boolean } | null>(null);
+  const editingBlock = editing && !editing.isNew ? setup?.blocks.find((one) => one.id === editing.id) : undefined;
+  useChatFocus("blocks", editingBlock ? { id: editingBlock.id, label: editingBlock.name } : null);
 
   if (error && !setup) return <ErrorState message={error} onRetry={() => void reload()} />;
   if (!setup) return <p className="dash-hint">Loading…</p>;
@@ -36,7 +39,7 @@ export const BlocksTab = (): JSX.Element => {
       : (setup.profiles.find((one) => one.member === placement.target.id)?.displayName ?? placement.target.id);
 
   return (
-    <div className="dash-sched-tab" data-testid="scheduling-blocks">
+    <div className="dash-sched-tab" data-testid="scheduling-blocks" {...screenAttrs("blocks")}>
       <header className="dash-sched-tab__head">
         <p className="dash-sched-panel__lede">Rules for who can book, placed on calendars once or repeating. Blocks are never a preference: people they do not match cannot book in them.</p>
         {canManage && (
@@ -52,7 +55,7 @@ export const BlocksTab = (): JSX.Element => {
           {setup.blocks.map((block) => {
             const placements = setup.placements.filter((one) => one.block === block.id);
             return (
-              <article key={block.id} className="dash-sched-block" data-kind={block.kind} style={{ ["--cal-color" as string]: colorVar(block.color) }} data-testid="blocks-card">
+              <article key={block.id} className="dash-sched-block" data-kind={block.kind} style={{ ["--cal-color" as string]: colorVar(block.color) }} data-testid="blocks-card" {...itemAttrs(block.id)}>
                 <button type="button" className="dash-sched-block__head" onClick={() => setEditing({ id: block.id, isNew: false })}>
                   <span className="dash-sched-block__name">{block.name}</span>
                   <Badge tone={block.kind === "closed" ? "neutral" : block.kind === "blank" ? "warn" : "accent"}>{BLOCK_KIND_WORDS[block.kind].label}</Badge>

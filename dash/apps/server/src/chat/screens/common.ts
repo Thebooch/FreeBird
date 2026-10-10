@@ -1,5 +1,5 @@
 import { revealSelector, withCitation, type ActionContext, type ActionPreflightResult, type ActionPreviewRow, type ComponentDefinition } from "@freebirdai/core";
-import { principalSchema, type Permission, type Principal } from "@freebirdai/dash-spec";
+import { DASH_SCREENS, principalSchema, type Permission, type Principal } from "@freebirdai/dash-spec";
 import type { z } from "zod";
 
 /**
@@ -24,51 +24,51 @@ export interface Screen {
 
 export const SCREENS = {
   calendar: {
-    id: "calendar",
+    id: DASH_SCREENS.calendar.id,
     title: "Calendar",
-    page: "#/agent/calendar",
+    page: DASH_SCREENS.calendar.page,
     description: "Everything on the calendar: events, deadlines and appointments from agents, workflows and people; and each member's own calendar feed for their phone.",
   },
   bookings: {
-    id: "calendar-bookings",
+    id: DASH_SCREENS.bookings.id,
     title: "Bookings",
-    page: "#/agent/calendar",
+    page: DASH_SCREENS.bookings.page,
     description: "Appointments people booked or asked for: open times, booking for a contact, and every decision on a booking (confirm, deny, offer other times, move, reassign, cancel, mark how it went, links).",
   },
   types: {
-    id: "calendar-types",
+    id: DASH_SCREENS.types.id,
     title: "Appointment types",
-    page: "#/agent/calendar/types",
+    page: DASH_SCREENS.types.page,
     description: "What people can book: length, hosts, approval, who can book (rules), questions, location, public link, how agents offer it, and its settings.",
   },
   blocks: {
-    id: "calendar-blocks",
+    id: DASH_SCREENS.blocks.id,
     title: "Blocks",
-    page: "#/agent/calendar/blocks",
+    page: DASH_SCREENS.blocks.page,
     description: "Rules for who can book at which times (set, blank and closed blocks), and where they are placed on calendars, once or repeating.",
   },
   people: {
-    id: "calendar-people",
+    id: DASH_SCREENS.people.id,
     title: "People & pools",
-    page: "#/agent/calendar/people",
+    page: DASH_SCREENS.people.page,
     description: "Whose time can be booked: each host's hours, time zone and settings, and pools that share the work.",
   },
   settings: {
-    id: "calendar-settings",
+    id: DASH_SCREENS.settings.id,
     title: "Scheduling settings",
-    page: "#/agent/calendar/settings",
+    page: DASH_SCREENS.settings.page,
     description: "The defaults every booking starts from: buffer, notice, horizon, approval, holds, cancel and reschedule cut-offs.",
   },
   contacts: {
-    id: "contacts",
+    id: DASH_SCREENS.contacts.id,
     title: "Contacts",
-    page: "#/agent/contacts",
+    page: DASH_SCREENS.contacts.page,
     description: "Everyone who has booked or been added: their details and fields, the records they match, and their personal booking links.",
   },
   contactFields: {
-    id: "contact-fields",
+    id: DASH_SCREENS.contactFields.id,
     title: "Contact fields",
-    page: "#/agent/contacts/fields",
+    page: DASH_SCREENS.contactFields.page,
     description: "The facts contacts hold, where each comes from, and the rules that match contacts to records.",
   },
 } as const satisfies Record<string, Screen>;

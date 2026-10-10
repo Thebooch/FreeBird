@@ -5,7 +5,7 @@ import {
   replayPendingCitation,
 } from "@freebirdai/core";
 import { navigate, parseRoute } from "./route.js";
-import { showWidget } from "./showWidget.js";
+import { showElement, showWidget } from "./showWidget.js";
 
 /**
  * What sits under a reply: where it came from, and how far it looked.
@@ -130,7 +130,17 @@ export const widgetIdOf = (citation: ComponentCitation): string | null => {
   return match?.[1] ?? null;
 };
 
-const goToCitation = async (citation: ComponentCitation): Promise<void> => {
+/**
+ * A setting on one of the chat's screens — a type, a booking, a field — as
+ * opposed to the screen as a whole. The screen itself is only scrolled to;
+ * ringing a whole page says nothing about where to look.
+ */
+export const settingSelectorOf = (citation: ComponentCitation): string | null => {
+  const selector = citation.selector ?? "";
+  return selector.startsWith("[data-freebird-component") && selector.includes(" ") ? selector : null;
+};
+
+export const goToCitation = async (citation: ComponentCitation): Promise<void> => {
   /*
    * `directive: "scroll-to"` is the contract's own way of saying "move there,
    * I will do the highlight". `focusTarget` otherwise pulses a hardcoded blue,
@@ -154,6 +164,8 @@ const goToCitation = async (citation: ComponentCitation): Promise<void> => {
   if (outcome.detail === "navigating") await replayPendingCitation();
   const widgetId = widgetIdOf(citation);
   if (widgetId) showWidget(widgetId, { ring: "cited" });
+  const setting = settingSelectorOf(citation);
+  if (setting) showElement(setting, { ring: "cited" });
 };
 
 export const Citations = ({ message }: { readonly message: ChatMessage }): JSX.Element | null => {

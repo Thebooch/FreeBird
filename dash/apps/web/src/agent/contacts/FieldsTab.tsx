@@ -1,4 +1,5 @@
 import { Badge, Button, EmptyState, ErrorState } from "@freebirdai/dash-components";
+import { itemAttrs, screenAttrs, useChatFocus, useScreenChanged } from "../chatScreen.js";
 import {
   CONTACT_FIELD_KINDS,
   type ContactFieldDef,
@@ -23,6 +24,8 @@ import { KIND_WORDS, keyOfLabel, recordTypeWords, sourceWords } from "./model.js
  * link a contact to a record.
  */
 
+const FIELD_SCREENS = ["contactFields"] as const;
+
 export const FieldsTab = ({ canManage }: { readonly canManage: boolean }): JSX.Element => {
   const [setup, setSetup] = useState<ContactSetup | null>(null);
   const [sources, setSources] = useState<ContactSource[]>([]);
@@ -41,12 +44,18 @@ export const FieldsTab = ({ canManage }: { readonly canManage: boolean }): JSX.E
     void reload();
     if (canManage) void api.contactSources().then(setSources, () => undefined);
   }, [reload, canManage]);
+  /* What the chat changes here shows at once; what is open is what "this" means to it. */
+  useScreenChanged(FIELD_SCREENS, useCallback(() => void reload(), [reload]));
+  useChatFocus(
+    "contactFields",
+    editing?.kind === "field" && editing.def ? { id: editing.def.key, label: editing.def.label } : editing?.kind === "rule" && editing.rule ? { id: editing.rule.id, label: `${editing.rule.connection} ${editing.rule.entity}` } : null,
+  );
 
   if (error && !setup) return <ErrorState message={error} onRetry={() => void reload()} />;
   if (!setup) return <p className="dash-hint">Loading…</p>;
 
   return (
-    <div className="dash-sched-tab" data-testid="contact-fields">
+    <div className="dash-sched-tab" data-testid="contact-fields" {...screenAttrs("contactFields")}>
       <div className="dash-sched-columns">
         <section className="dash-sched-panel" aria-labelledby="contact-fields-title">
           <header className="dash-sched-panel__head">
@@ -67,7 +76,7 @@ export const FieldsTab = ({ canManage }: { readonly canManage: boolean }): JSX.E
           ) : (
             <ul className="dash-sched-list">
               {setup.fields.map((def) => (
-                <li key={def.key}>
+                <li key={def.key} {...itemAttrs(def.key)}>
                   <button type="button" className="dash-sched-item" onClick={() => canManage && setEditing({ kind: "field", def })} disabled={!canManage} data-testid="fields-row">
                     <span className="dash-contacts-kind" aria-hidden="true">
                       {KIND_GLYPHS[def.kind]}
@@ -113,7 +122,7 @@ export const FieldsTab = ({ canManage }: { readonly canManage: boolean }): JSX.E
           ) : (
             <ul className="dash-sched-list">
               {setup.matchRules.map((rule) => (
-                <li key={rule.id}>
+                <li key={rule.id} {...itemAttrs(rule.id)}>
                   <button type="button" className="dash-sched-item" onClick={() => canManage && setEditing({ kind: "rule", rule })} disabled={!canManage} data-testid="match-row">
                     <span className="dash-contacts-kind" aria-hidden="true">
                       ⇄

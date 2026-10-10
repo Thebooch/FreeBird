@@ -1,5 +1,5 @@
 /**
- * Put a widget in front of the user.
+ * Put a widget — or a setting the chat just changed — in front of the user.
  *
  * Three things now want this — a widget the assistant just built, an
  * `open_widget` action, and a citation chip — and they want it for the same
@@ -33,11 +33,13 @@ export interface ShowWidgetOptions {
 }
 
 /**
- * Scroll to a widget's tile and ring it. Returns a cancel function, so an
+ * Scroll to whatever `selector` names and ring it — a widget's tile, or a
+ * setting on one of the screens the chat can change (`data-freebird-item`
+ * inside a `data-freebird-component`). Returns a cancel function, so an
  * effect can stop looking when its input changes.
  */
-export const showWidget = (
-  widgetId: string,
+export const showElement = (
+  selector: string,
   options: ShowWidgetOptions = {},
 ): (() => void) => {
   const doc = options.doc ?? document;
@@ -46,16 +48,16 @@ export const showWidget = (
   let timer = 0;
 
   const look = (): void => {
-    const tile = doc.querySelector(`[data-widget-id="${CSS.escape(widgetId)}"]`);
-    if (!tile) {
+    const found = doc.querySelector(selector);
+    if (!found) {
       if (attempts++ < MAX_ATTEMPTS) timer = window.setTimeout(look, INTERVAL_MS);
       else options.onGaveUp?.();
       return;
     }
-    tile.setAttribute(`data-${ring}`, "true");
-    tile.scrollIntoView({ behavior: "smooth", block: "center" });
+    found.setAttribute(`data-${ring}`, "true");
+    found.scrollIntoView({ behavior: "smooth", block: "center" });
     timer = window.setTimeout(() => {
-      tile.removeAttribute(`data-${ring}`);
+      found.removeAttribute(`data-${ring}`);
       options.onGaveUp?.();
     }, RING_MS);
   };
@@ -63,3 +65,7 @@ export const showWidget = (
   look();
   return () => window.clearTimeout(timer);
 };
+
+/** Scroll to a widget's tile and ring it. */
+export const showWidget = (widgetId: string, options: ShowWidgetOptions = {}): (() => void) =>
+  showElement(`[data-widget-id="${CSS.escape(widgetId)}"]`, options);

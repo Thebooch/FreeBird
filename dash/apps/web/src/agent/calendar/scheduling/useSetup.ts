@@ -1,6 +1,9 @@
 import { ROLE_PERMISSIONS, type Principal } from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useState } from "react";
 import { api, type SchedulingOverview } from "../../../api.js";
+import { useScreenChanged } from "../../chatScreen.js";
+
+const SETUP_SCREENS = ["types", "blocks", "people", "settings"] as const;
 
 /**
  * Scheduling's setup, loaded once for a tab and loaded again after every
@@ -30,6 +33,8 @@ export const useSetup = (): {
     void reload();
     void api.me().then((who) => setMe(who.principal), () => undefined);
   }, [reload]);
+  /* What the chat changes on these screens shows here at once. */
+  useScreenChanged(SETUP_SCREENS, useCallback(() => void reload(), [reload]));
 
   return { setup, error, me, canManage: me ? ROLE_PERMISSIONS[me.role].includes("calendar.manage") : false, reload };
 };

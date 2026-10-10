@@ -6,6 +6,7 @@ import { SettingsEditor } from "./editors.jsx";
 import { SheetSection } from "./inputs.jsx";
 import { useContactFields } from "./useContactFields.js";
 import { useSetup } from "./useSetup.js";
+import { screenAttrs } from "../../chatScreen.js";
 
 /**
  * The workspace's own scheduling defaults: what applies everywhere unless a
@@ -39,7 +40,7 @@ export const SettingsTab = (): JSX.Element => {
   const changed = JSON.stringify(draft) !== JSON.stringify(setup.defaults);
 
   return (
-    <div className="dash-sched-tab dash-sched-tab--narrow" data-testid="scheduling-settings">
+    <div className="dash-sched-tab dash-sched-tab--narrow" data-testid="scheduling-settings" {...screenAttrs("settings")}>
       <header className="dash-sched-tab__head">
         <p className="dash-sched-panel__lede">What applies to every booking unless a person, an appointment type or a block says otherwise.</p>
         {canManage && (

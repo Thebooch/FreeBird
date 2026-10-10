@@ -1,6 +1,7 @@
 import { Button } from "@freebirdai/dash-components";
 import { useEffect, useRef, useState } from "react";
 import { api, type CalendarFeedInfo } from "../../api.js";
+import { itemAttrs } from "../chatScreen.js";
 
 /**
  * Your own calendar on your phone: a link a calendar app subscribes to,
@@ -64,7 +65,7 @@ export const CalendarFeed = (): JSX.Element => {
   };
 
   return (
-    <div className="dash-cal-feed" ref={root}>
+    <div className="dash-cal-feed" ref={root} {...itemAttrs("feed")}>
       <Button onClick={() => setOpen((held) => !held)} testId="calendar-feed" title="See your calendar on your phone">
         Subscribe
       </Button>

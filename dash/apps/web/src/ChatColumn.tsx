@@ -3,9 +3,10 @@ import {
   useActionState,
   useChat,
   useFreeBird,
+  useNavigationRequests,
   useSession,
 } from "@freebirdai/react";
-import type { ChatMessage } from "@freebirdai/core";
+import { transientOf, type ChatMessage } from "@freebirdai/core";
 import { Tabs } from "@freebirdai/dash-components";
 import { useCallback, useLayoutEffect, useMemo } from "react";
 import { useOptionalDashboard } from "@freebirdai/dash-react";
@@ -15,8 +16,10 @@ import { buildStream, dayLabel, mergeLive, reachesLatest, withDay, type StreamDa
 import { ChatTimeline } from "./chat/Timeline.jsx";
 import { ConciergeCard } from "./ConciergeCard";
 import { CHANGE_ACTIONS, ChatChangeCard } from "./ChatChangeCard.jsx";
+import { ChatActionCard, OnceCard } from "./ChatActionCard.jsx";
+import { announceScreenChange, isScreenId } from "./agent/chatScreen.js";
 import { writeStoredSession } from "./ChatSession.jsx";
-import { Citations, DigDeeper, OfferWidget } from "./MessageExtras.jsx";
+import { Citations, DigDeeper, OfferWidget, goToCitation } from "./MessageExtras.jsx";
 import { showWidget } from "./showWidget.js";
 
 /**
@@ -496,6 +499,26 @@ const ChatBody = ({
   /** The action the server is carrying out right now, if any. */
   const [running, setRunning] = useState<{ actionId: string; label?: string } | null>(null);
 
+  /*
+   * A value an approved change hands over once — a booking page link, a
+   * calendar feed — held here until dismissed. The server keeps it nowhere,
+   * so a reload is the end of it; the card says so.
+   */
+  const [handedOnce, setHandedOnce] = useState<{ title: string; values: Readonly<Record<string, string>> } | null>(null);
+  /** The title of what was last proposed, to name what it handed over. */
+  const proposedTitle = useRef<string | null>(null);
+  useEffect(() => {
+    const title = actions.pending?.preview?.title;
+    if (title) proposedTitle.current = title;
+  }, [actions.pending]);
+
+  /*
+   * "Take me to the booking settings" — the assistant asks for a screen, and
+   * it opens the way a citation chip does: same tab or not, then a ring on
+   * the thing named. Nothing moves unless the person asked.
+   */
+  useNavigationRequests(useCallback((target) => void goToCitation(target), []));
+
   const stream = useMemo(
     () => buildStream({ days, live, today, topics: topicNames }),
     [days, live, today, topicNames],
@@ -557,6 +580,19 @@ const ChatBody = ({
         // The id lives on the record; the event carries the args it ran with.
         const actionId = event.record.actionId;
         const args = (event.args ?? {}) as Record<string, unknown>;
+
+        /*
+         * A calendar or contacts screen: the change is already saved, so the
+         * screen reads again if it is open, and anything shown once is put
+         * where it can be copied. The chip under the outcome is how to get
+         * there — nothing here moves the page.
+         */
+        if (isScreenId(event.record.componentId)) {
+          announceScreenChange(event.record.componentId);
+          const once = transientOf(event.result);
+          if (once) setHandedOnce({ title: proposedTitle.current ?? "Shown once", values: once });
+          return;
+        }
 
         if (SETUP_ACTIONS.has(actionId)) {
           setSetupRevision((current) => current + 1);
@@ -831,34 +867,25 @@ const ChatBody = ({
               onCancel={() => actions.cancel()}
             />
           )}
-        {actions.pending && actions.phase === "awaiting_confirmation" && !CHANGE_ACTIONS.has(actions.pending.actionId) && (
-          <div className="dash-callout" data-testid="chat-confirm">
-            <strong>{actions.pending.label ?? actions.pending.actionId}</strong>
-            <div style={{ marginTop: 4 }}>
-              {actions.pending.actionId === "add_widget"
-                ? `Add "${String(actions.pending.args.widgetId ?? "")}" to this dashboard?`
-                : actions.pending.actionId === "remove_widget"
-                  ? `Remove "${String(actions.pending.args.widgetId ?? "")}" from this dashboard?`
-                  : "Apply this change?"}
-            </div>
-            <div className="dash-row dash-row--end" style={{ marginTop: 8, gap: 6 }}>
-              <button
-                className="dash-control"
-                onClick={() => void actions.cancel()}
-                data-testid="chat-confirm-cancel"
-              >
-                Cancel
-              </button>
-              <button
-                className="dash-control"
-                onClick={() => void actions.confirm()}
-                data-testid="chat-confirm-apply"
-              >
-                Apply
-              </button>
-            </div>
-          </div>
-        )}
+        {actions.pending &&
+          (actions.phase === "awaiting_confirmation" || actions.phase === "executing") &&
+          !CHANGE_ACTIONS.has(actions.pending.actionId) && (
+            <ChatActionCard
+              pending={actions.pending}
+              executing={actions.phase === "executing"}
+              fallbackSummary={
+                actions.pending.actionId === "add_widget"
+                  ? `Add "${String(actions.pending.args.widgetId ?? "")}" to this dashboard.`
+                  : actions.pending.actionId === "remove_widget"
+                    ? `Remove "${String(actions.pending.args.widgetId ?? "")}" from this dashboard.`
+                    : undefined
+              }
+              onApprove={() => void actions.confirm()}
+              onCancel={() => void actions.cancel()}
+            />
+          )}
+
+        {handedOnce && <OnceCard title={handedOnce.title} values={handedOnce.values} onDismiss={() => setHandedOnce(null)} />}
 
         {actions.phase === "error" && actions.lastError && (
           <div className="dash-callout dash-callout--bad">{actions.lastError}</div>
