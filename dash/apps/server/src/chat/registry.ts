@@ -26,7 +26,6 @@ import {
 
 import { agentActions, agentKnowledge, type AgentChatOps } from "./agent-actions.js";
 import { workflowActions, workflowKnowledge, type WorkflowChatOps } from "./workflow-actions.js";
-import { calendarActions, calendarKnowledge, type CalendarChatOps } from "./calendar-actions.js";
 import { recordChangeActions, type RecordChangeOps } from "./record-actions.js";
 /**
  * The dashboard, described to the chat engine.
@@ -125,8 +124,12 @@ export interface BuildChatRegistryInput {
    * Absent means the two actions are not registered.
    */
   readonly workflows?: WorkflowChatOps;
-  /** The calendar: `list_calendar` and `add_calendar_entry`. Absent means neither is registered. */
-  readonly calendar?: CalendarChatOps;
+  /**
+   * The calendar's and contacts' screens, each a component with its own
+   * actions, knowledge and place in the app (`chat/screens/`). Registered
+   * after the roster and before the widgets.
+   */
+  readonly screens?: readonly ComponentDefinition[];
 }
 
 /* ── actions ──────────────────────────────────────────────────────────── */
@@ -840,7 +843,6 @@ export const buildChatRegistry = (input: BuildChatRegistryInput) => {
     ...(input.changes ? recordChangeActions(input.changes) : []),
     ...(input.agents ? agentActions(input.agents) : []),
     ...(input.workflows ? workflowActions(input.workflows) : []),
-    ...(input.calendar ? calendarActions(input.calendar) : []),
   ];
 
   /*
@@ -858,7 +860,7 @@ export const buildChatRegistry = (input: BuildChatRegistryInput) => {
    * shadow it — and avoid `__`, which the per-action tool encoder uses as
    * its separator.
    */
-  const taken = new Set(handles.map((entry) => entry.handle));
+  const taken = new Set([...handles.map((entry) => entry.handle), ...(input.screens ?? []).map((screen) => screen.id)]);
   let rosterId = "dashboard";
   for (let n = 2; taken.has(rosterId); n++) rosterId = `dashboard-${n}`;
 
@@ -874,12 +876,21 @@ export const buildChatRegistry = (input: BuildChatRegistryInput) => {
       ...workspaceKnowledge(input),
       ...(input.agents ? agentKnowledge(input.agents) : []),
       ...(input.workflows ? workflowKnowledge(input.workflows) : []),
-      ...(input.calendar ? calendarKnowledge(input.calendar) : []),
       ...(input.concierge ? conciergeKnowledge(input.concierge) : []),
     ],
     grid: { minW: 12, minH: 4 },
     actions,
   });
+
+  /*
+   * The calendar's and contacts' screens, after the roster so their knowledge
+   * follows it, and before the widgets. Their ids are never a widget's
+   * (`workspaceHandles` steps around them), and the roster's steps aside
+   * from them as it does from widgets.
+   */
+  for (const screen of input.screens ?? []) {
+    if (screen.id !== rosterId) registry.register(screen);
+  }
 
   /*
    * Every widget in the workspace is registered; only the current tab's carry

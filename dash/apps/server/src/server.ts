@@ -136,6 +136,7 @@ import { RATES_AS_OF } from "./pricing.js";
 import type { PartRegistry } from "@freebirdai/dash-parts";
 import { partsRoutes } from "./routes/parts.js";
 import { agentRoutes } from "./routes/agents.js";
+import { buildScreens } from "./chat/screens/index.js";
 import { workflowRoutes } from "./routes/workflows.js";
 import { calendarRoutes } from "./routes/calendar.js";
 import { CalendarService } from "./calendar/service.js";
@@ -3631,21 +3632,34 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             create: (principal, input) => workflows.create(principal, input),
             update: (principal, id, input) => workflows.update(principal, id, input),
             saveTemplate: (input) => workflowTemplates.saveFrom(input),
-            fromTemplate: async (principal, id, values, name) => {
-              const { input, template } = await workflowTemplates.workflowFrom(id, values, name);
+            fromTemplate: async (principal, id, values, name, types) => {
+              const { input, template } = await workflowTemplates.workflowFrom(id, values, name, types ? [...types] : undefined);
               const made = await workflows.create(principal, input);
               const marked = { ...made, fromTemplate: { id: template.id, version: template.version } };
               await workflowStore.put(marked);
               return marked;
             },
           },
-          calendar: {
-            agents: await agentStore.list(),
+          /*
+           * The calendar's and contacts' screens, each a component with the
+           * actions its screen has (`chat/screens/`). The setup is read once
+           * here for the cards' "before"; any change, by chat or by a screen,
+           * drops this cached registry so the next turn reads it again.
+           */
+          screens: buildScreens({
+            may: async (principal, permission) => (await policy.can(principal, permission, {})).ok,
             now: () => Date.now(),
-            mayManage: async (principal) => (await policy.can(principal, "calendar.manage", {})).ok,
-            list: (options) => calendar.list(options),
-            create: (principal, input) => calendar.create(principal, input),
-          },
+            changed: () => invalidateRegistry(),
+            calendar,
+            scheduling,
+            bookings,
+            contacts,
+            links: bookingLinks,
+            tasks: workflowEnv.tasks,
+            agents: { roster: await agentStore.list(), update: (principal, id, input) => agents.update(principal, id, input) },
+            setup: await scheduling.overview(),
+            contactSetup: await contacts.setup(),
+          }),
           changes: {
             prepare: (principal, intent, sessionId) =>
               writes.prepare(principal, intent, { via: "chat", sessionId }),
@@ -4172,6 +4186,20 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       citations: { enabled: true },
 
       /*
+       * The chat runs the whole app. Every action is offered on every turn,
+       * whatever is on screen (that is context: what "this" means), as one
+       * `start_action` with a catalog of every action a line each, so the
+       * app can grow without the tool list growing with it. Once an action is
+       * picked, its exact fields arrive with `update_action_args`, and a
+       * value that does not fit keeps it collecting until it does.
+       */
+      harnessArgsMode: "catalog",
+      /* "Take me to appointment types": opens the screen, through the app's router. */
+      navigation: { enabled: true },
+      /* A read, a start, a correction and the reply fit in one turn. */
+      maxToolSteps: 5,
+
+      /*
        * One structured question, where guessing would waste their time.
        *
        * Off everywhere by default because it changes the shape of a turn — the
@@ -4228,6 +4256,15 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
 
     invalidateRegistry = (tenantKey) => chatPlugin.freebird.invalidateRegistry(tenantKey);
     onWritesChanged = () => invalidateRegistry();
+    /*
+     * A change made on a screen is a change the chat's cards must see: the
+     * registry holds the scheduling and contact setup for their "before", so a
+     * successful change to it, or to the agents, drops the cached registry.
+     */
+    const SETUP_CHANGES = /^\/api\/(scheduling\/(defaults|profiles|pools|types|blocks|placements)|contacts\/(fields|match-rules)|agents)(\/|$|\?)/;
+    app.addHook("onResponse", async (request, reply) => {
+      if (request.method !== "GET" && reply.statusCode < 400 && SETUP_CHANGES.test(request.url)) invalidateRegistry();
+    });
     app.register(chatPlugin, { prefix: "/freebird" });
   }
 

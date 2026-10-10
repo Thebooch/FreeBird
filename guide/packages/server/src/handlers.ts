@@ -1,6 +1,7 @@
 import type { ActionState, AuthContext, ChatEngine, ChatMessage, ChatSession, ComponentRegistry, CustomTab, CustomTabsService, DbAdapter, DigestConfig, GridCell, KnowledgeGraph, LayoutPlan, LlmTool } from "@freebirdai/core";
 import {
   citationOf,
+  withoutTransient,
   deriveActionPreview,
   toComponentCitation,
   validateActionArgs,
@@ -410,7 +411,8 @@ const persistActionAudit = async (
           args: payload.args,
           before: payload.before,
           changed: payload.changed,
-          result: payload.result,
+          /* Values to show once (`withTransient`) are never kept. */
+          result: withoutTransient(payload.result),
           error: payload.error,
         },
       },
@@ -673,7 +675,7 @@ export const handleConfirmAction = async (
           args: outcome.args,
           before: outcome.before,
           changed: outcome.changed,
-          result: outcome.result,
+          result: withoutTransient(outcome.result),
           source: "http",
           at: new Date(),
         },

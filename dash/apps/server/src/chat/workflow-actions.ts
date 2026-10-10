@@ -48,7 +48,7 @@ export interface WorkflowChatOps {
   create(principal: Principal, input: WorkflowInput): Promise<WorkflowSpec>;
   update(principal: Principal, id: string, input: WorkflowInput): Promise<WorkflowSpec>;
   saveTemplate(input: { workflow: string; kind: "step" | "path" | "workflow"; name: string; steps?: string[]; description?: string }): Promise<WorkflowTemplate>;
-  fromTemplate(principal: Principal, id: string, values: Record<string, string>, name?: string): Promise<WorkflowSpec>;
+  fromTemplate(principal: Principal, id: string, values: Record<string, string>, name?: string, types?: readonly string[]): Promise<WorkflowSpec>;
 }
 
 /** New workflows from the chat start in trial for this many cases. */
@@ -124,6 +124,7 @@ export const useTemplateSchema = z.object({
   templateId: z.string().min(1).describe("A workflow template from TEMPLATES."),
   name: z.string().optional(),
   blanks: z.array(z.object({ name: z.string(), value: z.string() })).optional().describe("A value for each of the template's blanks."),
+  types: z.array(z.string().min(1)).max(50).optional().describe("For a booking template (one started by something happening to a booking, like recipe-turned-away): only these appointment types, ids from APPOINTMENT TYPES. Left out: every type."),
 });
 
 type Fields = Partial<z.infer<typeof createWorkflowSchema>>;
@@ -355,7 +356,7 @@ export const workflowActions = (ops: WorkflowChatOps): ActionDefinition<any, unk
     handler: async (args, ctx) => {
       const principal = principalOf(ctx);
       if (!principal) throw new Error("Nobody is signed in.");
-      const made = await explained(() => ops.fromTemplate(principal, args.templateId, Object.fromEntries((args.blanks ?? []).map((one) => [one.name, one.value])), args.name));
+      const made = await explained(() => ops.fromTemplate(principal, args.templateId, Object.fromEntries((args.blanks ?? []).map((one) => [one.name, one.value])), args.name, args.types));
       return { created: true, workflowId: made.id, name: made.name, enabled: made.enabled };
     },
   };

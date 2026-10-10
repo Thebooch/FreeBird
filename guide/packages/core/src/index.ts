@@ -170,6 +170,7 @@ export {
 // ---------------------------------------------------------------------------
 export * from "./actions/types.js";
 export { OPEN_COMPONENT_TOOL_NAME, buildOpenComponentTool, resolveNavigation } from "./chat/navigation.js";
+export { TRANSIENT_KEY, transientOf, withTransient, withoutTransient } from "./actions/transient.js";
 export {
   CITATION_KEY,
   citationOf,

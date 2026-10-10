@@ -6,6 +6,7 @@ import {
   type ComponentRegistry,
   type DbAdapter,
   withCitation,
+  withTransient,
 } from "@freebirdai/core";
 import {
   handleConfirmAction,
@@ -339,5 +340,25 @@ describe("handleConfirmAction — the outcome message", () => {
     const roles = (deps.db.appendMessage as unknown as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[0].role);
     expect(roles).not.toContain("assistant");
     expect(res.body.outcomeMessage).toBeUndefined();
+  });
+});
+
+describe("handleConfirmAction — values shown once", () => {
+  it("hands them to the person who approved, and keeps them out of the audit and every event", async () => {
+    const registry = createComponentRegistry();
+    registry.register({
+      id: "settings",
+      title: "Settings",
+      description: "Settings panel",
+      grid: { minW: 4, minH: 3 },
+      actions: [{ id: "set_theme", description: "Set the theme", schema: z.object({ theme: z.enum(["light", "dark"]) }), handler: async () => withTransient({ made: true }, { link: "https://x/p/s/book/SECRET" }) }],
+    });
+    const events: ServerActionEvent[] = [];
+    const deps = buildDeps({ registry, onActionEvent: (event) => void events.push(event) });
+    const res = await handleConfirmAction(deps, baseConfirmReq);
+    expect(res.body.result).toMatchObject({ made: true, freebirdTransient: { link: "https://x/p/s/book/SECRET" } });
+    const kept = (deps.db.appendMessage as unknown as ReturnType<typeof vi.fn>).mock.calls.map((call) => JSON.stringify(call[0]));
+    expect(kept.join("\n")).not.toContain("SECRET");
+    expect(JSON.stringify(events)).not.toContain("SECRET");
   });
 });
