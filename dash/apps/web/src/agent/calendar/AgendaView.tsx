@@ -2,6 +2,7 @@ import type { CalendarEvent } from "@freebirdai/dash-spec";
 import { AgentChip, Badge, EmptyState } from "@freebirdai/dash-components";
 import { useMemo } from "react";
 import { KIND_LABELS, STATUS_LABELS, byDay, colorVar, dayKey, entryEnd, entryStart, isAllDay, startOfDay, viewDays, type OwnerInfo } from "./model.js";
+import { itemAttrs } from "../chatScreen.js";
 
 const time = (ms: number): string => new Date(ms).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 
@@ -84,6 +85,7 @@ export const AgendaView = ({
                       style={{ ["--cal-color" as string]: colorVar(owner.color) }}
                       onClick={() => onOpen(entry)}
                       data-testid="calendar-agenda-row"
+                      {...itemAttrs(entry.booking ?? entry.id)}
                     >
                       <span className="dash-cal-agenda__time">
                         {isAllDay(entry) ? (

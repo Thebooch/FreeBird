@@ -1,4 +1,8 @@
 import type { DashboardSpec, WidgetSpec } from "@freebirdai/dash-spec";
+import { SCREENS } from "./screens/common.js";
+
+/** The ids the calendar's and contacts' screens are registered under. */
+const SCREEN_IDS: ReadonlySet<string> = new Set(Object.values(SCREENS).map((screen) => screen.id));
 
 /**
  * One name for every widget in the workspace.
@@ -49,11 +53,12 @@ export const workspaceHandles = (
     }
   }
 
-  const taken = new Set<string>();
+  /* The calendar's and contacts' screens are components too: a widget never takes one of their ids. */
+  const taken = new Set<string>(SCREEN_IDS);
   const out: WidgetHandle[] = [];
   for (const board of dashboards) {
     for (const widget of board.widgets) {
-      const plain = (seenIds.get(widget.id) ?? 0) === 1;
+      const plain = (seenIds.get(widget.id) ?? 0) === 1 && !SCREEN_IDS.has(widget.id);
       let handle = plain ? widget.id : `${widget.id}${HANDLE_SEPARATOR}${board.id}`;
       /*
        * A widget genuinely called `x--somebooard` could still collide with a

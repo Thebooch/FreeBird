@@ -373,15 +373,20 @@ export const describeFilters = (
   );
 };
 
-/** One line for the prompt, so the assistant can talk about what is on screen. */
+/**
+ * The open record, for reading it.
+ *
+ * Which tab is open reaches the model through guide, like every other page
+ * (`activeComponentIds` and `focus`, from `ChatScopeReporter`). This says the
+ * one thing only Dash can: whether the record's fields are already in hand
+ * from rows the browser drew, or have to be read. Nothing open, nothing to say.
+ */
 export const describeScreen = (input: {
   readonly tab: string;
   readonly open: OpenView | null;
   readonly record: Focus | null;
 }): string => {
-  if (!input.open) {
-    return `ON SCREEN — the "${input.tab}" tab, showing its widgets.`;
-  }
+  if (!input.open) return "";
   if (input.record) {
     /*
      * A record on its own page is named by *what it is*; one opened from a

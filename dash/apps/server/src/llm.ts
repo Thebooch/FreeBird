@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { LlmAdapter, LlmTokenUsage, LlmTool } from "@freebirdai/dash-agent";
+import type { LlmAdapter, LlmMessage, LlmTokenUsage, LlmTool } from "@freebirdai/dash-agent";
 import { z } from "zod";
 import {
   DEFAULT_MODEL_BY_PROVIDER,
@@ -23,21 +23,28 @@ import { RATES_AS_OF, costOf, formatUsd } from "./pricing.js";
  */
 
 interface JsonSchema {
-  type: string;
+  type?: string;
   description?: string;
   properties?: Record<string, JsonSchema>;
   required?: string[];
   items?: JsonSchema;
-  additionalProperties?: boolean;
+  additionalProperties?: boolean | JsonSchema;
   enum?: readonly (string | number)[];
+  anyOf?: readonly JsonSchema[];
 }
 
 /**
- * A zod→JSON Schema converter for the flat subset the proposal tool uses:
- * objects of strings and arrays of flat objects, plus `optional` and
- * `describe`. This is exactly why the tool schema is constrained to be dull —
- * no refinements, records or unions means no dependency on
+ * A zod→JSON Schema converter, hand-rolled so there is no dependency on
  * `zod-to-json-schema` and none of its failure modes.
+ *
+ * Every shape it knows is mapped on purpose, one case each: scalars, enums,
+ * objects and arrays, and the few the chat's screens need to say what a
+ * setting takes — a value that may be cleared (`nullable`), a map (`record`),
+ * one of several shapes (`union`), a checked string (a refinement, sent as
+ * its plain shape; zod still checks it when the arguments come back), and an
+ * open object (`passthrough`, for `start_action`'s `args`). Anything else
+ * throws, so a tool nobody can send fails here and in tests rather than
+ * inside a provider call.
  */
 export const toJsonSchema = (schema: z.ZodTypeAny): JsonSchema => {
   const def = schema._def as { typeName: string; [key: string]: unknown };
@@ -46,6 +53,20 @@ export const toJsonSchema = (schema: z.ZodTypeAny): JsonSchema => {
     case "ZodOptional":
     case "ZodDefault":
       return toJsonSchema(def.innerType as z.ZodTypeAny);
+    case "ZodEffects":
+      return toJsonSchema(def.schema as z.ZodTypeAny);
+    case "ZodNullable":
+      return { anyOf: [toJsonSchema(def.innerType as z.ZodTypeAny), { type: "null" }] };
+    case "ZodNull":
+      return { type: "null" };
+    case "ZodUnknown":
+    case "ZodAny":
+      return {};
+    case "ZodRecord":
+      return { type: "object", additionalProperties: toJsonSchema(def.valueType as z.ZodTypeAny) };
+    case "ZodUnion":
+    case "ZodDiscriminatedUnion":
+      return { anyOf: (def.options as readonly z.ZodTypeAny[]).map(toJsonSchema) };
     case "ZodString":
       return { type: "string" };
     case "ZodNumber":
@@ -73,12 +94,16 @@ export const toJsonSchema = (schema: z.ZodTypeAny): JsonSchema => {
         properties[name] = description ? { ...inner, description } : inner;
         if (!field.isOptional()) required.push(name);
       }
-      return { type: "object", properties, required, additionalProperties: false };
+      // Closed unless the schema says otherwise: `args` on `start_action`
+      // passes through whatever the picked action takes.
+      return def.unknownKeys === "passthrough"
+        ? { type: "object", properties, required }
+        : { type: "object", properties, required, additionalProperties: false };
     }
     default:
-      // Anything outside the flat subset is a bug in the tool definition, not
+      // A shape not mapped above is a bug in the tool definition, not
       // something to paper over with `{}` and debug at runtime.
-      throw new Error(`tool schemas must stay flat; got ${def.typeName}`);
+      throw new Error(`tool schemas use only the shapes toJsonSchema maps; got ${def.typeName}`);
   }
 };
 
@@ -413,6 +438,36 @@ export const openAiAdapter = (
   return { defaultModel, stream, generate };
 };
 
+/** Between system messages, as the provider reads them. */
+const SYSTEM_JOIN = "\n\n";
+
+type AnthropicSystemBlock = { type: "text"; text: string; cache_control?: { type: "ephemeral" } };
+
+/**
+ * The system prompt as Anthropic takes it.
+ *
+ * Anthropic caches only where a request asks it to, so a message's
+ * `cachePoint` (`@freebirdai/contracts`) splits the system prompt in two
+ * blocks: up to and including that message, marked for the cache, and the
+ * rest. The tools come before the system prompt, so they are cached with it.
+ * With no cache point it is the one string it always was, and the model reads
+ * the same words either way.
+ */
+export const anthropicSystem = (messages: readonly LlmMessage[]): string | AnthropicSystemBlock[] | undefined => {
+  const system = messages.filter((message) => message.role === "system");
+  const joined = (part: readonly LlmMessage[]) => part.map((message) => message.content).join(SYSTEM_JOIN);
+  const point = system.findIndex((message) => message.cachePoint);
+  const stable = joined(system.slice(0, point + 1));
+  if (point < 0 || !stable) return joined(system) || undefined;
+  const rest = joined(system.slice(point + 1));
+  // The separator opens the second block, so the cached one reads the same
+  // whatever follows it.
+  return [
+    { type: "text", text: stable, cache_control: { type: "ephemeral" } },
+    ...(rest ? [{ type: "text" as const, text: SYSTEM_JOIN + rest }] : []),
+  ];
+};
+
 export const anthropicAdapter = (
   apiKey: string,
   options: { model?: string } = {},
@@ -423,10 +478,7 @@ export const anthropicAdapter = (
     const tools = toolPayloads(opts.tools);
     const model = opts.model ?? defaultModel;
     const { supportsTemperature } = capabilitiesFor(model);
-    const system = opts.messages
-      .filter((message) => message.role === "system")
-      .map((message) => message.content)
-      .join("\n\n");
+    const system = anthropicSystem(opts.messages);
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -536,10 +588,7 @@ export const anthropicAdapter = (
     const tools = toolPayloads(opts.tools);
     const model = opts.model ?? defaultModel;
     const { supportsTemperature } = capabilitiesFor(model);
-    const system = opts.messages
-      .filter((message) => message.role === "system")
-      .map((message) => message.content)
-      .join("\n\n");
+    const system = anthropicSystem(opts.messages);
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",

@@ -8,6 +8,7 @@
 import { DASH_CALENDAR_STYLES } from "./styles-calendar.js";
 import { DASH_REPORTS_STYLES } from "./styles-reports.js";
 import { DASH_CONTACTS_STYLES } from "./styles-contacts.js";
+import { DASH_CHAT_CARD_STYLES } from "./styles-chat-cards.js";
 import { DASH_SCHEDULING_STYLES } from "./styles-scheduling.js";
 
 export const DASH_REACT_STYLES = `

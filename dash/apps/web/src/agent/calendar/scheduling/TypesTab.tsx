@@ -12,6 +12,7 @@ import { durationWords, factLabel, newId, slugOf, typeHostsWords } from "./model
 import { SetupSheet } from "./SetupSheet.jsx";
 import { useContactFields } from "./useContactFields.js";
 import { useSetup } from "./useSetup.js";
+import { itemAttrs, screenAttrs, useChatFocus } from "../../chatScreen.js";
 
 /**
  * Appointment types: what can be booked.
@@ -28,12 +29,14 @@ const WEEK_OF_NOTHING: WeeklyHours = { mon: [], tue: [], wed: [], thu: [], fri: 
 export const TypesTab = (): JSX.Element => {
   const { setup, error, canManage, reload } = useSetup();
   const [editing, setEditing] = useState<{ readonly id: string; readonly isNew: boolean } | null>(null);
+  const editingType = editing && !editing.isNew ? setup?.types.find((one) => one.id === editing.id) : undefined;
+  useChatFocus("types", editingType ? { id: editingType.id, label: editingType.name } : null);
 
   if (error && !setup) return <ErrorState message={error} onRetry={() => void reload()} />;
   if (!setup) return <p className="dash-hint">Loading…</p>;
 
   return (
-    <div className="dash-sched-tab" data-testid="scheduling-types">
+    <div className="dash-sched-tab" data-testid="scheduling-types" {...screenAttrs("types")}>
       <header className="dash-sched-tab__head">
         <p className="dash-sched-panel__lede">What can be booked, by whom, and on what terms.</p>
         {canManage && (
@@ -56,7 +59,7 @@ export const TypesTab = (): JSX.Element => {
               { layer: "type", settings: type.settings },
             ]).settings;
             return (
-              <button key={type.id} type="button" className="dash-sched-card" style={{ ["--cal-color" as string]: colorVar(type.color) }} onClick={() => setEditing({ id: type.id, isNew: false })} data-testid="types-card">
+              <button key={type.id} type="button" className="dash-sched-card" style={{ ["--cal-color" as string]: colorVar(type.color) }} onClick={() => setEditing({ id: type.id, isNew: false })} data-testid="types-card" {...itemAttrs(type.id)}>
                 <span className="dash-sched-card__title">
                   {type.name}
                   {!type.active && <Badge>Off</Badge>}

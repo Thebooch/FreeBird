@@ -1,11 +1,15 @@
 import { Badge, Button, EmptyState, ErrorState } from "@freebirdai/dash-components";
 import { describeTrigger, type AgentSpec, type Task, type WorkflowCase, type WorkflowSpec, type WorkflowTemplate } from "@freebirdai/dash-spec";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type ConnectionSummary } from "../../api";
 import type { Route } from "../../route.js";
 import { workflowState } from "./draft.js";
 import { TaskCard, when } from "./TaskCard.jsx";
 import { WorkflowEditor } from "./WorkflowEditor.jsx";
+import { itemAttrs, screenAttrs, useChatFocus, useChatScreen, useScreenChanged } from "../chatScreen.js";
+
+/** The page the chat knows this as. */
+const WORKFLOW_SCREENS = ["workflows"] as const;
 
 /**
  * Workflows: a trigger and a graph of steps.
@@ -195,10 +199,14 @@ export const WorkflowsSection = ({ selected, onNavigate }: { readonly selected: 
   const [busy, setBusy] = useState(false);
   const reload = (): void => setReloadToken((n) => n + 1);
   const go = (id?: string): void => onNavigate({ kind: "agent", section: "workflows", ...(id ? { id } : {}) });
+  /* On screen for the chat, and read again when the chat changes a workflow. */
+  useChatScreen(WORKFLOW_SCREENS);
+  useScreenChanged(WORKFLOW_SCREENS, useCallback(() => setReloadToken((n) => n + 1), []));
   const agentById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
   const names = useMemo(() => ({ connection: (id: string) => connections.find((one) => one.id === id)?.title ?? id }), [connections]);
   const startedBy = (id: string): string[] => agents.filter((agent) => agent.tools.some((tool) => tool.kind === "run_workflow" && tool.workflow === id)).map((agent) => agent.name);
   const current = selected && selected !== NEW ? (workflows.find((one) => one.id === selected) ?? null) : null;
+  useChatFocus("workflows", current ? { id: current.id, label: current.name } : null);
 
   const act = async (work: () => Promise<unknown>): Promise<void> => {
     setBusy(true);
@@ -219,8 +227,8 @@ export const WorkflowsSection = ({ selected, onNavigate }: { readonly selected: 
   if (selected === NEW || current) {
     const state = current ? workflowState(current) : null;
     return (
-      <div className="dash-workflow-page" data-testid="workflows-section">
-        <div className="dash-agents__subhead">
+      <div className="dash-workflow-page" data-testid="workflows-section" {...screenAttrs("workflows")}>
+        <div className="dash-agents__subhead" {...(current ? itemAttrs(current.id) : {})}>
           <button type="button" className="dash-overview__link" onClick={() => go()}>
             ← Workflows
           </button>
@@ -278,7 +286,7 @@ export const WorkflowsSection = ({ selected, onNavigate }: { readonly selected: 
   }
 
   return (
-    <div className="dash-agents" data-testid="workflows-section">
+    <div className="dash-agents" data-testid="workflows-section" {...screenAttrs("workflows")}>
       <aside className="dash-agents__list" aria-label="Workflows">
         <div className="dash-agents__head">
           <h2 className="dash-agents__title">Workflows</h2>
@@ -295,7 +303,7 @@ export const WorkflowsSection = ({ selected, onNavigate }: { readonly selected: 
             {workflows.map((workflow) => {
               const state = workflowState(workflow);
               return (
-                <li key={workflow.id}>
+                <li key={workflow.id} {...itemAttrs(workflow.id)}>
                   <button type="button" className="dash-agent-row" data-testid={`workflow-row-${workflow.id}`} onClick={() => go(workflow.id)}>
                     <span className="dash-agent-row__title">
                       {workflow.name} <Badge tone={state.tone === "on" ? "accent" : state.tone === "paused" ? "danger" : state.tone === "trial" ? "warn" : "neutral"}>{state.label}</Badge>

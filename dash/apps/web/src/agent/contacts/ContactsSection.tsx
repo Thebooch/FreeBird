@@ -1,4 +1,5 @@
 import { Tabs } from "@freebirdai/dash-components";
+import { useChatScreen } from "../chatScreen.js";
 import { ROLE_PERMISSIONS, type Principal } from "@freebirdai/dash-spec";
 import { useEffect, useState } from "react";
 import { api } from "../../api.js";
@@ -27,6 +28,8 @@ const LEDES: Readonly<Record<ContactsTabId, string>> = {
 
 export const ContactsSection = ({ tab, onNavigate }: { readonly tab: string | null; readonly onNavigate: (route: Route) => void }): JSX.Element => {
   const active: ContactsTabId = CONTACTS_TABS.some((one) => one.id === tab) ? (tab as ContactsTabId) : "people";
+  /* The tab on screen is what the chat takes "this" and "here" to mean. */
+  useChatScreen(active === "fields" ? ["contactFields"] : ["contacts"]);
   const [me, setMe] = useState<Principal | null>(null);
   useEffect(() => {
     void api.me().then((who) => setMe(who.principal), () => undefined);

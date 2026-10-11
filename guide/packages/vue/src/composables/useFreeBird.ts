@@ -3,10 +3,12 @@ import type {
   ActionRecord,
   ActionState,
   ChatMessage,
+  ComponentCitation,
   CustomTab,
   GridCell,
   LayoutPlan,
   Reference,
+  ScreenFocus,
 } from "@freebirdai/core";
 import { FREEBIRD_KEY, type FreeBirdContext } from "../plugin.js";
 
@@ -50,6 +52,10 @@ export interface UseFreeBirdReturn {
   onExplain: (fn: (componentId: string) => void) => () => void;
 
   setActiveComponentIds: (ids: string[]) => void;
+  /** What the person has open within the active components: "this one" for the chat. */
+  setFocus: (focus: ScreenFocus | null) => void;
+  /** Where the person asked the chat to take them; the host opens it. */
+  onNavigate: (handler: (target: ComponentCitation) => void) => () => void;
   confirmAction: () => Promise<void>;
   cancelAction: (reason?: string) => Promise<void>;
   pauseAction: (label?: string) => void;
@@ -110,6 +116,8 @@ export const useFreeBird = (): UseFreeBirdReturn => {
     onExplain: (fn) => store.onExplain(fn),
 
     setActiveComponentIds: (ids) => store.setActiveComponentIds(ids),
+    setFocus: (focus) => store.setFocus(focus),
+    onNavigate: (handler) => store.onNavigate(handler),
     confirmAction: () => store.confirmAction(),
     cancelAction: (reason) => store.cancelAction(reason),
     pauseAction: (label) => store.pauseAction(label),

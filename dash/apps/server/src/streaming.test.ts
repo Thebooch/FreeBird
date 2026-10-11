@@ -219,3 +219,36 @@ describe("openai streaming", () => {
     expect(body.stream_options?.include_usage).toBe(true);
   });
 });
+
+describe("a prefix the provider can cache", () => {
+  const messages = [
+    { role: "system" as const, content: "You help." },
+    { role: "system" as const, content: "Everything you can do.", cachePoint: true },
+    { role: "system" as const, content: "On screen now: the calendar." },
+    { role: "user" as const, content: "hi" },
+  ];
+  const sentBody = (spy: ReturnType<typeof vi.fn>): Record<string, unknown> =>
+    JSON.parse(String((spy.mock.calls[0] as unknown as [string, { body: string }])[1].body)) as Record<string, unknown>;
+
+  it("Anthropic caches up to the cache point, and reads the same words", async () => {
+    const spy = stubFetch(sseResponse([event({ type: "message_start", message: { usage: { input_tokens: 1 } } })]));
+    await collect(anthropicAdapter("k").stream({ messages }));
+    const system = sentBody(spy)["system"] as Array<{ text: string; cache_control?: unknown }>;
+    expect(system[0]).toEqual({ type: "text", text: "You help.\n\nEverything you can do.", cache_control: { type: "ephemeral" } });
+    expect(system[1]).toEqual({ type: "text", text: "\n\nOn screen now: the calendar." });
+    expect(system.map((block) => block.text).join("")).toBe("You help.\n\nEverything you can do.\n\nOn screen now: the calendar.");
+  });
+
+  it("Anthropic sends one string when nothing is marked, as before", async () => {
+    const spy = stubFetch(sseResponse([event({ type: "message_start", message: { usage: { input_tokens: 1 } } })]));
+    await collect(anthropicAdapter("k").stream({ messages: messages.map(({ role, content }) => ({ role, content })) }));
+    expect(sentBody(spy)["system"]).toBe("You help.\n\nEverything you can do.\n\nOn screen now: the calendar.");
+  });
+
+  it("OpenAI caches a repeated prefix by itself, so the marker is not sent", async () => {
+    const spy = stubFetch(sseResponse(["data: [DONE]\n\n"]));
+    await collect(openAiAdapter("k").stream({ messages }));
+    const sent = sentBody(spy)["messages"] as Array<Record<string, unknown>>;
+    expect(sent.map((message) => Object.keys(message).sort())).toEqual(messages.map(() => ["content", "role"]));
+  });
+});

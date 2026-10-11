@@ -1,3 +1,4 @@
+import { citationOf, navigationOf } from "@freebirdai/core";
 import { type DashboardSpec, dashboardSchema } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import { type BuildChatRegistryInput, buildChatRegistry } from "./registry.js";
@@ -105,7 +106,8 @@ describe("chat registry knowledge", () => {
 
   it("still builds for an empty board, rather than throwing", () => {
     const registry = build({ dashboard: board("blank", "Blank") });
-    expect(registry.list()).toHaveLength(1);
+    /* The roster, and the open tab as a page the chat can say is on screen. */
+    expect(registry.list().map((component) => component.id)).toEqual(["dashboard", "board"]);
     expect(roster(registry)).toContain("no widgets anywhere in this workspace");
     // The actions still have somewhere to live, or an empty board is inert.
     expect(actionOf(registry, "create_dashboard")).toBeDefined();
@@ -116,7 +118,24 @@ describe("chat registry knowledge", () => {
       dashboard: board("ops", "Ops", [widget("dashboard", "A widget named dashboard")]),
     });
     // Registering twice under one id throws, which would take the chat down.
-    expect(registry.list().map((component) => component.id)).toEqual(["dashboard-2", "dashboard"]);
+    expect(registry.list().map((component) => component.id)).toEqual(["dashboard-2", "board", "dashboard"]);
+  });
+});
+
+describe("the open tab", () => {
+  it("is a page the chat can say is on screen, with that tab's address and widgets", () => {
+    const registry = build({ dashboard: board("ops", "Ops", [widget("rent", "Rent roll")]) });
+    expect(registry.get("board")).toMatchObject({
+      title: "Ops",
+      description: expect.stringContaining('"Rent roll"'),
+      domAnchor: { selector: '[data-freebird-component="board"]', page: "#/d/ops" },
+    });
+  });
+
+  it("keeps its id when a widget is called board", () => {
+    const registry = build({ dashboard: board("ops", "Ops", [widget("board", "A widget named board")]) });
+    expect(registry.get("board")?.title).toBe("Ops");
+    expect(registry.list().some((component) => component.title === "A widget named board")).toBe(true);
   });
 });
 
@@ -415,5 +434,32 @@ describe("grouping widgets", () => {
     expect(saved.layout.cells.some((cell) => cell.group !== undefined)).toBe(false);
     // Nothing is deleted by taking a frame apart.
     expect(saved.widgets).toHaveLength(2);
+  });
+});
+
+describe("showing and changing the board, as guide's navigation and chips", () => {
+  const run = async (registry: ReturnType<typeof build>, id: string, args: Record<string, unknown>) =>
+    actionOf(registry, id)!.handler!(args as never, {} as never);
+
+  it("opens a widget for a period by its tab's address, ringing the widget", async () => {
+    const result = await run(build(), "open_widget", { widgetId: "leases", preset: "30d" });
+    expect(navigationOf(result)).toEqual({ title: "Leases", page: "#/d/ops?range=30d", selector: '[data-widget-id="leases"]' });
+    expect(navigationOf(await run(build(), "open_widget", { widgetId: "leases" }))?.page).toBe("#/d/ops");
+  });
+
+  it("shows the open tab for a period, switches tab, and opens Connections, each by address", async () => {
+    const registry = build();
+    expect(navigationOf(await run(registry, "set_time_range", { preset: "7d" }))).toEqual({ title: "Ops", page: "#/d/ops?range=7d" });
+    expect(navigationOf(await run(registry, "switch_dashboard", { dashboardId: "finance" }))).toEqual({ title: "Finance", page: "#/d/finance" });
+    expect(navigationOf(await run(registry, "open_connections", {}))?.page).toBe("#/d/ops?panel=connections");
+    expect(await actionOf(registry, "switch_dashboard")!.authorize!({ dashboardId: "nope" } as never, {} as never)).toMatchObject({ ok: false, status: 404 });
+  });
+
+  it("leaves a chip after an approved change instead of moving the page", async () => {
+    const registry = build();
+    const made = await run(registry, "create_dashboard", { title: "Leasing" });
+    expect(citationOf(made)).toMatchObject({ title: "Leasing", page: "#/d/leasing", summary: 'Made the tab "Leasing".' });
+    expect(navigationOf(made)).toBeNull();
+    expect(citationOf(await run(registry, "read_connection", { connectionId: "beta" }))?.page).toBe("#/d/ops?panel=connections");
   });
 });

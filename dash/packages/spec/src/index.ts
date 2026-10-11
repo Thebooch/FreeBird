@@ -580,3 +580,4 @@ export type {
   TrackedValue,
   TrackedValueInput,
 } from "./report.js";
+export { DASH_SCREENS, type DashScreen } from "./screens.js";

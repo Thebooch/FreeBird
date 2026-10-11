@@ -1,6 +1,7 @@
 import { Badge, Button, type BadgeTone } from "@freebirdai/dash-components";
 import { BOOKING_STATUS_WORDS, LOCATION_WORDS, type Booking, type BookingStatus, type Contact } from "@freebirdai/dash-spec";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useScreenChanged } from "../chatScreen.js";
 import { api, type SlotPreview } from "../../api.js";
 import { contactTitle, formatPhone } from "../contacts/model.js";
 import { CopyLink } from "../CopyLink.jsx";
@@ -49,6 +50,8 @@ const span = (start: string, end: string, zone?: string): string => `${formatIn(
 
 type Panel = null | "suggest" | "deny" | "move" | "cancel";
 
+const SHEET_SCREENS = ["bookings"] as const;
+
 export const BookingSheet = ({
   id,
   people: given,
@@ -84,6 +87,9 @@ export const BookingSheet = ({
   }, [given]);
   const people = given ?? loaded;
 
+  /* A decision the chat made on this booking shows here at once. */
+  const [revision, setRevision] = useState(0);
+  useScreenChanged(SHEET_SCREENS, useCallback(() => setRevision((n) => n + 1), []));
   useEffect(() => {
     void api.booking(id).then(
       (one) => {
@@ -92,7 +98,7 @@ export const BookingSheet = ({
       },
       (cause) => setError(cause instanceof Error ? cause.message : String(cause)),
     );
-  }, [id]);
+  }, [id, revision]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => event.key === "Escape" && !busy && onClose();

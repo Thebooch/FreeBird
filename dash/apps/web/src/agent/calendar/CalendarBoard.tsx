@@ -10,6 +10,7 @@ import { CalendarLegend } from "./CalendarLegend.jsx";
 import { ChevronLeft, ChevronRight, Segmented } from "./controls.jsx";
 import { EntryFormSheet } from "./EntryFormSheet.jsx";
 import { BookingSheet } from "./BookingSheet.jsx";
+import { screenAttrs, useChatFocus, useScreenChanged } from "../chatScreen.js";
 import { EntrySheet } from "./EntrySheet.jsx";
 import { blankForm, formOf, type EntryForm } from "./form.js";
 import { MonthView } from "./MonthView.jsx";
@@ -62,6 +63,8 @@ const keepView = (view: CalendarView): void => {
  * a workflow puts on the calendar appears without a reload. Keys: T for
  * today, M / W / A for the views, ← and → to step, N for a new entry.
  */
+const BOARD_SCREENS = ["calendar", "bookings"] as const;
+
 export const CalendarBoard = ({
   onNavigate,
   people = new Map(),
@@ -174,6 +177,10 @@ export const CalendarBoard = ({
   );
 
   const open = openId ? (entries.find((entry) => entry.id === openId) ?? null) : null;
+  /* What the chat changes here (an entry, a booking) shows at once. */
+  useScreenChanged(BOARD_SCREENS, useCallback(() => setToken((n) => n + 1), []));
+  /* What is open is what "this" means to the chat: a booking, or an entry. */
+  useChatFocus(open?.booking ? "bookings" : "calendar", open ? { id: open.booking ?? open.id, label: open.title } : null);
   const startNew = useCallback((at: number, whole = false) => setEditing({ form: blankForm(at, mine, whole) }), [mine]);
 
   /* Keys, when nothing is being typed and no sheet is open. */
@@ -212,8 +219,8 @@ export const CalendarBoard = ({
   const stepLabel = view === "month" ? "month" : view === "week" ? "week" : "30 days";
 
   return (
-    <div className="dash-cal" data-testid="calendar-board">
-      <div className="dash-cal__main">
+    <div className="dash-cal" data-testid="calendar-board" {...screenAttrs("calendar")}>
+      <div className="dash-cal__main" {...screenAttrs("bookings")}>
         <div className="dash-cal__toolbar">
           <div className="dash-cal__nav">
             <Button size="sm" onClick={() => setAnchor(Date.now())} title="Today (T)">

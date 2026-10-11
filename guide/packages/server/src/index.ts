@@ -124,6 +124,8 @@ export interface CreateFreeBirdRouterOptions<TAuth = unknown> {
    * retrieval (embeddings search) in place of exhaustive injection.
    */
   knowledgeContext?: import("@freebirdai/core").ChatEngineOptions["knowledgeContext"];
+  /** Forwarded to ChatEngineOptions.turnNote: a short per-turn note from the host (the date, what the page shows). */
+  turnNote?: import("@freebirdai/core").ChatEngineOptions["turnNote"];
   /**
    * Read-only tools the model may call on any turn, whose results are fed
    * back to it in the same turn before it answers.
@@ -148,6 +150,14 @@ export interface CreateFreeBirdRouterOptions<TAuth = unknown> {
   executeExtraTool?: import("@freebirdai/core").ChatEngineOptions["executeExtraTool"];
   /** Inner LLM steps per message. Default 3; 1 disables the loop. */
   maxToolSteps?: import("@freebirdai/core").ChatEngineOptions["maxToolSteps"];
+  /** Forwarded to ChatEngineOptions.harnessArgsMode: `"per_action"` (default) or `"catalog"` (one tool for the whole app), `"typed"`, `"loose"`. */
+  harnessArgsMode?: import("@freebirdai/core").ChatEngineOptions["harnessArgsMode"];
+  /** Forwarded to ChatEngineOptions.narrowToActive: offer only the on-screen components' actions (default off). */
+  narrowToActive?: import("@freebirdai/core").ChatEngineOptions["narrowToActive"];
+  /** Forwarded to ChatEngineOptions.toolBudgetBytes: defer tools behind `tool_search` above this (default none). */
+  toolBudgetBytes?: import("@freebirdai/core").ChatEngineOptions["toolBudgetBytes"];
+  /** Forwarded to ChatEngineOptions.navigation: an `open_component` tool for "take me to …" (default off). */
+  navigation?: import("@freebirdai/core").ChatEngineOptions["navigation"];
   /**
    * Forwarded to ChatEngineOptions.finalReply. Default `"fallback"`, where the
    * model's own prose is the reply; `"always"` makes one final step the sole
@@ -221,7 +231,12 @@ export const resolveDeps = <TAuth = unknown>(opts: CreateFreeBirdRouterOptions<T
       citations: opts.citations,
       askUser: opts.askUser,
       knowledgeContext: opts.knowledgeContext,
+      turnNote: opts.turnNote,
       maxToolSteps: opts.maxToolSteps,
+      harnessArgsMode: opts.harnessArgsMode,
+      narrowToActive: opts.narrowToActive,
+      toolBudgetBytes: opts.toolBudgetBytes,
+      navigation: opts.navigation,
       processingToolCatalog: opts.processingToolCatalog,
       executeExtraTool: opts.executeExtraTool,
       finalReply: opts.finalReply,
@@ -350,7 +365,12 @@ export const createDepsResolver = <TAuth = unknown>(
         citations: opts.citations,
         askUser: opts.askUser,
         knowledgeContext: opts.knowledgeContext,
+        turnNote: opts.turnNote,
         maxToolSteps: opts.maxToolSteps,
+        harnessArgsMode: opts.harnessArgsMode,
+        narrowToActive: opts.narrowToActive,
+        toolBudgetBytes: opts.toolBudgetBytes,
+        navigation: opts.navigation,
         processingToolCatalog: opts.processingToolCatalog,
         executeExtraTool: opts.executeExtraTool,
         finalReply: opts.finalReply,

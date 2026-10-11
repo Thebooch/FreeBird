@@ -218,6 +218,19 @@ export interface ComponentDomAnchor {
   page?: string;
 }
 
+/**
+ * The one thing a person has open within the components on screen: a row, a
+ * record, a type being edited. Sent with a turn so "this one" resolves.
+ */
+export interface ScreenFocus {
+  /** The component it belongs to. */
+  componentId: string;
+  /** Its id within that component, as the component's actions take it. */
+  itemId?: string;
+  /** What the person calls it: "Showing", "Unit 4B". */
+  label?: string;
+}
+
 /** MCP exposure policy for a component's read surface. */
 export interface McpComponentPolicy {
   /** When false, `dataSource` is not readable via MCP. Default true. */

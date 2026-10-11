@@ -9,12 +9,14 @@ import type {
   ActionRecord,
   ActionState,
   ChatMessage,
+  ComponentCitation,
   ComponentRegistry,
   CustomTab,
   GridCell,
   LayoutPlan,
   PendingQuestion,
   Reference,
+  ScreenFocus,
 } from "@freebirdai/core";
 import {
   FetchTransport,
@@ -74,6 +76,10 @@ export interface FreeBirdContextValue {
 
   // Action layer
   setActiveComponentIds: (ids: string[]) => void;
+  /** What the person has open within the active components: "this one" for the chat. */
+  setFocus: (focus: ScreenFocus | null) => void;
+  /** Where the person asked the chat to take them; the host opens it. */
+  onNavigate: (handler: (target: ComponentCitation) => void) => () => void;
   confirmAction: () => Promise<void>;
   cancelAction: (reason?: string) => Promise<void>;
   pauseAction: (label?: string) => void;
@@ -180,6 +186,8 @@ export const FreeBirdProvider: React.FC<FreeBirdProviderProps> = ({
       onExplain: (h) => store.onExplain(h),
 
       setActiveComponentIds: (ids) => store.setActiveComponentIds(ids),
+      setFocus: (focus) => store.setFocus(focus),
+      onNavigate: (handler) => store.onNavigate(handler),
       confirmAction: () => store.confirmAction(),
       cancelAction: (reason) => store.cancelAction(reason),
       pauseAction: (label) => store.pauseAction(label),

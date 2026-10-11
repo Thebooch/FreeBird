@@ -292,8 +292,8 @@ describe("focusFromScreen", () => {
 });
 
 describe("describeScreen", () => {
-  it("says which tab when nothing finer is open", () => {
-    expect(describeScreen({ tab: "Ops", open: null, record: null })).toContain('"Ops" tab');
+  it("says nothing when no record is open: the open tab reaches the model through guide", () => {
+    expect(describeScreen({ tab: "Ops", open: null, record: null })).toBe("");
   });
 
   it("says the record is in hand when it could be resolved", () => {

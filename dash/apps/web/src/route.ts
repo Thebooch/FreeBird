@@ -1,3 +1,4 @@
+import { rangePresetSchema, type RangePreset } from "@freebirdai/dash-spec";
 /**
  * Where you are, in the address bar.
  *
@@ -23,8 +24,16 @@ export type AgentSection = (typeof AGENT_SECTIONS)[number];
 /** Where an unknown section lands: the Overview, first in the list. */
 export const DEFAULT_AGENT_SECTION: AgentSection = "overview";
 
+/** What a board's address can ask for besides the tab: a period to show, a panel to open. */
+export interface BoardAsk {
+  /** `?range=30d`: show the tab for this period, as the range control would. */
+  readonly range?: RangePreset;
+  /** `?panel=connections`: open the Connections panel over the tab. */
+  readonly panel?: "connections";
+}
+
 export type Route =
-  | { readonly kind: "board"; readonly dashboardId: string | null }
+  | ({ readonly kind: "board"; readonly dashboardId: string | null } & BoardAsk)
   /** `#/agent/<section>[/<id>]` — one agent, workflow or day, depending on the section. */
   /** `#/comms` — everything coming in and going out, in a section of its own. */
   | { readonly kind: "comms" }
@@ -109,18 +118,30 @@ export const parseRoute = (hash: string): Route => {
     return { kind: "agent", section, ...(parts[2] ? { id: parts[2] } : {}) };
   }
 
-  if (parts[0] !== "d" || !parts[1]) return BOARD_ROUTE;
+  const ask = boardAsk(query);
+  if (parts[0] !== "d" || !parts[1]) return { ...BOARD_ROUTE, ...ask };
   const dashboardId = parts[1];
 
   if (parts[2] === "w" && parts[3] && parts[4] === "r" && parts[5]) {
     return { kind: "record", dashboardId, widgetId: parts[3], recordId: parts[5] };
   }
-  return { kind: "board", dashboardId };
+  return { kind: "board", dashboardId, ...ask };
+};
+
+/** A board address's asks, keeping only values the app knows. */
+const boardAsk = (query: string): BoardAsk => {
+  const params = new URLSearchParams(query);
+  const range = rangePresetSchema.safeParse(params.get("range"));
+  return {
+    ...(range.success ? { range: range.data } : {}),
+    ...(params.get("panel") === "connections" ? { panel: "connections" as const } : {}),
+  };
 };
 
 export const routeToHash = (route: Route): string => {
   if (route.kind === "board") {
-    return route.dashboardId ? `#/d/${encodeURIComponent(route.dashboardId)}` : "#/";
+    const query = new URLSearchParams({ ...(route.range ? { range: route.range } : {}), ...(route.panel ? { panel: route.panel } : {}) }).toString();
+    return `${route.dashboardId ? `#/d/${encodeURIComponent(route.dashboardId)}` : "#/"}${query ? `?${query}` : ""}`;
   }
   if (route.kind === "comms") return "#/comms";
   if (route.kind === "agent") {

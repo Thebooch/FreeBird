@@ -50,9 +50,9 @@ registry.register({
 
 Key fields: `schema` drives slot-filling ("missing fields") and gates confirmation; `handler` receives validated args plus `ActionContext { auth, sessionId }`; `readCurrent` captures the before-state for the journal; `authorize` is the server-side permission gate (below).
 
-## 2. Scope to active components
+## 2. Tell the chat what is on screen
 
-The chat harness only offers actions for components currently on screen — the LLM can't invoke things the user can't see:
+Every registered action is offered on every turn; what is on screen is context, so "this" and "here" resolve without a follow-up question (`setFocus` names the one item open):
 
 ```tsx
 // React — Vue's useFreeBird() and Angular's FreeBirdService expose the same call
@@ -63,7 +63,7 @@ useEffect(() => {
 }, [fb]);
 ```
 
-Passing an empty array (or omitting) exposes *every* registered action — that's what enables cross-page navigation actions on embed sites.
+An engine built with `narrowToActive: true` offers only the active components' actions instead.
 
 ## 3. Confirmation UI
 
@@ -103,7 +103,7 @@ The journal of action records is in-memory by design — persistence is a host c
 authorize: async (args, ctx) => ctx.auth.role === "admin",
 ```
 
-`setActiveComponentIds` is a UX scoping mechanism, **not** a security boundary — `authorize` is.
+`setActiveComponentIds` is context, **not** a security boundary — `authorize` is.
 
 ## Pause & resume
 
@@ -111,9 +111,10 @@ Users can pause a half-configured action ("do that later") and resume it from th
 
 ## Harness UX knobs
 
-Three `ChatEngine` options shape a turn (details in [ACTIONS.md](https://github.com/Thebooch/FreeBird/blob/main/ACTIONS.md#harness-ux-knobs-chat-engine)):
+These `ChatEngine` options shape a turn (details in [ACTIONS.md](https://github.com/Thebooch/FreeBird/blob/main/ACTIONS.md#harness-ux-knobs-chat-engine)):
 
-- `harnessArgsMode: "typed" | "loose"` — whether `start_action` gets the pending action's real Zod schema (default) or a loose object for providers that struggle with discriminated unions.
+- `harnessArgsMode` — `"per_action"` (default: a tool per action, schema inline), `"catalog"` (one `start_action` for the whole app, each action a line, the picked action's exact schema afterwards), `"typed"` or `"loose"`. No tool budget unless `toolBudgetBytes` is set.
+- `narrowToActive` — offer only the on-screen components' actions (off: on-screen is context). `navigation: { enabled }` — an `open_component` tool for "take me to …".
 - `maxToolSteps` (default 3) — auto-loop budget: after a tool-only turn lands in `collecting`/`awaiting_confirmation`, the engine runs another LLM step in the same stream so the model can ask the missing question.
 - `fallbackToolOnlyPhrase` — host-supplied copy for a turn that would otherwise get the engine's generic summary. Every turn persists a visible assistant message either way.
 
