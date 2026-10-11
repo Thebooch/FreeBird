@@ -257,3 +257,66 @@ describe("Reply to the email, in a workflow", () => {
     await app.close();
   });
 });
+
+describe("An agent starts an email conversation", () => {
+  it("sends from the agent's own mailbox through the review, and hears the reply", async () => {
+    const app = makeApp();
+    await setUp(app);
+    signIn("outlook");
+    await app.inject({ method: "GET", url: "/api/comms?area=agent:leasing" });
+    const saved = await app.inject({
+      method: "PUT",
+      url: "/api/workflows/new",
+      payload: {
+        name: "Say hello",
+        enabled: true,
+        trigger: { kind: "manual" },
+        nodes: [
+          { id: "hello", action: "outreach.email", mode: "auto", settings: { agentId: "leasing", to: "pat@example.com", subject: "Hello from Leasing", purpose: "Say hello", content: "fixed", wording: "Hi Pat, is the unit still of interest?" } },
+          { id: "wait", action: "wait.for", mode: "auto", settings: { event: "reply", step: "hello", timeout: "2d" } },
+        ],
+        edges: [
+          { id: "a", from: "trigger", to: "hello" },
+          { id: "b", from: "hello", to: "wait" },
+        ],
+      },
+    });
+    expect(saved.statusCode).toBe(200);
+    const id = (saved.json() as { id: string }).id;
+    await app.inject({ method: "POST", url: `/api/workflows/${id}/run` });
+    expect(mail.sent).toHaveLength(1);
+    expect(mail.sent[0]).toMatchObject({ provider: "outlook", draft: false });
+    expect(mail.sent[0]!.message).toContain("To: pat@example.com");
+    expect(mail.sent[0]!.message).toContain("Subject: Hello from Leasing");
+    let cases = (await app.inject({ method: "GET", url: `/api/workflows/${id}/cases` })).json() as { status: string }[];
+    expect(cases[0]?.status).toBe("waiting");
+
+    mail.outlook.push({ id: "o9", threadId: "ot9", from: "Pat <pat@example.com>", to: "agent@example.org", subject: "RE: Hello from Leasing", snippet: "Yes, still interested", at: at(40) });
+    await app.inject({ method: "POST", url: "/api/comms/mailboxes/outlook/refresh" });
+    cases = (await app.inject({ method: "GET", url: `/api/workflows/${id}/cases` })).json() as { status: string }[];
+    expect(cases[0]?.status).toBe("done");
+    await app.close();
+  });
+
+  it("says why when the agent has no mailbox to send from", async () => {
+    const app = makeApp();
+    await setUp(app);
+    const saved = await app.inject({
+      method: "PUT",
+      url: "/api/workflows/new",
+      payload: {
+        name: "Say hello",
+        enabled: true,
+        trigger: { kind: "manual" },
+        nodes: [{ id: "hello", action: "outreach.email", mode: "auto", settings: { agentId: "leasing", to: "pat@example.com", subject: "Hi", purpose: "Say hi", content: "fixed", wording: "Hi" } }],
+        edges: [{ id: "a", from: "trigger", to: "hello" }],
+      },
+    });
+    const id = (saved.json() as { id: string }).id;
+    await app.inject({ method: "POST", url: `/api/workflows/${id}/run` });
+    const tasks = (await app.inject({ method: "GET", url: "/api/tasks" })).json() as { delivery?: { status: string; detail?: string } }[];
+    expect(tasks[0]?.delivery).toMatchObject({ status: "not_sent" });
+    expect(mail.sent).toEqual([]);
+    await app.close();
+  });
+});

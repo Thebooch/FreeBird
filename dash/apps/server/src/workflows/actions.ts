@@ -477,7 +477,7 @@ const outreach: ActionExecutor = async (ctx) => {
   const sender = env.outreach ?? notConnectedSender;
   let sent: Awaited<ReturnType<typeof sender.send>>;
   try {
-    sent = await sender.send({ channel, to, ...(s["subject"] ? { subject: text(s["subject"]) } : {}), text: wording, agent: { id: agent.id, name: agent.name }, key });
+    sent = await sender.send({ channel, to, ...(s["subject"] ? { subject: text(s["subject"]) } : {}), text: wording, agent: { id: agent.id, name: agent.name }, key, actor: ctx.actor });
   } catch (error) {
     return failed(`Could not hand the message over to be sent: ${message(error)}`, undefined, { retryable: true });
   }

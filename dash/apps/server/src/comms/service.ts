@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { CommitResult, WriteIntent, WriteReview } from "@freebirdai/connect";
 import type { ReadRequest, ReadResult, WriteOnBehalfOf } from "@freebirdai/connect/host";
 import {
@@ -97,6 +98,8 @@ export interface CommsDeps {
   readonly received?: (messages: readonly { readonly message: MailMessage; readonly contact?: Contact | undefined }[]) => Promise<void>;
   /** A draft a workflow step wrote was sent, saved or discarded: the step's case goes on. */
   readonly draftSettled?: (draft: MailDraft) => Promise<void>;
+  /** Somebody answered a message an agent started: a case waiting on that conversation hears it. */
+  readonly replyHeard?: (draft: MailDraft, message: MailMessage) => Promise<void>;
   readonly now: () => number;
   readonly newId: () => string;
   readonly log?: { warn(line: string): void };
@@ -309,6 +312,7 @@ export class CommsService {
       await this.deps.store.keep(id, [...fresh, ...kept.map((one) => updated.get(one.id) ?? one)]);
       await this.deps.store.setMark(id, { ...(await this.deps.store.mark(id)), refreshedAt: this.iso(), error: undefined });
       const contacts = await this.senders(fresh);
+      if (kept.length > 0) await this.hearReplies(id, fresh.filter((one) => !one.sent));
       /* The first read takes in what was already there: only mail after it is news. */
       if (kept.length > 0 && fresh.length > 0) {
         const arrived = fresh.filter((one) => !one.sent).map((message) => ({ message, contact: message.from ? contacts.get(message.from.address) : undefined }));
@@ -660,7 +664,17 @@ export class CommsService {
     }
     const now = this.iso();
     const sentId = approval.save ? undefined : this.provider(connection).sentId(result.record);
-    const done: MailDraft = { ...draft, status: approval.save ? "saved" : "sent", sentAt: now, sentBy: principal.userId, ...(sentId ? { sentId } : {}), updatedAt: now };
+    /* A new conversation's thread, where the provider said (Gmail), so its replies can be heard. */
+    const startedThread = !draft.threadId && !approval.save ? (result.record as { threadId?: unknown } | null | undefined)?.threadId : undefined;
+    const done: MailDraft = {
+      ...draft,
+      status: approval.save ? "saved" : "sent",
+      sentAt: now,
+      sentBy: principal.userId,
+      ...(sentId ? { sentId } : {}),
+      ...(typeof startedThread === "string" ? { threadId: startedThread } : {}),
+      updatedAt: now,
+    };
     delete (done as { error?: string }).error;
     await this.deps.store.putDraft(done);
     if (!approval.save && draft.replyTo) await this.deps.store.putState({ mailbox: connection.id, message: draft.replyTo, status: "replied", ...(draft.agent ? { agent: draft.agent } : {}), updatedAt: now });
@@ -676,6 +690,63 @@ export class CommsService {
     await this.deps.store.putDraft(gone);
     await this.deps.draftSettled?.(gone).catch(() => undefined);
     return gone;
+  }
+
+  /**
+   * Which mailbox an agent starts a conversation from: its own first, else a
+   * team mailbox its reach lets it act on. None: it cannot send email.
+   */
+  async mailboxFor(agentId: string): Promise<ConnectionSpec | null> {
+    const ready = this.mailboxConnections().filter((one) => this.statusOf(one) === "ready");
+    const own = ready.find((one) => one.mailbox?.owner.kind === "agent" && one.mailbox.owner.id === agentId);
+    if (own) return own;
+    for (const one of ready) if (one.mailbox?.owner.kind === "team" && (await this.agentMaySend(agentId, one)) === null) return one;
+    return null;
+  }
+
+  /**
+   * A new email an agent starts (a workflow's Email step), sent through the
+   * review as `principal`. `key` makes it at most once: the same key finds
+   * the email it already sent rather than sending another.
+   */
+  async sendNew(principal: Principal, input: { readonly agent: string; readonly to: string; readonly subject?: string; readonly text: string; readonly key: string }): Promise<MailDraft> {
+    const id = `out-${createHash("sha1").update(input.key).digest("hex").slice(0, 20)}`;
+    const held = await this.deps.store.draft(id);
+    if (held && (held.status === "sent" || held.status === "saved")) return held;
+    const connection = await this.mailboxFor(input.agent);
+    if (!connection) throw new CommsError("This agent has no mailbox to send from: give it one under Comms, or tick a team mailbox on its page.", 409);
+    const now = this.iso();
+    const draft: MailDraft = {
+      id,
+      mailbox: connection.id,
+      to: input.to,
+      cc: "",
+      subject: input.subject ?? "",
+      text: input.text,
+      agent: input.agent,
+      status: "open",
+      createdAt: held?.createdAt ?? now,
+      updatedAt: now,
+    };
+    await this.deps.store.putDraft(draft);
+    return this.sendNow(principal, id);
+  }
+
+  /** Answers to emails agents started: matched by thread, else by the subject and who it went to. */
+  private async hearReplies(mailbox: string, inbound: readonly MailMessage[]): Promise<void> {
+    if (!this.deps.replyHeard || inbound.length === 0) return;
+    const started = (await this.deps.store.drafts({ mailbox, status: "sent" })).filter((one) => one.id.startsWith("out-"));
+    if (started.length === 0) return;
+    const bare = (subject: string) => subject.replace(/^\s*((re|fw|fwd):\s*)+/i, "").trim().toLowerCase();
+    for (const message of inbound) {
+      const from = message.from?.address;
+      const draft = started.find(
+        (one) =>
+          (one.threadId !== undefined && one.threadId === message.threadId) ||
+          (from !== undefined && one.to.toLowerCase().includes(from) && bare(one.subject) !== "" && bare(one.subject) === bare(message.subject)),
+      );
+      if (draft) await this.deps.replyHeard(draft, message).catch((error: unknown) => this.deps.log?.warn(`a reply to ${draft.id} was not passed on: ${String(error)}`));
+    }
   }
 
   /** A person starts a reply of their own. */

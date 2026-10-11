@@ -39,6 +39,8 @@ export interface OutreachSender {
     readonly subject?: string | undefined;
     readonly text: string;
     readonly agent: Pick<AgentSpec, "id" | "name">;
+    /** Whose permission it goes out with: the workflow's actor. Email is sent through the review as them. */
+    readonly actor?: Principal | null;
     /** At most once: the same key is never sent twice. */
     readonly key: string;
   }): Promise<{ readonly status: "queued" | "sent" | "delivered" | "failed" | "not_sent"; readonly detail?: string; readonly conversation?: string }>;

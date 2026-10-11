@@ -147,7 +147,7 @@ import { CalendarService } from "./calendar/service.js";
 import type { EmailAdapter } from "@freebirdai/core";
 import { reportRoutes } from "./routes/reports.js";
 import { commsRoutes } from "./routes/comms.js";
-import { CommsService } from "./comms/service.js";
+import { CommsError, CommsService } from "./comms/service.js";
 
 /** How often each signed-in mailbox is read with nobody looking, so new mail starts its workflows. */
 const COMMS_EVERY_MS = 5 * 60_000;
@@ -1077,7 +1077,25 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     templates: options.templates ?? new MemoryTemplateStore(),
     signals: options.signals ?? new MemorySignalStore(),
     agents: agentStore,
-    ...(options.outreach ? { outreach: options.outreach } : {}),
+    /*
+     * Outreach: a host's own sender where it gives one; otherwise email goes
+     * out from the agent's mailbox through Comms (its own, or a team one it
+     * may send from), and texts and calls wait for step 9.
+     */
+    outreach: options.outreach ?? {
+      send: async (message) => {
+        if (message.channel !== "email") return { status: "not_sent", detail: "Texts and calls are not connected yet, so nothing was sent." };
+        if (!commsForWorkflows) return { status: "not_sent", detail: "Email isn't set up on this server." };
+        if (!message.actor) return { status: "not_sent", detail: "The workflow runs as nobody, so it cannot send email: turn it on again." };
+        try {
+          const sent = await commsForWorkflows.sendNew(message.actor, { agent: message.agent.id, to: message.to, ...(message.subject ? { subject: message.subject } : {}), text: message.text, key: message.key });
+          return { status: "sent", conversation: sent.id };
+        } catch (error) {
+          if (error instanceof CommsError) return { status: "not_sent", detail: error.message };
+          throw error;
+        }
+      },
+    },
     /* A webhook goes through the same guard as every other request to an address someone typed. */
     post: async (url, body, how) => {
       const headers: Record<string, string> = { "content-type": "application/json", ...(how?.key ? { "idempotency-key": how.key } : {}) };
@@ -1257,6 +1275,10 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     ...(options.mailApps ? { builtInApps: options.mailApps } : {}),
     contacts: { findOrCreate: (input) => contacts.findOrCreate(input), match: (id) => contacts.match(id) },
     draftSettled: (draft) => commsDraftSettled(draft),
+    /* Somebody answered an email an agent started: a Wait for a reply on that conversation hears it. */
+    replyHeard: async (draft, message) => {
+      await workflowEngine.emit(`reply:${draft.id}`, { from: message.from?.address ?? "", subject: message.subject, text: message.snippet, message: message.id }, `reply:${draft.id}:${message.id}`);
+    },
     received: async (arrived) => {
       const listening = (await workflowStore.list()).filter(
         (one): one is MailWorkflow & { trigger: Extract<MailWorkflow["trigger"], { kind: "message_received" }> } =>
