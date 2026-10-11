@@ -155,6 +155,18 @@ export const authSchema = z.discriminatedUnion("type", [
     type: z.literal("oauth2"),
     flow: z.enum(["authorization_code", "client_credentials"]),
     authorizeUrl: z.string().url().optional(),
+    /**
+     * Fixed values the sign-in page also needs, from the provider's own
+     * documentation: Google's `access_type=offline` and `prompt=consent`, without
+     * which it gives no refresh token. Never one of the values the flow sets.
+     */
+    authorizeParams: z
+      .record(z.string().regex(/^[a-z_]+$/).max(40), z.string().max(200))
+      .refine(
+        (params) => !Object.keys(params).some((name) => ["response_type", "client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "scope"].includes(name)),
+        "the sign-in sets that value itself",
+      )
+      .optional(),
     tokenUrl: z.string().url(),
     scopes: z.array(z.string().min(1).max(200)).max(50).default([]),
     clientIdRef: idSchema,

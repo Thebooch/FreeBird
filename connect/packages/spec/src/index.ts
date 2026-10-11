@@ -57,9 +57,12 @@ export {
   opSchema,
   paginationSchema,
   resolveOp,
+  MAIL_PROVIDERS,
+  mailboxOwnerSchema,
+  mailboxSchema,
 } from "./connection.js";
 
-export type { AuthSpec, ConnectionSpec, OpDef, OpSpec, PaginationSpec } from "./connection.js";
+export type { AuthSpec, ConnectionSpec, MailboxOwner, MailboxSpec, OpDef, OpSpec, PaginationSpec } from "./connection.js";
 
 export {
   ARCHETYPES,
@@ -165,6 +168,7 @@ export type { EntityRecipe, ListView } from "./recipes.js";
 export { readField, setField } from "./field-path.js";
 
 export {
+  MIME_FIELDS,
   WRITES_VERSION,
   WRITE_METHODS,
   pathShape,
@@ -188,7 +192,7 @@ export type {
   WriteReviewView,
 } from "./write.js";
 
-export { actionCreates, MODE_PREFERENCE, pairedAction, writeRoleOf } from "./write-roles.js";
+export { actionCreates, declaredRole, MODE_PREFERENCE, pairedAction, writeRoleOf } from "./write-roles.js";
 
 export type { RolePaths, WriteMode, WriteRole } from "./write-roles.js";
 

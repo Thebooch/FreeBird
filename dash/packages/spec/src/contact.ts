@@ -20,7 +20,7 @@ import { principalSchema } from "./access.js";
  *   never changes under a booking without someone seeing why.
  */
 
-export const CONTACT_ORIGINS = ["public_link", "agent", "member", "workflow"] as const;
+export const CONTACT_ORIGINS = ["public_link", "agent", "member", "workflow", "email"] as const;
 export type ContactOrigin = (typeof CONTACT_ORIGINS)[number];
 
 /** Where a field's value came from, weakest first. */

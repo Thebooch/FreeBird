@@ -81,9 +81,25 @@ export const writeBodySchema = z.object({
    * and never offered.
    */
   unsupported: z.string().max(200).optional(),
+  /**
+   * The body is an email: the fields named in `MIME_FIELDS` are written as
+   * one plain-text message (RFC 5322), encoded, and sent at `into` — Gmail's
+   * `raw`, or `message.raw` for a draft — beside any other field. Without
+   * `into` the encoded message is the whole body, as Microsoft Graph takes
+   * it. A person reviews the fields; the encoding is only how they travel.
+   */
+  mime: z
+    .object({
+      into: z.string().min(1).max(120).optional(),
+      encoding: z.enum(["base64url", "base64"]).default("base64url"),
+    })
+    .optional(),
 });
 
 export type WriteBody = z.infer<typeof writeBodySchema>;
+
+/** The fields a `mime` body writes into the message, by name. Anything else is sent beside it. */
+export const MIME_FIELDS = ["to", "cc", "bcc", "subject", "text", "inReplyTo", "references"] as const;
 
 export const writeOpDefSchema = z.object({
   /** Unique among writes. A separate namespace from `ops`. */
@@ -111,6 +127,21 @@ export const writeOpDefSchema = z.object({
   confirmed: z.boolean().optional(),
   /** True once a real request through this endpoint succeeded. */
   verified: z.boolean().default(false),
+  /**
+   * What this endpoint does, said by whoever wrote the entry, for one whose
+   * path does not say it: Gmail's `POST /messages/send` is a step on the
+   * messages collection, not a new message under it. A hand-checked entry
+   * says so here; an imported one never does, and is read off its path.
+   */
+  role: z
+    .object({
+      entity: idSchema,
+      kind: z.enum(["create", "update", "delete", "action"]),
+      /** For an action: its id, as an intent names it. */
+      action: z.string().regex(/^[a-zA-Z0-9_-]+$/).max(64).optional(),
+      danger: z.boolean().optional(),
+    })
+    .optional(),
 });
 
 export type WriteOpDef = z.infer<typeof writeOpDefSchema>;

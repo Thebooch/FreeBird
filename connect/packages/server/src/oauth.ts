@@ -79,6 +79,8 @@ export const oauthRoutes =
       pending.set(state, { connection: connection.id, verifier, redirectUri, at: now() });
 
       const url = new URL(auth.authorizeUrl);
+      /* The provider's own fixed values first; the flow's own are set after, and win. */
+      for (const [name, value] of Object.entries(auth.authorizeParams ?? {})) url.searchParams.set(name, value);
       url.searchParams.set("response_type", "code");
       url.searchParams.set("client_id", clientId);
       url.searchParams.set("redirect_uri", redirectUri);

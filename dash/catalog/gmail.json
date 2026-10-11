@@ -1,0 +1,393 @@
+{
+  "id": "gmail",
+  "title": "Gmail",
+  "baseUrl": "https://gmail.googleapis.com/gmail/v1/users/me",
+  "docsUrl": "https://developers.google.com/gmail/api/reference/rest",
+  "keyHelp": "Gmail signs in with a Google account. It needs an OAuth app's client ID and secret once per workspace: in Google Cloud, create a project, enable the Gmail API, set up the OAuth consent screen, and create an OAuth client of type Web application whose authorized redirect URI is the one Dash shows.",
+  "dialect": {
+    "auth": {
+      "type": "oauth2",
+      "flow": "authorization_code",
+      "authorizeUrl": "https://accounts.google.com/o/oauth2/v2/auth",
+      "authorizeParams": {
+        "access_type": "offline",
+        "prompt": "consent",
+        "include_granted_scopes": "true"
+      },
+      "tokenUrl": "https://oauth2.googleapis.com/token",
+      "scopes": [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.compose"
+      ],
+      "clientIdRef": "gmail-client-id",
+      "clientSecretRef": "gmail-client-secret",
+      "keyRef": "gmail-token",
+      "refreshRef": "gmail-refresh",
+      "clientAuth": "body",
+      "clientIdLabel": "OAuth client ID",
+      "clientSecretLabel": "OAuth client secret"
+    },
+    "pagination": {
+      "kind": "none"
+    }
+  },
+  "ops": [
+    {
+      "id": "profile",
+      "title": "Mailbox profile",
+      "path": "/profile",
+      "archetype": "summary",
+      "description": "The mailbox's address and its newest history id."
+    },
+    {
+      "id": "messages",
+      "title": "Messages",
+      "path": "/messages",
+      "rowsPath": "$.messages",
+      "timeFiltered": false,
+      "maxPages": 1,
+      "description": "Message ids, newest first; one page at a time.",
+      "params": [
+        {
+          "name": "q",
+          "in": "query",
+          "role": "search",
+          "description": "Gmail search syntax."
+        },
+        {
+          "name": "pageToken",
+          "in": "query"
+        },
+        {
+          "name": "maxResults",
+          "in": "query",
+          "type": "number",
+          "default": 25
+        }
+      ]
+    },
+    {
+      "id": "message",
+      "title": "Message",
+      "path": "/messages/{{param.id}}",
+      "archetype": "summary",
+      "params": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "role": "id"
+        },
+        {
+          "name": "format",
+          "in": "query",
+          "enum": [
+            "minimal",
+            "metadata",
+            "full"
+          ],
+          "default": "metadata"
+        }
+      ]
+    },
+    {
+      "id": "thread",
+      "title": "Thread",
+      "path": "/threads/{{param.id}}",
+      "archetype": "summary",
+      "params": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "role": "id"
+        },
+        {
+          "name": "format",
+          "in": "query",
+          "enum": [
+            "minimal",
+            "metadata",
+            "full"
+          ],
+          "default": "full"
+        }
+      ]
+    },
+    {
+      "id": "history",
+      "title": "Mailbox history",
+      "path": "/history",
+      "rowsPath": "$.history",
+      "timeFiltered": false,
+      "maxPages": 1,
+      "params": [
+        {
+          "name": "startHistoryId",
+          "in": "query",
+          "required": true
+        },
+        {
+          "name": "pageToken",
+          "in": "query"
+        },
+        {
+          "name": "historyTypes",
+          "in": "query",
+          "default": "messageAdded"
+        }
+      ]
+    },
+    {
+      "id": "labels",
+      "title": "Labels",
+      "path": "/labels",
+      "rowsPath": "$.labels",
+      "timeFiltered": false,
+      "maxPages": 1
+    },
+    {
+      "id": "drafts",
+      "title": "Drafts",
+      "path": "/drafts",
+      "rowsPath": "$.drafts",
+      "timeFiltered": false,
+      "maxPages": 1,
+      "params": [
+        {
+          "name": "pageToken",
+          "in": "query"
+        },
+        {
+          "name": "maxResults",
+          "in": "query",
+          "type": "number",
+          "default": 25
+        }
+      ]
+    },
+    {
+      "id": "draft",
+      "title": "Draft",
+      "path": "/drafts/{{param.id}}",
+      "archetype": "summary",
+      "params": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "role": "id"
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "id": "message",
+      "title": "Messages",
+      "idField": "id",
+      "listOp": "messages",
+      "detailOp": "message",
+      "detailParam": "id"
+    },
+    {
+      "id": "draft",
+      "title": "Drafts",
+      "idField": "id",
+      "listOp": "drafts",
+      "detailOp": "draft",
+      "detailParam": "id"
+    },
+    {
+      "id": "label",
+      "title": "Labels",
+      "idField": "id",
+      "listOp": "labels"
+    }
+  ],
+  "entities": [
+    {
+      "id": "message",
+      "resource": "message",
+      "name": {
+        "one": "Message",
+        "many": "Messages"
+      },
+      "kind": "other",
+      "identity": {
+        "field": "id",
+        "observed": false
+      },
+      "fields": [],
+      "verified": false
+    },
+    {
+      "id": "draft",
+      "resource": "draft",
+      "name": {
+        "one": "Draft",
+        "many": "Drafts"
+      },
+      "kind": "other",
+      "identity": {
+        "field": "id",
+        "observed": false
+      },
+      "fields": [],
+      "verified": false
+    }
+  ],
+  "writes": [
+    {
+      "id": "send",
+      "title": "Send an email",
+      "method": "POST",
+      "path": "/messages/send",
+      "returns": "record",
+      "confidence": "declared",
+      "body": {
+        "contentType": "application/json",
+        "mime": {
+          "into": "raw",
+          "encoding": "base64url"
+        },
+        "fields": [
+          {
+            "path": "to",
+            "label": "To",
+            "type": "string",
+            "required": true,
+            "description": "Addresses, separated by commas.",
+            "mappedBy": "person"
+          },
+          {
+            "path": "cc",
+            "label": "Cc",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "bcc",
+            "label": "Bcc",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "subject",
+            "label": "Subject",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "text",
+            "label": "Message",
+            "type": "string",
+            "required": true,
+            "mappedBy": "person"
+          },
+          {
+            "path": "inReplyTo",
+            "label": "In reply to",
+            "type": "string",
+            "mappedBy": "person",
+            "description": "The Message-ID it answers, so it threads."
+          },
+          {
+            "path": "references",
+            "label": "References",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "threadId",
+            "label": "Conversation",
+            "type": "string",
+            "mappedBy": "person",
+            "description": "Gmail's thread, so a reply stays in it."
+          }
+        ]
+      },
+      "role": {
+        "entity": "message",
+        "kind": "action",
+        "action": "send",
+        "danger": false
+      }
+    },
+    {
+      "id": "create-draft",
+      "title": "Save a draft",
+      "method": "POST",
+      "path": "/drafts",
+      "returns": "record",
+      "confidence": "declared",
+      "body": {
+        "contentType": "application/json",
+        "mime": {
+          "into": "message.raw",
+          "encoding": "base64url"
+        },
+        "fields": [
+          {
+            "path": "to",
+            "label": "To",
+            "type": "string",
+            "required": true,
+            "description": "Addresses, separated by commas.",
+            "mappedBy": "person"
+          },
+          {
+            "path": "cc",
+            "label": "Cc",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "bcc",
+            "label": "Bcc",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "subject",
+            "label": "Subject",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "text",
+            "label": "Message",
+            "type": "string",
+            "required": true,
+            "mappedBy": "person"
+          },
+          {
+            "path": "inReplyTo",
+            "label": "In reply to",
+            "type": "string",
+            "mappedBy": "person",
+            "description": "The Message-ID it answers, so it threads."
+          },
+          {
+            "path": "references",
+            "label": "References",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "message.threadId",
+            "label": "Conversation",
+            "type": "string",
+            "mappedBy": "person"
+          }
+        ]
+      },
+      "role": {
+        "entity": "draft",
+        "kind": "create"
+      }
+    }
+  ],
+  "writesVersion": 1,
+  "validateOpId": "profile"
+}

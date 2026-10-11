@@ -13,7 +13,7 @@ import type { Coercion } from "./coercion.js";
 import { fieldReading, isFlagField } from "./observe.js";
 import { type Bundle, bundleOf, bundlesOf } from "./bundles.js";
 import { pathShape, type WriteField, type WriteMethod, type WriteOpDef } from "./write.js";
-import { MODE_PREFERENCE, pairedAction, writeRoleOf, type WriteMode, type WriteRole } from "./write-roles.js";
+import { MODE_PREFERENCE, declaredRole, pairedAction, writeRoleOf, type WriteMode, type WriteRole } from "./write-roles.js";
 import { mapWriteFields } from "./write-map.js";
 
 /** A named set of fields, for a record view that sections its fields. */
@@ -200,6 +200,8 @@ export interface WriteTarget {
   readonly fields: readonly WriteField[];
   /** Set when the body cannot be built from a form, so this is never offered. */
   readonly unsupported?: string | undefined;
+  /** The body is an email, encoded as `WriteBody.mime` says. */
+  readonly mime?: { readonly into?: string | undefined; readonly encoding: "base64url" | "base64" } | undefined;
   readonly action?:
     | {
         readonly id: string;
@@ -1466,6 +1468,7 @@ export const entityGraph = (input: EntityGraphInput): EntityGraph => {
         parents,
         fields: mapWriteFields(entity, op.body?.fields ?? []),
         ...(op.body?.unsupported ? { unsupported: op.body.unsupported } : {}),
+        ...(op.body?.mime ? { mime: { ...(op.body.mime.into ? { into: op.body.mime.into } : {}), encoding: op.body.mime.encoding } } : {}),
         ...(role.kind === "action"
           ? { action: { id: role.id, danger: role.danger, ...(role.creates ? { creates: true } : {}) } }
           : {}),
@@ -1487,12 +1490,17 @@ export const entityGraph = (input: EntityGraphInput): EntityGraph => {
     let remove: WriteTarget | undefined;
     const actions: WriteTarget[] = [];
     for (const op of input.writes) {
-      const role = writeRoleOf(op, {
-        list: list?.path,
-        detail: detail?.path,
-        singleton,
-        readShapes,
-      });
+      /* A role the entry declares is the role: for this record type, and no other. */
+      const role = op.role
+        ? op.role.entity === entity.id
+          ? declaredRole(op)
+          : null
+        : writeRoleOf(op, {
+            list: list?.path,
+            detail: detail?.path,
+            singleton,
+            readShapes,
+          });
       if (!role) continue;
       if (role.kind === "action") {
         actions.push(targetOf(op, role));

@@ -47,7 +47,8 @@ export interface PendingWrite {
   readonly target: WriteTarget;
   /** Every path value, filled. */
   readonly params: Readonly<Record<string, string>>;
-  readonly body: Record<string, unknown> | undefined;
+  /** What is sent: a JSON body, or an encoded email sent as it is (`WriteTarget.mime`). */
+  readonly body: Record<string, unknown> | string | undefined;
   /** The record as read immediately before the review; `null` when there is none yet. */
   readonly before: unknown;
   /** What the stale check compares: only the values this change reads, plus identity. */
