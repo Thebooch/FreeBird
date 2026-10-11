@@ -14,6 +14,10 @@ export const DASH_SCREENS = {
   settings: { id: "calendar-settings", page: "#/agent/calendar/settings" },
   contacts: { id: "contacts", page: "#/agent/contacts" },
   contactFields: { id: "contact-fields", page: "#/agent/contacts/fields" },
+  workflows: { id: "workflows", page: "#/agent/workflows" },
+  agents: { id: "agents", page: "#/agent/agents" },
+  /** The dashboard tab open now; its page is that tab's (`#/d/<id>`). */
+  board: { id: "board", page: "#/" },
 } as const;
 
 export type DashScreen = keyof typeof DASH_SCREENS;

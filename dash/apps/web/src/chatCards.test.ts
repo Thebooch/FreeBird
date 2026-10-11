@@ -74,7 +74,7 @@ describe("ChatActionCard", () => {
   });
 
   it("falls back to the action's name and a given line when there is no preview", () => {
-    const html = card({ pending: pending({ componentId: "board", actionId: "add_widget" }), fallbackSummary: 'Add "rent" to this dashboard.' });
+    const html = card({ pending: pending({ componentId: "dashboard", actionId: "add_widget" }), fallbackSummary: 'Add "rent" to this dashboard.' });
     expect(html).toContain("add widget");
     expect(html).toContain("Add &quot;rent&quot; to this dashboard.");
     expect(html).not.toContain("dash-action-card__where");

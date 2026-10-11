@@ -1,6 +1,7 @@
 import { createComponentRegistry } from "@freebirdai/core";
 import { FreeBirdProvider } from "@freebirdai/react";
 import { useOptionalDashboard } from "@freebirdai/dash-react";
+import { useChatFocus, useChatScreen } from "./agent/chatScreen.js";
 import {
   createContext,
   useContext,
@@ -106,10 +107,17 @@ export interface ChatSessionProps {
  */
 export const ChatScopeReporter = ({
   dashboardId,
+  onBoard = false,
   openRecord,
   openEntity,
 }: {
   readonly dashboardId: string | null;
+  /**
+   * Whether a board, or a record on one, is what is showing. The reporter is
+   * mounted on every page, so it says "the board is on screen" only then and
+   * leaves the Agent pages to say what they show.
+   */
+  readonly onBoard?: boolean;
   /** The record page currently open, when one was opened from a widget's row. */
   readonly openRecord?: { readonly widgetId: string; readonly recordId: string } | undefined;
   /**
@@ -161,8 +169,28 @@ export const ChatScopeReporter = ({
   useEffect(() => {
     report?.({ dashboardId, range: encoded, view, filters });
   }, [report, dashboardId, encoded, view, filters]);
+
+  /*
+   * What is on screen, in guide's terms, as every page says it: the open tab,
+   * and the record open on it. The headers above stay: they are what the
+   * server reads the board's data with, not what it tells the model.
+   */
+  useChatScreen(onBoard && dashboardId ? BOARD_SCREEN : []);
+  const widgetTitle = openRecord ? dashboard?.dashboard.widgets.find((one) => one.id === openRecord.widgetId)?.title : undefined;
+  useChatFocus(
+    "board",
+    !onBoard
+      ? null
+      : openRecord
+        ? { id: openRecord.recordId, label: widgetTitle ? `a record from "${widgetTitle}"` : undefined }
+        : openEntity
+          ? { id: openEntity.recordId, label: `a ${openEntity.entityId} record` }
+          : null,
+  );
   return null;
 };
+
+const BOARD_SCREEN = ["board"] as const;
 
 export const ChatSession = ({ children }: ChatSessionProps): JSX.Element => {
   const scopeRef = useRef<ChatScope>({

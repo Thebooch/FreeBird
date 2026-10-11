@@ -71,6 +71,24 @@ export const SCREENS = {
     page: DASH_SCREENS.contactFields.page,
     description: "The facts contacts hold, where each comes from, and the rules that match contacts to records.",
   },
+  workflows: {
+    id: DASH_SCREENS.workflows.id,
+    title: "Workflows",
+    page: DASH_SCREENS.workflows.page,
+    description: "Workflows: what starts each one, its steps, and its templates. Drafting, making and changing them.",
+  },
+  board: {
+    id: DASH_SCREENS.board.id,
+    title: "Dashboard",
+    page: DASH_SCREENS.board.page,
+    description: "The dashboard tab open now and its widgets.",
+  },
+  agents: {
+    id: DASH_SCREENS.agents.id,
+    title: "Agents",
+    page: DASH_SCREENS.agents.page,
+    description: "Agents: the AI workers, their role, instructions, personality and reach. Making, changing and archiving them.",
+  },
 } as const satisfies Record<string, Screen>;
 
 /** A screen as a guide component: its anchor, its knowledge and its actions. */
@@ -175,12 +193,12 @@ export const changeRows = (
 export const landed = <T extends object>(
   result: T,
   screen: Screen,
-  where: { readonly title: string; readonly summary: string; readonly item?: string; readonly field?: string },
+  where: { readonly title: string; readonly summary: string; readonly item?: string; readonly field?: string; readonly page?: string },
 ) =>
   withCitation(result, {
     title: where.title,
     summary: where.summary,
-    page: screen.page,
+    page: where.page ?? screen.page,
     selector: revealSelector({ component: screen.id, ...(where.item ? { item: where.item } : {}), ...(where.field ? { field: where.field } : {}) }),
   });
 

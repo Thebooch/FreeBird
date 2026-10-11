@@ -1,3 +1,4 @@
+import { citationOf } from "@freebirdai/core";
 import { agentSchema, workflowSchema, type Principal } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import { ownerPolicy, type Policy } from "../identity/policy.js";
@@ -6,6 +7,7 @@ import { WorkflowService } from "../workflows/service.js";
 import { MemoryTemplateStore, MemoryWorkflowStore } from "../workflows/store.js";
 import { TemplateService } from "../workflows/templates.js";
 import { BOOKING_RECIPES } from "../workflows/recipes.js";
+import { buildChatRegistry } from "./registry.js";
 import { CHAT_TRIAL_CASES, workflowActions, workflowKnowledge, type WorkflowChatOps } from "./workflow-actions.js";
 
 const owner: Principal = { userId: "o", workspaceId: "acme", role: "owner", kind: "member" };
@@ -126,5 +128,23 @@ describe("booking templates from the chat", () => {
     );
     const [made] = await service.list();
     expect(made?.trigger).toMatchObject({ kind: "booking", events: ["turned_away"], types: ["showing"] });
+  });
+});
+
+describe("workflows as a page the chat knows", () => {
+  it("leaves a chip that opens the workflow it made, ringing its row", async () => {
+    const { action } = await build();
+    const made = await (await action("create_workflow")).handler!(complete as never, ctxFor(owner));
+    const id = (made as { workflowId: string }).workflowId;
+    expect(citationOf(made)).toMatchObject({ page: `#/agent/workflows/${encodeURIComponent(id)}`, selector: `[data-freebird-component="workflows"] [data-freebird-item="${id}"]` });
+  });
+
+  it("is its own component, apart from the dashboard, with its page", async () => {
+    const { opsFor } = await build();
+    const board = { id: "ops", title: "Ops", widgets: [], layout: { cells: [] } };
+    const registry = buildChatRegistry({ dashboard: board as never, reports: [], board: { getDashboard: () => board as never, putDashboard: () => undefined } as never, workflows: await opsFor() });
+    expect(registry.get("workflows")?.domAnchor).toEqual({ selector: '[data-freebird-component="workflows"]', page: "#/agent/workflows" });
+    expect(registry.get("workflows")?.actions?.map((one) => one.id)).toContain("create_workflow");
+    expect(registry.get("dashboard")?.actions?.some((one) => one.id === "create_workflow")).toBe(false);
   });
 });

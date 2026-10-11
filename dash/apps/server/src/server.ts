@@ -137,6 +137,7 @@ import type { PartRegistry } from "@freebirdai/dash-parts";
 import { partsRoutes } from "./routes/parts.js";
 import { agentRoutes } from "./routes/agents.js";
 import { buildScreens } from "./chat/screens/index.js";
+import { describeTurn, periodParams } from "./context/period.js";
 import { workflowRoutes } from "./routes/workflows.js";
 import { calendarRoutes } from "./routes/calendar.js";
 import { CalendarService } from "./calendar/service.js";
@@ -3512,7 +3513,14 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           if (already) return already.value;
           const dashboards = store.listDashboards();
           const context = conciergeContext();
-          const resolved = resolvedFor(dashboard, ctx.auth.extra?.["range"]);
+          /*
+           * The period the question names, when it names one; otherwise the
+           * window the tab shows. "Last month" reads last month even while
+           * the board shows the last seven days.
+           */
+          const asked = args as { from?: unknown; to?: unknown };
+          const resolved =
+            periodParams(asked.from, asked.to, dashboard.params.timeZone) ?? resolvedFor(dashboard, ctx.auth.extra?.["range"]);
           const outcome = await answerFromData(args, {
             /*
              * The conversation, not the board. What a session is currently
@@ -4258,6 +4266,17 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
        * never shown is exactly the confidently-wrong answer to avoid.
        */
       knowledgeContext: { maxChars: 24_000 },
+      /*
+       * Today's date and the window the tab shows, each turn. Both change from
+       * turn to turn, so they ride after the cache point rather than in the
+       * registry; "last month" needs the first to mean anything.
+       */
+      turnNote: ({ auth }) => {
+        const dashboard = dashboardFor(auth);
+        const zone = dashboard?.params.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const window = dashboard ? resolvedFor(dashboard, auth.extra?.["range"]).range : null;
+        return describeTurn({ now: Date.now(), zone, window });
+      },
       // No email adapter, so no digests; the worker is not running either.
       scheduler: "external",
       systemPrompt: CHAT_SYSTEM_PROMPT,

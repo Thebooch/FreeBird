@@ -20,6 +20,9 @@ const SCREEN_TITLES: Readonly<Record<DashScreen, string>> = {
   settings: "Scheduling settings",
   contacts: "Contacts",
   contactFields: "Contact fields",
+  workflows: "Workflows",
+  agents: "Agents",
+  board: "Dashboard",
 };
 
 /** The screen a component id is, in words, or null for the dashboard's own. */

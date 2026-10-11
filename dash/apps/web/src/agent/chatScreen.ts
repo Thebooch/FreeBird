@@ -22,19 +22,23 @@ const useChatStore = () => {
   }
 };
 
-/** These screens are on screen while the caller is mounted. */
+/**
+ * These screens are on screen while the caller is mounted. An empty list
+ * reports nothing, rather than clearing what another page reported: a part of
+ * the app that stays mounted everywhere can report only where it is shown.
+ */
 export const useChatScreen = (screens: readonly DashScreen[]): void => {
   const store = useChatStore();
   const key = screens.join(",");
   useEffect(() => {
-    if (!store) return undefined;
+    if (!store || key === "") return undefined;
     store.setActiveComponentIds(key.split(",").filter(Boolean).map((one) => DASH_SCREENS[one as DashScreen].id));
     return () => store.setActiveComponentIds([]);
   }, [store, key]);
 };
 
 /** The one thing open on a screen, while it is open. */
-export const useChatFocus = (screen: DashScreen, item: { readonly id: string; readonly label: string } | null): void => {
+export const useChatFocus = (screen: DashScreen, item: { readonly id: string; readonly label?: string | undefined } | null): void => {
   const store = useChatStore();
   const id = item?.id;
   const label = item?.label;

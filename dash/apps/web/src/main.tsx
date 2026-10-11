@@ -20,11 +20,13 @@ import type {
   WidgetSpec,
 } from "@freebirdai/dash-spec";
 import { connectionSchema, parseDashboard, withoutWidget } from "@freebirdai/dash-spec";
-import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
+import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { api } from "./api.js";
 import { ChatColumn } from "./ChatColumn.jsx";
 import { ChatScopeReporter, ChatSession } from "./ChatSession.jsx";
+import { BoardAsk } from "./BoardAsk.jsx";
+import { DASH_SCREENS } from "@freebirdai/dash-spec";
 import { showWidget } from "./showWidget.js";
 import { ConnectionManager } from "./ConnectionManager.jsx";
 import { autoArrange, isTypingTarget } from "./editing.js";
@@ -372,6 +374,8 @@ const App = (): JSX.Element => {
   /** The widget whose frame is being changed, if any. */
   const [framing, setFraming] = useState<string | null>(null);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
+  /* Stable, so a board address asking for the panel opens it once. */
+  const openConnections = useCallback(() => setConnectionsOpen(true), []);
   const [chatOpen, setChatOpen] = useState(false);
   /** Something the shell is saying for the user, cleared once the chat has it. */
   const [pendingMessage, setPendingMessage] = useState<string | null>(null);
@@ -1086,6 +1090,7 @@ const App = (): JSX.Element => {
    */
   const overlays = (
     <>
+      <BoardAsk route={route} onOpenConnections={openConnections} />
       {/*
        * Reports which board and which window the conversation is about.
        * Rendered here, inside the dashboard's provider, because the resolved
@@ -1094,6 +1099,7 @@ const App = (): JSX.Element => {
        */}
       <ChatScopeReporter
         dashboardId={live.dashboard?.id ?? null}
+        onBoard={route.kind === "board" || route.kind === "record" || route.kind === "entity"}
         {...(route.kind === "record" && route.widgetId
           ? { openRecord: { widgetId: route.widgetId, recordId: route.recordId } }
           : {})}
@@ -1127,7 +1133,6 @@ const App = (): JSX.Element => {
           setJustAdded(widgetId);
           setArranging(true);
         }}
-        onSwitchDashboard={(id) => navigate({ kind: "board", dashboardId: id })}
         /*
          * Only the panels the assistant genuinely cannot stand in for. A
          * widget is no longer one of them: it builds those itself, in the
@@ -1415,6 +1420,7 @@ const App = (): JSX.Element => {
         )}
         <Dashboard
           key={live.dashboard.id}
+          rootData={{ "data-freebird-component": DASH_SCREENS.board.id }}
           /*
            * The record page renders *through* the dashboard rather than beside
            * it: it needs the board's widgets to find its drill-down, and the

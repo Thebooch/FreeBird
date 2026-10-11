@@ -104,7 +104,10 @@ describe("the calendar's and contacts' screens, as the chat's components", () =>
   it("registers every screen with its place in the app, and says what each action takes", async () => {
     const { build } = await world();
     const screens = await build();
-    expect(screens.map((one) => one.id)).toEqual(Object.values(SCREENS).map((one) => one.id));
+    /* Agents and workflows are pages too, registered by the chat's registry with their ops. */
+    const others: readonly string[] = [SCREENS.agents.id, SCREENS.workflows.id, SCREENS.board.id];
+    const own = Object.values(SCREENS).filter((one) => !others.includes(one.id));
+    expect(screens.map((one) => one.id)).toEqual(own.map((one) => one.id));
     for (const screen of screens) {
       expect(screen.domAnchor).toEqual({ selector: `[data-freebird-component="${screen.id}"]`, page: Object.values(SCREENS).find((one) => one.id === screen.id)!.page });
       for (const action of screen.actions ?? []) {
