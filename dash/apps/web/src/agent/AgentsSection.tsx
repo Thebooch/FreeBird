@@ -7,6 +7,7 @@ import {
   type AgentKnowledge,
   type AgentSpec,
   type AgentTool,
+  type MailboxView,
   type Scope,
 } from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -24,6 +25,8 @@ import {
   removeRow,
   rowKey,
   rowsFromReach,
+  sendsFrom,
+  setSendsFrom,
   togglePermission,
   type ReachRow,
 } from "./reach.js";
@@ -104,6 +107,44 @@ const Swatches = ({ value, onPick }: { value: number; onPick: (color: number) =>
     ))}
   </div>
 );
+
+/**
+ * Which mailboxes the agent's replies go out from: its own addresses always;
+ * a team mailbox only when ticked here (reading and acting on it, in its
+ * reach). Every reply is still reviewed before it is sent unless its workflow
+ * step is automatic.
+ */
+const SendsFrom = ({ agentId, rows, onChange }: { readonly agentId: string | undefined; readonly rows: readonly ReachRow[]; readonly onChange: (rows: ReachRow[]) => void }): JSX.Element => {
+  const [boxes, setBoxes] = useState<readonly MailboxView[] | null>(null);
+  useEffect(() => {
+    void api.commsMailboxes().then((answer) => setBoxes(answer.mailboxes), () => setBoxes([]));
+  }, []);
+  if (boxes === null) return <span className="dash-hint">Reading mailboxes…</span>;
+  const own = boxes.filter((box) => box.owner.kind === "agent" && box.owner.id === agentId);
+  const team = boxes.filter((box) => box.owner.kind === "team");
+  return (
+    <div className="dash-reach" data-testid="agent-sends-from">
+      {own.map((box) => (
+        <div key={box.id} className="dash-reach__row">
+          <span className="dash-reach__where">{box.address ?? box.title}</span>
+          <span className="dash-hint">Its own address</span>
+        </div>
+      ))}
+      {team.map((box) => (
+        <label key={box.id} className="dash-reach__row dash-reach__check">
+          <input type="checkbox" checked={sendsFrom(rows, box.id)} onChange={(event) => onChange(setSendsFrom(rows, box.id, event.target.checked))} />
+          <span className="dash-reach__where">{box.address ?? box.title}</span>
+          <span className="dash-hint">Team mailbox</span>
+        </label>
+      ))}
+      <span className="dash-hint">
+        {own.length === 0 && team.length === 0
+          ? "No mailboxes yet. Add one under Comms; one set up for this agent alone is the address it sends from."
+          : "It sends from its own address. Tick a team mailbox to let it reply from that one too."}
+      </span>
+    </div>
+  );
+};
 
 const ReachEditor = ({
   rows,
@@ -387,6 +428,10 @@ const Editor = ({
         <div className="dash-field">
           <label>What it may touch</label>
           <ReachEditor rows={rows} onChange={setRows} connections={connections} entities={entities} loadEntities={loadEntities} />
+        </div>
+        <div className="dash-field">
+          <label>Email it sends from</label>
+          <SendsFrom agentId={agent?.id} rows={rows} onChange={setRows} />
           <span className="dash-hint">
             This is the most it can ever do. Its tools and triggers stay inside it, and anything it changes is still limited to
             what the person approving it may do.

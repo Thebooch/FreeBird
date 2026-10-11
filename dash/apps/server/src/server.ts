@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -33,7 +33,7 @@ import type {
   TimeRange,
   WidgetBrief,
 } from "@freebirdai/dash-spec";
-import type { MailDraft } from "@freebirdai/dash-spec";
+import { fieldValueOf, type MailDraft, type WorkflowSpec as MailWorkflow } from "@freebirdai/dash-spec";
 import {
   readField,
   authTokenRefs,
@@ -148,6 +148,9 @@ import type { EmailAdapter } from "@freebirdai/core";
 import { reportRoutes } from "./routes/reports.js";
 import { commsRoutes } from "./routes/comms.js";
 import { CommsService } from "./comms/service.js";
+
+/** How often each signed-in mailbox is read with nobody looking, so new mail starts its workflows. */
+const COMMS_EVERY_MS = 5 * 60_000;
 import { MemoryCommsStore, type CommsStore } from "./comms/store.js";
 import { ReportService } from "./reports/service.js";
 import { MemoryReportStore, type ReportStore } from "./reports/store.js";
@@ -172,7 +175,7 @@ import { MemoryContactStore, type ContactStore } from "./contacts/store.js";
 import { SchedulingService, type WorkspaceMember } from "./scheduling/service.js";
 import { MemorySchedulingStore, type SchedulingStore } from "./scheduling/store.js";
 import { explainDraft } from "./workflows/draft.js";
-import { WorkflowEngine } from "./workflows/engine.js";
+import { CaseBusy, WorkflowEngine } from "./workflows/engine.js";
 import { WorkflowRunner } from "./workflows/runner.js";
 import { WorkflowService } from "./workflows/service.js";
 import { startFromAgentTool, type Starter } from "./workflows/start.js";
@@ -185,6 +188,7 @@ import {
   MemoryTaskStore,
   MemoryTemplateStore,
   MemoryWorkflowStore,
+  RevisionConflict,
   type CalendarStore,
   type CaseStore,
   type SignalStore,
@@ -1044,8 +1048,19 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   let bookingDispatcher: BookingDispatcher | undefined;
   /* Set once reports exist, below; Send a report reaches it only when it runs. */
   let reportsForWorkflows: ReportService | undefined;
+  /* Set once Communications exists, below; Reply to the email reaches it only when it runs. */
+  let commsForWorkflows: CommsService | undefined;
+  const commsNeeded = (): CommsService => {
+    if (!commsForWorkflows) throw new Error("Email isn't set up on this server.");
+    return commsForWorkflows;
+  };
   const workflowEnv: WorkflowEnv = {
     bookings: () => bookingsForWorkflows,
+    comms: {
+      conversation: (mailbox, message, threadId) => commsNeeded().conversationText(mailbox, message, threadId),
+      draft: (input) => commsNeeded().draft(input),
+      send: (principal, draft) => commsNeeded().sendNow(principal, draft),
+    },
     reports: {
       send: async (id, key) => {
         if (!reportsForWorkflows) throw new Error("Reports aren't set up on this server.");
@@ -1239,10 +1254,40 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     store: options.comms ?? new MemoryCommsStore(),
     contacts: { findOrCreate: (input) => contacts.findOrCreate(input), match: (id) => contacts.match(id) },
     draftSettled: (draft) => commsDraftSettled(draft),
+    received: async (arrived) => {
+      const listening = (await workflowStore.list()).filter(
+        (one): one is MailWorkflow & { trigger: Extract<MailWorkflow["trigger"], { kind: "message_received" }> } =>
+          one.trigger.kind === "message_received" && one.enabled && !one.parked && one.trigger.channels.includes("email"),
+      );
+      for (const { message, contact } of arrived) {
+        const row: Record<string, unknown> = {
+          ...message,
+          channel: "email",
+          ...(contact ? { contact: { id: contact.id, name: contact.name, emails: contact.emails, phones: contact.phones, fields: Object.fromEntries(Object.entries(contact.fields).map(([key, value]) => [key, fieldValueOf(value)?.value])) } } : {}),
+        };
+        for (const workflow of listening) {
+          if (workflow.trigger.mailboxes.length > 0 && !workflow.trigger.mailboxes.includes(message.mailbox)) continue;
+          /* Made from the workflow and the message, so a message read twice opens one case. */
+          const id = `mr-${createHash("sha1").update(`${workflow.id}:${message.mailbox}:${message.id}`).digest("hex").slice(0, 16)}`;
+          try {
+            await workflowEngine.create(workflow, { id, row, rowKey: `${message.mailbox}:${message.id}`, start: { kind: "message", message: `${message.mailbox}:${message.id}` } });
+            await workflowEngine.advance(id);
+          } catch (error) {
+            if (!(error instanceof CaseBusy) && !(error instanceof RevisionConflict)) app.log.warn(`"${workflow.name}" did not start for a new email: ${String(error)}`);
+          }
+        }
+      }
+    },
     now: () => Date.now(),
     newId: () => randomUUID(),
     log: { warn: (line) => app.log.warn(line) },
   });
+  commsForWorkflows = comms;
+  /* A draft a Reply step wrote was sent, saved or discarded: its case goes on down that way. */
+  commsDraftSettled = async (draft) => {
+    if (!draft.task) return;
+    await workflowEngine.emit(`draft:${draft.id}`, { status: draft.status, ...(draft.sentBy ? { by: draft.sentBy } : {}) }, `draft:${draft.id}:${draft.status}`);
+  };
   void app.register(commsRoutes({ comms }));
   /* Who is in the workspace: hosts, and who may answer an approval. Without sign-in, the one person this server answers to. */
   const workspaceMembers = options.members ?? (async () => [{ userId: LOCAL_USER_ID, email: "", role: "owner" as const }]);
@@ -1373,6 +1418,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       { name: "booking holds", run: () => bookings.settleDue() },
       { name: "reports", run: () => reportService.runDue() },
       { name: "tracked values", run: () => reportService.recordDue() },
+      /* New mail, with nobody looking: each signed-in mailbox read every few minutes, which starts its workflows. */
+      { name: "mail", run: () => comms.refreshDue(COMMS_EVERY_MS) },
     ],
   });
   if (options.workflowRunner === true) workflowRunner.start();

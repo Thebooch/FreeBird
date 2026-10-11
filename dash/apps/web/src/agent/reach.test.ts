@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addRow, reachFromRows, removeRow, rowsFromReach, togglePermission } from "./reach.js";
+import { addRow, reachFromRows, removeRow, rowsFromReach, sendsFrom, setSendsFrom, togglePermission } from "./reach.js";
 
 describe("an agent's reach, as rows", () => {
   const reach = [
@@ -36,5 +36,16 @@ describe("an agent's reach, as rows", () => {
 
   it("drops a place with nothing ticked when turned back into a reach", () => {
     expect(reachFromRows([{ scope: { connection: "pms" }, permissions: [] }])).toEqual([]);
+  });
+});
+
+
+describe("sending from a team mailbox", () => {
+  it("is reading and acting on the whole mailbox, added and taken away together", () => {
+    const on = setSendsFrom([], "gmail", true);
+    expect(sendsFrom(on, "gmail")).toBe(true);
+    expect(on[0]?.permissions).toEqual(["records.read", "records.act"]);
+    expect(setSendsFrom(on, "gmail", false)).toEqual([]);
+    expect(sendsFrom([{ scope: { connection: "gmail", entity: "message" }, permissions: ["records.act"] }], "gmail")).toBe(false);
   });
 });

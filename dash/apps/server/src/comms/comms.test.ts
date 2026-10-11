@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CatalogStore, KeyStore, LocalAesVault } from "@freebirdai/connect/host";
 import type { ConnectionSpec, MailPage, MailboxView } from "@freebirdai/dash-spec";
+import { fakeLlm } from "@freebirdai/dash-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
@@ -46,7 +47,7 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-const makeApp = () => buildServer({ store, keys, catalog: new CatalogStore(seed, join(dir, "overlay")), llm: null, http: mail.http });
+const makeApp = (llm: ReturnType<typeof fakeLlm> | null = null) => buildServer({ store, keys, catalog: new CatalogStore(seed, join(dir, "overlay")), llm, http: mail.http });
 
 /** A mailbox signed in: the token the broker would have got, put where it keeps it. */
 const signIn = (id: string): void => {
@@ -192,6 +193,57 @@ describe("Communications", () => {
     expect(mail.sent[0]).toMatchObject({ provider: "outlook", draft: true });
     expect(mail.sent[0]!.message).toContain("To: Sam Lee <sam@example.net>");
     expect(mail.sent[0]!.message).toContain("Subject: Re: Showing on Friday?");
+    await app.close();
+  });
+});
+
+describe("Reply to the email, in a workflow", () => {
+  it("drafts a reply when an email arrives, sends it from a team mailbox only with the agent's leave, and goes on", async () => {
+    const app = makeApp(fakeLlm([{ text: "Thanks Rae, a plumber will call you today." }]));
+    await setUp(app);
+    signIn("gmail");
+    /* The first read takes in what was there: no workflow starts for old mail. */
+    await app.inject({ method: "GET", url: "/api/comms?area=team" });
+    const saved = await app.inject({
+      method: "PUT",
+      url: "/api/workflows/new",
+      payload: {
+        name: "Answer new mail",
+        enabled: true,
+        trigger: { kind: "message_received", channels: ["email"], mailboxes: ["gmail"] },
+        nodes: [{ id: "reply", action: "outreach.reply", settings: { agentId: "leasing", instructions: "Say a plumber will call today.", send: "approval", timeout: "3d" }, mode: "auto" }],
+        edges: [{ id: "a", from: "trigger", to: "reply" }],
+      },
+    });
+    expect(saved.statusCode).toBe(200);
+    mail.gmail.push({ id: "g4", threadId: "gt4", from: "Rae <rae@example.com>", to: "team@example.com", subject: "Sink", snippet: "The sink is leaking", at: at(30), text: "The sink is leaking again." });
+    await app.inject({ method: "POST", url: "/api/comms/mailboxes/gmail/refresh" });
+
+    const drafts = (await app.inject({ method: "GET", url: "/api/comms/drafts" })).json() as { id: string; agent: string; text: string; to: string; task: string }[];
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({ agent: "leasing", text: "Thanks Rae, a plumber will call you today.", to: "Rae <rae@example.com>" });
+    expect(mail.sent).toEqual([]);
+    /* The contact came first, so the case knows who wrote. */
+    const contacts = (await app.inject({ method: "GET", url: "/api/contacts" })).json() as { contacts: { emails: string[] }[] };
+    expect(contacts.contacts.some((one) => one.emails.includes("rae@example.com"))).toBe(true);
+
+    /* An agent sends from its own address: a team mailbox needs its leave. */
+    const refused = await app.inject({ method: "POST", url: `/api/comms/drafts/${drafts[0]!.id}/review`, payload: {} });
+    expect(refused.statusCode).toBe(403);
+    await app.inject({ method: "PUT", url: "/api/agents/leasing", payload: { name: "Leasing", color: 3, reach: [{ permission: "records.read", scope: { connection: "gmail" } }, { permission: "records.act", scope: { connection: "gmail" } }] } });
+    const review = (await app.inject({ method: "POST", url: `/api/comms/drafts/${drafts[0]!.id}/review`, payload: {} })).json() as { pendingId: string; digest: string };
+    const sent = await app.inject({ method: "POST", url: `/api/comms/drafts/${drafts[0]!.id}/send`, payload: { pendingId: review.pendingId, digest: review.digest } });
+    expect(sent.statusCode).toBe(200);
+    expect(mail.sent).toHaveLength(1);
+    expect(mail.sent[0]!.message).toContain("To: Rae <rae@example.com>");
+
+    const task = (await app.inject({ method: "GET", url: `/api/tasks/${drafts[0]!.task}` })).json() as { status: string; outcome?: string; task?: { status: string; outcome?: string } };
+    const held = task.task ?? task;
+    expect(held).toMatchObject({ status: "done", outcome: "sent" });
+
+    /* What it sent is the agent's, in the team's inbox. */
+    const team = (await app.inject({ method: "GET", url: "/api/comms?area=team" })).json() as MailPage;
+    expect(team.messages.find((one) => one.id === "g4")).toMatchObject({ agent: "leasing", status: "replied" });
     await app.close();
   });
 });

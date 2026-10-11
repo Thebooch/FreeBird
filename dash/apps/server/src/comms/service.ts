@@ -82,6 +82,12 @@ export interface CommsDeps {
     findOrCreate(input: { readonly email: string; readonly name?: string; readonly origin: "email" }): Promise<Contact>;
     match(id: string): Promise<unknown>;
   };
+  /**
+   * New mail that arrived after a mailbox was first read (never the newest
+   * 100 read the first time), with its sender's contact: what starts
+   * "When an email arrives" workflows.
+   */
+  readonly received?: (messages: readonly { readonly message: MailMessage; readonly contact?: Contact | undefined }[]) => Promise<void>;
   /** A draft a workflow step wrote was sent, saved or discarded: the step's case goes on. */
   readonly draftSettled?: (draft: MailDraft) => Promise<void>;
   readonly now: () => number;
@@ -292,7 +298,12 @@ export class CommsService {
       }
       await this.deps.store.keep(id, [...fresh, ...kept.map((one) => updated.get(one.id) ?? one)]);
       await this.deps.store.setMark(id, { ...(await this.deps.store.mark(id)), refreshedAt: this.iso(), error: undefined });
-      await this.senders(fresh);
+      const contacts = await this.senders(fresh);
+      /* The first read takes in what was already there: only mail after it is news. */
+      if (kept.length > 0 && fresh.length > 0) {
+        const arrived = fresh.filter((one) => !one.sent).map((message) => ({ message, contact: message.from ? contacts.get(message.from.address) : undefined }));
+        if (arrived.length > 0) await this.deps.received?.(arrived).catch((error: unknown) => this.deps.log?.warn(`workflows for new mail in ${id} did not start: ${String(error)}`));
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.deps.store.setMark(id, { ...(await this.deps.store.mark(id)), refreshedAt: this.iso(), error: message.slice(0, 400) });
@@ -301,9 +312,10 @@ export class CommsService {
   }
 
   /** Each new sender, once: a contact, matched to the workspace's records when new. */
-  private async senders(messages: readonly MailMessage[]): Promise<void> {
+  private async senders(messages: readonly MailMessage[]): Promise<Map<string, Contact>> {
+    const found = new Map<string, Contact>();
     const contacts = this.deps.contacts;
-    if (!contacts) return;
+    if (!contacts) return found;
     const own = this.ownAddresses();
     const { contactIgnore } = await this.deps.store.settings();
     const seen = new Set<string>();
@@ -313,12 +325,52 @@ export class CommsService {
       seen.add(from.address);
       try {
         const contact = await contacts.findOrCreate({ email: from.address, ...(from.name ? { name: from.name } : {}), origin: "email" });
+        found.set(from.address, contact);
         const madeNow = contact.origin === "email" && contact.links.length === 0 && this.deps.now() - Date.parse(contact.createdAt) < 60_000;
         if (madeNow) await contacts.match(contact.id).catch(() => undefined);
       } catch (error) {
         this.deps.log?.warn(`a contact for ${from.address} could not be made: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+    return found;
+  }
+
+  /**
+   * The background pass: every signed-in mailbox not read for `everyMs` is
+   * read again, so new mail starts its workflows with nobody looking.
+   */
+  async refreshDue(everyMs: number): Promise<number> {
+    let read = 0;
+    for (const connection of this.mailboxConnections()) {
+      if (this.statusOf(connection) !== "ready") continue;
+      const mark = await this.deps.store.mark(connection.id);
+      if (mark.refreshedAt && this.deps.now() - Date.parse(mark.refreshedAt) < everyMs) continue;
+      await this.refresh(connection.id).then(
+        () => read++,
+        (error: unknown) => this.deps.log?.warn(`${connection.id} could not be read: ${error instanceof Error ? error.message : String(error)}`),
+      );
+    }
+    return read;
+  }
+
+  /** The conversation as plain text, oldest first, for an agent writing a reply. */
+  async conversationText(mailbox: string, message: string, threadId?: string): Promise<{ readonly text: string }> {
+    const connection = this.need(mailbox);
+    const kept = (await this.deps.store.recent(mailbox)).find((one) => one.id === message);
+    const thread = await this.provider(connection).thread(threadId ?? kept?.threadId ?? message);
+    const upTo = thread.findIndex((one) => one.id === message);
+    const shown = upTo >= 0 ? thread.slice(0, upTo + 1) : thread;
+    return {
+      text: shown
+        .map((one) => `From: ${one.from ? (one.from.name ? `${one.from.name} <${one.from.address}>` : one.from.address) : "unknown"}${one.sent ? " (us)" : ""}\nDate: ${one.at}\nSubject: ${one.subject}\n\n${one.text.trim()}`)
+        .join("\n\n---\n\n"),
+    };
+  }
+
+  /** Review and send a draft in one go, as this person: for a workflow step set to send straight away. */
+  async sendNow(principal: Principal, id: string): Promise<MailDraft> {
+    const review = await this.review(principal, id);
+    return this.commit(principal, id, { pendingId: review.pendingId, digest: review.digest });
   }
 
   /** The mailboxes a list reads: in the area, among those named, that this person may read and that are signed in. */

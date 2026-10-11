@@ -1,5 +1,5 @@
 import type { MailAddress, MailMessage, MailQuery, MailThreadMessage } from "@freebirdai/dash-spec";
-import { decodeToken, encodeToken, htmlToText, type MailListPage, type MailOutgoing, type MailProvider, type MailRead } from "./mail.js";
+import { decodeToken, encodeToken, htmlToText, type MailOutgoing, type MailProvider, type MailRead } from "./mail.js";
 import { graphSearch } from "./search.js";
 
 /**

@@ -256,6 +256,24 @@ export const ACTION_VARIANTS: readonly ActionVariant[] = [
     }),
   ),
 
+  /* Answer an email in an agent's voice: drafted for a person to send, or sent. */
+  variant({
+    id: "outreach.reply", base: "outreach", label: "Reply to the email",
+    does: "An agent writes a reply to the email that started the case. A person edits and sends it in Comms, or it is sent straight away.",
+    fields: [
+      AGENT,
+      { key: "instructions", label: "What to say", kind: "longtext", placeholder: "Thank them, and say a technician will call within a day", help: "Optional: what this reply must do, beside the agent's own instructions." },
+      {
+        key: "send", label: "Sending", kind: "select", default: "approval",
+        options: [{ value: "approval", label: "A person sends it (drafted in Comms)" }, { value: "automatic", label: "Send it straight away" }],
+      },
+      { key: "timeout", label: "Wait for a person up to", kind: "duration", default: "3d", showWhen: { key: "send", equals: "approval" } },
+    ],
+    outcomes: ["sent", "saved", "discarded", "timed_out", "failed"],
+    outputs: [{ name: "draft", description: "The draft's id" }, { name: "message", description: "What it said" }],
+    body: "conversation", leavesDash: true, modelTask: "outreach", interrupted: "review",
+  }),
+
   /* Tell the person who booked what was decided, in an agent's voice. */
   variant({
     id: "outreach.inform", base: "outreach", label: "Tell them what was decided",

@@ -14,6 +14,10 @@
  * cache" (2026-09-30). They are never served as a cache: a finished read's
  * answer goes to the memory cache like any other, and its records are deleted.
  *
+ * The one other exception is a host's, not the engine's: Dash keeps the newest
+ * 100 messages of each mailbox (headers and snippets, sealed the same way) so
+ * an inbox opens at once (2026-10-06; `dash/apps/server/src/comms/store.ts`).
+ *
  * A plug-in point: memory in tests, Dash's database in the open-source build
  * (`connect_jobs`, `connect_job_rows`), wherever a hosted build keeps the rest.
  * Every row carries a workspace.
