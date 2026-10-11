@@ -1,6 +1,12 @@
 import type { ChatMessage } from "@freebirdai/core";
 import type { EachAnswer, EachRequest } from "@freebirdai/dash-react";
 import type {
+  CommsSettings,
+  MailboxOwner,
+  MailboxView,
+  MailDraft,
+  MailPage,
+  MailThreadMessage,
   Report,
   ReportInput,
   ReportSend,
@@ -1476,6 +1482,39 @@ export const api = {
   /** A new workflow from a workflow template, saved off. `types`: for a template a booking starts, only these appointment types. */
   workflowFromTemplate: (id: string, values: Record<string, string>, name?: string, types?: readonly string[]): Promise<WorkflowSpec> =>
     request(`/api/workflow-templates/${encodeURIComponent(id)}/workflow`, json({ values, ...(name ? { name } : {}), ...(types && types.length > 0 ? { types } : {}) })),
+
+  /* ── communications ────────────────────────────────────────────────── */
+
+  /** Every mailbox this person may read, and whether each provider's OAuth app has been given. */
+  commsMailboxes: (): Promise<{ mailboxes: MailboxView[]; apps: { gmail: boolean; outlook: boolean } }> => request("/api/comms/mailboxes"),
+  /** The workspace's own OAuth app for a provider, given once for every mailbox of it. */
+  setCommsApp: (provider: "gmail" | "outlook", clientId: string, clientSecret: string): Promise<{ gmail: boolean; outlook: boolean }> =>
+    request(`/api/comms/apps/${provider}`, json({ clientId, clientSecret })),
+  addMailbox: (input: { provider: "gmail" | "outlook"; owner: MailboxOwner; title?: string }): Promise<MailboxView> => request("/api/comms/mailboxes", json(input)),
+  setMailboxOwner: (id: string, owner: MailboxOwner): Promise<MailboxView> =>
+    request(`/api/comms/mailboxes/${encodeURIComponent(id)}/owner`, { ...json({ owner }), method: "PUT" }),
+  removeMailbox: (id: string): Promise<{ removed: string }> => request(`/api/comms/mailboxes/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  refreshMailbox: (id: string): Promise<MailboxView | null> => request(`/api/comms/mailboxes/${encodeURIComponent(id)}/refresh`, json({})),
+  /** One page of an area's mail, merged by time across the mailboxes named (all of them when none are). */
+  commsList: (input: { area: string; mailboxes?: readonly string[]; cursor?: string; q?: string }): Promise<MailPage> => {
+    const query = new URLSearchParams({ area: input.area });
+    if (input.mailboxes && input.mailboxes.length > 0) query.set("mailboxes", input.mailboxes.join(","));
+    if (input.cursor) query.set("cursor", input.cursor);
+    if (input.q) query.set("q", input.q);
+    return request(`/api/comms?${query.toString()}`);
+  },
+  commsThread: (mailbox: string, thread: string): Promise<{ messages: MailThreadMessage[]; drafts: MailDraft[]; mailbox: MailboxView }> =>
+    request(`/api/comms/threads/${encodeURIComponent(mailbox)}/${encodeURIComponent(thread)}`),
+  startReply: (mailbox: string, replyTo: string, threadId?: string): Promise<MailDraft> => request("/api/comms/drafts", json({ mailbox, replyTo, ...(threadId ? { threadId } : {}) })),
+  editDraft: (id: string, edit: Partial<Pick<MailDraft, "to" | "cc" | "subject" | "text">>): Promise<MailDraft> =>
+    request(`/api/comms/drafts/${encodeURIComponent(id)}`, { ...json(edit), method: "PUT" }),
+  /** What sending (or saving to the provider's drafts) would do: the review to approve. */
+  reviewDraft: (id: string, save = false): Promise<WriteReviewView> => request(`/api/comms/drafts/${encodeURIComponent(id)}/review`, json({ save })),
+  sendDraft: (id: string, review: Pick<WriteReviewView, "pendingId" | "digest">, save = false): Promise<MailDraft> =>
+    request(`/api/comms/drafts/${encodeURIComponent(id)}/send`, json({ pendingId: review.pendingId, digest: review.digest, ...(save ? { save: true } : {}) })),
+  discardDraft: (id: string): Promise<MailDraft> => request(`/api/comms/drafts/${encodeURIComponent(id)}/discard`, json({})),
+  commsSettings: (): Promise<CommsSettings> => request("/api/comms/settings"),
+  putCommsSettings: (settings: CommsSettings): Promise<CommsSettings> => request("/api/comms/settings", { ...json(settings), method: "PUT" }),
 
   /* ── timed reports ─────────────────────────────────────────────────── */
 
