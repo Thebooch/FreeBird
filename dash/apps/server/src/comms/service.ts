@@ -77,6 +77,13 @@ export interface CommsDeps {
   readonly policy: Policy;
   readonly agents: { get(id: string): Promise<AgentSpec | null>; list(): Promise<AgentSpec[]> };
   readonly store: CommsStore;
+  /**
+   * OAuth apps this server already has for Gmail and Outlook (`DASH_GOOGLE_CLIENT_ID`
+   * and the rest, or a hosted build's own): with one, people only sign in with
+   * the mailbox they want, as in any other app, and nobody pastes anything.
+   * A workspace's own app, when it gives one, is used instead.
+   */
+  readonly builtInApps?: Partial<Record<"gmail" | "outlook", { readonly clientId: string; readonly clientSecret: string }>>;
   /** Every new sender becomes a contact; absent, none do. */
   readonly contacts?: {
     findOrCreate(input: { readonly email: string; readonly name?: string; readonly origin: "email" }): Promise<Contact>;
@@ -170,7 +177,8 @@ export class CommsService {
 
   /** Whether each provider's OAuth app has been given, and the address the provider must send people back to. */
   apps(): { readonly gmail: boolean; readonly outlook: boolean } {
-    return { gmail: this.deps.keys.has(appRefs("gmail").id), outlook: this.deps.keys.has(appRefs("outlook").id) };
+    const has = (provider: "gmail" | "outlook") => this.deps.keys.has(appRefs(provider).id) || Boolean(this.deps.builtInApps?.[provider]?.clientId);
+    return { gmail: has("gmail"), outlook: has("outlook") };
   }
 
   /** The workspace's own OAuth app for a provider, given once and copied to every mailbox of it. */
@@ -189,8 +197,10 @@ export class CommsService {
     const auth = connection.auth;
     if (!provider || auth.type !== "oauth2") return;
     const refs = appRefs(provider);
-    const id = this.deps.keys.get(refs.id);
-    const secret = this.deps.keys.get(refs.secret);
+    const own = this.deps.keys.get(refs.id);
+    const builtIn = this.deps.builtInApps?.[provider];
+    const id = own ?? builtIn?.clientId ?? null;
+    const secret = own ? this.deps.keys.get(refs.secret) : (builtIn?.clientSecret ?? null);
     if (id) this.deps.keys.set(auth.clientIdRef, id);
     if (secret && auth.clientSecretRef) this.deps.keys.set(auth.clientSecretRef, secret);
   }

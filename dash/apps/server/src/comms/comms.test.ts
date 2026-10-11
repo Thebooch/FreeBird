@@ -83,6 +83,16 @@ describe("Communications", () => {
     await app.close();
   });
 
+  it("needs nothing pasted when the server has its own app: people only sign in", async () => {
+    const app = buildServer({ store, keys, catalog: new CatalogStore(seed, join(dir, "overlay")), llm: null, http: mail.http, mailApps: { gmail: { clientId: "server-client", clientSecret: "server-secret" } } });
+    expect((await app.inject({ method: "GET", url: "/api/comms/mailboxes" })).json()).toMatchObject({ apps: { gmail: true, outlook: false } });
+    const made = (await app.inject({ method: "POST", url: "/api/comms/mailboxes", payload: { provider: "gmail", owner: { kind: "team" } } })).json() as MailboxView;
+    expect(made.status).toBe("needs_sign_in");
+    const start = await app.inject({ method: "POST", url: "/api/connections/gmail/oauth/start", headers: { origin: "http://localhost:5400" } });
+    expect(new URL((start.json() as { authorizeUrl: string }).authorizeUrl).searchParams.get("client_id")).toBe("server-client");
+    await app.close();
+  });
+
   it("keeps the team's mail and an agent's mail apart, each newest first", async () => {
     const app = makeApp();
     const { agent } = await setUp(app);

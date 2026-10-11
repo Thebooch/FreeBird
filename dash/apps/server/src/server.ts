@@ -432,6 +432,8 @@ export interface BuildServerOptions {
   readonly reports?: ReportStore;
   /** What Communications keeps: the newest 100 per mailbox (sealed), drafts, what agents did (`comms/store.ts`). Memory unless supplied. */
   readonly comms?: CommsStore;
+  /** OAuth apps this server already has for Gmail and Outlook, so people only sign in (`DASH_GOOGLE_CLIENT_ID`, `DASH_MICROSOFT_CLIENT_ID` and their secrets). */
+  readonly mailApps?: Partial<Record<"gmail" | "outlook", { readonly clientId: string; readonly clientSecret: string }>>;
   /**
    * What sends reports. Absent: reports can be made and previewed but not
    * sent, and `emailProblem` (or a default) says why.
@@ -1252,6 +1254,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     policy,
     agents: agentStore,
     store: options.comms ?? new MemoryCommsStore(),
+    ...(options.mailApps ? { builtInApps: options.mailApps } : {}),
     contacts: { findOrCreate: (input) => contacts.findOrCreate(input), match: (id) => contacts.match(id) },
     draftSettled: (draft) => commsDraftSettled(draft),
     received: async (arrived) => {
