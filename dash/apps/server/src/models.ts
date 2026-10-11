@@ -245,7 +245,8 @@ export type LlmTask =
   | "agent-tools"
   | "think"
   | "wait-match"
-  | "workflow-draft";
+  | "workflow-draft"
+  | "report";
 
 /**
  * Two tiers, not three.
@@ -373,6 +374,7 @@ export const TASKS: readonly TaskInfo[] = [
   { id: "think", label: "Think steps", tier: "fast", follows: "chat", group: "Workflows and agents", note: "A workflow's Think step: classify, extract, write. Never an agent's reply prompt." },
   { id: "wait-match", label: "Matching replies", tier: "fast", follows: "chat", group: "Workflows and agents", note: "Deciding whether a reply is the one a workflow waits for, when plain rules cannot." },
   { id: "workflow-draft", label: "Drafting workflows", tier: "fast", follows: "chat", group: "Workflows and agents", note: "Turning a request in the chat into a draft workflow and its questions." },
+  { id: "report", label: "Writing report summaries", tier: "fast", follows: "chat", group: "Workflows and agents", note: "The few sentences on top of a timed report, written from its numbers. Once per send." },
   {
     id: "record",
     label: "Designing a record view",

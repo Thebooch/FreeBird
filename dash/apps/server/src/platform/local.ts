@@ -28,6 +28,8 @@ import { DbPublicTokenStore } from "../public/tokens.js";
 import { DbContactStore } from "../contacts/store.js";
 import { DbSchedulingStore } from "../scheduling/store.js";
 import { DbSnapshotStore } from "../history/store.js";
+import { mailerFromEnv } from "../reports/mailer.js";
+import { DbReportStore } from "../reports/store.js";
 import { defaultModelId, llmForModel, modelForTask } from "../llm.js";
 import { TIER_MODELS, isTask, providerFor } from "../models.js";
 import { buildPartRegistry } from "../parts.js";
@@ -162,6 +164,7 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     contacts: new DbContactStore(db, workspace),
     bookings: new DbBookingStore(db, workspace),
     tokens: new DbPublicTokenStore(db, workspace),
+    reports: new DbReportStore(db, workspace),
   });
 
   /**
@@ -361,6 +364,9 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     return { ...stores, ...(process.env.DATABASE_URL ? { leases } : {}) };
   };
 
+  /* What sends timed reports: `DASH_EMAIL` (see `reports/mailer.ts`). One for every workspace on this host. */
+  const mailer = mailerFromEnv();
+
   const platform: DashPlatform = {
     ...(identity && memberships ? { identity, policy: rolePolicy(memberships) } : {}),
     /* Who is in the workspace, for scheduling's hosts. Without sign-in, the one owner. */
@@ -372,6 +378,8 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     ...(process.env.DASH_PAGES_ORIGIN ? { pagesOrigin: process.env.DASH_PAGES_ORIGIN } : {}),
     // The keeper: see `keeper/keeper.ts`. On here, off in tests.
     keeper: true,
+    email: mailer.email,
+    ...(mailer.problem ? { emailProblem: mailer.problem } : {}),
     // Workflows start by themselves on their schedules and API triggers. On here, off in tests.
     workflowRunner: true,
     // Every connection can change records; one whose write endpoints were never

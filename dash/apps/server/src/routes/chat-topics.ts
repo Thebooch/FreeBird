@@ -15,11 +15,11 @@ import {
 
 /**
  * Work that finished, as the timeline lists it beside the topics: a workflow
- * run that ended, or a workflow task that was done.
+ * run that ended, a workflow task that was done, or a timed report that went out.
  */
 export interface TimelineTask {
   readonly id: string;
-  readonly kind: "run" | "task";
+  readonly kind: "run" | "task" | "report";
   /** ISO time it finished. */
   readonly at: string;
   readonly title: string;

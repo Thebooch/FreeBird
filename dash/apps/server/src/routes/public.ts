@@ -45,6 +45,7 @@ export const PUBLIC_ROUTES = [
   "GET /api/public/:workspace/book/:token",
   "GET /api/public/:workspace/book/:token/ics",
   "GET /api/public/:workspace/calendar/:token",
+  "GET /api/public/:workspace/reports/unsubscribe/:token",
   "GET /api/public/:workspace/types/:slug",
   "POST /api/public/:workspace/approve/:token",
   "POST /api/public/:workspace/approve/:token/times",
@@ -55,6 +56,7 @@ export const PUBLIC_ROUTES = [
   "POST /api/public/:workspace/book/:token/request",
   "POST /api/public/:workspace/book/:token/reschedule",
   "POST /api/public/:workspace/book/:token/times",
+  "POST /api/public/:workspace/reports/unsubscribe/:token",
   "POST /api/public/:workspace/types/:slug/start",
   "POST /api/workflow-hooks/:workspace/:token",
 ] as const;

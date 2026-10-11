@@ -610,6 +610,35 @@ const webhook: ActionExecutor = async ({ env, settings: s, attempt }) => {
   }
 };
 
+/**
+ * Send a timed report now. At most once per step: the step's operation id
+ * goes with it, so a retry or a restart finds the send already made.
+ */
+const sendReport: ActionExecutor = async ({ env, settings: s, attempt }) => {
+  const id = text(s["report"]).trim();
+  if (!env.reports) return failed("Reports aren't set up on this server.");
+  if (!id) return failed("Say which report to send.");
+  let sent: Awaited<ReturnType<NonNullable<typeof env.reports>["send"]>>;
+  try {
+    sent = await env.reports.send(id, attempt.id);
+  } catch (error) {
+    return failed(message(error));
+  }
+  const body = { kind: "notice" as const, text: sent.recipients.length > 0 ? `To ${sent.recipients.join(", ")}` : "", audience: sent.recipients.join(", ") };
+  if (sent.status === "failed") return failed(`${sent.reportName} was not sent: ${sent.error ?? "nothing went out."}`, { body });
+  const reached = `${sent.recipients.length} ${sent.recipients.length === 1 ? "person" : "people"}`;
+  return done(
+    "next",
+    {
+      status: "done",
+      title: sent.status === "partial" ? `Sent ${sent.reportName} to ${reached}; ${sent.failures.length} could not be reached` : `Sent ${sent.reportName} to ${reached}`,
+      body,
+      reversal: { available: false, reason: "An email can't be unsent." },
+    },
+    { status: sent.status, recipients: sent.recipients },
+  );
+};
+
 /* ── wait ──────────────────────────────────────────────────────────────── */
 
 const waitDuration: ActionExecutor = async ({ env, settings: s, resume }) => {
@@ -834,6 +863,7 @@ export const EXECUTORS: Readonly<Record<string, ActionExecutor>> = {
   "think.extract": think,
   "think.write": think,
   "send.webhook": webhook,
+  "send.report": sendReport,
   "wait.duration": waitDuration,
   "wait.until": waitUntil,
   "wait.for": waitFor,

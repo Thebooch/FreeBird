@@ -6,6 +6,7 @@
  * only @freebirdai/dash-components has to get working controls out of one stylesheet.
  */
 import { DASH_CALENDAR_STYLES } from "./styles-calendar.js";
+import { DASH_REPORTS_STYLES } from "./styles-reports.js";
 import { DASH_CONTACTS_STYLES } from "./styles-contacts.js";
 import { DASH_CHAT_CARD_STYLES } from "./styles-chat-cards.js";
 import { DASH_SCHEDULING_STYLES } from "./styles-scheduling.js";
@@ -419,11 +420,41 @@ export const DASH_REACT_STYLES = `
 .dash-nav__seg[data-active="true"] { background: var(--nav-fill-active); color: #ffffff; font-weight: var(--dash-weight-semi); }
 .dash-nav__seg:focus-visible { outline: 2px solid var(--nav-mint); outline-offset: 1px; }
 
+/* The tabs, and the arrows at their ends while they are wider than the bar. */
+.dash-nav__tabs { display: flex; align-items: center; gap: 2px; min-width: 0; flex: 1 1 auto; }
 .dash-nav__rail {
   display: flex; align-items: center; gap: var(--dash-space-1);
   min-width: 0; flex: 1 1 auto;
   overflow-x: auto; scrollbar-width: none;
 }
+.dash-nav__scroll {
+  flex: none; width: 24px; height: 32px; border: 0; border-radius: var(--dash-radius-sm);
+  background: transparent; color: var(--nav-ink-dim); cursor: pointer;
+  font: inherit; font-size: var(--dash-text-lg); line-height: 1;
+}
+.dash-nav__scroll:hover { color: var(--nav-ink); background: var(--nav-fill-hover); }
+.dash-nav__scroll:focus-visible { outline: 2px solid var(--nav-mint); outline-offset: 1px; }
+
+/*
+ * Fixed at the right of the tabs, behind a rule like the brand's on the left:
+ * a new tab on this bar, and the arrows between bars. However many tabs
+ * there are, these stay where they are.
+ */
+.dash-nav__bars {
+  display: flex; align-items: center; gap: var(--dash-space-2); flex: none;
+  padding-left: 18px; border-left: 1px solid var(--nav-line);
+}
+.dash-nav__barnav { display: inline-flex; flex-direction: column; gap: 2px; }
+.dash-nav__barstep {
+  width: 22px; height: 15px; padding: 0; border: 0; border-radius: var(--dash-radius-xs);
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; color: var(--nav-ink-faint); cursor: pointer;
+  transition: color var(--dash-dur-fast) var(--dash-ease), background var(--dash-dur-fast) var(--dash-ease);
+}
+.dash-nav__barstep svg { width: 10px; height: 7px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.dash-nav__barstep:hover:not(:disabled) { color: var(--nav-ink); background: var(--nav-fill-hover); }
+.dash-nav__barstep:disabled { opacity: 0.3; cursor: default; }
+.dash-nav__barstep:focus-visible { outline: 2px solid var(--nav-mint); outline-offset: 1px; }
 .dash-nav__rail::-webkit-scrollbar { display: none; }
 .dash-nav__hint { font-size: var(--dash-text-xs); color: var(--nav-ink-faint); white-space: nowrap; }
 
@@ -588,7 +619,7 @@ export const DASH_REACT_STYLES = `
 
 @media (max-width: 900px) {
   .dash-nav { flex-wrap: wrap; gap: var(--dash-space-2); }
-  .dash-nav__rail { order: 3; width: 100%; }
+  .dash-nav__tabs { order: 3; width: 100%; }
   .dash-nav__switch { order: 1; }
   /*
    * The action group takes a row of its own and wraps inside it.
@@ -2113,4 +2144,4 @@ export const DASH_REACT_STYLES = `
 @media (max-width: 760px) {
   .dash-agents { grid-template-columns: minmax(0, 1fr); }
 }
-` + DASH_CALENDAR_STYLES + DASH_SCHEDULING_STYLES + DASH_CONTACTS_STYLES + DASH_CHAT_CARD_STYLES;
+` + DASH_CALENDAR_STYLES + DASH_SCHEDULING_STYLES + DASH_CONTACTS_STYLES + DASH_REPORTS_STYLES;

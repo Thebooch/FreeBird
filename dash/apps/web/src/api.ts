@@ -1,6 +1,10 @@
 import type { ChatMessage } from "@freebirdai/core";
 import type { EachAnswer, EachRequest } from "@freebirdai/dash-react";
 import type {
+  Report,
+  ReportInput,
+  ReportSend,
+  TrackedValue,
   AgentInput,
   AgentSpec,
   AppointmentType,
@@ -925,7 +929,7 @@ export interface ChatTopic {
 /** Work that finished, listed in the timeline beside the topics. */
 export interface ChatTimelineTask {
   readonly id: string;
-  readonly kind: "run" | "task";
+  readonly kind: "run" | "task" | "report";
   readonly at: string;
   readonly title: string;
   readonly detail?: string;
@@ -961,6 +965,23 @@ const timeZone = (): string => {
     return "UTC";
   }
 };
+
+/** A report as listed: when it is next due, by its schedule. */
+export type ReportView = Report & { readonly nextAt: string | null };
+
+/** Whether this server can send email, and why not. */
+export interface ReportEmailStatus {
+  readonly ready: boolean;
+  readonly reason?: string;
+}
+
+/** The email a report would send, sent nowhere, and what came up building it. */
+export interface ReportPreview {
+  readonly subject: string;
+  readonly html: string;
+  readonly text: string;
+  readonly warnings: readonly string[];
+}
 
 export const api = {
   /** What a number tile was, day by day, since the server began keeping it. Free: nothing is asked of the API. */
@@ -1455,6 +1476,22 @@ export const api = {
   /** A new workflow from a workflow template, saved off. `types`: for a template a booking starts, only these appointment types. */
   workflowFromTemplate: (id: string, values: Record<string, string>, name?: string, types?: readonly string[]): Promise<WorkflowSpec> =>
     request(`/api/workflow-templates/${encodeURIComponent(id)}/workflow`, json({ values, ...(name ? { name } : {}), ...(types && types.length > 0 ? { types } : {}) })),
+
+  /* ── timed reports ─────────────────────────────────────────────────── */
+
+  /** Every report, or those drawing from one tab, and whether email is set up. */
+  reports: (dashboard?: string): Promise<{ reports: ReportView[]; email: ReportEmailStatus }> =>
+    request(`/api/reports${dashboard ? `?dashboard=${encodeURIComponent(dashboard)}` : ""}`),
+  report: (id: string): Promise<ReportView & { sends: ReportSend[] }> => request(`/api/reports/${encodeURIComponent(id)}`),
+  createReport: (input: ReportInput): Promise<Report> => request("/api/reports", json(input)),
+  /** Change a report: what is given replaces what was there. */
+  updateReport: (id: string, input: Partial<ReportInput>): Promise<Report> =>
+    request(`/api/reports/${encodeURIComponent(id)}`, { ...json(input), method: "PUT" }),
+  removeReport: (id: string): Promise<{ removed: true }> => request(`/api/reports/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /** The email a report would send now. With an `id`, it compares with that report's last send. */
+  previewReport: (input: ReportInput & { id?: string }): Promise<ReportPreview> => request("/api/reports/preview", json(input)),
+  sendReport: (id: string): Promise<ReportSend> => request(`/api/reports/${encodeURIComponent(id)}/send`, json({})),
+  trackedValues: (): Promise<TrackedValue[]> => request("/api/tracked"),
 
   /* ── calendar ──────────────────────────────────────────────────────── */
 

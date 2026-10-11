@@ -1,7 +1,7 @@
 import type { CommitResult, WriteIntent, WriteReview } from "@freebirdai/connect";
 import type { RecordReader, WriteOnBehalfOf, WriteVia } from "@freebirdai/connect/host";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
-import type { ActionModelTask, AgentSpec, Booking, BookingEvent, Contact, Principal, SharedAgentKnowledge } from "@freebirdai/dash-spec";
+import type { ActionModelTask, AgentSpec, Booking, BookingEvent, Contact, Principal, ReportSend, SharedAgentKnowledge } from "@freebirdai/dash-spec";
 import type { BookingLinks } from "../bookings/links.js";
 import type { BookingService } from "../bookings/service.js";
 import type { Policy } from "../identity/policy.js";
@@ -81,6 +81,8 @@ export interface WorkflowEnv {
   readonly onEvent?: (event: WorkflowEvent) => void;
   /** Bookings, for the Schedule steps, Approve a booking and the booking waits. Absent: those steps cannot run here. */
   readonly bookings?: () => WorkflowBookings | undefined;
+  /** Timed reports, for Send a report. `key` is the step's operation id: a retry finds the send it made. Absent: the step cannot run. */
+  readonly reports?: { send(id: string, key: string): Promise<ReportSend> };
   readonly now: () => number;
   readonly newId: () => string;
 }

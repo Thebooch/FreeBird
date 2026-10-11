@@ -1,4 +1,5 @@
 import { Button } from "@freebirdai/dash-components";
+import { useEffect, useState } from "react";
 import {
   BASE_INFO,
   ON_FAILURE,
@@ -10,7 +11,7 @@ import {
   type WorkflowNode,
   type WorkflowSpec,
 } from "@freebirdai/dash-spec";
-import type { ConnectionSummary } from "../../api";
+import { api, type ConnectionSummary, type ReportView } from "../../api";
 import type { Entities } from "../entities.js";
 import { ValuesEditor } from "./fields.jsx";
 
@@ -30,6 +31,28 @@ const FAILURE_WORDS: Readonly<Record<(typeof ON_FAILURE)[number], string>> = {
   stop: "Stop the case",
   continue: "Carry on to the next step",
   path: "Follow its “failed” arrow",
+};
+
+/** The team's timed reports, read when a Send a report step is opened. */
+const ReportSelect = ({ label, value, onChange }: { label: string; value: string; onChange: (next: unknown) => void }): JSX.Element => {
+  const [reports, setReports] = useState<ReportView[] | null>(null);
+  useEffect(() => {
+    api.reports().then(
+      (answer) => setReports(answer.reports),
+      () => setReports([]),
+    );
+  }, []);
+  return (
+    <select aria-label={label} value={value} onChange={(event) => onChange(event.target.value || undefined)}>
+      <option value="">{reports === null ? "Loading…" : reports.length === 0 ? "No reports yet: make one from a tab's ⋯ menu" : "Pick a report"}</option>
+      {(reports ?? []).map((one) => (
+        <option key={one.id} value={one.id}>
+          {one.name}
+        </option>
+      ))}
+      {value && reports && !reports.some((one) => one.id === value) && <option value={value}>{value}</option>}
+    </select>
+  );
 };
 
 const Field = ({
@@ -157,6 +180,9 @@ const Field = ({
           ))}
         </select>
       );
+      break;
+    case "report":
+      control = <ReportSelect label={field.label} value={text} onChange={onChange} />;
       break;
     case "step":
       control = (

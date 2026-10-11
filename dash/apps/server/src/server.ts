@@ -141,6 +141,11 @@ import { describeTurn, periodParams } from "./context/period.js";
 import { workflowRoutes } from "./routes/workflows.js";
 import { calendarRoutes } from "./routes/calendar.js";
 import { CalendarService } from "./calendar/service.js";
+import type { EmailAdapter } from "@freebirdai/core";
+import { reportRoutes } from "./routes/reports.js";
+import { ReportService } from "./reports/service.js";
+import { MemoryReportStore, type ReportStore } from "./reports/store.js";
+import { trackedReader, widgetReader } from "./reports/read.js";
 import { schedulingRoutes } from "./routes/scheduling.js";
 import { contactRoutes, type ContactSource } from "./routes/contacts.js";
 import { bookingRoutes } from "./routes/bookings.js";
@@ -207,6 +212,7 @@ import {
   widgetBriefSchema,
 } from "@freebirdai/dash-spec";
 import type { AgentSpec, AgentTool, ResponseChannel } from "@freebirdai/dash-spec";
+import { reportDashboards } from "@freebirdai/dash-spec";
 import { onboardingRoutes } from "./routes/onboarding.js";
 import { allocateDashboardId } from "./onboarding/materialise.js";
 import { warmTargets } from "./keeper/targets.js";
@@ -412,6 +418,14 @@ export interface BuildServerOptions {
    * in this process only; the real entry point keeps them in Dash's database.
    */
   readonly snapshots?: SnapshotStore;
+  /** Timed reports, the values they track, and the log of what was sent (`reports/`). Memory unless supplied. */
+  readonly reports?: ReportStore;
+  /**
+   * What sends reports. Absent: reports can be made and previewed but not
+   * sent, and `emailProblem` (or a default) says why.
+   */
+  readonly email?: EmailAdapter | null;
+  readonly emailProblem?: string;
   /**
    * Where this workspace's agents are kept (`agents/store.ts`). Absent means in
    * this process only; the real entry point keeps them in Dash's database.
@@ -874,11 +888,11 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * assistant's `create_dashboard` — and two id rules would eventually
    * disagree about what "Finance" is called.
    */
-  const createDashboardSpec = (title: string): DashboardSpec => {
+  const createDashboardSpec = (title: string, bar?: number): DashboardSpec => {
     /* The same slug rule onboarding reserves its board ids by. */
     const id = allocateDashboardId(title, new Set(store.listDashboards().map((board) => board.id)));
 
-    const parsed = dashboardSchema.safeParse({ id, title, widgets: [] });
+    const parsed = dashboardSchema.safeParse({ id, title, widgets: [], ...(bar ? { bar } : {}) });
     if (!parsed.success) {
       throw new Error(
         `invalid dashboard: ${parsed.error.issues
@@ -1020,8 +1034,16 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     throw new AgentError("Booking isn't set up on this server.", 501);
   };
   let bookingDispatcher: BookingDispatcher | undefined;
+  /* Set once reports exist, below; Send a report reaches it only when it runs. */
+  let reportsForWorkflows: ReportService | undefined;
   const workflowEnv: WorkflowEnv = {
     bookings: () => bookingsForWorkflows,
+    reports: {
+      send: async (id, key) => {
+        if (!reportsForWorkflows) throw new Error("Reports aren't set up on this server.");
+        return reportsForWorkflows.send(id, "workflow", key);
+      },
+    },
     workspaceId: options.workspace?.id ?? LOCAL_WORKSPACE_ID,
     store: workflowStore,
     cases: options.cases ?? new MemoryCaseStore(),
@@ -1256,12 +1278,50 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     }),
   );
   void app.register(schedulingRoutes({ scheduling, policy }));
+
+  /*
+   * Timed reports (`reports/`): stacks of widgets, tabs and tracked values,
+   * emailed on a schedule. They read through the engine at background
+   * priority, so they share the cache with every tile; they are sent on the
+   * workflow runner's tick, and by a workflow's Send a report step.
+   */
+  const reportService = new ReportService({
+    store: options.reports ?? new MemoryReportStore(),
+    snapshots,
+    dashboards: () => store.listDashboards(),
+    hasConnection: (id) => store.getConnection(id) !== null,
+    readWidget: widgetReader({ read: engine.read, connection: (id) => store.getConnection(id), prepare: (connection) => registry.addConnection(connection) }),
+    readTracked: trackedReader(workflowEnv.read),
+    email: options.email ?? null,
+    ...(options.emailProblem ? { emailProblem: options.emailProblem } : {}),
+    llm: () => resolveLlm("report"),
+    withBudget: async (run) => {
+      enterTurnBudget(turnCeilingUsd());
+      return run();
+    },
+    agent: (id) => agentStore.get(id),
+    tokens: publicTokens,
+    brand: async () => {
+      const given = await options.brand?.().catch((): Partial<Brand> => ({}));
+      return { ...brandOf(given), name: given?.name?.trim() || "FreeBird" };
+    },
+    workspace: options.workspace?.id ?? LOCAL_WORKSPACE_ID,
+    origin: (options.pagesOrigin ?? options.publicOrigin ?? "http://localhost:5400").replace(/\/+$/, ""),
+    now: () => Date.now(),
+    newId: () => randomUUID(),
+    log: { warn: (line) => app.log.warn(line) },
+  });
+  reportsForWorkflows = reportService;
+  void app.register(reportRoutes({ reports: reportService, workspace: options.workspace?.id ?? LOCAL_WORKSPACE_ID, limiter: options.rateLimiter ?? new MemoryRateLimiter() }));
+
   const workflowRunner = new WorkflowRunner({
     ...workflowStarter,
     log: { warn: (line) => app.log.warn(line) },
     passes: [
       { name: "booking events", run: () => bookingDispatcher?.deliver() ?? Promise.resolve(0) },
       { name: "booking holds", run: () => bookings.settleDue() },
+      { name: "reports", run: () => reportService.runDue() },
+      { name: "tracked values", run: () => reportService.recordDue() },
     ],
   });
   if (options.workflowRunner === true) workflowRunner.start();
@@ -2454,6 +2514,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       id: dashboard.id,
       title: dashboard.title,
       description: dashboard.description,
+      /* Which tab bar it sits on: the first, unless it was made on another. */
+      bar: dashboard.bar ?? 0,
       widgets: dashboard.widgets.length,
       updatedAt: dashboard.updatedAt,
     })),
@@ -2759,11 +2821,13 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * to invent an id — and then two callers (the nav and the assistant) invent
    * them differently and collide. Slugify here, suffix on collision, one rule.
    */
-  app.post<{ Body: { title?: string } }>("/api/dashboards", async (request, reply) => {
+  app.post<{ Body: { title?: string; bar?: unknown } }>("/api/dashboards", async (request, reply) => {
     const title = (request.body?.title ?? "").trim();
     if (!title) return reply.status(400).send({ error: "a title is required" });
+    const bar = request.body?.bar;
+    if (bar !== undefined && !(Number.isInteger(bar) && (bar as number) >= 0 && (bar as number) <= 999)) return reply.status(400).send({ error: "bar is a whole number from 0 to 999" });
     try {
-      const created = createDashboardSpec(title);
+      const created = createDashboardSpec(title, bar as number | undefined);
       // The stored copy, so the caller leaves with the version to quote in its
       // next `If-Match`. Returning the pre-write spec meant every new board
       // started with no version and its first save could not be guarded.
@@ -2959,10 +3023,13 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       new TopicStore(chatDb, { userId: owner.userId || LOCAL_USER_ID, tenantId: workspaceKey });
     /** Finished work for the timeline: workflow runs that ended and tasks that were done. */
     const finishedWork = async (): Promise<TimelineTask[]> => {
-      const [runs, tasks] = await Promise.all([
+      const [runs, tasks, sends, reports] = await Promise.all([
         workflowStore.runs({ limit: 500 }),
         workflowEnv.tasks.list({ status: "done", limit: 500 }),
+        reportService.sends(undefined, 500),
+        reportService.list(),
       ]);
+      const reportTab = new Map(reports.map((one) => [one.id, reportDashboards(one)[0]]));
       const link = (workflow: string | undefined) =>
         workflow ? `#/agent/workflows/${encodeURIComponent(workflow)}` : undefined;
       return [
@@ -2992,6 +3059,19 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             workflow: task.workflow,
             link: link(task.workflow),
           })),
+        ...sends.map((send) => {
+          const tab = reportTab.get(send.report);
+          return {
+            id: `report:${send.id}`,
+            kind: "report" as const,
+            at: send.at,
+            title: `Report: ${send.reportName}`,
+            detail: send.status === "failed" ? send.error : `Sent to ${send.recipients.length} ${send.recipients.length === 1 ? "person" : "people"}`,
+            status: send.status === "failed" ? "failed" : "succeeded",
+            agent: send.agentId,
+            link: tab ? `#/d/${encodeURIComponent(tab)}` : undefined,
+          };
+        }),
       ].sort((a, b) => b.at.localeCompare(a.at));
     };
     void app.register(

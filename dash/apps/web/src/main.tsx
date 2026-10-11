@@ -46,6 +46,7 @@ import {
 } from "./route.js";
 import { TopNav } from "./TopNav.jsx";
 import { PresentationEditor } from "./PresentationEditor.jsx";
+import { ReportsSheet } from "./reports/ReportsSheet.jsx";
 import { RecordLayoutEditor } from "./RecordLayoutEditor.jsx";
 import { ChangeRecordSheet } from "./ChangeRecordSheet.jsx";
 import { writesApi, type ConnectionWrites } from "./writes.js";
@@ -53,6 +54,8 @@ import { writesApi, type ConnectionWrites } from "./writes.js";
 export interface DashboardSummary {
   id: string;
   title: string;
+  /** Which tab bar it sits on (`tabBars.ts`). Absent: the first. */
+  bar?: number;
 }
 
 /**
@@ -534,11 +537,11 @@ const App = (): JSX.Element => {
   const reload = (): void => setReloadToken((token) => token + 1);
 
   /** Create a board and land on it, so the click has a visible result. */
-  const createDashboard = async (): Promise<void> => {
+  const createDashboard = async (bar = 0): Promise<void> => {
     const response = await fetch("/api/dashboards", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title: "New tab" }),
+      body: JSON.stringify({ title: "New tab", ...(bar > 0 ? { bar } : {}) }),
     });
     if (!response.ok) return;
     const created = (await response.json()) as DashboardSummary;
@@ -843,6 +846,8 @@ const App = (): JSX.Element => {
    * the guard overlay only make sense while the board is being edited.
    */
   const [arranging, setArranging] = useState(false);
+  /* The Reports pop-up, for the tab that is open. */
+  const [reportsOpen, setReportsOpen] = useState(false);
 
   /** True while the assistant is building a widget, so the column has room. */
   const [building, setBuilding] = useState(false);
@@ -1163,6 +1168,7 @@ const App = (): JSX.Element => {
           {...(live.dashboard ? { onCreateWidget: (widget) => addWidget(widget, []) } : {})}
         />
       )}
+      {reportsOpen && live.dashboard && <ReportsSheet dashboard={live.dashboard} onClose={() => setReportsOpen(false)} />}
       {framing && shown && (
         <FramePanel
           dashboard={shown}
@@ -1227,7 +1233,7 @@ const App = (): JSX.Element => {
       tabs={live.available}
       activeId={live.dashboard?.id ?? null}
       onSelect={(id) => navigate({ kind: "board", dashboardId: id })}
-      onCreate={() => void createDashboard()}
+      onCreate={(bar) => void createDashboard(bar)}
       onRename={(id, title) => void renameDashboard(id, title)}
       onDelete={(id) => void deleteDashboard(id)}
       onConnect={() => setConnectionsOpen(true)}
@@ -1236,6 +1242,8 @@ const App = (): JSX.Element => {
       layoutEditing={arranging}
       onToggleLayoutEditing={setArranging}
       layoutEditingDisabled={!live.dashboard}
+      onOpenReports={() => setReportsOpen(true)}
+      reportsDisabled={!live.dashboard}
       chatOpen={chatOpen}
       /*
        * "Describe" is gone — it was the assistant button with an extra step.

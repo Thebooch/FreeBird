@@ -163,6 +163,31 @@ ALTER TABLE dash_calendar_events ADD COLUMN IF NOT EXISTS ends_at TEXT;
 ALTER TABLE dash_calendar_events ADD COLUMN IF NOT EXISTS dedupe_key TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS dash_calendar_events_dedupe ON dash_calendar_events (workspace, dedupe_key) WHERE dedupe_key IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS dash_tracked_values (
+  workspace TEXT NOT NULL,
+  id        TEXT NOT NULL,
+  record    JSONB NOT NULL,
+  PRIMARY KEY (workspace, id)
+);
+
+CREATE TABLE IF NOT EXISTS dash_reports (
+  workspace TEXT NOT NULL,
+  id        TEXT NOT NULL,
+  record    JSONB NOT NULL,
+  PRIMARY KEY (workspace, id)
+);
+
+CREATE TABLE IF NOT EXISTS dash_report_sends (
+  workspace TEXT NOT NULL,
+  id        TEXT NOT NULL,
+  report    TEXT NOT NULL,
+  at        TEXT NOT NULL,
+  record    JSONB NOT NULL,
+  PRIMARY KEY (workspace, id)
+);
+
+CREATE INDEX IF NOT EXISTS dash_report_sends_at ON dash_report_sends (workspace, report, at);
+
 CREATE TABLE IF NOT EXISTS dash_scheduling (
   workspace TEXT NOT NULL,
   kind      TEXT NOT NULL,

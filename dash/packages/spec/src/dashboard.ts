@@ -784,6 +784,12 @@ export const dashboardSchema = z
     id: idSchema,
     title: z.string().min(1).max(120),
     description: z.string().max(400).optional(),
+    /**
+     * Which tab bar the tab sits on, when the top bar holds several (some
+     * people keep a bar of tabs built only to be sent as reports). Absent is
+     * the first bar, so every board written before bars existed stays there.
+     */
+    bar: z.number().int().min(0).max(999).optional(),
     params: dashboardParamsSchema.default({
       defaultRange: "30d",
       timeZone: "UTC",

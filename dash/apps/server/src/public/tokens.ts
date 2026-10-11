@@ -16,9 +16,11 @@ import type { DashDb } from "../platform/db.js";
  *   deadline, is spent when used, and is revoked when the step finishes.
  * - A **calendar feed** is one member's own calendar as `.ics`, read-only,
  *   for their phone. Making a new one stops the old.
+ * - A **report unsubscribe** link is one recipient's, for one report, in
+ *   each email it sends. It lives a year and can be used again.
  */
 
-export const TOKEN_PURPOSES = ["booking_link", "approval", "calendar_feed"] as const;
+export const TOKEN_PURPOSES = ["booking_link", "approval", "calendar_feed", "report_unsubscribe"] as const;
 export type TokenPurpose = (typeof TOKEN_PURPOSES)[number];
 
 export const publicTokenSchema = z.object({
@@ -36,6 +38,9 @@ export const publicTokenSchema = z.object({
    */
   fromPublic: z.boolean().optional(),
   member: z.string().optional(),
+  /** The report and the address an unsubscribe link is for. */
+  report: z.string().optional(),
+  email: z.string().optional(),
   /** The Approve a booking task it answers, and the try of its step it was made for. */
   task: z.string().optional(),
   attempt: z.string().optional(),
