@@ -30,6 +30,7 @@ import { DbSchedulingStore } from "../scheduling/store.js";
 import { DbSnapshotStore } from "../history/store.js";
 import { mailerFromEnv } from "../reports/mailer.js";
 import { DbReportStore } from "../reports/store.js";
+import { DbCommsStore } from "../comms/store.js";
 import { defaultModelId, llmForModel, modelForTask } from "../llm.js";
 import { TIER_MODELS, isTask, providerFor } from "../models.js";
 import { buildPartRegistry } from "../parts.js";
@@ -165,6 +166,7 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     bookings: new DbBookingStore(db, workspace),
     tokens: new DbPublicTokenStore(db, workspace),
     reports: new DbReportStore(db, workspace),
+    comms: new DbCommsStore(db, vault, workspace),
   });
 
   /**

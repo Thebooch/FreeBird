@@ -33,8 +33,10 @@ import type {
   TimeRange,
   WidgetBrief,
 } from "@freebirdai/dash-spec";
+import type { MailDraft } from "@freebirdai/dash-spec";
 import {
   readField,
+  authTokenRefs,
   connectionKeyRefs,
   connectionNeedsAuthSetup,
   dashboardSchema,
@@ -57,6 +59,7 @@ import {
   BlockedUrlError,
   buildQueryRequest,
   CatalogStore,
+  connectionFromCatalog,
   createEngine,
   createRecordReader,
   describeFields,
@@ -143,6 +146,9 @@ import { calendarRoutes } from "./routes/calendar.js";
 import { CalendarService } from "./calendar/service.js";
 import type { EmailAdapter } from "@freebirdai/core";
 import { reportRoutes } from "./routes/reports.js";
+import { commsRoutes } from "./routes/comms.js";
+import { CommsService } from "./comms/service.js";
+import { MemoryCommsStore, type CommsStore } from "./comms/store.js";
 import { ReportService } from "./reports/service.js";
 import { MemoryReportStore, type ReportStore } from "./reports/store.js";
 import { trackedReader, widgetReader } from "./reports/read.js";
@@ -420,6 +426,8 @@ export interface BuildServerOptions {
   readonly snapshots?: SnapshotStore;
   /** Timed reports, the values they track, and the log of what was sent (`reports/`). Memory unless supplied. */
   readonly reports?: ReportStore;
+  /** What Communications keeps: the newest 100 per mailbox (sealed), drafts, what agents did (`comms/store.ts`). Memory unless supplied. */
+  readonly comms?: CommsStore;
   /**
    * What sends reports. Absent: reports can be made and previewed but not
    * sent, and `emailProblem` (or a default) says why.
@@ -1193,6 +1201,49 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     return out;
   };
   void app.register(contactRoutes({ contacts, policy, sources: contactSources }));
+
+  /*
+   * Communications (`comms/`): mailboxes are connections, read through the
+   * engine at the interactive priority a person looking deserves, and sent
+   * only through the write service's review, as whoever clicks Send.
+   */
+  let commsDraftSettled: (draft: MailDraft) => Promise<void> = async () => {};
+  const comms = new CommsService({
+    connections: {
+      list: () => store.listConnections(),
+      get: (id) => store.getConnection(id),
+      put: (spec) => {
+        store.putConnection(spec);
+        registry.addConnection(spec);
+      },
+      fromCatalog: (entry, id) => connectionFromCatalog(entry, { id }),
+      saved: (spec) => registry.addConnection(spec),
+      remove: async (id) => {
+        const connection = store.getConnection(id);
+        if (!connection) return;
+        for (const ref of [...connectionKeyRefs(connection), ...authTokenRefs(connection.auth)]) keys.delete(ref);
+        await broker.forget(connection).catch(() => undefined);
+        queries.invalidate(id);
+        store.deleteConnection(id);
+      },
+    },
+    catalog: { get: (id) => options.catalog?.get(id) ?? null },
+    keys,
+    read: (connection, request) => workflowEnv.read(connection, request, Priority.Interactive),
+    writes: {
+      prepare: (principal, intent, how) => writes.prepare(principal, intent, how),
+      commit: (principal, pendingId, digest) => writes.commit(principal, pendingId, digest),
+    },
+    policy,
+    agents: agentStore,
+    store: options.comms ?? new MemoryCommsStore(),
+    contacts: { findOrCreate: (input) => contacts.findOrCreate(input), match: (id) => contacts.match(id) },
+    draftSettled: (draft) => commsDraftSettled(draft),
+    now: () => Date.now(),
+    newId: () => randomUUID(),
+    log: { warn: (line) => app.log.warn(line) },
+  });
+  void app.register(commsRoutes({ comms }));
   /* Who is in the workspace: hosts, and who may answer an approval. Without sign-in, the one person this server answers to. */
   const workspaceMembers = options.members ?? (async () => [{ userId: LOCAL_USER_ID, email: "", role: "owner" as const }]);
   /* Scheduling: who can be booked, on what terms (`scheduling/`). */
