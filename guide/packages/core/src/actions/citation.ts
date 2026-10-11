@@ -39,9 +39,33 @@ export const withCitation = <T extends object>(result: T, citation: ActionCitati
 });
 
 /** The citation an action's result carries, or null when it carries none (or a malformed one). */
-export const citationOf = (result: unknown): ActionCitation | null => {
+export const citationOf = (result: unknown): ActionCitation | null => placeAt(result, CITATION_KEY);
+
+/**
+ * Where an action asks to take the person, when going there is the point.
+ *
+ * "Show me the leases widget for last month" is a request to see something,
+ * and an action that answers it (with no approval to give) returns where in
+ * its result. The client goes there as it follows a chip or "take me to …":
+ * `@freebirdai/core-state` raises it to `onNavigate` once the action has run.
+ * A change that needed approval never moves the page; it leaves a chip
+ * (`withCitation`) for the person to follow if they want.
+ */
+export const NAVIGATION_KEY = "freebirdNavigation" as const;
+
+/** An action's result, carrying where to take the person. */
+export const withNavigation = <T extends object>(result: T, target: ActionCitation): T & { readonly [NAVIGATION_KEY]: ActionCitation } => ({
+  ...result,
+  [NAVIGATION_KEY]: target,
+});
+
+/** Where an action's result asks to take the person, or null. */
+export const navigationOf = (result: unknown): ActionCitation | null => placeAt(result, NAVIGATION_KEY);
+
+/** A place under one of the keys above, or null when absent or malformed. */
+const placeAt = (result: unknown, key: string): ActionCitation | null => {
   if (!result || typeof result !== "object") return null;
-  const value = (result as Record<string, unknown>)[CITATION_KEY];
+  const value = (result as Record<string, unknown>)[key];
   if (!value || typeof value !== "object") return null;
   const { title, page, selector, summary } = value as Record<string, unknown>;
   if (typeof title !== "string" || title.trim() === "") return null;

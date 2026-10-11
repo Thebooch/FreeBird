@@ -1,5 +1,6 @@
 import type { ChatMessage, ChatStreamEvent } from "@freebirdai/core";
 import { describe, expect, it, vi } from "vitest";
+import { withNavigation } from "@freebirdai/core";
 import { FreeBirdStore } from "./store.js";
 
 /** A transport that records what each turn was sent and streams the given events. */
@@ -70,5 +71,29 @@ describe("what is on screen, and where the chat takes the person", () => {
     });
     await store.confirmAction();
     expect(store.getState().messages.map((one) => one.id)).toEqual(["m9"]);
+  });
+
+  it("goes where an action that needed no approval says, and never where an approved one does", async () => {
+    const result = withNavigation({ preset: "30d" }, { title: "Leases", page: "#/d/ops?range=30d", selector: '[data-widget-id="leases"]' });
+    const run = async (requiresConfirmation: "none" | "preview") => {
+      const t = transport([], { ok: true, recordId: "r1", result });
+      const store = new FreeBirdStore(t.impl, {
+        sessionId: "s1",
+        actionState: {
+          phase: requiresConfirmation === "none" ? "executing" : "awaiting_confirmation",
+          pending: { recordId: "r1", componentId: "dashboard", actionId: "open_widget", args: {}, missing: [], requiresConfirmation, startedAt: new Date() },
+          journal: [],
+          workflowStack: [],
+        },
+      });
+      const heard: unknown[] = [];
+      store.onNavigate((one) => heard.push(one));
+      await store.confirmAction();
+      return heard;
+    };
+    expect(await run("none")).toEqual([
+      { componentId: "dashboard", title: "Leases", directive: "scroll-to", kind: "component", selector: '[data-widget-id="leases"]', page: "#/d/ops?range=30d" },
+    ]);
+    expect(await run("preview")).toEqual([]);
   });
 });

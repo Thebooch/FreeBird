@@ -13,6 +13,7 @@ import type {
 } from "@freebirdai/core";
 import type { FreeBirdTransport } from "./transport/types.js";
 import type { PendingQuestion, QuestionAnswer, StateNotice } from "@freebirdai/core";
+import { navigationOf } from "@freebirdai/core";
 import {
   appendNotice,
   emptyNoticeBuffer,
@@ -629,6 +630,22 @@ export class FreeBirdStore {
         });
         /* The chat's line about the change, with its citation chip: already saved, shown now. */
         if (res.outcomeMessage) this.addMessage(res.outcomeMessage);
+        /*
+         * An action that needed no approval and says where to go was a request
+         * to see something ("show me last month"), so the page goes there, as
+         * it does for "take me to …". One that was approved never moves it.
+         */
+        const target = pending.requiresConfirmation === "none" ? navigationOf(res.result) : null;
+        if (target) {
+          this.raiseNavigate({
+            componentId: pending.componentId,
+            title: target.title,
+            directive: "scroll-to",
+            kind: "component",
+            ...(target.selector !== undefined ? { selector: target.selector } : {}),
+            ...(target.page !== undefined ? { page: target.page } : {}),
+          });
+        }
       } else if (res.blocked && res.blockers && res.message) {
         this.applyActionTransition({
           type: "block",
@@ -650,6 +667,17 @@ export class FreeBirdStore {
         message: err instanceof Error ? err.message : String(err),
         at: new Date(),
       });
+    }
+  }
+
+  /** Tell every `onNavigate` listener where to take the person. */
+  private raiseNavigate(target: ComponentCitation): void {
+    for (const fn of this.navigateListeners) {
+      try {
+        fn(target);
+      } catch (err) {
+        console.error("[freebird] onNavigate listener threw:", err);
+      }
     }
   }
 
@@ -964,15 +992,7 @@ export class FreeBirdStore {
             if (event.layout) this.setLayout(event.layout);
             break;
           case "navigate":
-            if (event.navigation) {
-              for (const fn of this.navigateListeners) {
-                try {
-                  fn(event.navigation);
-                } catch (err) {
-                  console.error("[freebird] onNavigate listener threw:", err);
-                }
-              }
-            }
+            if (event.navigation) this.raiseNavigate(event.navigation);
             break;
           case "assistant_saved":
             if (event.assistantMessage) this.addMessage(event.assistantMessage);

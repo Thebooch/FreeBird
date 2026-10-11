@@ -173,10 +173,13 @@ export { OPEN_COMPONENT_TOOL_NAME, buildOpenComponentTool, resolveNavigation } f
 export { TRANSIENT_KEY, transientOf, withTransient, withoutTransient } from "./actions/transient.js";
 export {
   CITATION_KEY,
+  NAVIGATION_KEY,
   citationOf,
+  navigationOf,
   revealSelector,
   toComponentCitation,
   withCitation,
+  withNavigation,
   type ActionCitation,
 } from "./actions/citation.js";
 export {

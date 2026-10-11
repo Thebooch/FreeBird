@@ -152,7 +152,10 @@ the most ubiquitous behaviour and can be opted out of per-host.
 Actions say where their change can be seen with `withCitation(result, { title,
 page, selector, summary })` (`revealSelector` builds selectors over
 `data-freebird-*`): the server saves a line with a citation chip, and the person
-follows it if they want to. See
+follows it if they want to. An action that needs no approval and exists to show
+something returns `withNavigation(result, { title, page, selector })`, and the
+client goes there as for `open_component`. `turnNote` adds a per-turn note (the
+date, what the page shows) after the cache point. See
 [`ACTIONS.md#harness-ux-knobs-chat-engine`](ACTIONS.md#harness-ux-knobs-chat-engine)
 for full details.
 

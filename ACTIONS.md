@@ -390,6 +390,29 @@ selectors over the attributes the embed scanner reads:
 `data-freebird-component` on a component's region, `data-freebird-item` on one
 thing listed in it, and `data-freebird-field` on one setting.
 
+## Taking the person somewhere (`withNavigation`)
+
+Some actions exist to show something: "show me the leases widget for last
+month", "open the connections panel". Such an action needs no approval
+(`requiresConfirmation: "none"`) and returns where to go with
+`withNavigation(result, { title, page, selector? })`. Once it has run,
+`@freebirdai/core-state` raises that place to `onNavigate` listeners, exactly as
+for the `open_component` tool, so the client follows it the way it follows a
+chip (`useNavigationRequests` → `activateCitation`). A page can carry what the
+view should show (`#/d/ops?range=30d`); the host's router applies it.
+
+An action the person approves never moves the page, whatever it returns: it
+leaves a chip (`withCitation`) instead.
+
+## A note about this turn (`turnNote`)
+
+What changes every turn and decides how a request reads (today's date in the
+person's calendar, the period the page shows) goes in
+`createChatEngine({ turnNote: ({ auth, text }) => string | null })`. The note is
+added after the on-screen note, so after the cache point; a null or a throw
+adds nothing. Keep it out of `systemPrompt`, which must read the same every
+turn to be cached.
+
 ## Server endpoints (added automatically)
 
 `@freebirdai/server` adds these alongside the existing chat routes:

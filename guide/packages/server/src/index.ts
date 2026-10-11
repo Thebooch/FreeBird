@@ -124,6 +124,8 @@ export interface CreateFreeBirdRouterOptions<TAuth = unknown> {
    * retrieval (embeddings search) in place of exhaustive injection.
    */
   knowledgeContext?: import("@freebirdai/core").ChatEngineOptions["knowledgeContext"];
+  /** Forwarded to ChatEngineOptions.turnNote: a short per-turn note from the host (the date, what the page shows). */
+  turnNote?: import("@freebirdai/core").ChatEngineOptions["turnNote"];
   /**
    * Read-only tools the model may call on any turn, whose results are fed
    * back to it in the same turn before it answers.
@@ -229,6 +231,7 @@ export const resolveDeps = <TAuth = unknown>(opts: CreateFreeBirdRouterOptions<T
       citations: opts.citations,
       askUser: opts.askUser,
       knowledgeContext: opts.knowledgeContext,
+      turnNote: opts.turnNote,
       maxToolSteps: opts.maxToolSteps,
       harnessArgsMode: opts.harnessArgsMode,
       narrowToActive: opts.narrowToActive,
@@ -362,6 +365,7 @@ export const createDepsResolver = <TAuth = unknown>(
         citations: opts.citations,
         askUser: opts.askUser,
         knowledgeContext: opts.knowledgeContext,
+        turnNote: opts.turnNote,
         maxToolSteps: opts.maxToolSteps,
         harnessArgsMode: opts.harnessArgsMode,
         narrowToActive: opts.narrowToActive,

@@ -315,6 +315,13 @@ export interface ChatEngineOptions {
     }) => Promise<KnowledgeItem[] | null> | KnowledgeItem[] | null;
   };
   /**
+   * A short note about this turn, from the host: what changes from one turn
+   * to the next and the model needs to read the request right — today's date
+   * in the person's own calendar, the period the page shows. Added after the
+   * on-screen note, so after the cache point. Null, or a throw, adds nothing.
+   */
+  turnNote?: (args: { auth: AuthContext; text: string }) => Promise<string | null> | string | null;
+  /**
    * Instruction packs — the procedures the assistant should follow.
    *
    * `provider` is **optional**, and its absence is a supported steady state
@@ -551,6 +558,7 @@ export class ChatEngine {
   private readonly askUserEnabled: boolean;
   private readonly knowledgeContextEnabled: boolean;
   private readonly knowledgeMaxChars: number;
+  private readonly turnNote: ChatEngineOptions["turnNote"];
   private readonly knowledgeRetrieve: NonNullable<
     ChatEngineOptions["knowledgeContext"]
   >["retrieve"];
@@ -594,6 +602,7 @@ export class ChatEngine {
     this.knowledgeContextEnabled = opts.knowledgeContext?.enabled !== false;
     this.knowledgeMaxChars = opts.knowledgeContext?.maxChars ?? 6000;
     this.knowledgeRetrieve = opts.knowledgeContext?.retrieve;
+    this.turnNote = opts.turnNote;
   }
 
   private pendingMissingOpts(): {
@@ -760,6 +769,14 @@ export class ChatEngine {
       }
       const onScreen = renderOnScreen(registry, input.activeComponentIds, input.focus);
       if (onScreen) baseMessages.push({ role: "system", content: onScreen });
+      if (this.turnNote) {
+        try {
+          const note = await this.turnNote({ auth, text: input.text });
+          if (note) baseMessages.push({ role: "system", content: note });
+        } catch {
+          // A note is help for this turn, never a reason to fail it.
+        }
+      }
       /*
        * Skills, after the facts and before the citation rules.
        *

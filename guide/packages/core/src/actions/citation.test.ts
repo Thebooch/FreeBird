@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CITATION_KEY, citationOf, revealSelector, toComponentCitation, withCitation } from "./citation.js";
+import { CITATION_KEY, NAVIGATION_KEY, citationOf, navigationOf, revealSelector, toComponentCitation, withCitation, withNavigation } from "./citation.js";
 
 describe("action citations", () => {
   it("ride along on a result and are read back", () => {
@@ -36,5 +36,15 @@ describe("action citations", () => {
       '[data-freebird-component="types"] [data-freebird-item="showing"] [data-freebird-field="approval"]',
     );
     expect(revealSelector({ component: "types", item: 'a"b\\c' })).toBe('[data-freebird-component="types"] [data-freebird-item="a\\"b\\\\c"]');
+  });
+});
+
+describe("where an action takes the person", () => {
+  it("carries a place apart from a citation, and reads back only a well-formed one", () => {
+    const result = withNavigation({ ok: true }, { title: "Leases", page: "#/d/ops?range=30d", selector: '[data-widget-id="leases"]' });
+    expect(navigationOf(result)).toEqual({ title: "Leases", page: "#/d/ops?range=30d", selector: '[data-widget-id="leases"]' });
+    expect(citationOf(result)).toBeNull();
+    expect(navigationOf({ [NAVIGATION_KEY]: { title: "" } })).toBeNull();
+    expect(navigationOf(null)).toBeNull();
   });
 });

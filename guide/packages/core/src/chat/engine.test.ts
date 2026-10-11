@@ -1158,6 +1158,33 @@ describe("ChatEngine — a prefix a provider can cache", () => {
   });
 });
 
+describe("ChatEngine — a note about this turn", () => {
+  it("adds the host's note after the cache point, and a failing note adds nothing", async () => {
+    const { registry, db, knowledge } = setup();
+    const llm = new FakeLlm([{ kind: "text", text: "One." }, { kind: "text", text: "Two." }]);
+    const seen: LlmMessage[][] = [];
+    const stream = llm.stream.bind(llm);
+    llm.stream = ((opts: LlmGenerateOptions) => {
+      seen.push(opts.messages);
+      return stream(opts);
+    }) as typeof llm.stream;
+    const { sessionId, pendingState } = await startCollecting(llm, db);
+    let fail = false;
+    const engine = new ChatEngine({ db, llm, registry, knowledge, harnessArgsMode: "catalog", turnNote: () => {
+      if (fail) throw new Error("no clock");
+      return "TODAY — 11 October 2026.";
+    } });
+    await collect(engine.send({ sessionId, text: "hi", actionState: pendingState }, auth));
+    fail = true;
+    await collect(engine.send({ sessionId, text: "again", actionState: pendingState }, auth));
+
+    const first = seen[0]!;
+    const note = first.findIndex((message) => message.content === "TODAY — 11 October 2026.");
+    expect(note).toBeGreaterThan(first.findIndex((message) => message.cachePoint));
+    expect(JSON.stringify(seen[1])).not.toContain("TODAY");
+  });
+});
+
 describe("ChatEngine — taking the person somewhere", () => {
   const anchored = () => {
     const { registry, db, knowledge } = setup();
