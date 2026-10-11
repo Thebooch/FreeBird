@@ -1,3 +1,4 @@
+import { citationOf } from "@freebirdai/core";
 import { agentSchema, workflowSchema, type Principal } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import { ownerPolicy, type Policy } from "../identity/policy.js";
@@ -5,6 +6,8 @@ import { explainDraft } from "../workflows/draft.js";
 import { WorkflowService } from "../workflows/service.js";
 import { MemoryTemplateStore, MemoryWorkflowStore } from "../workflows/store.js";
 import { TemplateService } from "../workflows/templates.js";
+import { BOOKING_RECIPES } from "../workflows/recipes.js";
+import { buildChatRegistry } from "./registry.js";
 import { CHAT_TRIAL_CASES, workflowActions, workflowKnowledge, type WorkflowChatOps } from "./workflow-actions.js";
 
 const owner: Principal = { userId: "o", workspaceId: "acme", role: "owner", kind: "member" };
@@ -100,5 +103,48 @@ describe("workflow chat actions", () => {
     expect(roster?.text).toContain('"Intake" (id: w, off, By hand, 0 steps)');
     expect(catalog?.text).toContain("outreach.text: Text a customer or anyone outside the team, in an agent's voice.");
     expect(catalog?.text).toContain("wait.for:");
+  });
+});
+
+describe("booking templates from the chat", () => {
+  it("scopes a turned-away follow-up to the type it names", async () => {
+    const store = new MemoryWorkflowStore();
+    const service = new WorkflowService({ store, policy: ownerPolicy, agents: { list: async () => [agent] }, hasConnection: () => false });
+    const templates = new TemplateService({ templates: new MemoryTemplateStore(), workflows: store, newId: () => "x", builtIn: BOOKING_RECIPES });
+    const ops: WorkflowChatOps = {
+      roster: [],
+      templates: await templates.list(),
+      mayManage: async () => true,
+      explain: (principal, workflow) => explainDraft(service, principal, workflow, [agent]),
+      create: (principal, input) => service.create(principal, input),
+      update: (principal, id, input) => service.update(principal, id, input),
+      saveTemplate: (input) => templates.saveFrom(input),
+      fromTemplate: async (principal, id, values, name, types) => service.create(principal, (await templates.workflowFrom(id, values, name, types ? [...types] : undefined)).input),
+    };
+    const use = workflowActions(ops).find((one) => one.id === "use_workflow_template")!;
+    await use.handler(
+      { templateId: "recipe-turned-away", blanks: [{ name: "agent", value: "maint" }, { name: "say", value: "Call us for 9 or more." }], types: ["showing"] } as never,
+      ctxFor(owner),
+    );
+    const [made] = await service.list();
+    expect(made?.trigger).toMatchObject({ kind: "booking", events: ["turned_away"], types: ["showing"] });
+  });
+});
+
+describe("workflows as a page the chat knows", () => {
+  it("leaves a chip that opens the workflow it made, ringing its row", async () => {
+    const { action } = await build();
+    const made = await (await action("create_workflow")).handler!(complete as never, ctxFor(owner));
+    const id = (made as { workflowId: string }).workflowId;
+    expect(citationOf(made)).toMatchObject({ page: `#/agent/workflows/${encodeURIComponent(id)}`, selector: `[data-freebird-component="workflows"] [data-freebird-item="${id}"]` });
+  });
+
+  it("is its own component, apart from the dashboard, with its page", async () => {
+    const { opsFor } = await build();
+    const board = { id: "ops", title: "Ops", widgets: [], layout: { cells: [] } };
+    const registry = buildChatRegistry({ dashboard: board as never, reports: [], board: { getDashboard: () => board as never, putDashboard: () => undefined } as never, workflows: await opsFor() });
+    expect(registry.get("workflows")?.domAnchor).toEqual({ selector: '[data-freebird-component="workflows"]', page: "#/agent/workflows" });
+    expect(registry.get("workflows")?.actions?.map((one) => one.id)).toContain("create_workflow");
+    expect(registry.get("dashboard")?.actions?.some((one) => one.id === "create_workflow")).toBe(false);
   });
 });

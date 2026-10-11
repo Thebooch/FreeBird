@@ -20,6 +20,11 @@ import { z } from "zod";
 import type { DraftExplanation } from "../workflows/draft.js";
 import { WorkflowError } from "../workflows/service.js";
 import { TemplateError } from "../workflows/templates.js";
+import { SCREENS, landed } from "./screens/common.js";
+
+/** A chip to the workflow a change landed on: its own page, its row ringed. */
+const atWorkflow = <T extends object>(result: T, workflow: { readonly id: string; readonly name: string }, summary: string) =>
+  landed(result, SCREENS.workflows, { title: workflow.name, summary, item: workflow.id, page: `${SCREENS.workflows.page}/${encodeURIComponent(workflow.id)}` });
 
 /**
  * Building workflows from the chat, in three moves:
@@ -48,7 +53,7 @@ export interface WorkflowChatOps {
   create(principal: Principal, input: WorkflowInput): Promise<WorkflowSpec>;
   update(principal: Principal, id: string, input: WorkflowInput): Promise<WorkflowSpec>;
   saveTemplate(input: { workflow: string; kind: "step" | "path" | "workflow"; name: string; steps?: string[]; description?: string }): Promise<WorkflowTemplate>;
-  fromTemplate(principal: Principal, id: string, values: Record<string, string>, name?: string): Promise<WorkflowSpec>;
+  fromTemplate(principal: Principal, id: string, values: Record<string, string>, name?: string, types?: readonly string[]): Promise<WorkflowSpec>;
 }
 
 /** New workflows from the chat start in trial for this many cases. */
@@ -124,6 +129,7 @@ export const useTemplateSchema = z.object({
   templateId: z.string().min(1).describe("A workflow template from TEMPLATES."),
   name: z.string().optional(),
   blanks: z.array(z.object({ name: z.string(), value: z.string() })).optional().describe("A value for each of the template's blanks."),
+  types: z.array(z.string().min(1)).max(50).optional().describe("For a booking template (one started by something happening to a booking, like recipe-turned-away): only these appointment types, ids from APPOINTMENT TYPES. Left out: every type."),
 });
 
 type Fields = Partial<z.infer<typeof createWorkflowSchema>>;
@@ -285,15 +291,19 @@ export const workflowActions = (ops: WorkflowChatOps): ActionDefinition<any, unk
       const check = await explained(() => ops.explain(principal, asSpec(input)));
       const complete = check.questions.every((one) => one.kind !== "missing") && check.problems.length === 0;
       const made = await explained(() => ops.create(principal, { ...input, enabled: complete, trial: CHAT_TRIAL_CASES }));
-      return {
-        created: true,
-        workflowId: made.id,
-        name: made.name,
-        sentence: check.sentence,
-        enabled: made.enabled,
-        trial: made.trial,
-        ...(complete ? {} : { stillMissing: check.questions.filter((one) => one.kind === "missing").map((one) => one.question) }),
-      };
+      return atWorkflow(
+        {
+          created: true,
+          workflowId: made.id,
+          name: made.name,
+          sentence: check.sentence,
+          enabled: made.enabled,
+          trial: made.trial,
+          ...(complete ? {} : { stillMissing: check.questions.filter((one) => one.kind === "missing").map((one) => one.question) }),
+        },
+        made,
+        complete ? `Created the workflow "${made.name}", on in trial.` : `Saved the workflow "${made.name}", off until what it still needs is filled in.`,
+      );
     },
   };
 
@@ -324,7 +334,7 @@ export const workflowActions = (ops: WorkflowChatOps): ActionDefinition<any, unk
       const held = known(args.workflowId);
       if (!held) throw new Error(`"${args.workflowId}" is not one of your workflows.`);
       const next = await explained(() => ops.update(principal, held.id, { ...inputOf(args, held), ...(args.enabled !== undefined ? { enabled: args.enabled } : {}) }));
-      return { updated: true, workflowId: next.id, enabled: next.enabled, starts: describeTrigger(next.trigger) };
+      return atWorkflow({ updated: true, workflowId: next.id, enabled: next.enabled, starts: describeTrigger(next.trigger) }, next, `Changed the workflow "${next.name}".`);
     },
   };
 
@@ -340,7 +350,7 @@ export const workflowActions = (ops: WorkflowChatOps): ActionDefinition<any, unk
       const saved = await explained(() =>
         ops.saveTemplate({ workflow: args.workflowId, kind: args.kind, name: args.name, ...(args.steps ? { steps: args.steps } : {}), ...(args.description ? { description: args.description } : {}) }),
       );
-      return { saved: true, templateId: saved.id, version: saved.version, blanks: saved.blanks.map((one) => one.name) };
+      return landed({ saved: true, templateId: saved.id, version: saved.version, blanks: saved.blanks.map((one) => one.name) }, SCREENS.workflows, { title: "Workflows", summary: `Saved the template "${saved.name}".` });
     },
   };
 
@@ -355,8 +365,8 @@ export const workflowActions = (ops: WorkflowChatOps): ActionDefinition<any, unk
     handler: async (args, ctx) => {
       const principal = principalOf(ctx);
       if (!principal) throw new Error("Nobody is signed in.");
-      const made = await explained(() => ops.fromTemplate(principal, args.templateId, Object.fromEntries((args.blanks ?? []).map((one) => [one.name, one.value])), args.name));
-      return { created: true, workflowId: made.id, name: made.name, enabled: made.enabled };
+      const made = await explained(() => ops.fromTemplate(principal, args.templateId, Object.fromEntries((args.blanks ?? []).map((one) => [one.name, one.value])), args.name, args.types));
+      return atWorkflow({ created: true, workflowId: made.id, name: made.name, enabled: made.enabled }, made, `Made the workflow "${made.name}" from a template.`);
     },
   };
 

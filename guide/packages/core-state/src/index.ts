@@ -13,6 +13,7 @@ export {
   type FreeBirdState,
   type FreeBirdListener,
   type ExplainListener,
+  type NavigateListener,
   type FreeBirdStoreOptions,
 } from "./store.js";
 

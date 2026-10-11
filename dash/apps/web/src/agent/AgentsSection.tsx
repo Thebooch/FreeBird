@@ -10,6 +10,7 @@ import {
   type Scope,
 } from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { itemAttrs, screenAttrs, useChatFocus, useChatScreen, useScreenChanged } from "./chatScreen.js";
 import { api, type ConnectionSummary } from "../api";
 import type { Route } from "../route.js";
 import { recordTypeChoices, type Entities } from "./entities.js";
@@ -469,6 +470,9 @@ const SharedKnowledgePanel = ({
   );
 };
 
+/** The page the chat knows this as. */
+const AGENT_SCREENS = ["agents"] as const;
+
 export const AgentsSection = ({
   selected,
   onNavigate,
@@ -482,6 +486,10 @@ export const AgentsSection = ({
   const [showArchived, setShowArchived] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const reload = (): void => setReloadToken((n) => n + 1);
+
+  /* On screen for the chat, and read again when the chat changes an agent. */
+  useChatScreen(AGENT_SCREENS);
+  useScreenChanged(AGENT_SCREENS, useCallback(() => setReloadToken((n) => n + 1), []));
 
   useEffect(() => {
     let cancelled = false;
@@ -504,6 +512,7 @@ export const AgentsSection = ({
     selected && selected !== NEW && selected !== SHARED
       ? ([...agents, ...archived].find((one) => one.id === selected) ?? null)
       : null;
+  useChatFocus("agents", current ? { id: current.id, label: current.name } : null);
 
   const toggleArchived = async (agent: AgentSpec): Promise<void> => {
     setActionError(null);
@@ -521,7 +530,7 @@ export const AgentsSection = ({
   const row = (agent: AgentSpec): JSX.Element => {
     const active = agent.tools.filter((tool) => tool.enabled).length;
     return (
-      <li key={agent.id}>
+      <li key={agent.id} {...itemAttrs(agent.id)}>
         <button
           type="button"
           className="dash-agent-row"
@@ -540,7 +549,7 @@ export const AgentsSection = ({
   };
 
   return (
-    <div className="dash-agents">
+    <div className="dash-agents" {...screenAttrs("agents")}>
       <aside className="dash-agents__list" aria-label="Agents">
         <div className="dash-agents__head">
           <h2 className="dash-agents__title">Agents</h2>

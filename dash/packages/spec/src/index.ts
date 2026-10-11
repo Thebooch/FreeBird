@@ -539,3 +539,4 @@ export type { Narrowing, NarrowingFile } from "./narrowing.js";
 export { describeMetric, metricSchema, reconcileRuleSchema } from "./metric.js";
 
 export type { MetricDefinition, ReconcileRule } from "./metric.js";
+export { DASH_SCREENS, type DashScreen } from "./screens.js";

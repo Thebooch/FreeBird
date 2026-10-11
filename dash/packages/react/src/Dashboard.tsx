@@ -129,6 +129,12 @@ export interface DashboardProps {
   /** connection id → endpoints that read the time range. See the provider. */
   readonly rangeOps?: Readonly<Record<string, readonly string[]>>;
   /**
+   * `data-*` attributes for the page's root, so a host can name the board for
+   * something reading the page (an assistant's citations, a test) without
+   * wrapping it.
+   */
+  readonly rootData?: Readonly<Record<`data-${string}`, string>>;
+  /**
    * connection id → its `credentialsRevision`, so a key change drops that
    * connection's cached rows instead of leaving the old account's on screen.
    */
@@ -215,6 +221,7 @@ export const Dashboard = ({
   labels,
   entityLinks,
   rangeOps,
+  rootData,
   credentialRevisions,
   history,
   readEach,
@@ -250,7 +257,7 @@ export const Dashboard = ({
       {...(changes ? { changes } : {})}
     >
       <DashStyleSheet />
-      <div className="dash-root dash-page">
+      <div className="dash-root dash-page" {...rootData}>
         <div className="dash-page__head">
           <h1 className="dash-page__title">{dashboard.title}</h1>
           {dashboard.description && <p className="dash-page__description">{dashboard.description}</p>}

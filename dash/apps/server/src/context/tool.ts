@@ -58,6 +58,19 @@ const answerSchema = z.object({
         "reported separately, so the answer can say which platform has what. Costs more " +
         "than a single-source answer; leave unset for an ordinary question.",
     ),
+  from: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional()
+    .describe(
+      "Only when the question names a period other than what the open tab shows (last month, in March, since June 1): " +
+        "its first day, YYYY-MM-DD in their calendar, worked out from TODAY. With `to`. Leave unset otherwise.",
+    ),
+  to: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional()
+    .describe("The period's last day, YYYY-MM-DD, with `from`."),
   scanRecords: z
     .number()
     .int()

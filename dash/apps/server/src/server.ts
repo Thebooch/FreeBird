@@ -94,7 +94,7 @@ import type {
 import type { ChatDb } from "./chat/db.js";
 import { resolveChatLlm } from "./chat/llm-bridge.js";
 import { LOOK_UP_TOOL, lookUpEndpoint, lookUpSchema } from "./chat/concierge-actions.js";
-import { buildChatRegistry } from "./chat/registry.js";
+import { buildChatRegistry, type BuildChatRegistryInput } from "./chat/registry.js";
 import { TopicStore, withTopicContext } from "./chat/topics.js";
 import { chatTopicRoutes, type TimelineTask } from "./routes/chat-topics.js";
 import { buildConciergeContext } from "./concierge/context.js";
@@ -136,6 +136,8 @@ import { RATES_AS_OF } from "./pricing.js";
 import type { PartRegistry } from "@freebirdai/dash-parts";
 import { partsRoutes } from "./routes/parts.js";
 import { agentRoutes } from "./routes/agents.js";
+import { buildScreens } from "./chat/screens/index.js";
+import { describeTurn, periodParams } from "./context/period.js";
 import { workflowRoutes } from "./routes/workflows.js";
 import { calendarRoutes } from "./routes/calendar.js";
 import { CalendarService } from "./calendar/service.js";
@@ -3511,7 +3513,14 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           if (already) return already.value;
           const dashboards = store.listDashboards();
           const context = conciergeContext();
-          const resolved = resolvedFor(dashboard, ctx.auth.extra?.["range"]);
+          /*
+           * The period the question names, when it names one; otherwise the
+           * window the tab shows. "Last month" reads last month even while
+           * the board shows the last seven days.
+           */
+          const asked = args as { from?: unknown; to?: unknown };
+          const resolved =
+            periodParams(asked.from, asked.to, dashboard.params.timeZone) ?? resolvedFor(dashboard, ctx.auth.extra?.["range"]);
           const outcome = await answerFromData(args, {
             /*
              * The conversation, not the board. What a session is currently
@@ -3571,6 +3580,63 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
        */
       registry: async (auth) => {
         const dashboard = dashboardFor(auth);
+        /*
+         * What the chat can do anywhere in the app, board or no board: agents,
+         * workflows, and the calendar's and contacts' screens. A workspace
+         * with no dashboard yet still has all of them.
+         */
+        const appWide: Pick<BuildChatRegistryInput, "agents" | "workflows" | "screens"> = {
+          /*
+           * Changes to connected accounts, proposed here and approved on the
+           * card. Every hook takes who is asking from the turn itself — this
+           * registry is cached for a minute, and a principal captured when it
+           * was built would outlive the request it came from.
+           */
+          agents: {
+            roster: await agents.list(),
+            mayManage: async (principal) => (await policy.can(principal, "agents.manage", {})).ok,
+            create: (principal, input) => agents.create(principal, input),
+            update: (principal, id, input) => agents.update(principal, id, input),
+            archive: (id) => agents.setArchived(id, true),
+          },
+          workflows: {
+            roster: await workflows.list(),
+            templates: await workflowTemplates.list(),
+            mayManage: async (principal) => (await policy.can(principal, "workflows.manage", {})).ok,
+            explain: async (principal, workflow) =>
+              explainDraft(workflows, principal, workflow, await agentStore.list(), { connection: (id) => store.getConnection(id)?.title ?? id }),
+            create: (principal, input) => workflows.create(principal, input),
+            update: (principal, id, input) => workflows.update(principal, id, input),
+            saveTemplate: (input) => workflowTemplates.saveFrom(input),
+            fromTemplate: async (principal, id, values, name, types) => {
+              const { input, template } = await workflowTemplates.workflowFrom(id, values, name, types ? [...types] : undefined);
+              const made = await workflows.create(principal, input);
+              const marked = { ...made, fromTemplate: { id: template.id, version: template.version } };
+              await workflowStore.put(marked);
+              return marked;
+            },
+          },
+          /*
+           * The calendar's and contacts' screens, each a component with the
+           * actions its screen has (`chat/screens/`). The setup is read once
+           * here for the cards' "before"; any change, by chat or by a screen,
+           * drops this cached registry so the next turn reads it again.
+           */
+          screens: buildScreens({
+            may: async (principal, permission) => (await policy.can(principal, permission, {})).ok,
+            now: () => Date.now(),
+            changed: () => invalidateRegistry(),
+            calendar,
+            scheduling,
+            bookings,
+            contacts,
+            links: bookingLinks,
+            tasks: workflowEnv.tasks,
+            agents: { roster: await agentStore.list(), update: (principal, id, input) => agents.update(principal, id, input) },
+            setup: await scheduling.overview(),
+            contactSetup: await contacts.setup(),
+          }),
+        };
         if (!dashboard) {
           // Parsed rather than cast, so schema defaults fill themselves in and
           // this cannot drift when the dashboard schema gains a field.
@@ -3583,6 +3649,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             }),
             reports: [],
             board: { getDashboard: () => null, putDashboard: () => {} },
+            ...appWide,
           });
         }
 
@@ -3609,43 +3676,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           dashboard,
           reports,
           connections,
-          /*
-           * Changes to connected accounts, proposed here and approved on the
-           * card. Every hook takes who is asking from the turn itself — this
-           * registry is cached for a minute, and a principal captured when it
-           * was built would outlive the request it came from.
-           */
-          agents: {
-            roster: await agents.list(),
-            mayManage: async (principal) => (await policy.can(principal, "agents.manage", {})).ok,
-            create: (principal, input) => agents.create(principal, input),
-            update: (principal, id, input) => agents.update(principal, id, input),
-            archive: (id) => agents.setArchived(id, true),
-          },
-          workflows: {
-            roster: await workflows.list(),
-            templates: await workflowTemplates.list(),
-            mayManage: async (principal) => (await policy.can(principal, "workflows.manage", {})).ok,
-            explain: async (principal, workflow) =>
-              explainDraft(workflows, principal, workflow, await agentStore.list(), { connection: (id) => store.getConnection(id)?.title ?? id }),
-            create: (principal, input) => workflows.create(principal, input),
-            update: (principal, id, input) => workflows.update(principal, id, input),
-            saveTemplate: (input) => workflowTemplates.saveFrom(input),
-            fromTemplate: async (principal, id, values, name) => {
-              const { input, template } = await workflowTemplates.workflowFrom(id, values, name);
-              const made = await workflows.create(principal, input);
-              const marked = { ...made, fromTemplate: { id: template.id, version: template.version } };
-              await workflowStore.put(marked);
-              return marked;
-            },
-          },
-          calendar: {
-            agents: await agentStore.list(),
-            now: () => Date.now(),
-            mayManage: async (principal) => (await policy.can(principal, "calendar.manage", {})).ok,
-            list: (options) => calendar.list(options),
-            create: (principal, input) => calendar.create(principal, input),
-          },
+          ...appWide,
           changes: {
             prepare: (principal, intent, sessionId) =>
               writes.prepare(principal, intent, { via: "chat", sessionId }),
@@ -4172,6 +4203,20 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       citations: { enabled: true },
 
       /*
+       * The chat runs the whole app. Every action is offered on every turn,
+       * whatever is on screen (that is context: what "this" means), as one
+       * `start_action` with a catalog of every action a line each, so the
+       * app can grow without the tool list growing with it. Once an action is
+       * picked, its exact fields arrive with `update_action_args`, and a
+       * value that does not fit keeps it collecting until it does.
+       */
+      harnessArgsMode: "catalog",
+      /* "Take me to appointment types": opens the screen, through the app's router. */
+      navigation: { enabled: true },
+      /* A read, a start, a correction and the reply fit in one turn. */
+      maxToolSteps: 5,
+
+      /*
        * One structured question, where guessing would waste their time.
        *
        * Off everywhere by default because it changes the shape of a turn — the
@@ -4221,6 +4266,17 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
        * never shown is exactly the confidently-wrong answer to avoid.
        */
       knowledgeContext: { maxChars: 24_000 },
+      /*
+       * Today's date and the window the tab shows, each turn. Both change from
+       * turn to turn, so they ride after the cache point rather than in the
+       * registry; "last month" needs the first to mean anything.
+       */
+      turnNote: ({ auth }) => {
+        const dashboard = dashboardFor(auth);
+        const zone = dashboard?.params.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const window = dashboard ? resolvedFor(dashboard, auth.extra?.["range"]).range : null;
+        return describeTurn({ now: Date.now(), zone, window });
+      },
       // No email adapter, so no digests; the worker is not running either.
       scheduler: "external",
       systemPrompt: CHAT_SYSTEM_PROMPT,
@@ -4228,6 +4284,15 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
 
     invalidateRegistry = (tenantKey) => chatPlugin.freebird.invalidateRegistry(tenantKey);
     onWritesChanged = () => invalidateRegistry();
+    /*
+     * A change made on a screen is a change the chat's cards must see: the
+     * registry holds the scheduling and contact setup for their "before", so a
+     * successful change to it, or to the agents, drops the cached registry.
+     */
+    const SETUP_CHANGES = /^\/api\/(scheduling\/(defaults|profiles|pools|types|blocks|placements)|contacts\/(fields|match-rules)|agents)(\/|$|\?)/;
+    app.addHook("onResponse", async (request, reply) => {
+      if (request.method !== "GET" && reply.statusCode < 400 && SETUP_CHANGES.test(request.url)) invalidateRegistry();
+    });
     app.register(chatPlugin, { prefix: "/freebird" });
   }
 

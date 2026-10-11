@@ -8,6 +8,8 @@ import { BlocksTab } from "./scheduling/BlocksTab.jsx";
 import { PeopleTab } from "./scheduling/PeopleTab.jsx";
 import { SettingsTab } from "./scheduling/SettingsTab.jsx";
 import { TypesTab } from "./scheduling/TypesTab.jsx";
+import type { DashScreen } from "@freebirdai/dash-spec";
+import { useChatScreen } from "../chatScreen.js";
 
 /**
  * The Calendar section on the Agent side.
@@ -27,6 +29,15 @@ export const CALENDAR_TABS = [
 ] as const;
 export type CalendarTab = (typeof CALENDAR_TABS)[number]["id"];
 
+/** The chat's screens each tab shows. */
+const TAB_SCREENS: Readonly<Record<CalendarTab, readonly DashScreen[]>> = {
+  calendar: ["calendar", "bookings"],
+  types: ["types"],
+  blocks: ["blocks"],
+  people: ["people"],
+  settings: ["settings"],
+};
+
 const LEDES: Readonly<Record<CalendarTab, string>> = {
   calendar: "Everything your agents, workflows and team have scheduled, each in its owner's colour.",
   types: "What people can book: how long it takes, who hosts it, and whether it needs approval.",
@@ -43,6 +54,8 @@ export const CalendarSection = ({
   readonly onNavigate: (route: Route) => void;
 }): JSX.Element => {
   const active: CalendarTab = CALENDAR_TABS.some((one) => one.id === tab) ? (tab as CalendarTab) : "calendar";
+  /* The tab on screen is what the chat takes "this" and "here" to mean. */
+  useChatScreen(TAB_SCREENS[active]);
   const [setup, setSetup] = useState<SchedulingOverview | null>(null);
 
   /* Who is who on the calendar: people's names and colours, read again when the tab changes. */

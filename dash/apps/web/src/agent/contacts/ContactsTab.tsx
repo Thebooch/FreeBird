@@ -1,4 +1,5 @@
 import { Badge, Button, EmptyState, ErrorState } from "@freebirdai/dash-components";
+import { itemAttrs, screenAttrs, useChatFocus, useScreenChanged } from "../chatScreen.js";
 import type { Contact, ContactFieldDef } from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, type ContactSource } from "../../api.js";
@@ -14,6 +15,8 @@ import { MATCH_TONES, MATCH_WORDS, contactColor, contactTitle, formatPhone, init
  */
 
 const PAGE = 50;
+
+const CONTACT_SCREENS = ["contacts"] as const;
 
 export const ContactsTab = ({ canManage, onSetUpFields }: { readonly canManage: boolean; readonly onSetUpFields: () => void }): JSX.Element => {
   const [search, setSearch] = useState("");
@@ -39,6 +42,11 @@ export const ContactsTab = ({ canManage, onSetUpFields }: { readonly canManage: 
       if (mine === sequence.current) setError(cause instanceof Error ? cause.message : String(cause));
     }
   }, []);
+
+  /* What the chat changes on contacts shows here at once. */
+  useScreenChanged(CONTACT_SCREENS, useCallback(() => void load(search), [load, search]));
+  const openContact = open ? contacts?.find((one) => one.id === open) : undefined;
+  useChatFocus("contacts", open ? { id: open, label: openContact?.name || openContact?.emails[0] || "this contact" } : null);
 
   /* Typing searches a moment after it stops. */
   useEffect(() => {
@@ -69,7 +77,7 @@ export const ContactsTab = ({ canManage, onSetUpFields }: { readonly canManage: 
   if (error && !contacts) return <ErrorState message={error} onRetry={() => void load(search)} />;
 
   return (
-    <div className="dash-sched-tab" data-testid="contacts-list">
+    <div className="dash-sched-tab" data-testid="contacts-list" {...screenAttrs("contacts")}>
       <div className="dash-contacts-toolbar">
         <label className="dash-contacts-search">
           <svg viewBox="0 0 16 16" aria-hidden="true" className="dash-contacts-search__icon">
@@ -124,7 +132,7 @@ export const ContactsTab = ({ canManage, onSetUpFields }: { readonly canManage: 
           {contacts.map((contact) => {
             const link = contact.links[0];
             return (
-              <button key={contact.id} type="button" role="row" className="dash-contacts-row" onClick={() => setOpen(contact.id)} data-testid="contacts-row">
+              <button key={contact.id} type="button" role="row" className="dash-contacts-row" onClick={() => setOpen(contact.id)} data-testid="contacts-row" {...itemAttrs(contact.id)}>
                 <span role="cell" className="dash-contacts-row__name">
                   <span className="dash-contacts-avatar" style={{ ["--cal-color" as string]: colorVar(contactColor(contact.id)) }} aria-hidden="true">
                     {initials(contact)}

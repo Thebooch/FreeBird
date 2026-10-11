@@ -5,6 +5,8 @@ import {
   type AuthContext,
   type ComponentRegistry,
   type DbAdapter,
+  withCitation,
+  withTransient,
 } from "@freebirdai/core";
 import {
   handleConfirmAction,
@@ -301,3 +303,62 @@ describe("handleUpdateActionArgs — authorize gate", () => {
   });
 });
 
+
+describe("handleConfirmAction — the outcome message", () => {
+  const registryWith = (handler: () => unknown) => {
+    const registry = createComponentRegistry();
+    registry.register({
+      id: "settings",
+      title: "Settings",
+      description: "Settings panel",
+      grid: { minW: 4, minH: 3 },
+      actions: [{ id: "set_theme", description: "Set the theme", schema: z.object({ theme: z.enum(["light", "dark"]) }), handler: async () => handler() }],
+    });
+    return registry;
+  };
+
+  it("saves a line about the change, with a chip to where it is, when the result cites it", async () => {
+    const deps = buildDeps({
+      registry: registryWith(() => withCitation({ theme: "dark" }, { title: "Theme", page: "#/settings", selector: "#theme", summary: "The theme is dark now." })),
+    });
+    const res = await handleConfirmAction(deps, baseConfirmReq);
+    expect(res.body.ok).toBe(true);
+    const saved = (deps.db.appendMessage as unknown as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[0]);
+    const line = saved.find((one: { role: string }) => one.role === "assistant");
+    expect(line).toMatchObject({
+      sessionId: "s1",
+      content: "The theme is dark now.",
+      toolPayload: { citations: [{ componentId: "settings", title: "Theme", directive: "highlight", kind: "component", page: "#/settings", selector: "#theme" }] },
+    });
+    expect(res.body.outcomeMessage).toMatchObject({ role: "assistant", content: "The theme is dark now." });
+  });
+
+  it("says nothing more for a result that cites nothing", async () => {
+    const deps = buildDeps({ registry: registryWith(() => ({ theme: "dark" })) });
+    const res = await handleConfirmAction(deps, baseConfirmReq);
+    expect(res.body.ok).toBe(true);
+    const roles = (deps.db.appendMessage as unknown as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[0].role);
+    expect(roles).not.toContain("assistant");
+    expect(res.body.outcomeMessage).toBeUndefined();
+  });
+});
+
+describe("handleConfirmAction — values shown once", () => {
+  it("hands them to the person who approved, and keeps them out of the audit and every event", async () => {
+    const registry = createComponentRegistry();
+    registry.register({
+      id: "settings",
+      title: "Settings",
+      description: "Settings panel",
+      grid: { minW: 4, minH: 3 },
+      actions: [{ id: "set_theme", description: "Set the theme", schema: z.object({ theme: z.enum(["light", "dark"]) }), handler: async () => withTransient({ made: true }, { link: "https://x/p/s/book/SECRET" }) }],
+    });
+    const events: ServerActionEvent[] = [];
+    const deps = buildDeps({ registry, onActionEvent: (event) => void events.push(event) });
+    const res = await handleConfirmAction(deps, baseConfirmReq);
+    expect(res.body.result).toMatchObject({ made: true, freebirdTransient: { link: "https://x/p/s/book/SECRET" } });
+    const kept = (deps.db.appendMessage as unknown as ReturnType<typeof vi.fn>).mock.calls.map((call) => JSON.stringify(call[0]));
+    expect(kept.join("\n")).not.toContain("SECRET");
+    expect(JSON.stringify(events)).not.toContain("SECRET");
+  });
+});

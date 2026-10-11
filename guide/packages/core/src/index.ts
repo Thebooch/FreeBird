@@ -169,8 +169,23 @@ export {
 // Actions
 // ---------------------------------------------------------------------------
 export * from "./actions/types.js";
+export { OPEN_COMPONENT_TOOL_NAME, buildOpenComponentTool, resolveNavigation } from "./chat/navigation.js";
+export { TRANSIENT_KEY, transientOf, withTransient, withoutTransient } from "./actions/transient.js";
+export {
+  CITATION_KEY,
+  NAVIGATION_KEY,
+  citationOf,
+  navigationOf,
+  revealSelector,
+  toComponentCitation,
+  withCitation,
+  withNavigation,
+  type ActionCitation,
+} from "./actions/citation.js";
 export {
   buildHarnessTurn,
+  offeredActions,
+  argumentNames,
   type HarnessTurn,
   type BuildHarnessTurnInput,
 } from "./actions/harness.js";

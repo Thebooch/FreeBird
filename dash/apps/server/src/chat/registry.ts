@@ -14,7 +14,7 @@ import {
   withoutWidget,
 } from "@freebirdai/dash-spec";
 import type { ComponentDefinition } from "@freebirdai/core";
-import { createComponentRegistry } from "@freebirdai/core";
+import { createComponentRegistry, withCitation, withNavigation } from "@freebirdai/core";
 import { z } from "zod";
 import {
   pageFor,
@@ -26,7 +26,7 @@ import {
 
 import { agentActions, agentKnowledge, type AgentChatOps } from "./agent-actions.js";
 import { workflowActions, workflowKnowledge, type WorkflowChatOps } from "./workflow-actions.js";
-import { calendarActions, calendarKnowledge, type CalendarChatOps } from "./calendar-actions.js";
+import { SCREENS, screenComponent } from "./screens/common.js";
 import { recordChangeActions, type RecordChangeOps } from "./record-actions.js";
 /**
  * The dashboard, described to the chat engine.
@@ -125,8 +125,12 @@ export interface BuildChatRegistryInput {
    * Absent means the two actions are not registered.
    */
   readonly workflows?: WorkflowChatOps;
-  /** The calendar: `list_calendar` and `add_calendar_entry`. Absent means neither is registered. */
-  readonly calendar?: CalendarChatOps;
+  /**
+   * The calendar's and contacts' screens, each a component with its own
+   * actions, knowledge and place in the app (`chat/screens/`). Registered
+   * after the roster and before the widgets.
+   */
+  readonly screens?: readonly ComponentDefinition[];
 }
 
 /* ── actions ──────────────────────────────────────────────────────────── */
@@ -171,6 +175,9 @@ const openWidgetSchema = z.object({
     .string()
     .min(1)
     .describe("Id of a widget that exists, from the WIDGETS list. Any tab."),
+  preset: rangePresetSchema
+    .optional()
+    .describe("Show its tab for this period: 24h, 7d, 30d, 90d or 12mo. Only when they asked for one; the range is the whole tab's."),
 });
 
 const switchDashboardSchema = z.object({
@@ -194,6 +201,12 @@ const readConnectionSchema = z.object({
   connectionId: z.string().min(1).describe("Id of a connection from the CONNECTIONS list."),
 });
 
+/** A tab's address, with the period to show and a panel to open when asked. */
+const boardPage = (dashboardId: string | null, extra: { preset?: RangePreset; panel?: "connections" } = {}): string => {
+  const query = new URLSearchParams({ ...(extra.preset ? { range: extra.preset } : {}), ...(extra.panel ? { panel: extra.panel } : {}) }).toString();
+  return `${dashboardId ? pageFor(dashboardId) : "#/"}${query ? `?${query}` : ""}`;
+};
+
 /**
  * Actions that only move the view.
  *
@@ -201,17 +214,24 @@ const readConnectionSchema = z.object({
  * file: changing a time range or opening a panel is local, instantly visible,
  * and undone by doing the opposite. Nothing leaves the browser and no stored
  * spec changes.
+ *
+ * Each says where to take the person (`withNavigation`), and guide's client
+ * goes there the way it follows a chip — the board's address carries the
+ * period and the panel — so nothing here is applied by Dash's chat column.
+ * They are for when somebody asks to *see* something; a question about the
+ * data is answered in the conversation and moves nothing.
  */
 const viewActions = (
+  input: BuildChatRegistryInput,
   handles: readonly WidgetHandle[],
 ): ComponentDefinition["actions"] => [
   {
     id: "set_time_range",
-    description: "Change the dashboard's time range.",
+    description: "Show the open tab for another period, when they ask to see it. A question about a period is answered without this.",
     schema: setRangeSchema,
     requiresConfirmation: "none",
-    // Executed client-side; the handler exists so the contract is complete.
-    handler: async (args: { preset: RangePreset }) => ({ preset: args.preset }),
+    handler: async (args: { preset: RangePreset }) =>
+      withNavigation({ preset: args.preset }, { title: input.dashboard.title, page: boardPage(input.dashboard.id, { preset: args.preset }) }),
   },
   {
     /*
@@ -221,27 +241,40 @@ const viewActions = (
      */
     id: "open_widget",
     description:
-      "Show the user a widget and open its inspector. Works for a widget on any tab; " +
+      "Show the user a widget when they ask to see it, optionally for a period. Works for a widget on any tab; " +
       "the view moves to that tab first.",
     schema: openWidgetSchema,
     requiresConfirmation: "none",
-    handler: async (args: { widgetId: string }) => {
+    handler: async (args: { widgetId: string; preset?: RangePreset }) => {
       const found = resolveHandle(handles, args.widgetId);
       if (!found) throw new Error(`there is no widget "${args.widgetId}"`);
-      return {
-        widgetId: found.widgetId,
-        dashboardId: found.dashboardId,
-        handle: found.handle,
-        title: found.widget.title,
-      };
+      return withNavigation(
+        {
+          widgetId: found.widgetId,
+          dashboardId: found.dashboardId,
+          handle: found.handle,
+          title: found.widget.title,
+        },
+        {
+          title: found.widget.title,
+          page: boardPage(found.dashboardId, args.preset ? { preset: args.preset } : {}),
+          selector: selectorFor(found.widgetId),
+        },
+      );
     },
   },
   {
     id: "switch_dashboard",
-    description: "Move to a different tab. Only ids from the TABS list are valid.",
+    description: "Move to a different tab, when they ask to. Only ids from the TABS list are valid.",
     schema: switchDashboardSchema,
     requiresConfirmation: "none",
-    handler: async (args: { dashboardId: string }) => ({ dashboardId: args.dashboardId }),
+    authorize: (args: { dashboardId: string }) =>
+      knownDashboard(input, args.dashboardId) || { ok: false as const, reason: `"${args.dashboardId}" is not one of your tabs.`, status: 404 },
+    handler: async (args: { dashboardId: string }) =>
+      withNavigation(
+        { dashboardId: args.dashboardId },
+        { title: (input.allDashboards ?? []).find((board) => board.id === args.dashboardId)?.title ?? args.dashboardId, page: boardPage(args.dashboardId) },
+      ),
   },
   /*
    * Opening a panel is not doing the thing the panel does.
@@ -256,9 +289,13 @@ const viewActions = (
       "Open the Connections panel so the user can attach a new API or manage an existing one.",
     schema: z.object({}),
     requiresConfirmation: "none",
-    handler: async () => ({ opened: "connections" }),
+    handler: async () =>
+      withNavigation({ opened: "connections" }, { title: "Connections", page: boardPage(realBoard(input) ? input.dashboard.id : null, { panel: "connections" }) }),
   },
 ];
+
+/** Whether the registry was built for a tab that exists, not the empty workspace's placeholder. */
+const realBoard = (input: BuildChatRegistryInput): boolean => input.board.getDashboard() !== null;
 
 /**
  * Actions that write the stored dashboard.
@@ -314,12 +351,15 @@ const boardActions = (
          */
         input.board.putDashboard(withoutWidget(board, found.widgetId));
         input.board.onChanged?.();
-        return {
-          removed: true,
-          widgetId: found.widgetId,
-          dashboardId: found.dashboardId,
-          title: found.widget.title,
-        };
+        return withCitation(
+          {
+            removed: true,
+            widgetId: found.widgetId,
+            dashboardId: found.dashboardId,
+            title: found.widget.title,
+          },
+          { title: board.title, page: boardPage(board.id), summary: `Removed "${found.widget.title}" from "${board.title}".` },
+        );
       },
     },
 
@@ -456,13 +496,16 @@ const boardActions = (
 
         input.board.putDashboard(checked.value);
         input.board.onChanged?.();
-        return {
-          grouped: true,
-          groupId,
-          title: args.title,
-          display,
-          widgets: found.map((entry) => entry.widget.title),
-        };
+        return withCitation(
+          {
+            grouped: true,
+            groupId,
+            title: args.title,
+            display,
+            widgets: found.map((entry) => entry.widget.title),
+          },
+          { title: args.title, page: boardPage(checked.value.id), summary: `Grouped ${found.length} widgets as "${args.title}".` },
+        );
       },
     },
 
@@ -524,7 +567,11 @@ const boardActions = (
       handler: async (args: { title: string }) => {
         const created = input.board.createDashboard!(args.title.trim());
         input.board.onChanged?.();
-        return { created: true, dashboardId: created.id, title: created.title };
+        /* A chip to the new tab; the person goes there when they choose. */
+        return withCitation(
+          { created: true, dashboardId: created.id, title: created.title },
+          { title: created.title, page: boardPage(created.id), summary: `Made the tab "${created.title}".` },
+        );
       },
     },
     {
@@ -546,7 +593,10 @@ const boardActions = (
         if (!current) throw new Error("that tab no longer exists");
         input.board.putDashboard({ ...current, title: args.title.trim() });
         input.board.onChanged?.();
-        return { renamed: true, dashboardId: args.dashboardId, title: args.title.trim() };
+        return withCitation(
+          { renamed: true, dashboardId: args.dashboardId, title: args.title.trim() },
+          { title: args.title.trim(), page: boardPage(args.dashboardId), summary: `Renamed the tab to "${args.title.trim()}".` },
+        );
       },
     },
     {
@@ -602,10 +652,15 @@ const boardActions = (
           reason: `"${args.connectionId}" is not one of your connections.`,
           status: 404,
         },
-      handler: async (args: { connectionId: string }) => ({
-        opened: "connections",
-        connectionId: args.connectionId,
-      }),
+      handler: async (args: { connectionId: string }) =>
+        withCitation(
+          { opened: "connections", connectionId: args.connectionId },
+          {
+            title: "Connections",
+            page: boardPage(realBoard(input) ? input.dashboard.id : null, { panel: "connections" }),
+            summary: "The Connections panel shows what reading it will cost, and starts it when you say so.",
+          },
+        ),
     },
   ];
 };
@@ -827,6 +882,14 @@ const workspaceKnowledge = (input: BuildChatRegistryInput): Array<{ text: string
   return facts;
 };
 
+/** The open tab in a line: which widgets it shows. */
+const boardDescription = (dashboard: DashboardSpec): string => {
+  const titles = dashboard.widgets.map((widget) => `"${widget.title}"`);
+  return titles.length === 0
+    ? "The dashboard tab open now. It has no widgets yet."
+    : `The dashboard tab open now, showing ${titles.slice(0, 12).join(", ")}${titles.length > 12 ? ` and ${titles.length - 12} more` : ""}.`;
+};
+
 export const buildChatRegistry = (input: BuildChatRegistryInput) => {
   const registry = createComponentRegistry();
   const handles = workspaceHandles(
@@ -835,12 +898,36 @@ export const buildChatRegistry = (input: BuildChatRegistryInput) => {
   );
   const actions = [
     ...(boardActions(input, handles) ?? []),
-    ...(viewActions(handles) ?? []),
+    ...(viewActions(input, handles) ?? []),
     ...(input.concierge ? (conciergeActions(input.concierge) ?? []) : []),
     ...(input.changes ? recordChangeActions(input.changes) : []),
-    ...(input.agents ? agentActions(input.agents) : []),
-    ...(input.workflows ? workflowActions(input.workflows) : []),
-    ...(input.calendar ? calendarActions(input.calendar) : []),
+  ];
+
+  /*
+   * Agents and workflows are pages of their own, so each is its own
+   * component: its actions, what it knows, and where it is — a change to one
+   * leaves a chip that opens it, and "take me to my workflows" can go there.
+   */
+  const pages = [
+    /*
+     * The tab open now, so the page can say "this is on screen" through
+     * guide's own channel (`activeComponentIds` / `focus`) like every other
+     * page. Only with a real board; the placeholder for an empty workspace
+     * has nothing to show.
+     */
+    ...(input.board.getDashboard() !== null
+      ? [
+          {
+            ...screenComponent(
+              { ...SCREENS.board, title: input.dashboard.title, page: pageFor(input.dashboard.id), description: boardDescription(input.dashboard) },
+              [],
+              [],
+            ),
+          },
+        ]
+      : []),
+    ...(input.agents ? [screenComponent(SCREENS.agents, agentKnowledge(input.agents).map((one) => one.text), agentActions(input.agents))] : []),
+    ...(input.workflows ? [screenComponent(SCREENS.workflows, workflowKnowledge(input.workflows).map((one) => one.text), workflowActions(input.workflows))] : []),
   ];
 
   /*
@@ -858,7 +945,7 @@ export const buildChatRegistry = (input: BuildChatRegistryInput) => {
    * shadow it — and avoid `__`, which the per-action tool encoder uses as
    * its separator.
    */
-  const taken = new Set(handles.map((entry) => entry.handle));
+  const taken = new Set([...handles.map((entry) => entry.handle), ...(input.screens ?? []).map((screen) => screen.id), ...pages.map((page) => page.id)]);
   let rosterId = "dashboard";
   for (let n = 2; taken.has(rosterId); n++) rosterId = `dashboard-${n}`;
 
@@ -872,14 +959,21 @@ export const buildChatRegistry = (input: BuildChatRegistryInput) => {
       ...(input.records ? [{ text: input.records }] : []),
       ...inventoryKnowledge(input, handles),
       ...workspaceKnowledge(input),
-      ...(input.agents ? agentKnowledge(input.agents) : []),
-      ...(input.workflows ? workflowKnowledge(input.workflows) : []),
-      ...(input.calendar ? calendarKnowledge(input.calendar) : []),
       ...(input.concierge ? conciergeKnowledge(input.concierge) : []),
     ],
     grid: { minW: 12, minH: 4 },
     actions,
   });
+
+  /*
+   * The calendar's and contacts' screens, after the roster so their knowledge
+   * follows it, and before the widgets. Their ids are never a widget's
+   * (`workspaceHandles` steps around them), and the roster's steps aside
+   * from them as it does from widgets.
+   */
+  for (const screen of [...pages, ...(input.screens ?? [])]) {
+    if (screen.id !== rosterId) registry.register(screen);
+  }
 
   /*
    * Every widget in the workspace is registered; only the current tab's carry

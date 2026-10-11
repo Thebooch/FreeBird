@@ -1,9 +1,11 @@
+import { citationOf } from "@freebirdai/core";
 import { agentSchema, type Principal } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import { AgentService } from "../agents/service.js";
 import { MemoryAgentStore } from "../agents/store.js";
 import { ownerPolicy, type Policy } from "../identity/policy.js";
 import { agentActions, agentKnowledge, type AgentChatOps } from "./agent-actions.js";
+import { buildChatRegistry } from "./registry.js";
 
 const owner: Principal = { userId: "o", workspaceId: "acme", role: "owner", kind: "member" };
 const ctxFor = (principal: Principal | null) => ({ auth: { extra: principal ? { principal } : {} } }) as never;
@@ -83,5 +85,24 @@ describe("agent chat actions", () => {
     const { ops } = await build();
     expect(agentKnowledge(ops)[0]?.text).toMatch(/Scout.*id: scout.*colour 2/);
     expect(agentKnowledge({ ...ops, roster: [] })[0]?.text).toContain("none yet");
+  });
+});
+
+describe("agents as a page the chat knows", () => {
+  it("leaves a chip that opens the agent it changed, ringing its row", async () => {
+    const { action } = await build();
+    const made = await action("create_agent").handler!({ name: "Clerk" } as never, ctxFor(owner));
+    expect(citationOf(made)).toMatchObject({ title: "Clerk", page: "#/agent/agents/clerk", selector: '[data-freebird-component="agents"] [data-freebird-item="clerk"]' });
+    const archived = await action("archive_agent").handler!({ agentId: "scout" } as never, ctxFor(owner));
+    expect(citationOf(archived)).toMatchObject({ page: "#/agent/agents", summary: expect.stringContaining("Archived") });
+  });
+
+  it("is its own component, apart from the dashboard, with its page and knowledge", async () => {
+    const { ops } = await build();
+    const board = { id: "ops", title: "Ops", widgets: [], layout: { cells: [] } };
+    const registry = buildChatRegistry({ dashboard: board as never, reports: [], board: { getDashboard: () => board as never, putDashboard: () => undefined } as never, agents: ops });
+    expect(registry.get("agents")?.domAnchor).toEqual({ selector: '[data-freebird-component="agents"]', page: "#/agent/agents" });
+    expect(registry.get("agents")?.actions?.map((one) => one.id)).toEqual(["create_agent", "update_agent", "archive_agent"]);
+    expect(registry.get("dashboard")?.actions?.some((one) => one.id === "create_agent")).toBe(false);
   });
 });

@@ -11,11 +11,13 @@ import type {
   ActionRecord,
   ActionState,
   ChatMessage,
+  ComponentCitation,
   ComponentRegistry,
   CustomTab,
   GridCell,
   LayoutPlan,
   Reference,
+  ScreenFocus,
 } from "@freebirdai/core";
 import type {
   ActionEvent,
@@ -201,6 +203,14 @@ export class FreeBirdService {
 
   setActiveComponentIds(ids: string[]): void {
     this.store.setActiveComponentIds(ids);
+  }
+  /** What the person has open within the active components: "this one" for the chat. */
+  setFocus(focus: ScreenFocus | null): void {
+    this.store.setFocus(focus);
+  }
+  /** Where the person asked the chat to take them; the host opens it. */
+  onNavigate(handler: (target: ComponentCitation) => void): () => void {
+    return this.store.onNavigate(handler);
   }
   confirmAction(): Promise<void> {
     return this.store.confirmAction();

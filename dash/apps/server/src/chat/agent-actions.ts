@@ -10,6 +10,7 @@ import {
 } from "@freebirdai/dash-spec";
 import { z } from "zod";
 import { AgentError } from "../agents/service.js";
+import { SCREENS, landed } from "./screens/common.js";
 
 /**
  * Setting up agents from the chat: make one, change one, retire one.
@@ -111,6 +112,10 @@ const summaryOf = (agent: AgentSpec) => ({
   reach: summarizeReach(agent.reach),
 });
 
+/** A chip to the agent a change landed on: its own page, its row ringed. */
+const atAgent = <T extends object>(result: T, agent: AgentSpec, summary: string) =>
+  landed(result, SCREENS.agents, { title: agent.name, summary, item: agent.id, page: `${SCREENS.agents.page}/${encodeURIComponent(agent.id)}` });
+
 /** A turn's failure in the person's words, rather than as a stack. */
 const explained = <T>(run: () => Promise<T>): Promise<T> =>
   run().catch((error: unknown) => {
@@ -161,7 +166,7 @@ export const agentActions = (ops: AgentChatOps): ActionDefinition<any, unknown, 
           ...(args.reach ? { reach: reachOf(args.reach) } : {}),
         }),
       );
-      return { created: true, ...summaryOf(made) };
+      return atAgent({ created: true, ...summaryOf(made) }, made, `Created the agent "${made.name}".`);
     },
   };
 
@@ -215,7 +220,7 @@ export const agentActions = (ops: AgentChatOps): ActionDefinition<any, unknown, 
           ...(args.reach ? { reach: reachOf(args.reach) } : {}),
         }),
       );
-      return { updated: true, ...summaryOf(next) };
+      return atAgent({ updated: true, ...summaryOf(next) }, next, `Changed the agent "${next.name}".`);
     },
   };
 
@@ -241,7 +246,7 @@ export const agentActions = (ops: AgentChatOps): ActionDefinition<any, unknown, 
     }),
     handler: async (args) => {
       const archived = await explained(() => ops.archive(args.agentId));
-      return { archived: true, ...summaryOf(archived) };
+      return landed({ archived: true, ...summaryOf(archived) }, SCREENS.agents, { title: "Agents", summary: `Archived the agent "${archived.name}". It can be restored from Agents.` });
     },
   };
 

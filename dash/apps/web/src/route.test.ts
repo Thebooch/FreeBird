@@ -212,3 +212,16 @@ describe("the Agent side", () => {
     expect(routeToHash({ kind: "agent", section: "agents", id: "a b" })).toBe("#/agent/agents/a%20b");
   });
 });
+
+describe("a board address that asks for a period or a panel", () => {
+  it("reads a known range and the Connections panel, and ignores anything else", () => {
+    expect(parseRoute("#/d/ops?range=30d")).toEqual({ kind: "board", dashboardId: "ops", range: "30d" });
+    expect(parseRoute("#/?panel=connections")).toEqual({ kind: "board", dashboardId: null, panel: "connections" });
+    expect(parseRoute("#/d/ops?range=forever&panel=nope")).toEqual({ kind: "board", dashboardId: "ops" });
+  });
+
+  it("writes them back the same way", () => {
+    expect(routeToHash({ kind: "board", dashboardId: "ops", range: "7d", panel: "connections" })).toBe("#/d/ops?range=7d&panel=connections");
+    expect(parseRoute(routeToHash({ kind: "board", dashboardId: "ops", range: "12mo" }))).toEqual({ kind: "board", dashboardId: "ops", range: "12mo" });
+  });
+});

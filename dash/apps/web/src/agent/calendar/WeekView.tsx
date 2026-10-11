@@ -3,6 +3,7 @@ import type { HostOccurrence } from "../../api.js";
 import { useEffect, useMemo, useRef } from "react";
 import { EntryChip } from "./EntryChip.jsx";
 import { colorVar, dayKey, dayOf, entryEnd, entryStart, isAllDay, shortSpan, startOfDay, timeLabel, viewDays, type OwnerInfo } from "./model.js";
+import { itemAttrs } from "../chatScreen.js";
 
 const HOUR_PX = 48;
 const MINUTE_PX = HOUR_PX / 60;
@@ -206,6 +207,7 @@ export const WeekView = ({
                       onClick={() => onOpen(entry)}
                       title={`${entry.title}, ${timeLabel(entry)}, ${owner.name}`}
                       data-testid="calendar-week-event"
+                      {...itemAttrs(entry.booking ?? entry.id)}
                     >
                       <span className="dash-cal-week__event-title">{entry.title}</span>
                       {height >= 34 && <span className="dash-cal-week__event-time">{shortSpan(entry)}</span>}

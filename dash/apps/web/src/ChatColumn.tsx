@@ -3,21 +3,22 @@ import {
   useActionState,
   useChat,
   useFreeBird,
+  useNavigationRequests,
   useSession,
 } from "@freebirdai/react";
-import type { ChatMessage } from "@freebirdai/core";
+import { transientOf, type ChatMessage } from "@freebirdai/core";
 import { Tabs } from "@freebirdai/dash-components";
 import { useCallback, useLayoutEffect, useMemo } from "react";
-import { useOptionalDashboard } from "@freebirdai/dash-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 import { buildStream, dayLabel, mergeLive, reachesLatest, withDay, type StreamDay } from "./chat/stream.js";
 import { ChatTimeline } from "./chat/Timeline.jsx";
 import { ConciergeCard } from "./ConciergeCard";
 import { CHANGE_ACTIONS, ChatChangeCard } from "./ChatChangeCard.jsx";
+import { ChatActionCard, OnceCard } from "./ChatActionCard.jsx";
+import { announceScreenChange, isScreenId } from "./agent/chatScreen.js";
 import { writeStoredSession } from "./ChatSession.jsx";
-import { Citations, DigDeeper, OfferWidget } from "./MessageExtras.jsx";
-import { showWidget } from "./showWidget.js";
+import { Citations, DigDeeper, OfferWidget, goToCitation } from "./MessageExtras.jsx";
 
 /**
  * The assistant, as a column rather than a bubble.
@@ -48,8 +49,6 @@ export interface ChatColumnProps {
    * not a handoff, it is a puzzle.
    */
   readonly onWidgetAdded?: (widgetId: string) => void;
-  /** Move to another tab, when the assistant is asked to. */
-  readonly onSwitchDashboard?: (id: string) => void;
   /** Open a panel the assistant cannot fill in on the user's behalf. */
   readonly onOpenPanel?: (panel: "connections") => void;
   /**
@@ -180,7 +179,6 @@ const ChatBody = ({
   dashboardId,
   onDashboardChanged,
   onWidgetAdded,
-  onSwitchDashboard,
   onOpenPanel,
   onBuildingChange,
   pending,
@@ -460,19 +458,6 @@ const ChatBody = ({
     if (text) void sendRouted(text);
   }, [pending, streaming, routing, sendRouted, takePending]);
   const actions = useActionState();
-  /*
-   * When a board is open the column renders inside its provider — via the
-   * `toolbar` slot, documented as where a chat drawer goes — so it can drive
-   * the view directly rather than routing every change up through props.
-   * Fixed positioning means its place in the tree does not affect where it
-   * appears on screen.
-   *
-   * Optional because the assistant also opens on an empty workspace, where
-   * there is no board and so nothing to set a time range on. Requiring the
-   * context there took the whole app down the moment the panel was opened.
-   */
-  const dashboard = useOptionalDashboard();
-  const setPreset = dashboard?.setPreset;
   const [draft, setDraft] = useState("");
   const logRef = useRef<HTMLDivElement>(null);
   /*
@@ -495,6 +480,26 @@ const ChatBody = ({
   const [startedHere, setStartedHere] = useState(false);
   /** The action the server is carrying out right now, if any. */
   const [running, setRunning] = useState<{ actionId: string; label?: string } | null>(null);
+
+  /*
+   * A value an approved change hands over once — a booking page link, a
+   * calendar feed — held here until dismissed. The server keeps it nowhere,
+   * so a reload is the end of it; the card says so.
+   */
+  const [handedOnce, setHandedOnce] = useState<{ title: string; values: Readonly<Record<string, string>> } | null>(null);
+  /** The title of what was last proposed, to name what it handed over. */
+  const proposedTitle = useRef<string | null>(null);
+  useEffect(() => {
+    const title = actions.pending?.preview?.title;
+    if (title) proposedTitle.current = title;
+  }, [actions.pending]);
+
+  /*
+   * "Take me to the booking settings" — the assistant asks for a screen, and
+   * it opens the way a citation chip does: same tab or not, then a ring on
+   * the thing named. Nothing moves unless the person asked.
+   */
+  useNavigationRequests(useCallback((target) => void goToCitation(target), []));
 
   const stream = useMemo(
     () => buildStream({ days, live, today, topics: topicNames }),
@@ -556,7 +561,19 @@ const ChatBody = ({
         setRunning(null);
         // The id lives on the record; the event carries the args it ran with.
         const actionId = event.record.actionId;
-        const args = (event.args ?? {}) as Record<string, unknown>;
+
+        /*
+         * A calendar or contacts screen: the change is already saved, so the
+         * screen reads again if it is open, and anything shown once is put
+         * where it can be copied. The chip under the outcome is how to get
+         * there — nothing here moves the page.
+         */
+        if (isScreenId(event.record.componentId)) {
+          announceScreenChange(event.record.componentId);
+          const once = transientOf(event.result);
+          if (once) setHandedOnce({ title: proposedTitle.current ?? "Shown once", values: once });
+          return;
+        }
 
         if (SETUP_ACTIONS.has(actionId)) {
           setSetupRevision((current) => current + 1);
@@ -584,49 +601,17 @@ const ChatBody = ({
           return;
         }
         if (SPEC_ACTIONS.has(actionId)) {
+          // The stored board changed, so it is read again. Where the change
+          // is reached from is the chip under the outcome; nothing moves here.
           onDashboardChanged();
-          // Creating a tab should land on it, the same as clicking ＋ does.
-          const created = (event.result as { dashboardId?: unknown } | null)?.dashboardId;
-          if (actionId === "create_dashboard" && typeof created === "string") {
-            onSwitchDashboard?.(created);
-          }
-          return;
         }
-        if (actionId === "set_time_range" && typeof args.preset === "string") {
-          // No board open means no range to change; the action simply has
-          // nothing to act on rather than being an error.
-          setPreset?.(args.preset as Parameters<NonNullable<typeof setPreset>>[0]);
-        }
-        if (actionId === "open_widget") {
-          /*
-           * The server resolved the handle, so this gets the real widget id
-           * AND which tab it is filed under. Switching first is what makes
-           * "show me the rent roll" work from any tab — the assistant is not
-           * limited to the board that happens to be open, and the user should
-           * not have to be either.
-           *
-           * The tile is waited for rather than assumed: a tab change refetches
-           * the board, so it does not exist yet at the moment the action lands.
-           */
-          const opened = event.result as
-            | { widgetId?: unknown; dashboardId?: unknown }
-            | null;
-          const widgetId =
-            typeof opened?.widgetId === "string" ? opened.widgetId : args.widgetId;
-          if (typeof widgetId !== "string") return;
-          if (typeof opened?.dashboardId === "string" && opened.dashboardId !== dashboardId) {
-            onSwitchDashboard?.(opened.dashboardId);
-          }
-          showWidget(widgetId);
-        }
-        if (actionId === "switch_dashboard" && typeof args.dashboardId === "string") {
-          onSwitchDashboard?.(args.dashboardId);
-        }
-        if (actionId === "open_connections" || actionId === "read_connection") {
-          onOpenPanel?.("connections");
-        }
+        /*
+         * Opening a widget, switching tab, a time range, the Connections panel:
+         * each says where to go, and guide's client goes there like a chip
+         * (`useNavigationRequests` below, then `goToCitation`). Nothing to do here.
+         */
       },
-      [setPreset, onDashboardChanged, onSwitchDashboard, onOpenPanel, onRecordChanged, dashboardId],
+      [onDashboardChanged, onRecordChanged],
     ),
   );
 
@@ -831,34 +816,25 @@ const ChatBody = ({
               onCancel={() => actions.cancel()}
             />
           )}
-        {actions.pending && actions.phase === "awaiting_confirmation" && !CHANGE_ACTIONS.has(actions.pending.actionId) && (
-          <div className="dash-callout" data-testid="chat-confirm">
-            <strong>{actions.pending.label ?? actions.pending.actionId}</strong>
-            <div style={{ marginTop: 4 }}>
-              {actions.pending.actionId === "add_widget"
-                ? `Add "${String(actions.pending.args.widgetId ?? "")}" to this dashboard?`
-                : actions.pending.actionId === "remove_widget"
-                  ? `Remove "${String(actions.pending.args.widgetId ?? "")}" from this dashboard?`
-                  : "Apply this change?"}
-            </div>
-            <div className="dash-row dash-row--end" style={{ marginTop: 8, gap: 6 }}>
-              <button
-                className="dash-control"
-                onClick={() => void actions.cancel()}
-                data-testid="chat-confirm-cancel"
-              >
-                Cancel
-              </button>
-              <button
-                className="dash-control"
-                onClick={() => void actions.confirm()}
-                data-testid="chat-confirm-apply"
-              >
-                Apply
-              </button>
-            </div>
-          </div>
-        )}
+        {actions.pending &&
+          (actions.phase === "awaiting_confirmation" || actions.phase === "executing") &&
+          !CHANGE_ACTIONS.has(actions.pending.actionId) && (
+            <ChatActionCard
+              pending={actions.pending}
+              executing={actions.phase === "executing"}
+              fallbackSummary={
+                actions.pending.actionId === "add_widget"
+                  ? `Add "${String(actions.pending.args.widgetId ?? "")}" to this dashboard.`
+                  : actions.pending.actionId === "remove_widget"
+                    ? `Remove "${String(actions.pending.args.widgetId ?? "")}" from this dashboard.`
+                    : undefined
+              }
+              onApprove={() => void actions.confirm()}
+              onCancel={() => void actions.cancel()}
+            />
+          )}
+
+        {handedOnce && <OnceCard title={handedOnce.title} values={handedOnce.values} onDismiss={() => setHandedOnce(null)} />}
 
         {actions.phase === "error" && actions.lastError && (
           <div className="dash-callout dash-callout--bad">{actions.lastError}</div>
@@ -929,7 +905,7 @@ const ChatBody = ({
               ? "The assistant is unavailable — see the server console"
               : keyless
                 ? "No AI model is configured"
-                : "Ask about this dashboard…"
+                : "Ask anything, or say what to change…"
           }
           disabled={keyless || unavailable}
           data-testid="chat-input"

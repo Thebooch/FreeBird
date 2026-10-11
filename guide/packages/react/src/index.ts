@@ -28,6 +28,7 @@ export {
   useActionEvents,
   type UseActionStateReturn,
 } from "./hooks/useActionState.js";
+export { useNavigationRequests } from "./navigation.js";
 export {
   useActionJournal,
   type UseActionJournalReturn,
@@ -64,6 +65,7 @@ export {
 export type {
   ActionDefinition,
   ActionContext,
+  ActionCitation,
   ActionPhase,
   ActionRecord,
   ActionRecordStatus,
@@ -83,5 +85,6 @@ export type {
   PendingAction,
   PreviewStrategy,
   Reference,
+  ScreenFocus,
 } from "@freebirdai/core";
 export type { ActionEvent, ActionEventListener } from "@freebirdai/core-state";

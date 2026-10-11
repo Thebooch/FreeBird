@@ -33,8 +33,8 @@ import { z } from "zod";
  * it never names a field, because a field it invented would not be in the list
  * the machine produced.
  *
- * The tool schemas stay flat — strings, booleans and arrays of strings — which
- * the repo's hard rule requires and `toJsonSchema` enforces by throwing.
+ * The tool schemas stay flat — strings, booleans and arrays of strings — so
+ * the model picks among options rather than composing structure.
  */
 
 export interface ConciergeOps {
@@ -166,8 +166,8 @@ export interface ConciergeOps {
 /**
  * The proposal fields, shared by `start_setup` and `revise_setup`.
  *
- * Flat by necessity — `toJsonSchema` throws on records and unions — so roles
- * arrive as a list of `{role, fields}` rather than an object. That also keeps
+ * Flat on purpose, so roles arrive as a list of `{role, fields}` rather than
+ * an object. That also keeps
  * role names open, which matters because a custom component may declare roles
  * nothing here has heard of.
  */

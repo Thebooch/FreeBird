@@ -9,6 +9,7 @@ import { ColorPicker, FormRow, NumberInput, SheetSection, TextInput, TimeZoneSel
 import { browserZone, hoursSummary, newId } from "./model.js";
 import { SetupSheet } from "./SetupSheet.jsx";
 import { useSetup } from "./useSetup.js";
+import { itemAttrs, screenAttrs, useChatFocus } from "../../chatScreen.js";
 
 /**
  * People and pools: whose time can be booked.
@@ -24,6 +25,9 @@ type Editing = { readonly kind: "person"; readonly member: string; readonly isNe
 export const PeopleTab = (): JSX.Element => {
   const { setup, error, canManage, reload } = useSetup();
   const [editing, setEditing] = useState<Editing | null>(null);
+  const editingHost = editing?.kind === "person" && !editing.isNew ? setup?.profiles.find((one) => one.member === editing.member) : undefined;
+  const editingPool = editing?.kind === "pool" && !editing.isNew ? setup?.pools.find((one) => one.id === editing.id) : undefined;
+  useChatFocus("people", editingHost ? { id: editingHost.member, label: editingHost.displayName } : editingPool ? { id: `pool-${editingPool.id}`, label: editingPool.name } : null);
 
   if (error && !setup) return <ErrorState message={error} onRetry={() => void reload()} />;
   if (!setup) return <p className="dash-hint">Loading…</p>;
@@ -32,7 +36,7 @@ export const PeopleTab = (): JSX.Element => {
   const name = (member: string) => setup.profiles.find((one) => one.member === member)?.displayName ?? member;
 
   return (
-    <div className="dash-sched-tab" data-testid="scheduling-people">
+    <div className="dash-sched-tab" data-testid="scheduling-people" {...screenAttrs("people")}>
       <div className="dash-sched-columns">
         <section className="dash-sched-panel" aria-labelledby="sched-people">
           <header className="dash-sched-panel__head">
@@ -54,7 +58,7 @@ export const PeopleTab = (): JSX.Element => {
             <ul className="dash-sched-list">
               {setup.profiles.map((profile) => (
                 <li key={profile.member}>
-                  <button type="button" className="dash-sched-item" onClick={() => setEditing({ kind: "person", member: profile.member, isNew: false, team: profile.member.startsWith("team-") })} data-testid="people-row">
+                  <button type="button" className="dash-sched-item" onClick={() => setEditing({ kind: "person", member: profile.member, isNew: false, team: profile.member.startsWith("team-") })} data-testid="people-row" {...itemAttrs(profile.member)}>
                     <span className="dash-sched-avatar" style={{ ["--cal-color" as string]: colorVar(profile.color ?? memberColor(profile.member)) }} aria-hidden="true">
                       {profile.displayName.slice(0, 1).toUpperCase()}
                     </span>
@@ -115,7 +119,7 @@ export const PeopleTab = (): JSX.Element => {
             <ul className="dash-sched-list">
               {setup.pools.map((pool) => (
                 <li key={pool.id}>
-                  <button type="button" className="dash-sched-item" onClick={() => setEditing({ kind: "pool", id: pool.id, isNew: false })} data-testid="pools-row">
+                  <button type="button" className="dash-sched-item" onClick={() => setEditing({ kind: "pool", id: pool.id, isNew: false })} data-testid="pools-row" {...itemAttrs(`pool-${pool.id}`)}>
                     <span className="dash-sched-swatch" style={{ ["--cal-color" as string]: colorVar(pool.color) }} aria-hidden="true" />
                     <span className="dash-sched-item__main">
                       <span className="dash-sched-item__title">{pool.name}</span>
