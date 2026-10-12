@@ -229,9 +229,9 @@ export const widgetSchema = z
    */
   compiler: z.number().int().min(0).optional(),
   /**
-   * Said on the tile when a rebuild changed what the widget counts, so a
-   * number never moves without a word: "Now counts only leases whose status
-   * is Active." Cleared by the next edit.
+   * Written by an earlier build when a rebuild changed what a widget counts.
+   * No longer written or shown; kept so boards saved with it still parse,
+   * and dropped the next time the widget is rebuilt or edited.
    */
   revised: z.object({ at: z.string().min(1).max(40), said: z.string().min(1).max(400) }).optional(),
   /**

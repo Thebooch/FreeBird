@@ -431,7 +431,7 @@ describe("widgets built by an older compiler", () => {
       ],
     }).value!;
 
-  it("rebuilds it from its brief when the board is read, and says what changed", async () => {
+  it("rebuilds it from its brief when the board is read", async () => {
     connect(["tasks", "vendors", "vendor"]);
     store.putDashboard(staleBoard());
 
@@ -441,11 +441,28 @@ describe("widgets built by an older compiler", () => {
     const ops = widget.pipeline.map((step: { op: string }) => step.op);
     expect(ops).toContain("filter");
     expect(ops.indexOf("filter")).toBeLessThan(ops.indexOf("group"));
-    expect(widget.revised.said).toMatch(/^Now counts only .*Acme/);
+    // Logged rather than shown on the tile.
+    expect(widget.revised).toBeUndefined();
     // What the person chose outside the brief survives the rebuild.
     expect(widget.presentation).toMatchObject({ density: "compact" });
     // And it is saved, so the keeper's numbers follow it too.
     expect(store.getDashboard("board")?.widgets[0]?.compiler).toBe(BRIEF_COMPILER);
+  });
+
+  it("clears a rebuild note an earlier build wrote on a tile", async () => {
+    connect(["tasks", "vendors", "vendor"]);
+    const board = staleBoard();
+    store.putDashboard({
+      ...board,
+      widgets: board.widgets.map((widget) => ({
+        ...widget,
+        compiler: BRIEF_COMPILER,
+        revised: { at: "2026-10-12T19:30:00.000Z", said: "Now counts only Suppliers whose Company name is Acme." },
+      })),
+    });
+    const read = (await get("/api/dashboards/board")).json();
+    expect(read.widgets[0].revised).toBeUndefined();
+    expect(store.getDashboard("board")?.widgets[0]?.revised).toBeUndefined();
   });
 
   it("leaves a widget it cannot rebuild exactly as it was", async () => {

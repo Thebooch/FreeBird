@@ -65,6 +65,15 @@ export const WidgetInspector = ({
         </div>
 
         <div className="dash-inspector__body">
+          {/* What the number means — counted or added, over what, narrowed how. Here rather than on the tile. */}
+          {widget.metric?.says && (
+            <>
+              <h4>What it counts</h4>
+              <p className="dash-inspector__meaning" data-testid="inspector-meaning">
+                {widget.metric.says}
+              </p>
+            </>
+          )}
           <h4>{sources.length > 1 ? `Sources (${sources.length})` : "Source"}</h4>
           <dl className="dash-inspector__kv">
             {/*

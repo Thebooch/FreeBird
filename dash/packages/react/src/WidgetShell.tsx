@@ -335,14 +335,13 @@ export const WidgetShell = ({
       // Promoted out of the title tooltip. A description nobody hovers is a
       // description nobody reads.
       <p className="dash-widget__subtitle">{widget.description}</p>
-    ) : widget.metric ? (
-      /*
-       * What the number means, where nobody wrote a description: what it
-       * counts or adds, over which records, narrowed how. A
-       * reader checks a number against this before acting on it.
+    ) : /*
+       * Only a description somebody wrote. What the compiler says a number
+       * means ("Number of leases whose LeaseStatus is Active") is for whoever
+       * is checking the widget, and lives in "Where did this come from?" —
+       * on the board the title stands alone.
        */
-      <p className="dash-widget__subtitle dash-widget__meaning">{widget.metric.says}</p>
-    ) : null,
+    null,
     badges: (
       <>
         {/*
@@ -479,17 +478,6 @@ export const WidgetShell = ({
             {data.incomplete[0]}
             {data.incomplete.length > 1 ? ` (${data.incomplete.length - 1} more reason${data.incomplete.length === 2 ? "" : "s"})` : ""}
           </span>
-        </p>
-      )}
-
-      {/*
-       * The widget was rebuilt from its request by a newer compiler, and what
-       * it counts changed: said, so a number never moves without a word.
-       */}
-      {widget.revised && (
-        <p className="dash-widget__revised" role="note" data-testid={`revised-${widget.id}`} title={widget.revised.said}>
-          <span aria-hidden="true">ⓘ</span>
-          <span>{widget.revised.said}</span>
         </p>
       )}
 

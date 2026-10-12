@@ -3014,13 +3014,19 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * nothing else would ever notice, and the tile would go on saying what its
    * title does not mean. Through the same compile an edit uses, keeping what
    * the person chose (`recompileWidget`). A rebuild that changes how the
-   * number is taken says so on the tile (`revised`); one the compiler would
-   * build identically only gains its stamp; one that cannot be rebuilt is
-   * left exactly as it was, and the log says why.
+   * number is taken is logged; one the compiler would build identically only
+   * gains its stamp; one that cannot be rebuilt is left exactly as it was,
+   * and the log says why.
    */
   const rebuildStale = (board: DashboardSpec): DashboardSpec => {
     let changed = false;
     const widgets = board.widgets.map((widget) => {
+      /* A note an earlier build wrote on the tile after a rebuild: no longer shown, so cleared. */
+      if (widget.revised && (!widget.brief || (widget.compiler ?? 0) >= BRIEF_COMPILER)) {
+        changed = true;
+        const { revised: _old, ...plain } = widget;
+        return plain;
+      }
       if (!widget.brief || (widget.compiler ?? 0) >= BRIEF_COMPILER) return widget;
       const found = settingsFor(board.id, widget.id);
       const resource =
@@ -3065,8 +3071,10 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         narrowing.length > 0
           ? narrowing.join(" ")
           : "Rebuilt from its request by a newer FreeBird, so how this is worked out changed.";
+      // Logged, not shown: on the tile it read as noise rather than as an answer.
       app.log.info(`widget ${board.id}/${widget.id} rebuilt from its brief: ${said}`);
-      return { ...rebuilt, revised: { at: new Date().toISOString(), said: said.slice(0, 400) } };
+      const { revised: _old, ...plain } = rebuilt;
+      return plain;
     });
     if (!changed) return board;
     const valid = parseDashboard({ ...board, widgets });

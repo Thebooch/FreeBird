@@ -148,6 +148,7 @@ export const DASH_REACT_STYLES = `
 .dash-inspector h4 { font-size: var(--dash-text-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--dash-muted); margin: 16px 0 6px; }
 .dash-inspector h4:first-child { margin-top: 0; }
 .dash-inspector__kv { display: grid; grid-template-columns: minmax(90px, auto) 1fr; gap: 3px 12px; font-size: var(--dash-text-sm); }
+.dash-inspector__meaning { margin: 0 0 var(--dash-space-3, 12px); font-size: var(--dash-text-sm); color: var(--dash-ink); line-height: 1.45; }
 .dash-inspector__kv dt { color: var(--dash-muted); }
 .dash-inspector__kv dd { margin: 0; color: var(--dash-ink); word-break: break-all; }
 .dash-steps { width: 100%; border-collapse: collapse; font-size: var(--dash-text-sm); }
