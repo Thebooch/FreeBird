@@ -469,4 +469,4 @@ export type { ComponentId } from "./primitives.js";
 export { FACET_MAX_PER_WIDGET } from "./entity.js";
 export type { FieldGroup } from "./entity-graph.js";
 export type { BriefPaths } from "./observe.js";
-export { humanLabel } from "./label.js";
+export { humanLabel, humanValue, isNothingValue, looksLikeToken } from "./label.js";

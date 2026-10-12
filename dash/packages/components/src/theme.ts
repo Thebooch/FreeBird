@@ -1337,6 +1337,9 @@ ${seriesVars(SERIES_LIGHT)}
 .dash-stat__caption { font-size: var(--dash-text-xs); color: var(--dash-muted); }
 .dash-stat__spark { height: 34px; margin-top: 6px; }
 
+/* An empty value: present, but quieter than a value. */
+.dash-nil { color: var(--dash-muted); }
+
 /* ── table ───────────────────────────────────────────────────────────────── */
 .dash-table-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .dash-table { width: 100%; border-collapse: collapse; font-size: var(--dash-text, var(--dash-text-sm)); }

@@ -70,7 +70,8 @@ describe("formatValue", () => {
   });
 
   it("falls back to text for non-numeric semantics", () => {
-    expect(formatValue("succeeded", { semantic: "status_enum" })).toBe("succeeded");
+    // A status is one of a set, so it reads in sentence case like any other value (label.test.ts).
+    expect(formatValue("succeeded", { semantic: "status_enum" })).toBe("Succeeded");
     expect(formatValue("abc", undefined)).toBe("abc");
   });
 });

@@ -94,7 +94,11 @@ export const Table = (props: WidgetRenderProps): JSX.Element => {
    */
   const cellContent = (row: Record<string, unknown>, name: string): JSX.Element | string => {
     const reference = metaByName.get(name)?.reference;
-    if (!reference) return display(row, name);
+    if (!reference) {
+      const shown = display(row, name);
+      // Empty, or the API's word for empty (`NotSet`): a muted dash, so a gap reads as a gap.
+      return shown === "—" ? <span className="dash-nil">—</span> : shown;
+    }
 
     const resolved = referenceText({
       row,
