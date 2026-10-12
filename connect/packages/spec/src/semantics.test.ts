@@ -23,6 +23,16 @@ describe("formatValue", () => {
     expect(formatValue({}, undefined)).toBe("{}");
   });
 
+  it("shows a date with no time as the day alone", () => {
+    expect(formatValue("2025-07-31", { semantic: "timestamp" })).toBe("Jul 31, 2025");
+    expect(formatValue("2025-07-31T00:00:00", { semantic: "timestamp" })).toBe("Jul 31, 2025");
+    expect(formatValue("2025-07-31T00:00:00Z", { semantic: "timestamp" }, { timeZone: "America/Los_Angeles" })).toBe("Jul 31, 2025");
+    // The same day after a coerce step made it milliseconds.
+    expect(formatValue(Date.UTC(2025, 6, 31), { semantic: "timestamp" }, { timeZone: "America/New_York" })).toBe("Jul 31, 2025");
+    // A real time keeps it.
+    expect(formatValue("2025-07-31T14:30:00Z", { semantic: "timestamp" }, { timeZone: "UTC" })).toMatch(/2:30/);
+  });
+
   it("reads a nested record as its name", () => {
     // A Buildium work order's task, as the API sends it.
     const task = {
