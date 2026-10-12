@@ -41,8 +41,8 @@ export const WidgetHistory = ({
   const low = Math.min(...values);
   const high = Math.max(...values);
   const span = high - low || 1;
-  const width = 120;
-  const height = 24;
+  const width = 96;
+  const height = 16;
   const line = points
     .map((point, index) => {
       const x = (index / (points.length - 1)) * width;
@@ -50,19 +50,17 @@ export const WidgetHistory = ({
       return `${index === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
     })
     .join(" ");
-  const first = points[0]!;
+  /*
+   * No date on screen, not even on hover. The day history starts is when
+   * FreeBird began keeping this tile's value, which is bookkeeping; shown,
+   * it read as how far back the records go.
+   */
+  const meaning = `This number, day by day (${points.length} days)`;
   return (
-    <div className="dash-widget__history" data-testid={`history-${widget}`}>
-      <svg
-        width={width}
-        height={height}
-        viewBox={`0 0 ${width} ${height}`}
-        role="img"
-        aria-label={`${points.length} days of history, from ${first.day}`}
-      >
-        <path d={line} fill="none" stroke="currentColor" strokeWidth={1.5} />
+    <div className="dash-widget__history" data-testid={`history-${widget}`} title={meaning}>
+      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label={meaning}>
+        <path d={line} fill="none" stroke="currentColor" strokeWidth={1.25} />
       </svg>
-      <span className="dash-widget__history-since">History starts {first.day}</span>
     </div>
   );
 };

@@ -56,6 +56,7 @@ export { labelColumns, useWidgetData } from "./useWidgetData.js";
 export type { ApprovalVerdict, WidgetData, WidgetState } from "./useWidgetData.js";
 export { WidgetDetail } from "./WidgetDetail.js";
 export { RecordView } from "./RecordView.jsx";
+export type { FieldTools } from "./RecordView.jsx";
 export { RecordPage, missingTokens } from "./RecordPage.jsx";
 export { EntityRecordPage } from "./EntityRecordPage.jsx";
 export type { RecordChangeRequest } from "./EntityRecordPage.jsx";
@@ -75,5 +76,5 @@ export {
   truncateTrail,
 } from "./detail.js";
 export type { DetailPane, TrailEntry } from "./detail.js";
-export { canEmbedInExpression, entityPanes } from "./entityDetail.js";
+export { canEmbedInExpression, entityPanes, keyFieldsOf } from "./entityDetail.js";
 export type { EntityPaneInput, OpenReference } from "./entityDetail.js";

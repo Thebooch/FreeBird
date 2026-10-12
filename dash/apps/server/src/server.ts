@@ -220,6 +220,7 @@ import {
   parseDashboard,
   rerootBrief,
   recompileWidget,
+  BRIEF_COMPILER,
   entityPageView,
   fieldGroupSchema,
   fieldPathSchema,
@@ -2208,7 +2209,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
                   // Only the page's half. Columns, sort, strips and stats are
                   // a different screen's business and must not be cleared by
                   // a write about the layout of a record.
-                  record: { facts: parsed.data.facts, groups: parsed.data.groups },
+                  // The key fields are their own control ("Move to key fields") and are kept.
+                  record: { ...one.views.record, facts: parsed.data.facts, groups: parsed.data.groups },
                 },
               }
             : one,
@@ -2216,6 +2218,67 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       });
 
       return saved.entities?.find((one) => one.id === entity.id)?.views.record ?? { facts: [], groups: [] };
+    },
+  );
+
+  /**
+   * Which fields a record type leads with, changed for everybody.
+   *
+   * What "Move to key fields" and "Move to all fields" write: one field moved,
+   * answered with the whole list as it now stands. Stored beside the layout
+   * in the same local tier, so it is an override of what shipped and undoing
+   * it is a delete. The first move starts from the fields the page marked
+   * primary — or, where none were, from whatever list the page was showing,
+   * which the browser sends as `current` — so moving one field never empties
+   * the rest of the top.
+   */
+  app.put<{ Params: { id: string; entity: string }; Body: unknown }>(
+    "/api/connections/:id/entities/:entity/keys",
+    async (request, reply) => {
+      const parsed = z
+        .object({
+          path: fieldPathSchema,
+          to: z.enum(["key", "all"]),
+          current: z.array(fieldPathSchema).max(80).optional(),
+        })
+        .safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.status(400).send({ error: "invalid move", detail: parsed.error.issues });
+      }
+
+      const connection = store.getConnection(request.params.id);
+      if (!connection) return reply.status(404).send({ error: "no such connection" });
+      const entry = connection.catalog ? options.catalog?.get(connection.catalog) : undefined;
+      const entity = entry?.entities?.find((one) => one.id === request.params.entity);
+      if (!entry || !entity) return reply.status(404).send({ error: "no such record type" });
+
+      const shown = entity.fields.filter((f) => f.visibility !== "hidden").map((f) => f.path);
+      if (!shown.includes(parsed.data.path)) {
+        return reply.status(400).send({ error: `${entity.name.many} do not show ${parsed.data.path}.` });
+      }
+
+      const marked = entity.fields.filter((f) => f.visibility === "primary").map((f) => f.path);
+      const before =
+        entity.views.record.keys ??
+        (marked.length > 0 ? marked : (parsed.data.current ?? []).filter((path) => shown.includes(path)));
+      const after =
+        parsed.data.to === "key"
+          ? [...before.filter((path) => path !== parsed.data.path), parsed.data.path]
+          : before.filter((path) => path !== parsed.data.path);
+      if (after.length > 40) {
+        return reply.status(400).send({ error: "A record shows at most 40 key fields." });
+      }
+
+      const saved = options.catalog!.put({
+        ...entry,
+        entities: (entry.entities ?? []).map((one) =>
+          one.id === entity.id
+            ? { ...one, views: { ...one.views, record: { ...one.views.record, keys: after } } }
+            : one,
+        ),
+      });
+
+      return { keys: saved.entities?.find((one) => one.id === entity.id)?.views.record.keys ?? after };
     },
   );
 
@@ -2777,8 +2840,9 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   );
 
   app.get<{ Params: { id: string } }>("/api/dashboards/:id", async (request, reply) => {
-    const dashboard = store.getDashboard(request.params.id);
-    if (!dashboard) return reply.status(404).send({ error: "no such dashboard" });
+    const stored = store.getDashboard(request.params.id);
+    if (!stored) return reply.status(404).send({ error: "no such dashboard" });
+    const dashboard = rebuildStale(stored);
     // Approval state rides alongside the spec rather than inside it, so the
     // board on the wire stays byte-for-byte the board on disk.
     if (!options.grants) return dashboard;
@@ -2940,6 +3004,103 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     return rebuilt;
   };
 
+  /**
+   * Build again, from its own brief, every widget on a board that an older
+   * compiler built (`BRIEF_COMPILER`).
+   *
+   * A saved widget is what the compiler made of its request on the day it was
+   * built. When the compiler later learns to do better — a value filter on a
+   * number that used to be dropped, so "Active leases" counted every lease —
+   * nothing else would ever notice, and the tile would go on saying what its
+   * title does not mean. Through the same compile an edit uses, keeping what
+   * the person chose (`recompileWidget`). A rebuild that changes how the
+   * number is taken is logged; one the compiler would build identically only
+   * gains its stamp; one that cannot be rebuilt is left exactly as it was,
+   * and the log says why.
+   */
+  const rebuildStale = (board: DashboardSpec): DashboardSpec => {
+    let changed = false;
+    const widgets = board.widgets.map((widget) => {
+      /* A note an earlier build wrote on the tile after a rebuild: no longer shown, so cleared. */
+      if (widget.revised && (!widget.brief || (widget.compiler ?? 0) >= BRIEF_COMPILER)) {
+        changed = true;
+        const { revised: _old, ...plain } = widget;
+        return plain;
+      }
+      if (!widget.brief || (widget.compiler ?? 0) >= BRIEF_COMPILER) return widget;
+      const found = settingsFor(board.id, widget.id);
+      const resource =
+        found.ok && found.entity && found.connection
+          ? found.connection.resources.find((one) => one.id === found.entity!.resource)
+          : undefined;
+      if (!found.ok || !found.brief || !found.entity || !found.connection || !resource) {
+        app.log.warn(`widget ${board.id}/${widget.id} was built by an older compiler and could not be rebuilt: its record type or endpoint is not on the connection`);
+        return widget;
+      }
+      const compiled = compileBrief({
+        brief: found.brief,
+        entity: found.entity,
+        resource,
+        connection: found.connection.id,
+        listPath: pathOf(found.connection, resource.listOp),
+        rowsPathOf: rowsPathsOf(found.connection),
+        filterParamOf: filterParamsOf(found.connection),
+        readsRange: readsRangeOf(found.connection),
+        related: relatedFor(found.connection, found.entities ?? []),
+        id: widget.id,
+      });
+      if (!compiled.widget) {
+        app.log.warn(`widget ${board.id}/${widget.id} could not be rebuilt from its brief: ${compiled.errors.join("; ")}`);
+        return widget;
+      }
+      const rebuilt = recompileWidget(widget, compiled.widget);
+      changed = true;
+      /*
+       * What the calculation does now that it did not: the compiler's own
+       * notes about narrowing ("Only leases whose LeaseStatus is Active are
+       * counted"), said only when the steps that take the number changed.
+       */
+      const sameSteps =
+        JSON.stringify([widget.pipeline, widget.sources, widget.source]) ===
+        JSON.stringify([rebuilt.pipeline, rebuilt.sources, rebuilt.source]);
+      if (sameSteps) return rebuilt;
+      const narrowing = compiled.notes
+        .filter((note) => /^Only /.test(note))
+        .map((note) => note.replace(/^Only (.+?) (?:are|is) counted\.$/, "Now counts only $1."));
+      const said =
+        narrowing.length > 0
+          ? narrowing.join(" ")
+          : "Rebuilt from its request by a newer FreeBird, so how this is worked out changed.";
+      // Logged, not shown: on the tile it read as noise rather than as an answer.
+      app.log.info(`widget ${board.id}/${widget.id} rebuilt from its brief: ${said}`);
+      const { revised: _old, ...plain } = rebuilt;
+      /*
+       * Its history starts again: the days before measured something else,
+       * and a line from 28 to 25 would read as three leases ending rather than
+       * as the widget being corrected.
+       */
+      snapshots
+        .forget(board.id, widget.id)
+        .catch((error: unknown) => app.log.warn(`history for ${board.id}/${widget.id} could not be cleared: ${String(error)}`));
+      return { ...plain, historyFrom: dayOf(Date.now()) };
+    });
+    if (!changed) return board;
+    const valid = parseDashboard({ ...board, widgets });
+    if (!valid.ok || !valid.value) {
+      app.log.warn(`board ${board.id} could not be saved after rebuilding its widgets: ${valid.errors?.join("; ") ?? "invalid"}`);
+      return board;
+    }
+    store.putDashboard(valid.value);
+    return store.getDashboard(board.id) ?? valid.value;
+  };
+  /* Every board, once the server is up, so the keeper's numbers follow the rebuilt widgets too. */
+  app.addHook("onReady", async () => {
+    for (const summary of store.listDashboards()) {
+      const board = store.getDashboard(summary.id);
+      if (board) rebuildStale(board);
+    }
+  });
+
   /** A widget's own changes to a record page, with its paths moved inside `wrapper`. */
   const rerootRecordOverride = (record: RecordOverride, wrapper: string): RecordOverride => {
     const to = (path: string): string =>
@@ -3019,7 +3180,21 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         return reply.status(409).send({ error: compiled.errors[0] ?? "That change cannot be built." });
       }
 
-      const widget = recompileWidget(found.widget, compiled.widget);
+      const recompiled = recompileWidget(found.widget, compiled.widget);
+      /*
+       * An answer that changes how the number is worked out starts its
+       * history again, as a rebuild does: the days before measured something
+       * else.
+       */
+      const sameSteps =
+        JSON.stringify([found.widget.pipeline, found.widget.sources, found.widget.source]) ===
+        JSON.stringify([recompiled.pipeline, recompiled.sources, recompiled.source]);
+      if (!sameSteps) {
+        snapshots
+          .forget(found.dashboard.id, found.widget.id)
+          .catch((error: unknown) => app.log.warn(`history for ${found.dashboard.id}/${found.widget.id} could not be cleared: ${String(error)}`));
+      }
+      const widget = sameSteps ? recompiled : { ...recompiled, historyFrom: dayOf(Date.now()) };
       const board = {
         ...found.dashboard,
         widgets: found.dashboard.widgets.map((entry) =>
@@ -3164,7 +3339,11 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       if (!board?.widgets.some((widget) => widget.id === request.params.widgetId)) {
         return reply.status(404).send({ error: "no such widget" });
       }
-      const points = await snapshots.list(request.params.id, request.params.widgetId);
+      const from = board.widgets.find((widget) => widget.id === request.params.widgetId)?.historyFrom;
+      /* Only the days that measured what the widget measures now — see `historyFrom`. */
+      const points = (await snapshots.list(request.params.id, request.params.widgetId)).filter(
+        (point) => !from || point.day >= from,
+      );
       return { points, ...(points[0] ? { since: points[0].day } : {}) };
     },
   );
@@ -4339,7 +4518,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
                             },
                             reason: written.reason,
                             notes: mapped.notes,
-                            ambiguities: [],
+                            /* A title promising a narrowing the request does not make, asked before it is saved. */
+                            ambiguities: mapped.questions,
                           };
                         }
                         /*

@@ -40,6 +40,12 @@ export interface WidgetRenderProps {
    */
   readonly onSelectRow?: (row: Row) => void;
   /**
+   * Open the records a number was taken over. Only a number tile reads it,
+   * and absent means the number does not come from rows anyone can list — the
+   * tile then stays plain, with no pointer.
+   */
+  readonly drill?: { readonly label: string; readonly open: () => void };
+  /**
    * What can be done to the record behind each row — edit, record actions,
    * delete — drawn as a small menu at the row's end.
    *
@@ -96,6 +102,19 @@ export interface WidgetRenderProps {
    * per drill-down rather than per component anyway.
    */
   readonly groups?: readonly FieldGroup[];
+  /**
+   * A record's other fields, behind "All fields": the `fields` role holds the
+   * key ones. Absent, a record with many fields picks its key ones itself
+   * (`rankKeyFields`), and a short one shows every field as it always did.
+   */
+  readonly detailFields?: readonly string[];
+  /**
+   * Move a field between the key fields and "All fields", for everybody who
+   * opens this kind of record. Absent where nothing can store it.
+   */
+  readonly onMoveField?: (column: string, to: "key" | "all") => void;
+  /** Change this record, offered beside each field under "All fields". */
+  readonly onEditField?: (column: string) => void;
 }
 
 export type WidgetComponent = (props: WidgetRenderProps) => JSX.Element;

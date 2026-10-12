@@ -112,3 +112,5 @@ export type { BuildSeriesInput, BuiltSeries, CategoryDatum, SeriesPoint } from "
 
 export { DASH_STYLES } from "./theme.js";
 export type { RowAction, WidgetComponent, WidgetRenderProps } from "./types.js";
+export { KEY_FIELD_CAP, isPlumbing, rankKeyFields } from "./keyFields.js";
+export type { FieldCandidate, KeyFieldHints } from "./keyFields.js";

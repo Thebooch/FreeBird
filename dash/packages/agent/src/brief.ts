@@ -551,6 +551,15 @@ export const briefSchema = z.object({
               "is ignored and the reader simply sees everything, so an approximate word is " +
               "safe here — an invented FIELD is not.",
           ),
+        except: z
+          .array(z.string())
+          .max(8)
+          .optional()
+          .describe(
+            'Values to leave out: "open work orders" where open means "not Closed" is except ["Closed"]. ' +
+              "Use instead of listing every other value, so a value added later still counts. " +
+              "Copy the record type's own spelling where it lists values.",
+          ),
         above: z.number().optional().describe("Only records whose number in this field is more than this."),
         below: z.number().optional().describe("Only records whose number in this field is less than this."),
         from: z.string().optional().describe("Only records dated on or after this day, YYYY-MM-DD, by this field."),
@@ -783,6 +792,8 @@ export const BRIEF_SYSTEM_PROMPT = [
   "  type is dated by, with `from` (inclusive) and `to` (exclusive), as YYYY-MM-DD. July 2026 is",
   "  from 2026-07-01 to 2026-08-01. Work relative words out from TODAY.",
   "- A range goes with any narrowing by value on other fields: debits in July is two filters.",
+  '- "everything not closed", "open" meaning anything but done: `except` with the values left out,',
+  "  never a list of all the others: a value the API adds later must still count.",
   "- A field marked \"in the smallest currency unit\" holds 100 for 1.00: write an amount the",
   "  request names in that unit. More than $250 is above 25000.",
   "",
@@ -1143,7 +1154,8 @@ export const writeBrief = async (
           filters: args.filters.map((one) => {
             const field = pathOf(one.field)!;
             const values = spelled(field, one.values);
-            return { ...one, field, ...(values ? { values } : {}) };
+            const except = spelled(field, one.except);
+            return { ...one, field, ...(values ? { values } : {}), ...(except ? { except } : {}) };
           }),
         }
       : {}),
@@ -1163,6 +1175,7 @@ export const writeBrief = async (
           filters: args.filters.map((one) => ({
             field: one.field,
             ...(one.values && one.values.length > 0 ? { values: one.values } : {}),
+            ...(one.except && one.except.length > 0 ? { except: one.except } : {}),
             ...(one.above !== undefined ? { above: one.above } : {}),
             ...(one.below !== undefined ? { below: one.below } : {}),
             ...(one.from ? { from: one.from } : {}),

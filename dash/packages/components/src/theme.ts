@@ -393,15 +393,23 @@ ${seriesVars(SERIES_LIGHT)}
 .dash-widget[data-border="off"] .dash-widget__foot {
   padding-left: 0; padding-right: 0; background: transparent;
 }
-.dash-widget__count { flex: 1 1 auto; min-width: 0; }
+/* One line, always: on a narrow tile the count is cut short with an ellipsis
+   (the whole of it is on hover) rather than wrapping onto a second line the
+   card then clips. */
+.dash-widget__count { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-widget__updated { white-space: nowrap; }
 .dash-widget__more { color: var(--dash-serious); }
 /* How far the read got: a fact about the numbers, not a warning, so in the count's own colour. */
 .dash-widget__coverage { cursor: help; }
 /* A number's history under it: quiet, in the muted colour, never competing with the number. */
+/* What the number was, day by day: a quiet line, its meaning on hover. It
+   gives way first on a short tile — shrinking to nothing rather than letting
+   the number above spill onto it. */
 .dash-widget__history {
-  display: flex; align-items: center; gap: var(--dash-space-2, 8px);
-  padding: 0 var(--dash-space-3, 12px) var(--dash-space-2, 8px);
-  color: var(--dash-muted); font-size: var(--dash-text-xs);
+  flex: 0 1 auto; min-height: 0; overflow: hidden;
+  display: flex; align-items: center;
+  padding: 0 var(--dash-pad-x, 12px) var(--dash-space-2, 8px);
+  color: var(--dash-axis); opacity: 0.8;
 }
 .dash-widget__history svg { flex: none; }
 .dash-widget__updated { flex: none; }
@@ -1297,19 +1305,65 @@ ${seriesVars(SERIES_LIGHT)}
 .dash-crosshair { stroke: var(--dash-axis); stroke-width: 1; shape-rendering: crispEdges; }
 
 /* ── stat ────────────────────────────────────────────────────────────────── */
-.dash-stat { display: flex; flex-direction: column; justify-content: center; height: 100%; gap: 4px; position: relative; }
+/* A fixed anatomy: number under the title, delta on its own line, sparkline
+   at the foot. One size for every tile's number, whatever its length, so a
+   row of tiles reads level; a value that would not fit steps down
+   (data-fit, set by Stat after measuring) rather than wrapping or clipping. */
+/* A number's row is never squeezed below the number: on a short tile the
+   history line under it gives way instead (see .dash-widget__history). */
+.dash-widget__body:has(> .dash-stat) { flex: 1 0 auto; }
+.dash-stat {
+  display: flex; flex-direction: column; justify-content: flex-start;
+  height: 100%; gap: 4px; position: relative; min-width: 0;
+}
 .dash-stat__value {
   font-size: var(--dash-text-3xl); font-weight: var(--dash-weight-semi);
   line-height: 1.05; letter-spacing: -0.025em; color: var(--dash-ink);
   font-variant-numeric: tabular-nums; font-feature-settings: "tnum";
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+  /* Never shrunk by the column: overflow hidden drops a flex item's minimum
+     height to zero, and a short tile then squeezed the number out of sight. */
+  flex: none;
 }
-.dash-stat__value--hero { font-size: var(--dash-text-hero); }
-.dash-stat__delta { display: inline-flex; align-items: center; gap: 4px; font-size: var(--dash-text-sm); font-weight: 500; }
+.dash-stat__value[data-fit="1"] { font-size: var(--dash-text-2xl); }
+.dash-stat__value[data-fit="2"] { font-size: var(--dash-text-xl); }
+.dash-stat__value[data-fit="3"] { font-size: var(--dash-text-lg); }
+.dash-stat__foot { margin-top: auto; padding-top: 6px; }
+.dash-stat__foot .dash-stat__spark { margin-top: 0; }
+/*
+ * The whole card is the control, not just the number: the button stays where
+ * it is in the reading order, and its ::after is stretched over the card.
+ * The card is isolated so that sheet never rises above the grid's edit guard,
+ * and the header's menus sit above it so they still open on their own.
+ */
+.dash-widget[data-drill="true"] { position: relative; isolation: isolate; cursor: pointer; }
+.dash-widget[data-drill="true"] .dash-widget__actions { position: relative; z-index: 2; cursor: default; }
+.dash-stat--drill {
+  appearance: none; border: 0; background: transparent; padding: 0; margin: 0;
+  font: inherit; color: inherit; text-align: left; width: 100%; cursor: pointer;
+  position: static;
+}
+.dash-stat--drill::after { content: ""; position: absolute; inset: 0; z-index: 1; border-radius: inherit; }
+.dash-widget[data-drill="true"]:hover .dash-stat__value { color: var(--dash-accent); }
+.dash-stat--drill:focus-visible { outline: none; }
+.dash-stat--drill:focus-visible::after { outline: 2px solid var(--dash-accent); outline-offset: -2px; border-radius: var(--dash-radius); }
+/* The list behind a number, in the drawer. */
+.dash-drill__count { font-weight: var(--dash-weight-normal, 400); color: var(--dash-muted); font-size: var(--dash-text-sm); }
+.dash-drill__table { display: flex; flex-direction: column; min-height: 0; }
+.dash-drill__total {
+  display: flex; justify-content: space-between; margin: 0; padding: 8px 12px;
+  border-top: 1px solid var(--dash-border-strong); font-size: var(--dash-text-sm);
+  font-weight: var(--dash-weight-semi); font-variant-numeric: tabular-nums;
+}
+.dash-stat__delta { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: var(--dash-text-sm); font-weight: 500; }
 .dash-stat__delta--up { color: var(--dash-delta-up); }
 .dash-stat__delta--down { color: var(--dash-critical); }
 .dash-stat__delta--flat { color: var(--dash-muted); }
 .dash-stat__caption { font-size: var(--dash-text-xs); color: var(--dash-muted); }
 .dash-stat__spark { height: 34px; margin-top: 6px; }
+
+/* An empty value: present, but quieter than a value. */
+.dash-nil { color: var(--dash-muted); }
 
 /* ── table ───────────────────────────────────────────────────────────────── */
 .dash-table-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; }
@@ -1464,6 +1518,34 @@ ${seriesVars(SERIES_LIGHT)}
 /* An empty value is stated, not left blank. A blank right-hand column reads as
    a rendering fault; an em-dash reads as "this record does not have one". */
 .dash-record__pair dd:empty::after { content: "—"; color: var(--dash-axis); }
+/* A field's tools (move, edit) sit at the value's end, quiet until the row is hovered or focused. */
+.dash-record__pair dd { position: relative; }
+.dash-record__tools {
+  float: right; display: inline-flex; gap: 2px; margin-left: var(--dash-space-2);
+  opacity: 0; transition: opacity 120ms ease;
+}
+.dash-record__pair:hover .dash-record__tools,
+.dash-record__pair:focus-within .dash-record__tools { opacity: 1; }
+@media (hover: none) { .dash-record__tools { opacity: 1; } }
+.dash-record__tools .dash-iconbtn { width: 22px; height: 22px; font-size: var(--dash-text-xs); }
+/* Everything else about the record: one thin-ruled disclosure, closed by default. */
+.dash-record__more { margin-top: var(--dash-space-4); border-top: 1px solid var(--dash-border); }
+.dash-record__more-summary {
+  cursor: pointer; padding: var(--dash-space-3) 0; list-style: none;
+  font-size: var(--dash-text-xs); font-weight: var(--dash-weight-medium); color: var(--dash-muted);
+}
+.dash-record__more-summary::-webkit-details-marker { display: none; }
+.dash-record__more-summary::before { content: "▸"; display: inline-block; width: 1em; transition: transform 120ms ease; }
+.dash-record__more[open] > .dash-record__more-summary::before { transform: rotate(90deg); }
+.dash-record__more-summary:hover { color: var(--dash-ink); }
+.dash-record__more-summary:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 2px; border-radius: var(--dash-radius-sm); }
+.dash-record--compact .dash-record__pair { padding: 6px 0; grid-template-columns: minmax(96px, 40%) 1fr; gap: var(--dash-space-3); }
+.dash-record--compact .dash-record__pair dd { font-size: var(--dash-text-xs); }
+.dash-record__api {
+  display: block; margin-top: 1px; font-size: var(--dash-text-micro); font-weight: var(--dash-weight-normal);
+  color: var(--dash-axis); font-family: var(--dash-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  overflow: hidden; text-overflow: ellipsis;
+}
 /* A flattened child sits under its parent's name, with a rule rather than an
    indent — indentation alone at this size reads as an accident. */
 .dash-record__pair--nested dt {

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { humanValue, isNothingValue } from "./label.js";
 
 /**
  * The semantic type registry.
@@ -236,6 +237,18 @@ export interface FormatOptions {
   readonly now?: number;
   readonly locale?: string;
   readonly timeZone?: string;
+  /**
+   * What an empty value reads as. "—" by default, which is right in a table
+   * and in a record's key fields; a list of every field says "Not set", so an
+   * empty row reads as a fact rather than as a gap in the layout.
+   */
+  readonly empty?: string;
+  /**
+   * Print strings exactly as sent: no "In progress" for `InProgress`, no
+   * empty for `NotSet`. For the inspector, whose job is to show what came
+   * back.
+   */
+  readonly raw?: boolean;
 }
 
 /**
@@ -254,8 +267,35 @@ export interface FormatOptions {
  * `{…}` and `[…]` are already this codebase's mark for an elided container
  * (`inferShape`'s sampler uses them), so the two agree.
  */
+/** Keys that name the record an object is, best first. */
+const NAME_KEYS = ["name", "displayname", "fullname", "title", "subject", "label"];
+
+/**
+ * What a nested record is called, where it says: its `Name`, `Title`,
+ * `DisplayName`, or `FirstName` and `LastName` together. Undefined when it
+ * names nothing — an address, a bare reference — and the summary stands.
+ */
+export const nameOfObject = (value: unknown): string | undefined => {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value as Record<string, unknown>);
+  const text = (key: string): string | undefined => {
+    const found = entries.find(([name]) => name.toLowerCase().replace(/[^a-z]/g, "") === key)?.[1];
+    return typeof found === "string" && found.trim() !== "" ? found.trim() : undefined;
+  };
+  const person = [text("firstname"), text("lastname")].filter(Boolean).join(" ");
+  if (person) return person;
+  for (const key of NAME_KEYS) {
+    const found = text(key);
+    if (found) return found;
+  }
+  return undefined;
+};
+
 const summarise = (value: unknown): string => {
   if (Array.isArray(value)) return value.length === 1 ? "1 item" : `${value.length} items`;
+  // A nested record reads as its name: a work order's task is "Leak under the sink", not `{Id, Type, …}`.
+  const named = nameOfObject(value);
+  if (named) return named;
   if (typeof value === "object") {
     const keys = Object.keys(value as Record<string, unknown>);
     if (keys.length === 0) return "{}";
@@ -293,7 +333,10 @@ export const formatValue = (
   format: FormatSpec | undefined,
   options: FormatOptions = {},
 ): string => {
-  if (value === null || value === undefined || value === "") return "—";
+  const empty = options.empty ?? "—";
+  if (value === null || value === undefined || value === "") return empty;
+  // `NotSet`, `N/A`, `0001-01-01`: the API's way of saying there is nothing here.
+  if (!options.raw && isNothingValue(value)) return empty;
 
   const locale = options.locale ?? "en-US";
   const semantic = format?.semantic ?? "text";
@@ -361,9 +404,17 @@ export const formatValue = (
   /*
    * A flag, said the way a person says it rather than "true" or "false".
    */
+  /*
+   * A code value said as words: `InProgress` reads "In progress". A status
+   * or category is one of a set, so any single token is spoken; elsewhere
+   * only a string that is plainly a code is, so names and sentences are
+   * left exactly as typed.
+   */
   const text =
     typeof value === "string"
-      ? value
+      ? options.raw || semantic === "identifier" || semantic === "url"
+        ? value
+        : humanValue(value, semantic === "status_enum")
       : typeof value === "boolean"
         ? flagLabel(value)
         : summarise(value);

@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connectionSchema } from "@freebirdai/dash-spec";
+import { BRIEF_COMPILER, connectionSchema, parseDashboard } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CatalogStore, KeyStore, LocalAesVault } from "@freebirdai/connect/host";
 import { buildServer } from "../server.js";
@@ -346,5 +346,132 @@ describe("PUT /api/connections/:id/entities/:entity/layout", () => {
     expect(
       (await put("/api/connections/works/entities/nothing/layout", { facts: [] })).statusCode,
     ).toBe(404);
+  });
+});
+
+/*
+ * "Move to key fields" and "Move to all fields": one field at a time, for
+ * everybody who opens this kind of record, beside the layout in the same tier.
+ */
+describe("PUT /api/connections/:id/entities/:entity/keys", () => {
+  const fieldsOf = async (): Promise<Record<string, string>> => {
+    const page = (await get("/api/connections/works/entities/vendor")).json();
+    return Object.fromEntries(
+      (page.fields as { path: string; visibility: string }[]).map((field) => [field.path, field.visibility]),
+    );
+  };
+
+  it("moves a field to the key fields, keeping the ones already there", async () => {
+    connect(["tasks", "vendors", "vendor"]);
+    expect((await fieldsOf())["Phone"]).toBe("detail");
+
+    const saved = await put("/api/connections/works/entities/vendor/keys", { path: "Phone", to: "key" });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json().keys).toEqual(["CompanyName", "Phone"]);
+
+    const fields = await fieldsOf();
+    expect(fields["Phone"]).toBe("primary");
+    expect(fields["CompanyName"]).toBe("primary");
+  });
+
+  it("moves one back to all fields", async () => {
+    connect(["tasks", "vendors", "vendor"]);
+    await put("/api/connections/works/entities/vendor/keys", { path: "Phone", to: "key" });
+    await put("/api/connections/works/entities/vendor/keys", { path: "CompanyName", to: "all" });
+
+    const fields = await fieldsOf();
+    expect(fields["CompanyName"]).toBe("detail");
+    expect(fields["Phone"]).toBe("primary");
+  });
+
+  it("survives a later change to the layout", async () => {
+    connect(["tasks", "vendors", "vendor"]);
+    await put("/api/connections/works/entities/vendor/keys", { path: "Phone", to: "key" });
+    await put("/api/connections/works/entities/vendor/layout", { facts: ["Phone"] });
+    expect((await fieldsOf())["Phone"]).toBe("primary");
+  });
+
+  it("refuses a field the record type does not show", async () => {
+    connect(["tasks", "vendors", "vendor"]);
+    const response = await put("/api/connections/works/entities/vendor/keys", { path: "Href", to: "key" });
+    expect(response.statusCode).toBe(400);
+  });
+});
+
+/*
+ * A widget built by an older compiler is built again from its own request.
+ *
+ * Found on a real board: "Active leases" stored the request "leases whose
+ * status is Active", but it was compiled before a value filter on a number
+ * narrowed the count, so it counted every lease. Nothing per API: any widget
+ * with a brief and an older (or no) compiler stamp is rebuilt.
+ */
+describe("widgets built by an older compiler", () => {
+  const staleBoard = () =>
+    parseDashboard({
+      id: "board",
+      title: "Board",
+      params: { defaultRange: "30d", timeZone: "UTC", filters: [] },
+      widgets: [
+        {
+          id: "acme_suppliers",
+          title: "Acme suppliers",
+          component: "stat",
+          entity: "vendor",
+          source: { connection: "works", op: "vendors", params: {} },
+          brief: { entity: "vendor", intent: "measure", filters: [{ field: "CompanyName", values: ["Acme"] }] },
+          pipeline: [
+            { op: "extract", path: "$" },
+            { op: "derive", fields: { _all: "1" } },
+            { op: "group", by: [{ field: "_all" }], agg: { value: "count()" } },
+          ],
+          roles: { value: "value" },
+          presentation: { density: "compact" },
+        },
+      ],
+    }).value!;
+
+  it("rebuilds it from its brief when the board is read", async () => {
+    connect(["tasks", "vendors", "vendor"]);
+    store.putDashboard(staleBoard());
+
+    const board = (await get("/api/dashboards/board")).json();
+    const widget = board.widgets[0];
+    expect(widget.compiler).toBe(BRIEF_COMPILER);
+    const ops = widget.pipeline.map((step: { op: string }) => step.op);
+    expect(ops).toContain("filter");
+    expect(ops.indexOf("filter")).toBeLessThan(ops.indexOf("group"));
+    // Logged rather than shown on the tile.
+    expect(widget.revised).toBeUndefined();
+    // Its history starts again: the days before measured every supplier.
+    expect(widget.historyFrom).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    // What the person chose outside the brief survives the rebuild.
+    expect(widget.presentation).toMatchObject({ density: "compact" });
+    // And it is saved, so the keeper's numbers follow it too.
+    expect(store.getDashboard("board")?.widgets[0]?.compiler).toBe(BRIEF_COMPILER);
+  });
+
+  it("clears a rebuild note an earlier build wrote on a tile", async () => {
+    connect(["tasks", "vendors", "vendor"]);
+    const board = staleBoard();
+    store.putDashboard({
+      ...board,
+      widgets: board.widgets.map((widget) => ({
+        ...widget,
+        compiler: BRIEF_COMPILER,
+        revised: { at: "2026-10-12T19:30:00.000Z", said: "Now counts only Suppliers whose Company name is Acme." },
+      })),
+    });
+    const read = (await get("/api/dashboards/board")).json();
+    expect(read.widgets[0].revised).toBeUndefined();
+    expect(store.getDashboard("board")?.widgets[0]?.revised).toBeUndefined();
+  });
+
+  it("leaves a widget it cannot rebuild exactly as it was", async () => {
+    // No connection: the record type's endpoint is nowhere to be found.
+    store.putDashboard(staleBoard());
+    const board = (await get("/api/dashboards/board")).json();
+    expect(board.widgets[0].compiler).toBeUndefined();
+    expect(board.widgets[0].pipeline).toHaveLength(3);
   });
 });

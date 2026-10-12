@@ -1,6 +1,6 @@
 import { AdapterRegistry, ProxyAdapter } from "@freebirdai/connect/adapters";
 import { FramePanel } from "./FramePanel.jsx";
-import { Dashboard, DashStyleSheet, RecordPage, changeRowActions, recordChangeRequests } from "@freebirdai/dash-react";
+import { Dashboard, DashStyleSheet, RecordPage, changeRowActions, keyFieldsOf, recordChangeRequests } from "@freebirdai/dash-react";
 import type {
   RecordChangeRequest,
   RecordChangeSignal,
@@ -1462,6 +1462,26 @@ const App = (): JSX.Element => {
                     : {}),
                   onEditLayout: () => setEditingLayout(true),
                   onChangeRecord: setChange,
+                  /*
+                   * For everybody who opens this kind of record, like a layout
+                   * written "Everywhere"; the page is read again to show it.
+                   */
+                  onMoveField: (path: string, to: "key" | "all") => {
+                    const page = entityPage.page;
+                    if (!page) return;
+                    const current = keyFieldsOf(page.fields, {
+                      title: page.title,
+                      status: page.status,
+                      facts: page.facts,
+                      identity: page.identity,
+                    });
+                    void api
+                      .putRecordKeys(route.connectionId, page.entity, { path, to, current })
+                      .then(() => setLayoutToken((previous) => previous + 1))
+                      .catch((caught: unknown) =>
+                        window.alert(caught instanceof Error ? caught.message : String(caught)),
+                      );
+                  },
                 },
               }
             : {})}

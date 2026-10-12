@@ -221,6 +221,27 @@ export const widgetSchema = z
    */
   metric: metricSchema.optional(),
   /**
+   * The version of `compileBrief` that built this widget (`BRIEF_COMPILER`).
+   * Absent on a widget built by hand or before versions were stamped; a
+   * widget with a brief and an older stamp is rebuilt from that brief.
+   *
+   * Optional with no default, for the reason `brief` is.
+   */
+  compiler: z.number().int().min(0).optional(),
+  /**
+   * The first day this widget's daily history counts from (YYYY-MM-DD).
+   * Set when a rebuild changes how its number is worked out: the days before
+   * measured something else, and drawn beside today's they read as a change
+   * in the records rather than in the widget.
+   */
+  historyFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  /**
+   * Written by an earlier build when a rebuild changed what a widget counts.
+   * No longer written or shown; kept so boards saved with it still parse,
+   * and dropped the next time the widget is rebuilt or edited.
+   */
+  revised: z.object({ at: z.string().min(1).max(40), said: z.string().min(1).max(400) }).optional(),
+  /**
    * This widget's own changes to the record page its rows open.
    *
    * Only what differs from the entity's shared page — an extra fact, a

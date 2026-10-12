@@ -87,12 +87,15 @@ export {
   ALONGSIDE_MODES,
   WIDGET_INTENTS,
   columnForPath,
+  BRIEF_COMPILER,
   compileBrief,
+  titlePromises,
   widgetBriefSchema,
 } from "./brief.js";
 
 export type {
   AlongsideMode,
+  BriefQuestion,
   CompileBriefInput,
   CompiledBrief,
   WidgetBrief,

@@ -130,7 +130,62 @@ export interface CompiledBrief {
    * always said out loud rather than left for somebody to notice.
    */
   readonly notes: readonly string[];
+  /**
+   * What to ask before the widget is saved: a title that promises a narrowing
+   * the request does not make ("Open work orders" over every work order).
+   * Raised through whatever confirmation the caller has; absent when there is
+   * nothing to ask.
+   */
+  readonly questions?: readonly BriefQuestion[];
 }
+
+export interface BriefQuestion {
+  /** What it is about: the word in the title. */
+  readonly field: string;
+  readonly question: string;
+  readonly options: readonly string[];
+}
+
+/**
+ * Words in a title that say only some of the records are meant: "Open work
+ * orders", "Unpaid bills", "Active leases". Nothing per API: these are words
+ * about the state of a record, in any domain.
+ */
+const NARROWING_WORDS = [
+  "open", "active", "inactive", "pending", "new", "overdue", "late", "past due", "unpaid", "paid",
+  "outstanding", "closed", "completed", "complete", "done", "finished", "cancelled", "canceled",
+  "approved", "rejected", "declined", "archived", "draft", "awaiting", "current", "expired",
+  "expiring", "upcoming", "resolved", "unresolved", "in progress", "vacant", "occupied",
+];
+
+/**
+ * A title that promises a narrowing the request does not make.
+ *
+ * Found on a real board: "Open work orders" counted every work order, closed
+ * ones included, because the request written for it narrowed nothing — only
+ * the title said "open". Deliberately lenient: any narrowing at all counts as
+ * the title's (a "Pending" title over an "Undecided" status is the API's word
+ * for it, not a mistake), so this asks only when nothing narrows.
+ */
+export const titlePromises = (
+  title: string | undefined,
+  brief: Pick<WidgetBrief, "filters">,
+): string | null => {
+  if (!title) return null;
+  const narrows = (brief.filters ?? []).some(
+    (one) =>
+      (one.values?.length ?? 0) > 0 ||
+      (one.except?.length ?? 0) > 0 ||
+      one.empty !== undefined ||
+      one.above !== undefined ||
+      one.below !== undefined ||
+      one.from !== undefined ||
+      one.to !== undefined,
+  );
+  if (narrows) return null;
+  const text = title.toLowerCase();
+  return NARROWING_WORDS.find((word) => new RegExp(`(^|[^a-z])${word}([^a-z]|$)`).test(text)) ?? null;
+};
 
 /**
  * A column name the pipeline can produce, from a field path that may nest.
@@ -692,6 +747,21 @@ const axisOn = (far: EntitySpec, primary: EntityField): Resolved<string> => {
  * approximated to the nearest match — a widget that silently filtered on some
  * other column would be confidently, invisibly wrong.
  */
+/**
+ * Which version of this compiler built a widget, stamped on it as `compiler`.
+ *
+ * A saved widget is what the compiler made of its brief on the day it was
+ * built, and nothing used to notice when the compiler later learned to do
+ * better: a number narrowed to "status is Active" kept counting every record,
+ * because on the day it was built a value filter on a number was dropped.
+ * The host rebuilds any widget stamped lower than this (or not stamped) from
+ * its own brief, so raise it whenever a change here would build a different
+ * widget from the same brief.
+ *
+ * 1: value filters on a number or a chart narrow the calculation (2026-09-30).
+ */
+export const BRIEF_COMPILER = 1;
+
 export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
   const { brief, entity, resource, connection } = input;
   const errors: string[] = [];
@@ -857,6 +927,8 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
    */
   const filters: string[] = [];
   const preselect = new Map<string, readonly string[]>();
+  /** Field path → the values asked to be left out ("not Closed"). */
+  const excluded = new Map<string, readonly string[]>();
   /** Field path → the closed set the API declares for it, where it declares one. */
   const declaredValues = new Map<string, readonly string[]>();
   const boundFilters = new Set<string>();
@@ -882,6 +954,7 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
     const stated = entity.fields.find((one) => one.path === path)?.values ?? [];
     if (stated.length > 0) declaredValues.set(bound, stated.slice(0, FACET_MAX_VALUES));
     if (asked?.values && asked.values.length > 0) preselect.set(bound, asked.values);
+    if (asked?.except && asked.except.length > 0) excluded.set(bound, asked.except);
   }
 
   /*
@@ -1573,6 +1646,27 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
         notes.push(`The API is asked for those ${entity.name.many} alone (${param}=${values[0]}), so only they are read.`);
       }
     }
+    /*
+     * Every value but some: on a number or a chart, the calculation's; on a
+     * list, its strip's where the strip knows every value there is (below),
+     * else here, since a strip of only the values rows happen to hold cannot
+     * start on "everything but Closed".
+     */
+    for (const [path, values] of excluded) {
+      if (brief.intent === "records" && (declaredValues.get(path) ?? []).length > 0) continue;
+      const column = columnForPath(path);
+      const label = entity.fields.find((one) => one.path === path)?.label ?? path;
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(column)) {
+        notes.push(`The request left out some ${label} values, which cannot be applied here, so nothing was left out.`);
+        unmet.push(`${label} not ${values.join(" or ")}`);
+        continue;
+      }
+      clauses.push(`!(lower(string(${column})) in [${values.map((value) => JSON.stringify(value.toLowerCase())).join(", ")}])`);
+      notes.push(
+        `Only ${entity.name.many} whose ${label} is not ${values.join(" or ")} are ${brief.intent === "records" ? "shown" : "counted"}.`,
+      );
+      whereSaid.push(`${label} is not ${values.join(" or ")}`);
+    }
     if (clauses.length > 0) narrowing.push({ op: "filter", where: clauses.join(" && ") });
   }
 
@@ -1764,7 +1858,13 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
   const facets =
     brief.intent === "records"
       ? filters.map((path) => {
-          const chosen = preselect.get(path) ?? [];
+          const declared = declaredValues.get(path) ?? [];
+          const leftOut = (excluded.get(path) ?? []).map((value) => value.toLowerCase());
+          /* "Everything but Closed" on a strip: it starts on every value the API declares except those. */
+          const chosen =
+            leftOut.length > 0 && declared.length > 0
+              ? declared.filter((value) => !leftOut.includes(value.toLowerCase()))
+              : (preselect.get(path) ?? []);
           /*
            * The values the API itself declares for this field, where it does.
            *
@@ -1775,7 +1875,6 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
            * still gets a tile, because `other` shows by default, so a stale
            * enum costs a row of "Other" rather than a hidden record.
            */
-          const declared = declaredValues.get(path) ?? [];
           return {
             field: columnForPath(path),
             ...(declared.length > 0
@@ -1825,6 +1924,7 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
     !pair &&
     sources.length === 0 &&
     ranges.length === 0 &&
+    excluded.size === 0 &&
     [...preselect].every(([path, values]) => {
       const param = values.length === 1 && listOp ? input.filterParamOf?.(listOp, path) : undefined;
       return param !== undefined && counted.filters.includes(param);
@@ -1907,6 +2007,7 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
     id: input.id,
     title: brief.title?.trim() || entity.name.many,
     component,
+    compiler: BRIEF_COMPILER,
     /*
      * Carried on the widget so it can be changed later. Everything below is
      * derived from it, so storing the derivation without what it came from is
@@ -1951,7 +2052,20 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
     ...(linked.length > 0 ? { linked } : {}),
   });
 
+  /* A title that says "open" over a request that narrows nothing: said, and asked. */
+  const promised = titlePromises(brief.title, brief);
+  const questions: BriefQuestion[] = [];
+  if (promised) {
+    const said = `The title says "${promised}", but nothing in the request narrows the ${entity.name.many.toLowerCase()}, so this ${brief.intent === "records" ? "shows" : "counts"} all of them.`;
+    notes.push(said);
+    questions.push({
+      field: promised,
+      question: `${said} Which ${entity.name.many.toLowerCase()} should it ${brief.intent === "records" ? "show" : "count"}?`,
+      options: [`Only ${promised} ones (say what that means)`, `All ${entity.name.many.toLowerCase()}, and drop "${promised}" from the title`],
+    });
+  }
+
   return parsed.value
-    ? { widget: parsed.value, errors: [], notes }
-    : { widget: null, errors: parsed.errors, notes };
+    ? { widget: parsed.value, errors: [], notes, ...(questions.length > 0 ? { questions } : {}) }
+    : { widget: null, errors: parsed.errors, notes, ...(questions.length > 0 ? { questions } : {}) };
 };

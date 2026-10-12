@@ -48,6 +48,14 @@ export interface DetailPane {
   /** Field sections, on the record pane only. */
   readonly groups?: readonly FieldGroup[];
   /**
+   * The record's other fields, by column, behind "All fields". Absent where
+   * the pane does not split them: a drill-down's record, whose component then
+   * decides for itself.
+   */
+  readonly more?: readonly string[];
+  /** Each column's field path, where a derive step flattened a nested one. */
+  readonly paths?: Readonly<Record<string, string>>;
+  /**
    * What the record type's own dictionary calls each column, and what it says.
    *
    * Keyed by column name rather than by field path, because that is what a

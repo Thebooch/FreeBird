@@ -85,7 +85,10 @@ describe("entityPanes", () => {
       op: "derive",
       fields: { Category_Name: "Category.Name" },
     });
-    expect(record?.roles.fields).toEqual(["CompanyName", "IsActive", "Category_Name"]);
+    // The key field leads; the rest wait under "All fields", flattened the same way.
+    expect(record?.roles.fields).toEqual(["CompanyName"]);
+    expect(byId(panesOf(), "record")?.more).toEqual(["IsActive", "Category_Name"]);
+    expect(byId(panesOf(), "record")?.paths?.["Category_Name"]).toBe("Category.Name");
     expect(byId(panesOf(), "record")?.groups).toEqual([
       { title: "Trade", fields: ["Category_Name"] },
     ]);
@@ -93,14 +96,36 @@ describe("entityPanes", () => {
 
   it("shows every field the dictionary left visible, uncapped", () => {
     // Deciding which fields belong to a person is the entity pass's job and it
-    // already did it; a second cap here would drop real fields silently.
+    // already did it; a second cap here would drop real fields silently. They
+    // are split, never dropped: the key ones lead, the rest are "All fields".
     const many = Array.from({ length: 60 }, (_, index) => ({
       path: `Field${index}`,
       label: `Field ${index}`,
       visibility: "detail" as const,
     }));
-    const record = byId(panesOf({ fields: many, title: [], groups: [] }), "record")?.spec;
-    expect(record?.roles.fields).toHaveLength(60);
+    const pane = byId(panesOf({ fields: many, title: [], groups: [] }), "record");
+    const keys = pane?.spec.roles.fields as string[];
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys.length).toBeLessThanOrEqual(10);
+    expect(keys.length + (pane?.more?.length ?? 0)).toBe(60);
+  });
+
+  it("leads with readable fields when the record type marked none as key", () => {
+    // Never empty at the top, and never ids and audit stamps ahead of a name.
+    const fields = [
+      { path: "Id", label: "ID", visibility: "detail" as const },
+      { path: "CreatedDateTime", label: "Created", visibility: "detail" as const, semantic: "timestamp" as const },
+      { path: "LastUpdatedByUser", label: "Updated by", visibility: "detail" as const },
+      { path: "IsActive", label: "Active", visibility: "detail" as const, semantic: "boolean" as const },
+      { path: "TaxCode", label: "Tax code", visibility: "detail" as const },
+      { path: "CompanyName", label: "Company name", visibility: "detail" as const },
+      { path: "Email", label: "Email", visibility: "detail" as const },
+      { path: "Status", label: "Status", visibility: "detail" as const, semantic: "status_enum" as const },
+      { path: "Balance", label: "Balance", visibility: "detail" as const, semantic: "currency" as const },
+    ];
+    const pane = byId(panesOf({ fields, title: ["CompanyName"], groups: [], status: "Status" }), "record");
+    expect(pane?.spec.roles.fields).toEqual(["CompanyName", "Email", "Status", "Balance"]);
+    expect(pane?.more).toEqual(["Id", "CreatedDateTime", "LastUpdatedByUser", "IsActive", "TaxCode"]);
   });
 
   it("carries the record type's own words for each column", () => {
@@ -391,7 +416,8 @@ describe("entityPanes", () => {
       id: "41",
       override: { hide: ["IsActive"] },
     });
-    expect(byId(panes, "record")?.spec.roles.fields).toEqual(["CompanyName", "Category_Name"]);
+    expect(byId(panes, "record")?.spec.roles.fields).toEqual(["CompanyName"]);
+    expect(byId(panes, "record")?.more).toEqual(["Category_Name"]);
     // Hiding the field the status pointed at unbinds the status too, rather
     // than leaving the header bound to a column that is no longer produced.
     expect(byId(panes, "header")?.spec.roles.status).toBeUndefined();

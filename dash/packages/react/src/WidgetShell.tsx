@@ -1,5 +1,4 @@
 import {
-  Badge,
   EmptyState,
   ErrorState,
   type FacetSelection,
@@ -28,13 +27,15 @@ import {
   settingString,
   slotLabel,
 } from "@freebirdai/dash-spec";
-import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { StatDrillSheet } from "./StatDrillSheet.jsx";
 import { WidgetDetail } from "./WidgetDetail.jsx";
 import { WidgetErrorBoundary } from "./WidgetErrorBoundary.jsx";
 import { WidgetHistory } from "./WidgetHistory.jsx";
 import { WidgetInspector } from "./WidgetInspector.jsx";
 import { useDashboard } from "./context.jsx";
 import type { OpenReference } from "./entityDetail.js";
+import { drillLabel, statDrill } from "./drill.js";
 import { entityFor } from "./references.js";
 import { chromePresentationFor, presentationFor, presentationStyle } from "./presentation.js";
 import type { WidgetData } from "./useWidgetData.js";
@@ -179,6 +180,14 @@ export const WidgetShell = ({
   const opensPage = Boolean(onOpenPage) && Boolean(recordType?.identity) && !aggregated;
 
   /*
+   * The rows behind a number tile, when the number was taken over rows that
+   * can be listed: its own request with the counting taken off.
+   */
+  const drill = useMemo(() => statDrill(widget), [widget]);
+  const [drilling, setDrilling] = useState(false);
+  const frameRef = useRef<HTMLDivElement>(null);
+
+  /*
    * What the reader has narrowed this widget to.
    *
    * Local to the shell and to this session, exactly like the table's sort and
@@ -275,8 +284,25 @@ export const WidgetShell = ({
     });
   }
 
+  /*
+   * What the widget has to say about itself — a binding that only half fits,
+   * rows a join dropped, a narrowing that matched nothing — as menu items
+   * that open the inspector, where each is said in full.
+   */
+  const cautions: readonly string[] =
+    data.state === "ok"
+      ? [...(data.binding?.warnings.map((warning) => warning.message) ?? []), ...(data.runMeta?.warnings ?? [])]
+      : [];
+
   const createLabel = onCreateRecord?.label(widget.id);
   const actions: MenuItem[] = [
+    ...cautions.map((said, index) => ({
+      id: `caution-${index}`,
+      label: said.length > 90 ? `${said.slice(0, 89)}…` : said,
+      icon: "⚠",
+      section: "About this number",
+      onSelect: () => setInspecting(true),
+    })),
     { id: "refresh", label: "Refresh", icon: "↻", onSelect: data.refetch },
     {
       id: "inspect",
@@ -325,42 +351,26 @@ export const WidgetShell = ({
       // Promoted out of the title tooltip. A description nobody hovers is a
       // description nobody reads.
       <p className="dash-widget__subtitle">{widget.description}</p>
-    ) : widget.metric ? (
-      /*
-       * What the number means, where nobody wrote a description: what it
-       * counts or adds, over which records, narrowed how. A
-       * reader checks a number against this before acting on it.
+    ) : /*
+       * Only a description somebody wrote. What the compiler says a number
+       * means ("Number of leases whose LeaseStatus is Active") is for whoever
+       * is checking the widget, and lives in "Where did this come from?" —
+       * on the board the title stands alone.
        */
-      <p className="dash-widget__subtitle dash-widget__meaning">{widget.metric.says}</p>
-    ) : null,
+    null,
     badges: (
       <>
-        {data.stale && data.state === "ok" && (
-          <Badge tone="stale" title="Older than this widget's freshness window">
-            stale · {formatValue(data.lastFetchedAt, { semantic: "relative_time" }, { now: Math.max(now, data.lastFetchedAt) })}
-          </Badge>
-        )}
-        {data.state === "ok" && data.binding && data.binding.warnings.length > 0 && (
-          <Badge tone="warn" title={data.binding.warnings.map((w) => w.message).join("\n")}>
-            {data.binding.warnings.length} note(s)
-          </Badge>
-        )}
         {/*
-         * What the run itself had to say, which until now only the inspector
-         * showed.
-         *
-         * These are the warnings that change what a number *means*: rows a
-         * join dropped for want of a match, rows it repeated because one
-         * matched several, a page cut short. A widget can be wrong in exactly
-         * those ways while looking entirely fine, and the count was already
-         * being computed — it just never reached the place somebody reading
-         * the number would look.
+         * No "stale" badge. How long ago the tile was read is in its footer,
+         * which is enough for a figure that is merely a few minutes old; a
+         * refresh the API refused still gets its banner below, because that
+         * one changes whether the number can be trusted.
          */}
-        {data.state === "ok" && data.runMeta && data.runMeta.warnings.length > 0 && (
-          <Badge tone="danger" title={data.runMeta.warnings.join("\n")}>
-            {data.runMeta.warnings.length} caveat(s)
-          </Badge>
-        )}
+        {/*
+         * Nor the "note(s)" and "caveat(s)" badges: on the face of the tile they
+         * pushed the number down and read as alarms. They are in the ⋯ menu,
+         * counted on its button, and said in full in the inspector.
+         */}
       </>
     ),
     actions: (
@@ -386,9 +396,20 @@ export const WidgetShell = ({
                 : `Filter ${widget.title}`
             }
             testId={`filters-${widget.id}`}
+            floating
           />
         )}
-        <Menu items={actions} label={`Actions for ${widget.title}`} testId={`actions-${widget.id}`} />
+        <Menu
+          items={actions}
+          label={
+            cautions.length > 0
+              ? `Actions for ${widget.title}, ${cautions.length} caveat${cautions.length === 1 ? "" : "s"}`
+              : `Actions for ${widget.title}`
+          }
+          testId={`actions-${widget.id}`}
+          {...(cautions.length > 0 ? { badge: cautions.length } : {})}
+          floating
+        />
       </span>
     ),
   };
@@ -400,7 +421,9 @@ export const WidgetShell = ({
 
   return (
     <div
+      ref={frameRef}
       className="dash-widget"
+      {...(drill && data.state === "ok" ? { "data-drill": "true" } : {})}
       data-density={chrome.density ?? "cozy"}
       data-border={settingBool(chrome, "border", true) ? "on" : "off"}
       style={presentationStyle(chrome)}
@@ -425,8 +448,8 @@ export const WidgetShell = ({
       {/*
        * Why the reader is looking at something old.
        *
-       * Deliberately louder than the stale badge beside the title. That badge
-       * says "this is a bit old", which is a normal condition; this says the
+       * Deliberately louder than the footer's "4 minutes ago". That says
+       * "this is a bit old", which is a normal condition; this says the
        * upstream refused us and these numbers are not current. Someone
        * screenshotting a figure needs to have been told which of those it is.
        */}
@@ -507,8 +530,30 @@ export const WidgetShell = ({
                 : {})}
             {...(openReference ? { onOpenReference: openReference } : {})}
             {...(onRowActions ? { rowActions: (row: Row) => onRowActions(widget.id, row) } : {})}
+            {...(drill && data.state === "ok"
+              ? {
+                  drill: {
+                    label: drillLabel(
+                      drill.measure.fn === "count" ? countOf(faceted.rows, widget) : null,
+                      recordType?.name.many,
+                    ),
+                    open: () => setDrilling(true),
+                  },
+                }
+              : {})}
           />
         </WidgetErrorBoundary>
+        {drilling && drill && (
+          <StatDrillSheet
+            widget={widget}
+            drill={drill}
+            link={recordType}
+            onClose={() => setDrilling(false)}
+            container={frameRef.current?.closest(".dash-root") ?? null}
+            {...(onOpenPage && recordType?.identity ? { onOpenPage } : {})}
+            {...(openReference ? { onOpenReference: openReference } : {})}
+          />
+        )}
         {openRow && widget.drilldown && (
           <WidgetDetail
             parent={widget}
@@ -529,6 +574,7 @@ export const WidgetShell = ({
           data={data}
           rows={faceted.rows}
           now={now}
+          single={widget.component === "stat"}
           {...(widget.timeWindow ? { timeWindow: widget.timeWindow } : {})}
         />
       )}
@@ -536,6 +582,13 @@ export const WidgetShell = ({
       {inspecting && <WidgetInspector data={data} onClose={() => setInspecting(false)} />}
     </div>
   );
+};
+
+/** A count tile's number, as the count of records it promises to list. */
+const countOf = (rows: readonly Row[], widget: WidgetSpec): number | null => {
+  const column = widget.roles["value"];
+  const value = typeof column === "string" ? rows[rows.length - 1]?.[column] : undefined;
+  return typeof value === "number" && Number.isInteger(value) ? value : null;
 };
 
 /**
@@ -550,11 +603,18 @@ const WidgetFooter = ({
   rows,
   now,
   timeWindow,
+  single = false,
 }: {
   data: WidgetData;
   /** After the facets, so the count describes what is actually on screen. */
   rows: readonly Row[];
   now: number;
+  /**
+   * One number rather than rows: "1 row · all 28 read" says nothing to
+   * somebody reading a total, so only what changes how far to trust it stays
+   * — partial, its own time window — beside how long ago it was read.
+   */
+  single?: boolean;
   /** The widget's own time, where its request named one, or all time: said, so the board's range is not mistaken for it. */
   timeWindow?: TimeWindow;
 }): JSX.Element => {
@@ -570,15 +630,18 @@ const WidgetFooter = ({
    * not cut short — that one says what it left out, above.
    */
   const read = data.runMeta?.steps.find((step) => step.op === "extract")?.rowsOut;
-  const coverage = !truncated && data.fetchMeta && read !== undefined ? readCoverage(data.fetchMeta, read) : null;
+  const coverage =
+    !single && !truncated && data.fetchMeta && read !== undefined ? readCoverage(data.fetchMeta, read) : null;
+  /* The separator before a part: none before the first one a number tile draws. */
+  const dot = single ? "" : " · ";
   return (
     <div className="dash-widget__foot">
       <span className="dash-widget__count">
-        {rows.length.toLocaleString()} {rows.length === 1 ? "row" : "rows"}
+        {!single && `${rows.length.toLocaleString()} ${rows.length === 1 ? "row" : "rows"}`}
         {truncated && (
           <span className="dash-widget__more" title={data.incomplete.join("\n") || "Not every record was read"}>
-            {" "}
-            · {unsure ? "may be partial" : "partial"}
+            {dot}
+            {unsure ? "may be partial" : "partial"}
           </span>
         )}
         {timeWindow && (
@@ -587,8 +650,7 @@ const WidgetFooter = ({
             data-testid="own-window"
             title="This widget reads its own time, whatever window the board shows."
           >
-            {" "}
-            ·{" "}
+            {single && !truncated ? "" : " · "}
             {"all" in timeWindow
               ? "all time"
               : timeWindow.to
@@ -632,6 +694,7 @@ const WidgetFooter = ({
          * acts; an answer that arrived after it — a read finished in the
          * background — is "now", never "in 4 seconds".
          */}
+        {single ? "Updated " : ""}
         {formatValue(data.lastFetchedAt, { semantic: "relative_time" }, { now: Math.max(now, data.lastFetchedAt) })}
       </span>
     </div>
@@ -737,6 +800,7 @@ const WidgetBody = ({
   onSelectRow,
   onOpenReference,
   rowActions,
+  drill,
 }: {
   data: WidgetData;
   /**
@@ -757,6 +821,7 @@ const WidgetBody = ({
   onSelectRow?: (row: Row) => void;
   onOpenReference?: (target: { entity: string; id: string | number }) => void;
   rowActions?: (row: Row) => readonly RowAction[];
+  drill?: { label: string; open: () => void };
 }): JSX.Element => {
   switch (data.state) {
     case "loading":
@@ -859,6 +924,7 @@ const WidgetBody = ({
           {...(onSelectRow ? { onSelectRow } : {})}
           {...(onOpenReference ? { onOpenReference } : {})}
           {...(rowActions ? { rowActions } : {})}
+          {...(drill ? { drill } : {})}
           {...(Object.keys(data.referenceNames).length > 0
             ? { referenceNames: data.referenceNames }
             : {})}
