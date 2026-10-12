@@ -2208,7 +2208,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
                   // Only the page's half. Columns, sort, strips and stats are
                   // a different screen's business and must not be cleared by
                   // a write about the layout of a record.
-                  record: { facts: parsed.data.facts, groups: parsed.data.groups },
+                  // The key fields are their own control ("Move to key fields") and are kept.
+                  record: { ...one.views.record, facts: parsed.data.facts, groups: parsed.data.groups },
                 },
               }
             : one,
@@ -2216,6 +2217,67 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       });
 
       return saved.entities?.find((one) => one.id === entity.id)?.views.record ?? { facts: [], groups: [] };
+    },
+  );
+
+  /**
+   * Which fields a record type leads with, changed for everybody.
+   *
+   * What "Move to key fields" and "Move to all fields" write: one field moved,
+   * answered with the whole list as it now stands. Stored beside the layout
+   * in the same local tier, so it is an override of what shipped and undoing
+   * it is a delete. The first move starts from the fields the page marked
+   * primary — or, where none were, from whatever list the page was showing,
+   * which the browser sends as `current` — so moving one field never empties
+   * the rest of the top.
+   */
+  app.put<{ Params: { id: string; entity: string }; Body: unknown }>(
+    "/api/connections/:id/entities/:entity/keys",
+    async (request, reply) => {
+      const parsed = z
+        .object({
+          path: fieldPathSchema,
+          to: z.enum(["key", "all"]),
+          current: z.array(fieldPathSchema).max(80).optional(),
+        })
+        .safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.status(400).send({ error: "invalid move", detail: parsed.error.issues });
+      }
+
+      const connection = store.getConnection(request.params.id);
+      if (!connection) return reply.status(404).send({ error: "no such connection" });
+      const entry = connection.catalog ? options.catalog?.get(connection.catalog) : undefined;
+      const entity = entry?.entities?.find((one) => one.id === request.params.entity);
+      if (!entry || !entity) return reply.status(404).send({ error: "no such record type" });
+
+      const shown = entity.fields.filter((f) => f.visibility !== "hidden").map((f) => f.path);
+      if (!shown.includes(parsed.data.path)) {
+        return reply.status(400).send({ error: `${entity.name.many} do not show ${parsed.data.path}.` });
+      }
+
+      const marked = entity.fields.filter((f) => f.visibility === "primary").map((f) => f.path);
+      const before =
+        entity.views.record.keys ??
+        (marked.length > 0 ? marked : (parsed.data.current ?? []).filter((path) => shown.includes(path)));
+      const after =
+        parsed.data.to === "key"
+          ? [...before.filter((path) => path !== parsed.data.path), parsed.data.path]
+          : before.filter((path) => path !== parsed.data.path);
+      if (after.length > 40) {
+        return reply.status(400).send({ error: "A record shows at most 40 key fields." });
+      }
+
+      const saved = options.catalog!.put({
+        ...entry,
+        entities: (entry.entities ?? []).map((one) =>
+          one.id === entity.id
+            ? { ...one, views: { ...one.views, record: { ...one.views.record, keys: after } } }
+            : one,
+        ),
+      });
+
+      return { keys: saved.entities?.find((one) => one.id === entity.id)?.views.record.keys ?? after };
     },
   );
 

@@ -206,6 +206,8 @@ export interface DashboardProps {
     readonly onEditLayout?: () => void;
     /** Offer the changes the page allows. Absent where nothing can be changed. */
     readonly onChangeRecord?: (request: RecordChangeRequest) => void;
+    /** Move a field between key fields and "All fields" for the record type. */
+    readonly onMoveField?: (path: string, to: "key" | "all") => void;
   };
 }
 

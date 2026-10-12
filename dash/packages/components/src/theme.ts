@@ -1493,6 +1493,34 @@ ${seriesVars(SERIES_LIGHT)}
 /* An empty value is stated, not left blank. A blank right-hand column reads as
    a rendering fault; an em-dash reads as "this record does not have one". */
 .dash-record__pair dd:empty::after { content: "—"; color: var(--dash-axis); }
+/* A field's tools (move, edit) sit at the value's end, quiet until the row is hovered or focused. */
+.dash-record__pair dd { position: relative; }
+.dash-record__tools {
+  float: right; display: inline-flex; gap: 2px; margin-left: var(--dash-space-2);
+  opacity: 0; transition: opacity 120ms ease;
+}
+.dash-record__pair:hover .dash-record__tools,
+.dash-record__pair:focus-within .dash-record__tools { opacity: 1; }
+@media (hover: none) { .dash-record__tools { opacity: 1; } }
+.dash-record__tools .dash-iconbtn { width: 22px; height: 22px; font-size: var(--dash-text-xs); }
+/* Everything else about the record: one thin-ruled disclosure, closed by default. */
+.dash-record__more { margin-top: var(--dash-space-4); border-top: 1px solid var(--dash-border); }
+.dash-record__more-summary {
+  cursor: pointer; padding: var(--dash-space-3) 0; list-style: none;
+  font-size: var(--dash-text-xs); font-weight: var(--dash-weight-medium); color: var(--dash-muted);
+}
+.dash-record__more-summary::-webkit-details-marker { display: none; }
+.dash-record__more-summary::before { content: "▸"; display: inline-block; width: 1em; transition: transform 120ms ease; }
+.dash-record__more[open] > .dash-record__more-summary::before { transform: rotate(90deg); }
+.dash-record__more-summary:hover { color: var(--dash-ink); }
+.dash-record__more-summary:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 2px; border-radius: var(--dash-radius-sm); }
+.dash-record--compact .dash-record__pair { padding: 6px 0; grid-template-columns: minmax(96px, 40%) 1fr; gap: var(--dash-space-3); }
+.dash-record--compact .dash-record__pair dd { font-size: var(--dash-text-xs); }
+.dash-record__api {
+  display: block; margin-top: 1px; font-size: var(--dash-text-micro); font-weight: var(--dash-weight-normal);
+  color: var(--dash-axis); font-family: var(--dash-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  overflow: hidden; text-overflow: ellipsis;
+}
 /* A flattened child sits under its parent's name, with a rule rather than an
    indent — indentation alone at this size reads as an accident. */
 .dash-record__pair--nested dt {

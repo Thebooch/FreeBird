@@ -37,9 +37,9 @@ export const KEY_FIELD_CAP = 10;
 /** The last level of a path, which is what its name says about it. */
 const leaf = (key: string): string => key.split(/[._]/).filter(Boolean).pop() ?? key;
 
-/** `CreatedAt`, `ModifiedBy`, `updated_on`, `LastModifiedDate`, `created_by_user_id`. */
+/** `CreatedAt`, `ModifiedBy`, `LastUpdatedByUser`, `updated_on`, `LastModifiedDate`, `created_by_user_id`. */
 const AUDIT = /(^|[._])(created|modified|updated|last_?modified|deleted)(_?(at|by|on|date|time|date_?time|user(_?id)?|by_?user(_?id)?))?$/i;
-const AUDIT_CAMEL = /(Created|Modified|Updated|Deleted)(At|By|On|Date|Time|DateTime|User|UserId|ByUserId|ById)?$/;
+const AUDIT_CAMEL = /(Created|Modified|Updated|Deleted)(At|On|Date|Time|DateTime|By|ByUser|ByUserId|ByUserID|ById|ByID|User|UserId|UserID)?$/;
 /** `Id`, `VendorID`, `vendor_id`, `uuid`, `guid`. */
 const ID = /(^|[a-z0-9_.])(id|ids|uuid|guid)$|(Id|ID|Ids|IDs|Uuid|UUID|Guid|GUID)$/;
 /** `TaxCode`, `country_code`, `Ref`, `Key`, `Hash`, `Version`, `ETag`. */

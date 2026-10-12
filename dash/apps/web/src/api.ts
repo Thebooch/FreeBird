@@ -1212,6 +1212,22 @@ export const api = {
     }),
 
   /**
+   * Move one field of a record type between its key fields and "All fields",
+   * for everybody who opens one. `current` is the key list the page was
+   * showing, so the first move starts from it rather than from nothing.
+   */
+  putRecordKeys: (
+    connectionId: string,
+    entity: string,
+    move: { path: string; to: "key" | "all"; current?: readonly string[] },
+  ): Promise<{ keys: readonly string[] }> =>
+    request(`/api/connections/${connectionId}/entities/${entity}/keys`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(move),
+    }),
+
+  /**
    * Describe what this API's records are: their names, fields and links.
    *
    * The pass everything entity-first rests on, and the one thing that had no

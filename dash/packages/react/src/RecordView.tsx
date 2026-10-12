@@ -60,6 +60,7 @@ export const RecordView = ({
   onOpenChild,
   onOpenReference,
   rowActions,
+  fieldTools,
 }: {
   readonly panes: readonly DetailPane[];
   readonly row: Row;
@@ -80,6 +81,8 @@ export const RecordView = ({
    * nothing.
    */
   readonly rowActions?: (pane: DetailPane, row: Row) => readonly RowAction[];
+  /** What can be done to a field of the record itself: move it between the lists, or edit the record. */
+  readonly fieldTools?: FieldTools;
 }): JSX.Element => {
   const header = headerPane(panes);
   const record = recordPane(panes);
@@ -153,7 +156,14 @@ export const RecordView = ({
           ))}
         </div>
       )}
-      {record && <PaneBody pane={record} row={row} {...(onOpenReference ? { onOpenReference } : {})} />}
+      {record && (
+        <PaneBody
+          pane={record}
+          row={row}
+          {...(onOpenReference ? { onOpenReference } : {})}
+          {...(fieldTools ? { fieldTools } : {})}
+        />
+      )}
 
       {tabs.length > 0 && current && (
         <div className="dash-record-tabs">
@@ -215,18 +225,26 @@ export const RecordView = ({
  * it above the guard would fire a request for a drill-down that has not been
  * configured.
  */
+/** A record field's tools, by column. */
+export interface FieldTools {
+  readonly move?: (column: string, to: "key" | "all") => void;
+  readonly edit?: (column: string) => void;
+}
+
 const PaneBody = ({
   pane,
   row,
   onOpenChild,
   onOpenReference,
   rowActions,
+  fieldTools,
 }: {
   readonly pane: DetailPane;
   readonly row: Row;
   readonly onOpenChild?: (pane: DetailPane, childRow: Row) => void;
   readonly onOpenReference?: OpenReference;
   readonly rowActions?: (pane: DetailPane, row: Row) => readonly RowAction[];
+  readonly fieldTools?: FieldTools;
 }): JSX.Element => {
   const { now, timeZone, presentation: sources } = useDashboard();
   return (
@@ -240,6 +258,7 @@ const PaneBody = ({
       {...(onOpenChild ? { onOpenChild } : {})}
       {...(onOpenReference ? { onOpenReference } : {})}
       {...(rowActions ? { rowActions } : {})}
+      {...(fieldTools ? { fieldTools } : {})}
     />
   );
 };
@@ -254,6 +273,7 @@ const PaneRenderer = ({
   onOpenChild,
   onOpenReference,
   rowActions,
+  fieldTools,
 }: {
   readonly spec: WidgetSpec;
   readonly pane: DetailPane;
@@ -264,6 +284,7 @@ const PaneRenderer = ({
   readonly onOpenChild?: (pane: DetailPane, childRow: Row) => void;
   readonly onOpenReference?: OpenReference;
   readonly rowActions?: (pane: DetailPane, row: Row) => readonly RowAction[];
+  readonly fieldTools?: FieldTools;
 }): JSX.Element => {
   const data = useWidgetData(spec, row);
 
@@ -463,6 +484,9 @@ const PaneRenderer = ({
         {...(openReference ? { onOpenReference: openReference } : {})}
         {...(rowActions ? { rowActions: (childRow: Row) => rowActions(pane, childRow) } : {})}
         {...(pane.groups ? { groups: pane.groups } : {})}
+        {...(pane.more ? { detailFields: pane.more } : {})}
+        {...(fieldTools?.move ? { onMoveField: fieldTools.move } : {})}
+        {...(fieldTools?.edit ? { onEditField: fieldTools.edit } : {})}
         presentation={presentationFor(sources, spec.component, spec.presentation)}
       />
     </>

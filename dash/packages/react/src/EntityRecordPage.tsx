@@ -4,7 +4,7 @@ import { humanLabel, parentsFrom } from "@freebirdai/dash-spec";
 import type { Row } from "@freebirdai/dash-runtime";
 import { useMemo } from "react";
 import type { DetailPane } from "./detail.js";
-import { RecordView } from "./RecordView.jsx";
+import { type FieldTools, RecordView } from "./RecordView.jsx";
 import { entityPanes, missingParents, type OpenReference } from "./entityDetail.js";
 import { changeRowActions, recordChangeRequests, recordToolbar, type ToolbarEntry } from "./writes/requests.js";
 
@@ -98,6 +98,7 @@ export const EntityRecordPage = ({
   onOpenReference,
   onEditLayout,
   onChangeRecord,
+  onMoveField,
 }: {
   readonly page: EntityPageView;
   readonly connection: string;
@@ -128,6 +129,11 @@ export const EntityRecordPage = ({
    * the person may make; the host does the rest. Absent, nothing is offered.
    */
   readonly onChangeRecord?: (request: RecordChangeRequest) => void;
+  /**
+   * Move a field between the key fields and "All fields" for this record
+   * type, for everybody. By field path. Absent where nothing can store it.
+   */
+  readonly onMoveField?: (path: string, to: "key" | "all") => void;
 }): JSX.Element => {
   const panes = useMemo(
     () =>
@@ -199,6 +205,28 @@ export const EntityRecordPage = ({
       : [];
 
   const toolbar = onChangeRecord ? recordToolbar(ownRequests, sectionOffers) : undefined;
+
+  /*
+   * A field's own tools, on the record itself. Moving one is by path, since
+   * that is what the record type stores; the pane knows each column's path.
+   * Editing a field opens the record's own edit form — there is no per-field
+   * write, and the form is where every field the API lets change is.
+   */
+  const recordPaneOf = panes.find((pane) => pane.id === "record");
+  const fieldTools: FieldTools | undefined =
+    onMoveField || (toolbar?.edit && onChangeRecord)
+      ? {
+          ...(onMoveField
+            ? {
+                move: (column: string, to: "key" | "all") =>
+                  onMoveField(recordPaneOf?.paths?.[column] ?? column, to),
+              }
+            : {}),
+          ...(toolbar?.edit && onChangeRecord
+            ? { edit: () => onChangeRecord(toolbar.edit!) }
+            : {}),
+        }
+      : undefined;
 
   const shown = panes.filter((pane) => pane.tab === true).length;
   const unknownBundles = (page.bundles ?? []).filter((bundle) => !bundle.entity);
@@ -300,6 +328,7 @@ export const EntityRecordPage = ({
             wide
             {...(onOpenReference ? { onOpenReference } : {})}
             {...(sectionRowActions ? { rowActions: sectionRowActions } : {})}
+            {...(fieldTools ? { fieldTools } : {})}
           />
           {unknownBundles.length > 0 && (
             /*

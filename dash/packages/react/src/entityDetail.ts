@@ -8,6 +8,7 @@ import type {
 } from "@freebirdai/dash-spec";
 import type { AddressPart, Coercion, SemanticType } from "@freebirdai/dash-spec";
 import { fnv1a, parentsFrom, parseWidget, shapeSteps } from "@freebirdai/dash-spec";
+import { rankKeyFields } from "@freebirdai/dash-components";
 import type { DetailPane } from "./detail.js";
 
 /**
@@ -223,6 +224,32 @@ const sectionRequest = (
   return null;
 };
 
+/**
+ * The fields a record leads with, in page order.
+ *
+ * The record type's own answer — the fields marked primary, by the entity pass
+ * or by somebody moving them — wherever it gave one. Where it gave none, the
+ * same ranking a long drill-down uses: what names the record, then names,
+ * dates, money and statuses, ahead of ids, flags, codes and audit stamps.
+ */
+export const keyFieldsOf = (
+  fields: readonly EntityPageField[],
+  hints: {
+    readonly title: readonly string[];
+    readonly status?: string | undefined;
+    readonly facts: readonly string[];
+    readonly identity?: string | undefined;
+  },
+): string[] => {
+  const marked = fields.filter((field) => field.visibility === "primary").map((field) => field.path);
+  if (marked.length > 0) return marked;
+  const ranked = rankKeyFields(
+    fields.map((field) => ({ key: field.path, semantic: field.readAs ?? field.semantic })),
+    hints,
+  );
+  return fields.map((field) => field.path).filter((path) => ranked.includes(path));
+};
+
 export interface EntityPaneInput {
   readonly page: EntityPageView;
   readonly connection: string;
@@ -340,10 +367,13 @@ export const entityPanes = (input: EntityPaneInput): DetailPane[] => {
    *
    * Every field the dictionary did not hide, uncapped: deciding which fields
    * belong to a person is the entity pass's job and it already did it, so a
-   * second cap here would drop real fields for no stated reason.
+   * second cap here would drop real fields for no stated reason. They come in
+   * two lists: the key fields, read first, and the rest behind "All fields".
    */
   if (detail && visible.length > 0) {
     const paths = visible.map((field) => field.path);
+    const keys = keyFieldsOf(visible, { title, status, facts, identity: page.identity });
+    const rest = paths.filter((path) => !keys.includes(path));
     const groups: FieldGroup[] = (override?.groups ?? page.groups)
       .map((group) => ({ title: group.title, fields: keep(group.fields).map(columnFor) }))
       .filter((group) => group.fields.length > 0);
@@ -358,7 +388,7 @@ export const entityPanes = (input: EntityPaneInput): DetailPane[] => {
       pipeline: [{ op: "extract", path: "$" }, ...deriveFor(paths), ...read.steps],
       ...(Object.keys(read.format).length > 0 ? { format: read.format } : {}),
       roles: {
-        fields: paths.map(columnFor),
+        fields: keys.map(columnFor),
         ...(leading ? { title: columnFor(leading) } : {}),
       },
     });
@@ -368,6 +398,8 @@ export const entityPanes = (input: EntityPaneInput): DetailPane[] => {
         title: page.name.one,
         spec: record,
         fields: fieldsOf(visible, paths),
+        ...(rest.length > 0 ? { more: rest.map(columnFor) } : {}),
+        paths: Object.fromEntries(paths.map((path) => [columnFor(path), path])),
         ...(groups.length > 0 ? { groups } : {}),
       });
     }

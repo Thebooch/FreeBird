@@ -359,6 +359,14 @@ export const entityViewsSchema = z.object({
     .object({
       facts: z.array(fieldPathSchema).max(4).default([]),
       groups: z.array(fieldGroupSchema).max(8).default([]),
+      /**
+       * The fields a record of this type leads with, where somebody chose
+       * them ("Move to key fields"). Over the fields' own `visibility`: listed
+       * here is primary, anything else is behind "All fields". Absent, the
+       * fields' own marks decide. Optional with no default, so a record type
+       * nobody rearranged reads exactly as before.
+       */
+      keys: z.array(fieldPathSchema).max(40).optional(),
     })
     .default({}),
   stats: z.array(entityStatSchema).max(4).default([]),

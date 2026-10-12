@@ -348,3 +348,52 @@ describe("PUT /api/connections/:id/entities/:entity/layout", () => {
     ).toBe(404);
   });
 });
+
+/*
+ * "Move to key fields" and "Move to all fields": one field at a time, for
+ * everybody who opens this kind of record, beside the layout in the same tier.
+ */
+describe("PUT /api/connections/:id/entities/:entity/keys", () => {
+  const fieldsOf = async (): Promise<Record<string, string>> => {
+    const page = (await get("/api/connections/works/entities/vendor")).json();
+    return Object.fromEntries(
+      (page.fields as { path: string; visibility: string }[]).map((field) => [field.path, field.visibility]),
+    );
+  };
+
+  it("moves a field to the key fields, keeping the ones already there", async () => {
+    connect(["tasks", "vendors", "vendor"]);
+    expect((await fieldsOf())["Phone"]).toBe("detail");
+
+    const saved = await put("/api/connections/works/entities/vendor/keys", { path: "Phone", to: "key" });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json().keys).toEqual(["CompanyName", "Phone"]);
+
+    const fields = await fieldsOf();
+    expect(fields["Phone"]).toBe("primary");
+    expect(fields["CompanyName"]).toBe("primary");
+  });
+
+  it("moves one back to all fields", async () => {
+    connect(["tasks", "vendors", "vendor"]);
+    await put("/api/connections/works/entities/vendor/keys", { path: "Phone", to: "key" });
+    await put("/api/connections/works/entities/vendor/keys", { path: "CompanyName", to: "all" });
+
+    const fields = await fieldsOf();
+    expect(fields["CompanyName"]).toBe("detail");
+    expect(fields["Phone"]).toBe("primary");
+  });
+
+  it("survives a later change to the layout", async () => {
+    connect(["tasks", "vendors", "vendor"]);
+    await put("/api/connections/works/entities/vendor/keys", { path: "Phone", to: "key" });
+    await put("/api/connections/works/entities/vendor/layout", { facts: ["Phone"] });
+    expect((await fieldsOf())["Phone"]).toBe("primary");
+  });
+
+  it("refuses a field the record type does not show", async () => {
+    connect(["tasks", "vendors", "vendor"]);
+    const response = await put("/api/connections/works/entities/vendor/keys", { path: "Href", to: "key" });
+    expect(response.statusCode).toBe(400);
+  });
+});

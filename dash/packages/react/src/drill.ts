@@ -1,6 +1,6 @@
 import type { ColumnMeta, EntityLinkView, WidgetSpec } from "@freebirdai/dash-spec";
 import { ALL_ROWS, parseAggregation } from "@freebirdai/dash-spec";
-import { rankKeyFields } from "./keyFields.js";
+import { rankKeyFields } from "@freebirdai/dash-components";
 
 /**
  * The rows behind a number.

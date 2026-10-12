@@ -1,5 +1,7 @@
 import { isSlotHidden, settingBool, settingNumber } from "@freebirdai/dash-spec";
-import { Message, SectionHeader, StatusPill } from "../ui/index.js";
+import { useState } from "react";
+import { KEY_FIELD_CAP, rankKeyFields } from "../keyFields.js";
+import { Menu, Message, SectionHeader, StatusPill } from "../ui/index.js";
 import {
   type RecordEntry,
   highlightsFor,
@@ -23,25 +25,42 @@ import type { WidgetRenderProps } from "../types.js";
  * shown indented under a shared label.
  */
 export const Record = (props: WidgetRenderProps): JSX.Element => {
+  const [open, setOpen] = useState(false);
   const bound = roleColumns(props.roles, "fields");
   const names = bound.length > 0 ? bound : props.columns.map((column) => column.name);
+  const titleColumn = roleColumn(props.roles, "title");
 
-  if (names.length === 0) return <Message>This widget has no fields bound.</Message>;
+  if (names.length === 0 && !props.detailFields?.length) {
+    return <Message>This widget has no fields bound.</Message>;
+  }
   if (props.rows.length === 0) return <Message>No record found.</Message>;
 
-  const look = props.presentation;
-  const all = recordEntries(props, names);
   /*
-   * A blank row still tells you the field exists, which is often the point on
-   * a record — so hiding empties is opt-in rather than the default.
+   * Key fields first, the rest behind "All fields".
+   *
+   * A record type that says which fields are key splits them itself
+   * (`detailFields`). One that does not, with more fields than fit above the
+   * fold, is split here by `rankKeyFields` — names, statuses, dates and money
+   * ahead of ids, flags and who-changed-it-when — so the top is never empty
+   * and never everything. A short record shows every field, as before.
    */
-  const entries = settingBool(look, "hideEmpty", false)
-    ? all.filter((entry) => entry.value !== null && entry.value !== undefined && entry.value !== "")
-    : all;
+  const split = splitFields(props, names, titleColumn);
+  const look = props.presentation;
+  const all = recordEntries(props, split.keys);
+  /*
+   * The key fields say what is there. An empty one — or the API's word for
+   * empty, `NotSet` — says nothing, so it waits under "All fields", where an
+   * empty row is the point: it tells you the field exists. A record with no
+   * "All fields" keeps its empties unless asked, for the same reason.
+   */
+  const entries =
+    split.more.length > 0 || settingBool(look, "hideEmpty", false)
+      ? all.filter((entry) => !isEmpty(entry))
+      : all;
+  const more = recordEntries(props, split.more);
   // A record shows one row, so its highlights are the first row's.
   const hits = highlightsFor(props, 0);
   const rowHits = hits.filter((hit) => !hit.field);
-  const titleColumn = roleColumn(props.roles, "title");
   const heading = titleColumn ? props.rows[0]?.[titleColumn] : undefined;
 
   const sections = groupEntries(entries, props.groups);
@@ -56,7 +75,8 @@ export const Record = (props: WidgetRenderProps): JSX.Element => {
    * one that was fetched, then the kind of record — is `referenceText`'s, the
    * same function the table cell calls.
    */
-  const valueOf = (entry: RecordEntry): JSX.Element | string => {
+  const valueOf = (entry: RecordEntry, empty = "—"): JSX.Element | string => {
+    if (isEmpty(entry)) return <span className="dash-nil">{empty}</span>;
     if (!entry.reference) return entry.formatted;
 
     const resolved = referenceText({
@@ -83,6 +103,23 @@ export const Record = (props: WidgetRenderProps): JSX.Element => {
     );
   };
 
+  /** Move this field to the other list, for everybody who opens one of these. */
+  const moveMenu = (entry: RecordEntry, to: "key" | "all"): JSX.Element | null =>
+    props.onMoveField ? (
+      <Menu
+        floating
+        label={`Options for ${entry.label}`}
+        testId={`record-field-menu-${entry.name}`}
+        items={[
+          {
+            id: "move",
+            label: to === "key" ? "Move to key fields" : "Move to all fields",
+            onSelect: () => props.onMoveField?.(entry.name, to),
+          },
+        ]}
+      />
+    ) : null;
+
   const pair = (entry: RecordEntry): JSX.Element => (
     <div
       key={entry.name}
@@ -108,6 +145,7 @@ export const Record = (props: WidgetRenderProps): JSX.Element => {
       {/* The tooltip keeps the whole value: the pair shows a summary. */}
       <dd title={titleFor(entry.value)}>
         {valueOf(entry)}
+        {split.more.length > 0 && <span className="dash-record__tools">{moveMenu(entry, "all")}</span>}
         {hits
           .filter((hit) => hit.field === entry.name)
           .map((hit) => (
@@ -141,8 +179,92 @@ export const Record = (props: WidgetRenderProps): JSX.Element => {
           </dl>
         </section>
       ))}
+
+      {more.length > 0 && (
+        /*
+         * Collapsed by default: these are the fields somebody looks up, not
+         * the ones they read. Compact, empties included ("Not set"), each
+         * with the name the API sends it under, for whoever is matching the
+         * screen against the API's documentation.
+         */
+        <details
+          className="dash-record__more"
+          data-testid="record-all-fields"
+          open={open}
+          onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
+        >
+          <summary className="dash-record__more-summary">All fields ({more.length})</summary>
+          {open && (
+            <dl className="dash-record dash-record--compact" data-columns={2}>
+              {more.map((entry) => (
+                <div key={entry.name} className="dash-record__pair">
+                  <dt title={entry.description ?? entry.name}>
+                    {entry.label}
+                    <span className="dash-record__api">{entry.name}</span>
+                  </dt>
+                  <dd title={titleFor(entry.value)}>
+                    {valueOf(entry, "Not set")}
+                    <span className="dash-record__tools">
+                      {props.onEditField && (
+                        <button
+                          type="button"
+                          className="dash-iconbtn dash-record__edit"
+                          aria-label={`Edit ${entry.label}`}
+                          title={`Edit ${entry.label}`}
+                          onClick={() => props.onEditField?.(entry.name)}
+                          data-testid={`record-field-edit-${entry.name}`}
+                        >
+                          ✎
+                        </button>
+                      )}
+                      {moveMenu(entry, "key")}
+                    </span>
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )}
+        </details>
+      )}
     </div>
   );
+};
+
+/** Nothing there, or the API's way of saying nothing (`NotSet`, `0001-01-01`). */
+const isEmpty = (entry: RecordEntry): boolean =>
+  entry.value === null || entry.value === undefined || entry.value === "" || entry.formatted === "—";
+
+/** A short record shows every field; past this many, the rest go under "All fields". */
+const SPLIT_ABOVE = KEY_FIELD_CAP + 2;
+
+/**
+ * Which fields lead and which wait under "All fields".
+ *
+ * The record type's own split when it gave one; otherwise the ranking, and
+ * only for a record long enough to need it.
+ */
+export const splitFields = (
+  props: Pick<WidgetRenderProps, "columns" | "detailFields">,
+  names: readonly string[],
+  titleColumn: string | undefined,
+): { keys: readonly string[]; more: readonly string[] } => {
+  if (props.detailFields && props.detailFields.length > 0) {
+    const more = props.detailFields.filter((name) => !names.includes(name));
+    return { keys: names, more };
+  }
+  if (names.length <= SPLIT_ABOVE) return { keys: names, more: [] };
+  const meta = new Map(props.columns.map((column) => [column.name, column]));
+  const keys = rankKeyFields(
+    names.map((name) => ({
+      key: name,
+      semantic: meta.get(name)?.semantic,
+      valueType: meta.get(name)?.valueType,
+    })),
+    titleColumn ? { title: [titleColumn] } : {},
+  );
+  // Page order, not rank order: the record reads top to bottom as the type lays it out.
+  const ordered = names.filter((name) => keys.includes(name));
+  return { keys: ordered, more: names.filter((name) => !keys.includes(name)) };
 };
 
 interface Section {

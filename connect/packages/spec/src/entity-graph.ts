@@ -927,6 +927,8 @@ export const entityPageView = (
     }
   }
 
+  /* Key fields somebody chose for this record type, over what the describing pass marked. */
+  const chosenKeys = entity.views.record.keys ? new Set(entity.views.record.keys) : undefined;
   const fields: EntityPageField[] = kept
     // A reference recorded against the object rather than the id inside it is
     // kept regardless: it carries the link, which no leaf of it does.
@@ -936,7 +938,9 @@ export const entityPageView = (
       label: bundleLabel(field.path) ?? field.label ?? humanLabel(field.path),
       ...(field.description ? { description: field.description } : {}),
       ...(field.group ? { group: field.group } : {}),
-      visibility: field.visibility === "primary" ? ("primary" as const) : ("detail" as const),
+      visibility: (chosenKeys ? chosenKeys.has(field.path) : field.visibility === "primary")
+        ? ("primary" as const)
+        : ("detail" as const),
       ...(field.semantic ? { semantic: field.semantic } : {}),
       ...(() => {
         const reading = fieldReading(field);
