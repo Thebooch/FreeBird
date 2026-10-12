@@ -78,6 +78,7 @@ export const AGENT_TOOL_KINDS = [
   "schedule_appointment",
   "schedule_follow_up",
   "run_workflow",
+  "search_mail",
   "highlight",
 ] as const;
 export const agentToolKindSchema = z.enum(AGENT_TOOL_KINDS);
@@ -105,6 +106,8 @@ export const AGENT_TOOL_INFO: Readonly<Record<AgentToolKind, AgentToolKindInfo>>
   schedule_appointment: { kind: "schedule_appointment", label: "Schedule an appointment", does: "schedule an appointment", scoped: false, defaultMode: "approve" },
   schedule_follow_up: { kind: "schedule_follow_up", label: "Schedule a follow-up", does: "schedule a follow-up with the person", scoped: false, defaultMode: "auto" },
   run_workflow: { kind: "run_workflow", label: "Run a workflow", does: "start a workflow", scoped: false, defaultMode: "approve" },
+  /* Reading only: the mailboxes it may read (its own, and team ones its reach reads), through each provider's own search. */
+  search_mail: { kind: "search_mail", label: "Search mail", does: "search the email it can read for earlier messages", scoped: false, defaultMode: "auto" },
   /*
    * Not something the agent decides to do: every message received is checked
    * against every active highlight, and a match notifies the team. It has no

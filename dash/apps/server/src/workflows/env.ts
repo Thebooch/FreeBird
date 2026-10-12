@@ -1,7 +1,7 @@
 import type { CommitResult, WriteIntent, WriteReview } from "@freebirdai/connect";
 import type { RecordReader, WriteOnBehalfOf, WriteVia } from "@freebirdai/connect/host";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
-import type { ActionModelTask, AgentSpec, Booking, BookingEvent, Contact, MailDraft, Principal, ReportSend, SharedAgentKnowledge } from "@freebirdai/dash-spec";
+import type { ActionModelTask, AgentSpec, Booking, BookingEvent, Contact, MailDraft, MailMessage, Principal, ReportSend, SharedAgentKnowledge } from "@freebirdai/dash-spec";
 import type { BookingLinks } from "../bookings/links.js";
 import type { BookingService } from "../bookings/service.js";
 import type { Policy } from "../identity/policy.js";
@@ -90,6 +90,8 @@ export interface WorkflowEnv {
    */
   readonly comms?: {
     conversation(mailbox: string, message: string, threadId?: string): Promise<{ readonly text: string }>;
+    /** An agent's Search mail tool: the mailboxes it may read, newest first. */
+    search?(agent: string, query: string): Promise<readonly MailMessage[]>;
     draft(input: { readonly mailbox: string; readonly replyTo: string; readonly threadId?: string; readonly text: string; readonly agent: string; readonly workflow: string; readonly task: string }): Promise<MailDraft>;
     send(principal: Principal, draft: string): Promise<MailDraft>;
   };

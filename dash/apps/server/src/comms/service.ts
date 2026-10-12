@@ -611,6 +611,28 @@ export class CommsService {
     return { messages, problems };
   }
 
+  /**
+   * An agent's own search (`search_mail`): every mailbox it may read — its
+   * own, and team ones its reach reads — searched by each provider's own
+   * index with the same query syntax a person uses. Newest first.
+   */
+  async searchAs(agentId: string, text: string, limit = 10): Promise<readonly MailMessage[]> {
+    const agent = await this.deps.agents.get(agentId);
+    if (!agent || agent.archived) return [];
+    const query = parseMailQuery(text);
+    if (isEmptyMailQuery(query)) return [];
+    const found: MailMessage[] = [];
+    for (const connection of this.mailboxConnections()) {
+      if (this.statusOf(connection) !== "ready") continue;
+      const owner = connection.mailbox?.owner;
+      const mayRead = owner?.kind === "agent" ? owner.id === agent.id : reachCovers(agent.reach, "records.read", { connection: connection.id });
+      if (!mayRead) continue;
+      const page = await this.provider(connection).search(query, undefined, limit).catch(() => ({ messages: [] as MailMessage[] }));
+      found.push(...page.messages);
+    }
+    return found.sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit);
+  }
+
   /* ── drafts and sending ───────────────────────────────────────────── */
 
   /** A reply's addresses and headers, from the message it answers. */

@@ -1063,6 +1063,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     bookings: () => bookingsForWorkflows,
     comms: {
       conversation: (mailbox, message, threadId) => commsNeeded().conversationText(mailbox, message, threadId),
+      search: (agent, query) => commsNeeded().searchAs(agent, query),
       draft: (input) => commsNeeded().draft(input),
       send: (principal, draft) => commsNeeded().sendNow(principal, draft),
     },

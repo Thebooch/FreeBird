@@ -472,3 +472,34 @@ describe("Contacts, the rest", () => {
     await app.close();
   });
 });
+
+describe("An agent's Search mail tool", () => {
+  it("searches the mail the agent can read before it writes its reply", async () => {
+    const llm = fakeLlm([{ args: { query: "from:kim@example.net" } }, { text: "Hi Ivy, pets are welcome." }]);
+    const app = makeApp(llm);
+    await setUp(app);
+    await app.inject({ method: "PUT", url: "/api/agents/leasing", payload: { name: "Leasing", color: 3, tools: [{ id: "search", kind: "search_mail", mode: "auto" }] } });
+    signIn("outlook");
+    await app.inject({ method: "GET", url: "/api/comms?area=agent:leasing" });
+    await app.inject({
+      method: "PUT",
+      url: "/api/workflows/new",
+      payload: {
+        name: "Answer leasing mail",
+        enabled: true,
+        trigger: { kind: "message_received", channels: ["email"], mailboxes: ["outlook"] },
+        nodes: [{ id: "reply", action: "outreach.reply", mode: "auto", settings: { agentId: "leasing", send: "approval", timeout: "3d" } }],
+        edges: [{ id: "a", from: "trigger", to: "reply" }],
+      },
+    });
+    mail.outlook.push({ id: "o8", threadId: "ot8", from: "Ivy <ivy@example.net>", to: "agent@example.org", subject: "Pets", snippet: "Are pets allowed", at: at(60) });
+    await app.inject({ method: "POST", url: "/api/comms/mailboxes/outlook/refresh" });
+    expect(llm.calls[0]?.toolNames).toEqual(["search_mail"]);
+    expect(mail.requests.some((one) => decodeURIComponent(one.url).includes("$search"))).toBe(true);
+    const sawResults = llm.calls[1]?.messages.some((one) => typeof one.content === "string" && one.content.includes("Search results"));
+    expect(sawResults).toBe(true);
+    const drafts = (await app.inject({ method: "GET", url: "/api/comms/drafts" })).json() as { text: string }[];
+    expect(drafts[0]?.text).toBe("Hi Ivy, pets are welcome.");
+    await app.close();
+  });
+});
