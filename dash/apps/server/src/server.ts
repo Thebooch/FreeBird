@@ -1399,6 +1399,30 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     commsRoutes({
       comms,
       contactAddresses: async (id) => (await contacts.get(id))?.emails ?? null,
+      /* Fields set to fill from email, read from the newest 100 of each mailbox: for a field just added. */
+      backfillFields: async (principal) => {
+        const extractor = resolveLlm("extract");
+        if (!extractor) throw new CommsError("No AI model is set up, so email cannot be read for contact fields.", 409);
+        const defs = (await contacts.setup()).fields;
+        let read = 0;
+        let filled = 0;
+        for (const mailbox of await comms.mailboxes(principal)) {
+          if (mailbox.status !== "ready") continue;
+          for (const message of await commsStore.recent(mailbox.id)) {
+            if (message.sent || !message.from) continue;
+            const contact = await contacts.byEmail(message.from.address);
+            const toFill = contact ? fieldsToFill(defs, contact) : [];
+            if (!contact || toFill.length === 0) continue;
+            read++;
+            const words = (await comms.conversationText(message.mailbox, message.id, message.threadId).catch(() => ({ text: message.snippet }))).text.split("\n\n---\n\n").at(-1) ?? message.snippet;
+            const found = await extractFields(extractor, toFill, `Subject: ${message.subject}\n\n${words}`).catch(() => ({}));
+            for (const [key, value] of Object.entries(found)) {
+              await contacts.record(contact.id, key, value, "person").then(() => filled++, () => undefined);
+            }
+          }
+        }
+        return { read, filled };
+      },
       contactCard: async (email) => {
         const contact = await contacts.byEmail(email);
         if (!contact) return null;

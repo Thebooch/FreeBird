@@ -1526,6 +1526,8 @@ export const api = {
   sendDraft: (id: string, review: Pick<WriteReviewView, "pendingId" | "digest">, save = false): Promise<MailDraft> =>
     request(`/api/comms/drafts/${encodeURIComponent(id)}/send`, json({ pendingId: review.pendingId, digest: review.digest, ...(save ? { save: true } : {}) })),
   discardDraft: (id: string): Promise<MailDraft> => request(`/api/comms/drafts/${encodeURIComponent(id)}/discard`, json({})),
+  /** Read the newest 100 of each mailbox for the contact fields set to fill from email. */
+  backfillContactFields: (): Promise<{ read: number; filled: number }> => request("/api/comms/backfill-fields", json({})),
   commsSettings: (): Promise<CommsSettings> => request("/api/comms/settings"),
   putCommsSettings: (settings: CommsSettings): Promise<CommsSettings> => request("/api/comms/settings", { ...json(settings), method: "PUT" }),
 

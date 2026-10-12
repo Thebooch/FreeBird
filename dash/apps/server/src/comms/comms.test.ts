@@ -402,6 +402,21 @@ describe("Calendar sync", () => {
   });
 });
 
+describe("Contact fields from earlier email", () => {
+  it("reads what each mailbox kept for a field just set to fill from email", async () => {
+    const app = makeApp(fakeLlm([{ args: { unit: "4B" } }]));
+    await setUp(app);
+    signIn("gmail");
+    await app.inject({ method: "GET", url: "/api/comms?area=team" });
+    await app.inject({ method: "PUT", url: "/api/contacts/fields/unit", payload: { label: "Unit", kind: "text", fromEmail: { enabled: true, look: "Which unit they live in" } } });
+    const done = (await app.inject({ method: "POST", url: "/api/comms/backfill-fields" })).json() as { read: number; filled: number };
+    expect(done).toEqual({ read: 1, filled: 1 });
+    const contacts = (await app.inject({ method: "GET", url: "/api/contacts" })).json() as { contacts: { emails: string[]; fields: Record<string, { person?: { value: unknown } }> }[] };
+    expect(contacts.contacts.find((one) => one.emails.includes("pat@example.com"))?.fields["unit"]?.person?.value).toBe("4B");
+    await app.close();
+  });
+});
+
 describe("Contacts, the rest", () => {
   it("merges two contacts into one, and the old id still finds it", async () => {
     const app = makeApp();

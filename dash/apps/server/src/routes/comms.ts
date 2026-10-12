@@ -28,6 +28,8 @@ export const commsRoutes = (deps: {
   readonly comms: CommsService;
   /** A contact's addresses, by id; null when there is no such contact. */
   readonly contactAddresses?: (id: string) => Promise<readonly string[] | null>;
+  /** Read the newest 100 of each mailbox for the contact fields set to fill from email. */
+  readonly backfillFields?: (principal: Principal) => Promise<{ readonly read: number; readonly filled: number }>;
   /** The contact with this email, for the card beside a conversation. */
   readonly contactCard?: (email: string) => Promise<ContactCard | null>;
 }) =>
@@ -187,6 +189,13 @@ export const commsRoutes = (deps: {
       }),
     );
 
+    app.post(
+      "/api/comms/backfill-fields",
+      handled(async (principal) => {
+        if (!deps.backfillFields) throw new CommsError("Contacts are not set up on this server.", 501);
+        return deps.backfillFields(principal);
+      }),
+    );
     app.get("/api/comms/settings", handled(async () => comms.settings()));
     app.put(
       "/api/comms/settings",

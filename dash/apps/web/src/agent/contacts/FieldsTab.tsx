@@ -299,6 +299,7 @@ const FieldSheet = ({
             )}
           </FormRow>
         )}
+        {def?.fromEmail?.enabled && <BackfillButton />}
       </SheetSection>
 
       <SheetSection title="Asking" description="Whether the booking page and agents may ask the person for it. Leave it off for anything they could answer to their own advantage.">
@@ -447,6 +448,38 @@ const SourceEditor = ({
 };
 
 /* ── a match rule ──────────────────────────────────────────────────────── */
+
+/** The newest 100 of each mailbox, read once for every field set to fill from email: for a field just added. */
+const BackfillButton = (): JSX.Element => {
+  const [busy, setBusy] = useState(false);
+  const [said, setSaid] = useState<string | null>(null);
+  return (
+    <FormRow label="Earlier email" hint="New email is read as it arrives. This reads what each mailbox already kept (its newest 100) for the fields still empty.">
+      {() => (
+        <span className="dash-sched-panel__actions">
+          <Button
+            busy={busy}
+            testId="field-backfill"
+            onClick={() => {
+              setBusy(true);
+              setSaid(null);
+              void api
+                .backfillContactFields()
+                .then(
+                  (done) => setSaid(`Read ${done.read} email${done.read === 1 ? "" : "s"}; filled ${done.filled} value${done.filled === 1 ? "" : "s"}.`),
+                  (error: unknown) => setSaid(error instanceof Error ? error.message : String(error)),
+                )
+                .finally(() => setBusy(false));
+            }}
+          >
+            Read the newest 100 now
+          </Button>
+          {said && <span className="dash-hint">{said}</span>}
+        </span>
+      )}
+    </FormRow>
+  );
+};
 
 /** Try the rules once on every contact not yet linked: after adding or changing one. */
 const MatchAllButton = (): JSX.Element => {
