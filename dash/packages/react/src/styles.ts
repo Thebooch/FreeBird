@@ -379,12 +379,12 @@ export const DASH_REACT_STYLES = `
   padding-right: 18px; border-right: 1px solid var(--nav-line);
   /* The switch lives inside this segment, beside the name. */
 }
-.dash-nav__mark {
-  width: 20px; height: 20px; border-radius: var(--dash-radius-xs); flex: none;
-  /* Mint to deep teal: the full brand ramp in one 20px tile, which is the only
-     place both ends of it appear together. */
-  background: linear-gradient(140deg, #3fb5ad, var(--dash-accent));
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.10), 0 2px 6px rgba(0, 0, 0, 0.4);
+.dash-nav__mark { height: 30px; width: auto; flex: none; display: block; }
+/* Michroma: ultra-wide, microgramma-style. It is wide, so the size and tracking
+   come down from the sans the rest of the bar uses. */
+.dash-nav__name {
+  font-family: "Michroma", var(--dash-font-sans, system-ui), sans-serif;
+  font-size: 13px; font-weight: 400; letter-spacing: 0.02em;
 }
 
 /* The Agent | Tabs switch: two segments in one ring, the active one lit. */

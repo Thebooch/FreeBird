@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ModelPicker } from "./ModelPicker.jsx";
+import logo from "./assets/freebird-logo.png";
 import { barFor, barOf, barsOf, stepBar } from "./tabBars.js";
 
 /**
@@ -251,8 +252,8 @@ export const TopNav = ({
   return (
     <header className="dash-nav">
       <span className="dash-nav__brand">
-        <span className="dash-nav__mark" aria-hidden="true" />
-        FreeBird
+        <img className="dash-nav__mark" src={logo} alt="" aria-hidden="true" />
+        <span className="dash-nav__name">FreeBird</span>
         {onModeChange && (
           <span className="dash-nav__switch" role="group" aria-label="Switch between Dash, Comms and the agent">
             {MODES.map((one) => (
