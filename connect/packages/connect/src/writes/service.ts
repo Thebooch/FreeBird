@@ -28,6 +28,7 @@ import type { ConnectionRepository } from "../connections.js";
 import type { SecretRepository } from "../vault.js";
 import type { WriteActor, WritePermission, WritePolicy } from "./policy.js";
 import { buildBody, currentValue, labelOf, settable, type FieldError } from "./body.js";
+import { encodeMimeBody } from "./mime.js";
 import type { WriteEvent, WriteJournal, WriteOnBehalfOf, WriteReversal, WriteVia } from "./journal.js";
 import { PENDING_TTL_MS, PendingWrites, type PendingWrite, type WriteIntent, type WriteReview } from "./pending.js";
 
@@ -497,10 +498,12 @@ export class WriteService {
 
     const now = this.now();
     const id = this.pending.newId();
+    /* An email is reviewed as its fields and sent as one encoded message: the digest covers what is sent. */
+    const sentBody = target.mime ? encodeMimeBody(built.body, target.mime) : built.body;
     const request = {
       method: target.method,
       path: target.path.replace(/\{\{\s*param\.([A-Za-z0-9_]+)[^}]*\}\}/g, (_token, name: string) => params[name] ?? ""),
-      body: built.body ?? null,
+      body: sentBody ?? null,
     };
     const requestDigest = digest({ id, request, beforeDigest });
     const review: WriteReview = {
@@ -533,7 +536,7 @@ export class WriteService {
       ...(options.onBehalfOf ? { onBehalfOf: options.onBehalfOf } : {}),
       target,
       params,
-      body: built.body,
+      body: sentBody,
       before,
       beforeDigest,
       effectiveMode,

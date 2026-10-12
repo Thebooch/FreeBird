@@ -10,6 +10,7 @@ import { DASH_REPORTS_STYLES } from "./styles-reports.js";
 import { DASH_CONTACTS_STYLES } from "./styles-contacts.js";
 import { DASH_CHAT_CARD_STYLES } from "./styles-chat-cards.js";
 import { DASH_SCHEDULING_STYLES } from "./styles-scheduling.js";
+import { DASH_COMMS_STYLES } from "./styles-comms.js";
 
 export const DASH_REACT_STYLES = `
 .dash-page { background: var(--dash-plane); min-height: 100%; padding: 16px; }
@@ -2144,4 +2145,4 @@ export const DASH_REACT_STYLES = `
 @media (max-width: 760px) {
   .dash-agents { grid-template-columns: minmax(0, 1fr); }
 }
-` + DASH_CALENDAR_STYLES + DASH_SCHEDULING_STYLES + DASH_CONTACTS_STYLES + DASH_REPORTS_STYLES;
+` + DASH_CALENDAR_STYLES + DASH_SCHEDULING_STYLES + DASH_CONTACTS_STYLES + DASH_REPORTS_STYLES + DASH_COMMS_STYLES;

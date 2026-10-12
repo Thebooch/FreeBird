@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -33,8 +33,10 @@ import type {
   TimeRange,
   WidgetBrief,
 } from "@freebirdai/dash-spec";
+import { fieldValueOf, type Contact, type MailDraft, type WorkflowSpec as MailWorkflow } from "@freebirdai/dash-spec";
 import {
   readField,
+  authTokenRefs,
   connectionKeyRefs,
   connectionNeedsAuthSetup,
   dashboardSchema,
@@ -57,6 +59,7 @@ import {
   BlockedUrlError,
   buildQueryRequest,
   CatalogStore,
+  connectionFromCatalog,
   createEngine,
   createRecordReader,
   describeFields,
@@ -143,6 +146,16 @@ import { calendarRoutes } from "./routes/calendar.js";
 import { CalendarService } from "./calendar/service.js";
 import type { EmailAdapter } from "@freebirdai/core";
 import { reportRoutes } from "./routes/reports.js";
+import { commsRoutes } from "./routes/comms.js";
+import { CommsError, CommsService } from "./comms/service.js";
+import { emailHighlightNotifier, emailTeamNotifier } from "./comms/notify.js";
+import { extractFields, fieldsToFill } from "./comms/extract.js";
+import { emailTimeline } from "./comms/timeline.js";
+import { activeHighlights, checkHighlights } from "./agents/highlights.js";
+
+/** How often each signed-in mailbox is read with nobody looking, so new mail starts its workflows. */
+const COMMS_EVERY_MS = 5 * 60_000;
+import { MemoryCommsStore, type CommsStore } from "./comms/store.js";
 import { ReportService } from "./reports/service.js";
 import { MemoryReportStore, type ReportStore } from "./reports/store.js";
 import { trackedReader, widgetReader } from "./reports/read.js";
@@ -159,14 +172,14 @@ import { BOOKING_RECIPES } from "./workflows/recipes.js";
 import { MemoryBookingStore, type BookingStore } from "./bookings/store.js";
 import { BookingLinks } from "./bookings/links.js";
 import { replyWithScheduling } from "./scheduling/conversation.js";
-import { brandOf, notConnectedNotifier, type Brand, type TeamNotifier } from "./bookings/notify.js";
+import { brandOf, type Brand, type TeamNotifier } from "./bookings/notify.js";
 import { MemoryRateLimiter, type RateLimiter } from "./public/limits.js";
 import { MemoryPublicTokenStore, type PublicTokenStore } from "./public/tokens.js";
 import { MemoryContactStore, type ContactStore } from "./contacts/store.js";
 import { SchedulingService, type WorkspaceMember } from "./scheduling/service.js";
 import { MemorySchedulingStore, type SchedulingStore } from "./scheduling/store.js";
 import { explainDraft } from "./workflows/draft.js";
-import { WorkflowEngine } from "./workflows/engine.js";
+import { CaseBusy, WorkflowEngine } from "./workflows/engine.js";
 import { WorkflowRunner } from "./workflows/runner.js";
 import { WorkflowService } from "./workflows/service.js";
 import { startFromAgentTool, type Starter } from "./workflows/start.js";
@@ -179,6 +192,7 @@ import {
   MemoryTaskStore,
   MemoryTemplateStore,
   MemoryWorkflowStore,
+  RevisionConflict,
   type CalendarStore,
   type CaseStore,
   type SignalStore,
@@ -420,6 +434,10 @@ export interface BuildServerOptions {
   readonly snapshots?: SnapshotStore;
   /** Timed reports, the values they track, and the log of what was sent (`reports/`). Memory unless supplied. */
   readonly reports?: ReportStore;
+  /** What Communications keeps: the newest 100 per mailbox (sealed), drafts, what agents did (`comms/store.ts`). Memory unless supplied. */
+  readonly comms?: CommsStore;
+  /** OAuth apps this server already has for Gmail and Outlook, so people only sign in (`DASH_GOOGLE_CLIENT_ID`, `DASH_MICROSOFT_CLIENT_ID` and their secrets). */
+  readonly mailApps?: Partial<Record<"gmail" | "outlook", { readonly clientId: string; readonly clientSecret: string }>>;
   /**
    * What sends reports. Absent: reports can be made and previewed but not
    * sent, and `emailProblem` (or a default) says why.
@@ -1036,8 +1054,20 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   let bookingDispatcher: BookingDispatcher | undefined;
   /* Set once reports exist, below; Send a report reaches it only when it runs. */
   let reportsForWorkflows: ReportService | undefined;
+  /* Set once Communications exists, below; Reply to the email reaches it only when it runs. */
+  let commsForWorkflows: CommsService | undefined;
+  const commsNeeded = (): CommsService => {
+    if (!commsForWorkflows) throw new Error("Email isn't set up on this server.");
+    return commsForWorkflows;
+  };
   const workflowEnv: WorkflowEnv = {
     bookings: () => bookingsForWorkflows,
+    comms: {
+      conversation: (mailbox, message, threadId) => commsNeeded().conversationText(mailbox, message, threadId),
+      search: (agent, query) => commsNeeded().searchAs(agent, query),
+      draft: (input) => commsNeeded().draft(input),
+      send: (principal, draft) => commsNeeded().sendNow(principal, draft),
+    },
     reports: {
       send: async (id, key) => {
         if (!reportsForWorkflows) throw new Error("Reports aren't set up on this server.");
@@ -1052,7 +1082,25 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     templates: options.templates ?? new MemoryTemplateStore(),
     signals: options.signals ?? new MemorySignalStore(),
     agents: agentStore,
-    ...(options.outreach ? { outreach: options.outreach } : {}),
+    /*
+     * Outreach: a host's own sender where it gives one; otherwise email goes
+     * out from the agent's mailbox through Comms (its own, or a team one it
+     * may send from), and texts and calls wait for step 9.
+     */
+    outreach: options.outreach ?? {
+      send: async (message) => {
+        if (message.channel !== "email") return { status: "not_sent", detail: "Texts and calls are not connected yet, so nothing was sent." };
+        if (!commsForWorkflows) return { status: "not_sent", detail: "Email isn't set up on this server." };
+        if (!message.actor) return { status: "not_sent", detail: "The workflow runs as nobody, so it cannot send email: turn it on again." };
+        try {
+          const sent = await commsForWorkflows.sendNew(message.actor, { agent: message.agent.id, to: message.to, ...(message.subject ? { subject: message.subject } : {}), text: message.text, key: message.key });
+          return { status: "sent", conversation: sent.id };
+        } catch (error) {
+          if (error instanceof CommsError) return { status: "not_sent", detail: error.message };
+          throw error;
+        }
+      },
+    },
     /* A webhook goes through the same guard as every other request to an address someone typed. */
     post: async (url, body, how) => {
       const headers: Record<string, string> = { "content-type": "application/json", ...(how?.key ? { "idempotency-key": how.key } : {}) };
@@ -1147,8 +1195,38 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     return entities.find((one) => one.id === record) ?? entities.find((one) => one.name.one.toLowerCase() === wanted || one.name.many.toLowerCase() === wanted);
   };
   const bookingStore = options.bookings ?? new MemoryBookingStore();
-  const contacts = new ContactService({
+  /** A contact as a workflow step reads it: who they are, their types, and each field's strongest value. */
+  const contactRowOf = async (contact: Contact): Promise<Record<string, unknown>> => ({
+    ...Object.fromEntries(Object.entries(contact.fields).flatMap(([key, field]) => {
+      const best = fieldValueOf(field);
+      return best ? [[key, best.value]] : [];
+    })),
+    id: contact.id,
+    name: contact.name || contact.emails[0] || "",
+    email: contact.emails[0] ?? "",
+    phone: contact.phones[0] ?? "",
+    emails: contact.emails,
+    phones: contact.phones,
+    types: await contacts.typesOf(contact),
+  });
+  const contacts: ContactService = new ContactService({
     store: options.contacts ?? new MemoryContactStore(),
+    wantsCreated: async () => (await workflowStore.list()).some((one) => one.trigger.kind === "contact_created" && one.enabled && !one.parked),
+    /* Someone new, matched once: "When someone new becomes a contact" workflows open a case each, once. */
+    created: async (contact) => {
+      const listening = (await workflowStore.list()).filter((one) => one.trigger.kind === "contact_created" && one.enabled && !one.parked);
+      if (listening.length === 0) return;
+      const row = { ...(await contactRowOf(contact)), contact: await contactRowOf(contact) };
+      for (const workflow of listening) {
+        const id = `cc-${createHash("sha1").update(`${workflow.id}:${contact.id}`).digest("hex").slice(0, 16)}`;
+        try {
+          await workflowEngine.create(workflow, { id, row, rowKey: contact.id, start: { kind: "contact" } });
+          await workflowEngine.advance(id);
+        } catch (error) {
+          if (!(error instanceof CaseBusy) && !(error instanceof RevisionConflict)) app.log.warn(`"${workflow.name}" did not start for a new contact: ${String(error)}`);
+        }
+      }
+    },
     reads: {
       read: async (as, target, fresh) => {
         const may = await policy.can(as, "records.read", { connection: target.connection });
@@ -1192,7 +1270,178 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     }
     return out;
   };
-  void app.register(contactRoutes({ contacts, policy, sources: contactSources }));
+  void app.register(contactRoutes({ contacts, policy, sources: contactSources, merged: async (from, to) => void (await bookings.moveContact(from, to)) }));
+
+  /*
+   * Communications (`comms/`): mailboxes are connections, read through the
+   * engine at the interactive priority a person looking deserves, and sent
+   * only through the write service's review, as whoever clicks Send.
+   */
+  /* What Communications keeps (`comms/store.ts`); made here so team notices can claim their sends. */
+  const commsStore = options.comms ?? new MemoryCommsStore();
+  /* Team notices and highlights by email, through the system mail reports use, to each member or the notices address. */
+  const noticeDeps = {
+    email: () => options.email ?? null,
+    ...(options.emailProblem ? { emailProblem: options.emailProblem } : {}),
+    settings: () => commsStore.settings(),
+    claim: (key: string, at: string) => commsStore.claimNotice(key, at),
+    release: (key: string) => commsStore.releaseNotice(key),
+    team: async () => (await workspaceMembers()).map((one) => ({ email: one.email })),
+    now: () => Date.now(),
+  };
+  const highlightNotifier = emailHighlightNotifier(noticeDeps);
+  let commsDraftSettled: (draft: MailDraft) => Promise<void> = async () => {};
+  const comms = new CommsService({
+    connections: {
+      list: () => store.listConnections(),
+      get: (id) => store.getConnection(id),
+      put: (spec) => {
+        store.putConnection(spec);
+        registry.addConnection(spec);
+      },
+      fromCatalog: (entry, id) => connectionFromCatalog(entry, { id }),
+      saved: (spec) => registry.addConnection(spec),
+      remove: async (id) => {
+        const connection = store.getConnection(id);
+        if (!connection) return;
+        for (const ref of [...connectionKeyRefs(connection), ...authTokenRefs(connection.auth)]) keys.delete(ref);
+        await broker.forget(connection).catch(() => undefined);
+        queries.invalidate(id);
+        store.deleteConnection(id);
+      },
+    },
+    catalog: { get: (id) => options.catalog?.get(id) ?? null },
+    keys,
+    read: (connection, request) => workflowEnv.read(connection, request, Priority.Interactive),
+    writes: {
+      prepare: (principal, intent, how) => writes.prepare(principal, intent, how),
+      commit: (principal, pendingId, digest) => writes.commit(principal, pendingId, digest),
+    },
+    policy,
+    agents: agentStore,
+    store: commsStore,
+    ...(options.mailApps ? { builtInApps: options.mailApps } : {}),
+    contacts: { findOrCreate: (input) => contacts.findOrCreate(input), settle: (id) => contacts.settle(id) },
+    draftSettled: (draft) => commsDraftSettled(draft),
+    /* A member's appointments, which go into their mailbox calendar when it is set to. */
+    appointments: {
+      list: (member, from, to) =>
+        workflowEnv.calendar.list({ from: new Date(from).toISOString(), to: new Date(to).toISOString(), owners: [`member:${member}`], kinds: ["appointment"], limit: 5000 }),
+      get: (id) => workflowEnv.calendar.get(id),
+    },
+    /* Somebody answered an email an agent started: a Wait for a reply on that conversation hears it. */
+    replyHeard: async (draft, message) => {
+      await workflowEngine.emit(`reply:${draft.id}`, { from: message.from?.address ?? "", subject: message.subject, text: message.snippet, message: message.id }, `reply:${draft.id}:${message.id}`);
+    },
+    received: async (arrived) => {
+      const listening = (await workflowStore.list()).filter(
+        (one): one is MailWorkflow & { trigger: Extract<MailWorkflow["trigger"], { kind: "message_received" }> } =>
+          one.trigger.kind === "message_received" && one.enabled && !one.parked && one.trigger.channels.includes("email"),
+      );
+      const fieldDefs = (await contacts.setup()).fields;
+      for (const arrival of arrived) {
+        const { message } = arrival;
+        let contact = arrival.contact;
+        /* Fields set to fill from email, still empty on this contact: read once from this email, before any workflow sees the contact. */
+        const toFill = contact ? fieldsToFill(fieldDefs, contact) : [];
+        const extractor = toFill.length > 0 ? resolveLlm("extract") : null;
+        if (contact && extractor) {
+          try {
+            const words = (await comms.conversationText(message.mailbox, message.id, message.threadId)).text.split("\n\n---\n\n").at(-1) ?? message.snippet;
+            const found = await extractFields(extractor, toFill, `Subject: ${message.subject}\n\n${words}`);
+            for (const [key, value] of Object.entries(found)) await contacts.record(contact.id, key, value, "person").catch(() => undefined);
+            if (Object.keys(found).length > 0) contact = (await contacts.get(contact.id)) ?? contact;
+          } catch (error) {
+            app.log.warn(`contact fields were not read from a new email: ${String(error)}`);
+          }
+        }
+        /* An agent's own mailbox: the message is checked against that agent's highlights, and a match tells the team. */
+        const owner = store.getConnection(message.mailbox)?.mailbox?.owner;
+        if (owner?.kind === "agent") {
+          const agent = await agentStore.get(owner.id);
+          const llm = agent && activeHighlights(agent).length > 0 ? resolveLlm("agent-tools") : null;
+          if (agent && llm) {
+            try {
+              const words = `Subject: ${message.subject}\n\n${(await comms.conversationText(message.mailbox, message.id, message.threadId).catch(() => ({ text: message.snippet }))).text}`;
+              const matches = await checkHighlights(llm, agent, words);
+              if (matches.length > 0) await highlightNotifier.notify({ agent: { id: agent.id, name: agent.name, color: agent.color }, matches, conversation: `${message.mailbox}:${message.id}`, message: words });
+            } catch (error) {
+              app.log.warn(`highlights for a new email were not checked: ${String(error)}`);
+            }
+          }
+        }
+        const row: Record<string, unknown> = {
+          ...message,
+          channel: "email",
+          ...(contact ? { contact: await contactRowOf(contact) } : {}),
+        };
+        for (const workflow of listening) {
+          if (workflow.trigger.mailboxes.length > 0 && !workflow.trigger.mailboxes.includes(message.mailbox)) continue;
+          /* Made from the workflow and the message, so a message read twice opens one case. */
+          const id = `mr-${createHash("sha1").update(`${workflow.id}:${message.mailbox}:${message.id}`).digest("hex").slice(0, 16)}`;
+          try {
+            await workflowEngine.create(workflow, { id, row, rowKey: `${message.mailbox}:${message.id}`, start: { kind: "message", message: `${message.mailbox}:${message.id}` } });
+            await workflowEngine.advance(id);
+          } catch (error) {
+            if (!(error instanceof CaseBusy) && !(error instanceof RevisionConflict)) app.log.warn(`"${workflow.name}" did not start for a new email: ${String(error)}`);
+          }
+        }
+      }
+    },
+    now: () => Date.now(),
+    newId: () => randomUUID(),
+    log: { warn: (line) => app.log.warn(line) },
+  });
+  commsForWorkflows = comms;
+  /* A draft a Reply step wrote was sent, saved or discarded: its case goes on down that way. */
+  commsDraftSettled = async (draft) => {
+    if (!draft.task) return;
+    await workflowEngine.emit(`draft:${draft.id}`, { status: draft.status, ...(draft.sentBy ? { by: draft.sentBy } : {}) }, `draft:${draft.id}:${draft.status}`);
+  };
+  void app.register(
+    commsRoutes({
+      comms,
+      contactAddresses: async (id) => (await contacts.get(id))?.emails ?? null,
+      /* Fields set to fill from email, read from the newest 100 of each mailbox: for a field just added. */
+      backfillFields: async (principal) => {
+        const extractor = resolveLlm("extract");
+        if (!extractor) throw new CommsError("No AI model is set up, so email cannot be read for contact fields.", 409);
+        const defs = (await contacts.setup()).fields;
+        let read = 0;
+        let filled = 0;
+        for (const mailbox of await comms.mailboxes(principal)) {
+          if (mailbox.status !== "ready") continue;
+          for (const message of await commsStore.recent(mailbox.id)) {
+            if (message.sent || !message.from) continue;
+            const contact = await contacts.byEmail(message.from.address);
+            const toFill = contact ? fieldsToFill(defs, contact) : [];
+            if (!contact || toFill.length === 0) continue;
+            read++;
+            const words = (await comms.conversationText(message.mailbox, message.id, message.threadId).catch(() => ({ text: message.snippet }))).text.split("\n\n---\n\n").at(-1) ?? message.snippet;
+            const found = await extractFields(extractor, toFill, `Subject: ${message.subject}\n\n${words}`).catch(() => ({}));
+            for (const [key, value] of Object.entries(found)) {
+              await contacts.record(contact.id, key, value, "person").then(() => filled++, () => undefined);
+            }
+          }
+        }
+        return { read, filled };
+      },
+      contactCard: async (email) => {
+        const contact = await contacts.byEmail(email);
+        if (!contact) return null;
+        const defs = (await contacts.setup()).fields;
+        return {
+          id: contact.id,
+          name: contact.name || contact.emails[0] || "",
+          types: await contacts.typesOf(contact),
+          fields: defs.flatMap((def) => {
+            const best = fieldValueOf(contact.fields[def.key]);
+            return best && best.value !== null && best.value !== undefined && best.value !== "" ? [{ label: def.label, value: typeof best.value === "object" ? JSON.stringify(best.value) : String(best.value) }] : [];
+          }),
+        };
+      },
+    }),
+  );
   /* Who is in the workspace: hosts, and who may answer an approval. Without sign-in, the one person this server answers to. */
   const workspaceMembers = options.members ?? (async () => [{ userId: LOCAL_USER_ID, email: "", role: "owner" as const }]);
   /* Scheduling: who can be booked, on what terms (`scheduling/`). */
@@ -1203,6 +1452,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     factKinds: () => contacts.factKinds(),
     contacts,
     bookings: bookingsAsBusy(bookingStore),
+    /* A member's own Google or Outlook calendar, where a mailbox's is theirs: its busy times are kept free. */
+    external: (member, from, to) => comms.busy(member, from, to),
     now: () => Date.now(),
   });
   /* Bookings (`bookings/`): the only code that changes one; the calendar mirrors each. */
@@ -1228,7 +1479,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     scheduling,
     contacts,
     members: workspaceMembers,
-    notifier: options.notifier ?? notConnectedNotifier,
+    notifier: options.notifier ?? emailTeamNotifier(noticeDeps),
     brand,
     workspace: options.workspace?.id ?? LOCAL_WORKSPACE_ID,
     origin: (options.pagesOrigin ?? options.publicOrigin ?? "http://localhost:5400").replace(/\/+$/, ""),
@@ -1322,6 +1573,10 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       { name: "booking holds", run: () => bookings.settleDue() },
       { name: "reports", run: () => reportService.runDue() },
       { name: "tracked values", run: () => reportService.recordDue() },
+      /* New mail, with nobody looking: each signed-in mailbox read every few minutes, which starts its workflows. */
+      { name: "mail", run: () => comms.refreshDue(COMMS_EVERY_MS) },
+      /* Appointments into the calendars of members whose mailbox calendar is set to take them. */
+      { name: "calendars", run: () => comms.pushCalendars() },
     ],
   });
   if (options.workflowRunner === true) workflowRunner.start();
@@ -3023,11 +3278,12 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       new TopicStore(chatDb, { userId: owner.userId || LOCAL_USER_ID, tenantId: workspaceKey });
     /** Finished work for the timeline: workflow runs that ended and tasks that were done. */
     const finishedWork = async (): Promise<TimelineTask[]> => {
-      const [runs, tasks, sends, reports] = await Promise.all([
+      const [runs, tasks, sends, reports, emails] = await Promise.all([
         workflowStore.runs({ limit: 500 }),
         workflowEnv.tasks.list({ status: "done", limit: 500 }),
         reportService.sends(undefined, 500),
         reportService.list(),
+        commsStore.drafts({ status: "sent" }),
       ]);
       const reportTab = new Map(reports.map((one) => [one.id, reportDashboards(one)[0]]));
       const link = (workflow: string | undefined) =>
@@ -3072,6 +3328,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             link: tab ? `#/d/${encodeURIComponent(tab)}` : undefined,
           };
         }),
+        /* Email a person sent from Comms (a workflow's shows as its task). */
+        ...emailTimeline(emails),
       ].sort((a, b) => b.at.localeCompare(a.at));
     };
     void app.register(

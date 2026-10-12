@@ -55,3 +55,23 @@ export const togglePermission = (rows: readonly ReachRow[], scope: Scope, permis
     const next = has ? row.permissions.filter((one) => one !== permission) : [...row.permissions, permission];
     return { scope: row.scope, permissions: AGENT_PERMISSIONS.filter((one) => next.includes(one)) };
   });
+
+/** Whether the reach lets the agent send from a mailbox: it may act on the whole connection. */
+export const sendsFrom = (rows: readonly ReachRow[], mailbox: string): boolean =>
+  rows.some((row) => row.scope.connection === mailbox && row.scope.entity === undefined && row.permissions.includes("records.act"));
+
+/**
+ * Let it send from a team mailbox, or stop it: reading and acting on that
+ * mailbox's connection, added or taken away together. Anything else granted
+ * there is left as it was.
+ */
+export const setSendsFrom = (rows: readonly ReachRow[], mailbox: string, on: boolean): ReachRow[] => {
+  const scope: Scope = { connection: mailbox };
+  const held = rows.find((row) => rowKey(row.scope) === rowKey(scope));
+  const wanted: Permission[] = on
+    ? [...new Set([...(held?.permissions ?? []), "records.read", "records.act"] as Permission[])]
+    : (held?.permissions ?? []).filter((one) => one !== "records.act" && one !== "records.read");
+  const row: ReachRow = { scope, permissions: AGENT_PERMISSIONS.filter((one) => wanted.includes(one)) };
+  const others = rows.filter((one) => rowKey(one.scope) !== rowKey(scope));
+  return row.permissions.length > 0 ? [...others, row] : others;
+};

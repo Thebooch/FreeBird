@@ -54,6 +54,8 @@ export interface SchedulingDeps {
   readonly calendar: CalendarStore;
   /** Who is in the workspace. The open-source build has its one owner. */
   readonly members: () => Promise<readonly WorkspaceMember[]>;
+  /** Busy times in a member's own Google or Outlook calendar, read through Comms. Absent: none are read. */
+  readonly external?: (member: string, from: number, to: number) => Promise<readonly { readonly start: number; readonly end: number }[]>;
   /** What fills a host's time besides calendar entries: their bookings. */
   readonly bookings?: (member: string, from: number, to: number) => Promise<readonly Busy[]>;
   /** Each contact field's kind, by path, for comparing values. */
@@ -377,7 +379,9 @@ export class SchedulingService {
       .filter((one) => !one.allDay && one.end)
       .map((one) => ({ start: Date.parse(one.at), end: Date.parse(one.end!), kind: "entry" as const }))
       .filter((one) => Number.isFinite(one.start) && one.end > one.start);
-    return [...timed, ...((await bookings?.(member, from - DAY, to + DAY)) ?? [])];
+    /* Their own calendar's busy times, where a mailbox's is theirs: an entry like any other. A calendar that cannot be read adds nothing. */
+    const outside: Busy[] = ((await this.deps.external?.(member, from - DAY, to + DAY).catch(() => [])) ?? []).map((one) => ({ start: one.start, end: one.end, kind: "entry" as const }));
+    return [...timed, ...outside, ...((await bookings?.(member, from - DAY, to + DAY)) ?? [])];
   }
 
   /** The hosts a type can be booked with, each with what applies to them and fills their time. */

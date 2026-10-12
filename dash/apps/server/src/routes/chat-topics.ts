@@ -19,7 +19,7 @@ import {
  */
 export interface TimelineTask {
   readonly id: string;
-  readonly kind: "run" | "task" | "report";
+  readonly kind: "run" | "task" | "report" | "email";
   /** ISO time it finished. */
   readonly at: string;
   readonly title: string;

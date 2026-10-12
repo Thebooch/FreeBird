@@ -1,7 +1,7 @@
 import type { CommitResult, WriteIntent, WriteReview } from "@freebirdai/connect";
 import type { RecordReader, WriteOnBehalfOf, WriteVia } from "@freebirdai/connect/host";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
-import type { ActionModelTask, AgentSpec, Booking, BookingEvent, Contact, Principal, ReportSend, SharedAgentKnowledge } from "@freebirdai/dash-spec";
+import type { ActionModelTask, AgentSpec, Booking, BookingEvent, Contact, MailDraft, MailMessage, Principal, ReportSend, SharedAgentKnowledge } from "@freebirdai/dash-spec";
 import type { BookingLinks } from "../bookings/links.js";
 import type { BookingService } from "../bookings/service.js";
 import type { Policy } from "../identity/policy.js";
@@ -39,6 +39,8 @@ export interface OutreachSender {
     readonly subject?: string | undefined;
     readonly text: string;
     readonly agent: Pick<AgentSpec, "id" | "name">;
+    /** Whose permission it goes out with: the workflow's actor. Email is sent through the review as them. */
+    readonly actor?: Principal | null;
     /** At most once: the same key is never sent twice. */
     readonly key: string;
   }): Promise<{ readonly status: "queued" | "sent" | "delivered" | "failed" | "not_sent"; readonly detail?: string; readonly conversation?: string }>;
@@ -81,6 +83,18 @@ export interface WorkflowEnv {
   readonly onEvent?: (event: WorkflowEvent) => void;
   /** Bookings, for the Schedule steps, Approve a booking and the booking waits. Absent: those steps cannot run here. */
   readonly bookings?: () => WorkflowBookings | undefined;
+  /**
+   * Email, for Reply to the email: the conversation as text, read live; a
+   * draft kept in Comms; and sending one through its review as a person.
+   * Absent: the step cannot run.
+   */
+  readonly comms?: {
+    conversation(mailbox: string, message: string, threadId?: string): Promise<{ readonly text: string }>;
+    /** An agent's Search mail tool: the mailboxes it may read, newest first. */
+    search?(agent: string, query: string): Promise<readonly MailMessage[]>;
+    draft(input: { readonly mailbox: string; readonly replyTo: string; readonly threadId?: string; readonly text: string; readonly agent: string; readonly workflow: string; readonly task: string }): Promise<MailDraft>;
+    send(principal: Principal, draft: string): Promise<MailDraft>;
+  };
   /** Timed reports, for Send a report. `key` is the step's operation id: a retry finds the send it made. Absent: the step cannot run. */
   readonly reports?: { send(id: string, key: string): Promise<ReportSend> };
   readonly now: () => number;

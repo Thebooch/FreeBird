@@ -1,0 +1,531 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { CatalogStore, KeyStore, LocalAesVault } from "@freebirdai/connect/host";
+import type { ConnectionSpec, MailDraft, MailPage, MailboxView } from "@freebirdai/dash-spec";
+import { fakeLlm } from "@freebirdai/dash-agent";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { buildServer } from "../server.js";
+import { SpecStore } from "../store.js";
+import { MemoryCalendarStore } from "../workflows/store.js";
+import { fakeMailServer, type FakeMailServer } from "./fixtures.js";
+import { emailTimeline } from "./timeline.js";
+
+/**
+ * Communications end to end, against a fake Gmail and a fake Outlook that
+ * answer the shipped catalog entries: through the engine's read, and the
+ * write service's review for anything sent.
+ */
+
+const here = dirname(fileURLToPath(import.meta.url));
+const seed = join(here, "..", "..", "..", "..", "catalog");
+
+let dir: string;
+let store: SpecStore;
+let keys: KeyStore;
+let mail: FakeMailServer;
+
+const at = (minutes: number) => new Date(Date.UTC(2026, 9, 10, 12, minutes)).toISOString();
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "dash-comms-"));
+  store = new SpecStore(join(dir, "dashboards"), join(dir, "connections"), join(dir, "reports"));
+  keys = new KeyStore(new LocalAesVault(Buffer.alloc(32, 9)), join(dir, ".dash", "vault.json"));
+  mail = fakeMailServer({
+    gmail: [
+      { id: "g1", threadId: "gt1", from: "Pat Doe <pat@example.com>", to: "team@example.com", subject: "Leak in 4B", snippet: "Water under the sink", at: at(1), unread: true, text: "Water under the sink since Monday." },
+      { id: "g2", threadId: "gt2", from: "noreply@vendor.example", to: "team@example.com", subject: "Your invoice", snippet: "Invoice attached", at: at(5) },
+      { id: "g3", threadId: "gt1", from: "team@example.com", to: "pat@example.com", subject: "Re: Leak in 4B", snippet: "We'll send someone", at: at(9), sent: true },
+    ],
+    outlook: [
+      { id: "o1", threadId: "ot1", from: "Sam Lee <sam@example.net>", to: "agent@example.org", subject: "Showing on Friday?", snippet: "Is the unit still available", at: at(3), unread: true },
+      { id: "o2", threadId: "ot2", from: "Kim <kim@example.net>", to: "agent@example.org", subject: "Application", snippet: "Sent my application", at: at(7) },
+    ],
+  });
+});
+
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+});
+
+const makeApp = (llm: ReturnType<typeof fakeLlm> | null = null) => buildServer({ store, keys, catalog: new CatalogStore(seed, join(dir, "overlay")), llm, http: mail.http });
+
+/** A mailbox signed in: the token the broker would have got, put where it keeps it. */
+const signIn = (id: string): void => {
+  const connection = store.getConnection(id) as ConnectionSpec;
+  if (connection.auth.type !== "oauth2") throw new Error("not oauth");
+  keys.set(connection.auth.keyRef, `token-${id}`);
+};
+
+const setUp = async (app: ReturnType<typeof makeApp>) => {
+  for (const provider of ["gmail", "outlook"]) {
+    const answer = await app.inject({ method: "POST", url: `/api/comms/apps/${provider}`, payload: { clientId: `${provider}-client`, clientSecret: "secret" } });
+    expect(answer.statusCode).toBe(200);
+  }
+  const agent = (await app.inject({ method: "PUT", url: "/api/agents/leasing", payload: { name: "Leasing", color: 3 } })).json() as { id: string };
+  const gmail = (await app.inject({ method: "POST", url: "/api/comms/mailboxes", payload: { provider: "gmail", owner: { kind: "team" } } })).json() as MailboxView;
+  const outlook = (await app.inject({ method: "POST", url: "/api/comms/mailboxes", payload: { provider: "outlook", owner: { kind: "agent", id: agent.id } } })).json() as MailboxView;
+  return { agent, gmail, outlook };
+};
+
+describe("Communications", () => {
+  it("adds a mailbox with the workspace's app copied in, waiting for its sign-in", async () => {
+    const app = makeApp();
+    const { gmail, outlook, agent } = await setUp(app);
+    expect(gmail).toMatchObject({ id: "gmail", provider: "gmail", owner: { kind: "team" }, status: "needs_sign_in" });
+    expect(outlook).toMatchObject({ id: "outlook", owner: { kind: "agent", id: agent.id } });
+    const connection = store.getConnection("gmail")!;
+    expect(connection.auth.type === "oauth2" && keys.get(connection.auth.clientIdRef)).toBe("gmail-client");
+    const start = await app.inject({ method: "POST", url: "/api/connections/gmail/oauth/start", headers: { origin: "http://localhost:5400" } });
+    const authorize = new URL((start.json() as { authorizeUrl: string }).authorizeUrl);
+    expect(authorize.hostname).toBe("accounts.google.com");
+    expect(authorize.searchParams.get("access_type")).toBe("offline");
+    expect(authorize.searchParams.get("client_id")).toBe("gmail-client");
+    await app.close();
+  });
+
+  it("needs nothing pasted when the server has its own app: people only sign in", async () => {
+    const app = buildServer({ store, keys, catalog: new CatalogStore(seed, join(dir, "overlay")), llm: null, http: mail.http, mailApps: { gmail: { clientId: "server-client", clientSecret: "server-secret" } } });
+    expect((await app.inject({ method: "GET", url: "/api/comms/mailboxes" })).json()).toMatchObject({ apps: { gmail: true, outlook: false } });
+    const made = (await app.inject({ method: "POST", url: "/api/comms/mailboxes", payload: { provider: "gmail", owner: { kind: "team" } } })).json() as MailboxView;
+    expect(made.status).toBe("needs_sign_in");
+    const start = await app.inject({ method: "POST", url: "/api/connections/gmail/oauth/start", headers: { origin: "http://localhost:5400" } });
+    expect(new URL((start.json() as { authorizeUrl: string }).authorizeUrl).searchParams.get("client_id")).toBe("server-client");
+    await app.close();
+  });
+
+  it("keeps the team's mail and an agent's mail apart, each newest first", async () => {
+    const app = makeApp();
+    const { agent } = await setUp(app);
+    signIn("gmail");
+    signIn("outlook");
+    const team = (await app.inject({ method: "GET", url: "/api/comms?area=team" })).json() as MailPage;
+    expect(team.problems).toEqual([]);
+    expect(team.messages.map((one) => one.id)).toEqual(["g3", "g2", "g1"]);
+    expect(team.messages.find((one) => one.id === "g1")).toMatchObject({ unread: true, from: { address: "pat@example.com", name: "Pat Doe" } });
+    expect(team.messages.find((one) => one.id === "g3")?.sent).toBe(true);
+    const agents = (await app.inject({ method: "GET", url: `/api/comms?area=agent:${agent.id}` })).json() as MailPage;
+    expect(agents.messages.map((one) => one.id)).toEqual(["o2", "o1"]);
+    await app.close();
+  });
+
+  it("merges several mailboxes by time, and narrows to the ones ticked", async () => {
+    const app = makeApp();
+    await setUp(app);
+    await app.inject({ method: "PUT", url: "/api/comms/mailboxes/outlook/owner", payload: { owner: { kind: "team" } } });
+    signIn("gmail");
+    signIn("outlook");
+    const all = (await app.inject({ method: "GET", url: "/api/comms?area=team" })).json() as MailPage;
+    expect(all.messages.map((one) => one.id)).toEqual(["g3", "o2", "g2", "o1", "g1"]);
+    const one = (await app.inject({ method: "GET", url: "/api/comms?area=team&mailboxes=outlook" })).json() as MailPage;
+    expect(one.messages.map((item) => item.id)).toEqual(["o2", "o1"]);
+    await app.close();
+  });
+
+  it("pages across mailboxes with a cursor for each", async () => {
+    const app = makeApp();
+    await setUp(app);
+    await app.inject({ method: "PUT", url: "/api/comms/mailboxes/outlook/owner", payload: { owner: { kind: "team" } } });
+    signIn("gmail");
+    signIn("outlook");
+    const first = (await app.inject({ method: "GET", url: "/api/comms?area=team&size=2" })).json() as MailPage;
+    expect(first.messages.map((one) => one.id)).toEqual(["g3", "o2"]);
+    const second = (await app.inject({ method: "GET", url: `/api/comms?area=team&size=2&cursor=${first.cursor}` })).json() as MailPage;
+    expect(second.messages.map((one) => one.id)).toEqual(["g2", "o1"]);
+    const third = (await app.inject({ method: "GET", url: `/api/comms?area=team&size=2&cursor=${second.cursor}` })).json() as MailPage;
+    expect(third.messages.map((one) => one.id)).toEqual(["g1"]);
+    expect(third.cursor).toBeUndefined();
+    await app.close();
+  });
+
+  it("searches each selected mailbox's own index", async () => {
+    const app = makeApp();
+    await setUp(app);
+    signIn("gmail");
+    const found = (await app.inject({ method: "GET", url: `/api/comms?area=team&q=${encodeURIComponent("from:pat")}` })).json() as MailPage;
+    expect(found.searched).toBe(true);
+    expect(found.messages.map((one) => one.id)).toEqual(["g1"]);
+    expect(mail.requests.some((one) => one.url.includes("q=from%3Apat"))).toBe(true);
+    await app.close();
+  });
+
+  it("makes each new sender a contact, but not the workspace's own address or a no-reply", async () => {
+    const app = makeApp();
+    await setUp(app);
+    signIn("gmail");
+    await app.inject({ method: "GET", url: "/api/comms?area=team" });
+    const contacts = (await app.inject({ method: "GET", url: "/api/contacts" })).json() as { contacts: { emails: string[]; origin: string }[] };
+    expect(contacts.contacts.map((one) => one.emails[0])).toEqual(["pat@example.com"]);
+    expect(contacts.contacts[0]?.origin).toBe("email");
+    await app.close();
+  });
+
+  it("reads a thread live, and sends a reply only through the review", async () => {
+    const app = makeApp();
+    await setUp(app);
+    signIn("gmail");
+    await app.inject({ method: "GET", url: "/api/comms?area=team" });
+    const thread = (await app.inject({ method: "GET", url: "/api/comms/threads/gmail/gt1" })).json() as { messages: { id: string; text: string }[] };
+    expect(thread.messages.map((one) => one.id)).toEqual(["g1", "g3"]);
+    expect(thread.messages[0]?.text).toContain("since Monday");
+
+    const draft = (await app.inject({ method: "POST", url: "/api/comms/drafts", payload: { mailbox: "gmail", replyTo: "g1", threadId: "gt1" } })).json() as { id: string; to: string; subject: string };
+    expect(draft).toMatchObject({ to: "Pat Doe <pat@example.com>", subject: "Re: Leak in 4B" });
+    await app.inject({ method: "PUT", url: `/api/comms/drafts/${draft.id}`, payload: { text: "Someone will be there at 9." } });
+    expect(mail.sent).toEqual([]);
+
+    const review = (await app.inject({ method: "POST", url: `/api/comms/drafts/${draft.id}/review`, payload: {} })).json() as { pendingId: string; digest: string; rows: { label: string; after: string | null }[] };
+    expect(review.rows.map((row) => row.label)).toEqual(expect.arrayContaining(["To", "Subject", "Message"]));
+    expect(mail.sent).toEqual([]);
+    const sent = await app.inject({ method: "POST", url: `/api/comms/drafts/${draft.id}/send`, payload: { pendingId: review.pendingId, digest: review.digest } });
+    expect(sent.statusCode).toBe(200);
+    expect(sent.json()).toMatchObject({ status: "sent", sentId: "sent-1" });
+    expect(mail.sent).toHaveLength(1);
+    expect(mail.sent[0]).toMatchObject({ provider: "gmail", threadId: "gt1", draft: false });
+    expect(mail.sent[0]!.message).toContain("To: Pat Doe <pat@example.com>");
+    expect(mail.sent[0]!.message).toContain("In-Reply-To: <g1@fake.mail>");
+    /* The same yes cannot send it twice. */
+    const again = await app.inject({ method: "POST", url: `/api/comms/drafts/${draft.id}/send`, payload: { pendingId: review.pendingId, digest: review.digest } });
+    expect(again.statusCode).toBe(409);
+    expect(mail.sent).toHaveLength(1);
+    await app.close();
+  });
+
+  it("saves to the provider's drafts instead, for Outlook as MIME", async () => {
+    const app = makeApp();
+    const { agent } = await setUp(app);
+    signIn("outlook");
+    await app.inject({ method: "GET", url: `/api/comms?area=agent:${agent.id}` });
+    const draft = (await app.inject({ method: "POST", url: "/api/comms/drafts", payload: { mailbox: "outlook", replyTo: "o1", threadId: "ot1" } })).json() as { id: string };
+    await app.inject({ method: "PUT", url: `/api/comms/drafts/${draft.id}`, payload: { text: "Friday at 2 works." } });
+    const review = (await app.inject({ method: "POST", url: `/api/comms/drafts/${draft.id}/review`, payload: { save: true } })).json() as { pendingId: string; digest: string };
+    const saved = await app.inject({ method: "POST", url: `/api/comms/drafts/${draft.id}/send`, payload: { pendingId: review.pendingId, digest: review.digest, save: true } });
+    expect(saved.json()).toMatchObject({ status: "saved" });
+    expect(mail.sent[0]).toMatchObject({ provider: "outlook", draft: true });
+    expect(mail.sent[0]!.message).toContain("To: Sam Lee <sam@example.net>");
+    expect(mail.sent[0]!.message).toContain("Subject: Re: Showing on Friday?");
+    await app.close();
+  });
+});
+
+describe("Keeping up with new mail", () => {
+  it("asks each provider what changed rather than reading the newest page again", async () => {
+    const app = makeApp();
+    const { agent } = await setUp(app);
+    signIn("gmail");
+    signIn("outlook");
+    await app.inject({ method: "GET", url: "/api/comms?area=team" });
+    await app.inject({ method: "GET", url: `/api/comms?area=agent:${agent.id}` });
+    mail.requests.length = 0;
+    mail.gmail.push({ id: "g7", threadId: "gt7", from: "Max <max@example.com>", to: "team@example.com", subject: "Parking", snippet: "Is there parking", at: at(55) });
+    mail.outlook.push({ id: "o7", threadId: "ot7", from: "Ivy <ivy@example.net>", to: "agent@example.org", subject: "Pets", snippet: "Are pets allowed", at: at(56) });
+    await app.inject({ method: "POST", url: "/api/comms/mailboxes/gmail/refresh" });
+    await app.inject({ method: "POST", url: "/api/comms/mailboxes/outlook/refresh" });
+    expect(mail.requests.some((one) => one.url.startsWith("/gmail/v1/users/me/history"))).toBe(true);
+    expect(mail.requests.some((one) => one.url.startsWith("/v1.0/me/mailFolders/inbox/messages/delta") || one.url.includes("/messages/delta"))).toBe(true);
+    expect(mail.requests.some((one) => /\/gmail\/v1\/users\/me\/messages\?/.test(one.url))).toBe(false);
+    const team = (await app.inject({ method: "GET", url: "/api/comms?area=team" })).json() as MailPage;
+    expect(team.messages[0]?.id).toBe("g7");
+    const theirs = (await app.inject({ method: "GET", url: `/api/comms?area=agent:${agent.id}` })).json() as MailPage;
+    expect(theirs.messages[0]?.id).toBe("o7");
+    await app.close();
+  });
+});
+
+describe("Reply to the email, in a workflow", () => {
+  it("drafts a reply when an email arrives, sends it from a team mailbox only with the agent's leave, and goes on", async () => {
+    const app = makeApp(fakeLlm([{ text: "Thanks Rae, a plumber will call you today." }]));
+    await setUp(app);
+    signIn("gmail");
+    /* The first read takes in what was there: no workflow starts for old mail. */
+    await app.inject({ method: "GET", url: "/api/comms?area=team" });
+    const saved = await app.inject({
+      method: "PUT",
+      url: "/api/workflows/new",
+      payload: {
+        name: "Answer new mail",
+        enabled: true,
+        trigger: { kind: "message_received", channels: ["email"], mailboxes: ["gmail"] },
+        nodes: [{ id: "reply", action: "outreach.reply", settings: { agentId: "leasing", instructions: "Say a plumber will call today.", send: "approval", timeout: "3d" }, mode: "auto" }],
+        edges: [{ id: "a", from: "trigger", to: "reply" }],
+      },
+    });
+    expect(saved.statusCode).toBe(200);
+    mail.gmail.push({ id: "g4", threadId: "gt4", from: "Rae <rae@example.com>", to: "team@example.com", subject: "Sink", snippet: "The sink is leaking", at: at(30), text: "The sink is leaking again." });
+    await app.inject({ method: "POST", url: "/api/comms/mailboxes/gmail/refresh" });
+
+    const drafts = (await app.inject({ method: "GET", url: "/api/comms/drafts" })).json() as { id: string; agent: string; text: string; to: string; task: string }[];
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({ agent: "leasing", text: "Thanks Rae, a plumber will call you today.", to: "Rae <rae@example.com>" });
+    expect(mail.sent).toEqual([]);
+    /* The contact came first, so the case knows who wrote. */
+    const contacts = (await app.inject({ method: "GET", url: "/api/contacts" })).json() as { contacts: { emails: string[] }[] };
+    expect(contacts.contacts.some((one) => one.emails.includes("rae@example.com"))).toBe(true);
+
+    /* An agent sends from its own address: a team mailbox needs its leave. */
+    const refused = await app.inject({ method: "POST", url: `/api/comms/drafts/${drafts[0]!.id}/review`, payload: {} });
+    expect(refused.statusCode).toBe(403);
+    await app.inject({ method: "PUT", url: "/api/agents/leasing", payload: { name: "Leasing", color: 3, reach: [{ permission: "records.read", scope: { connection: "gmail" } }, { permission: "records.act", scope: { connection: "gmail" } }] } });
+    const review = (await app.inject({ method: "POST", url: `/api/comms/drafts/${drafts[0]!.id}/review`, payload: {} })).json() as { pendingId: string; digest: string };
+    const sent = await app.inject({ method: "POST", url: `/api/comms/drafts/${drafts[0]!.id}/send`, payload: { pendingId: review.pendingId, digest: review.digest } });
+    expect(sent.statusCode).toBe(200);
+    expect(mail.sent).toHaveLength(1);
+    expect(mail.sent[0]!.message).toContain("To: Rae <rae@example.com>");
+
+    const task = (await app.inject({ method: "GET", url: `/api/tasks/${drafts[0]!.task}` })).json() as { status: string; outcome?: string; task?: { status: string; outcome?: string } };
+    const held = task.task ?? task;
+    expect(held).toMatchObject({ status: "done", outcome: "sent" });
+
+    /* What it sent is the agent's, in the team's inbox. */
+    const team = (await app.inject({ method: "GET", url: "/api/comms?area=team" })).json() as MailPage;
+    expect(team.messages.find((one) => one.id === "g4")).toMatchObject({ agent: "leasing", status: "replied" });
+    await app.close();
+  });
+});
+
+describe("An agent starts an email conversation", () => {
+  it("sends from the agent's own mailbox through the review, and hears the reply", async () => {
+    const app = makeApp();
+    await setUp(app);
+    signIn("outlook");
+    await app.inject({ method: "GET", url: "/api/comms?area=agent:leasing" });
+    const saved = await app.inject({
+      method: "PUT",
+      url: "/api/workflows/new",
+      payload: {
+        name: "Say hello",
+        enabled: true,
+        trigger: { kind: "manual" },
+        nodes: [
+          { id: "hello", action: "outreach.email", mode: "auto", settings: { agentId: "leasing", to: "pat@example.com", subject: "Hello from Leasing", purpose: "Say hello", content: "fixed", wording: "Hi Pat, is the unit still of interest?" } },
+          { id: "wait", action: "wait.for", mode: "auto", settings: { event: "reply", step: "hello", timeout: "2d" } },
+        ],
+        edges: [
+          { id: "a", from: "trigger", to: "hello" },
+          { id: "b", from: "hello", to: "wait" },
+        ],
+      },
+    });
+    expect(saved.statusCode).toBe(200);
+    const id = (saved.json() as { id: string }).id;
+    await app.inject({ method: "POST", url: `/api/workflows/${id}/run` });
+    expect(mail.sent).toHaveLength(1);
+    expect(mail.sent[0]).toMatchObject({ provider: "outlook", draft: false });
+    expect(mail.sent[0]!.message).toContain("To: pat@example.com");
+    expect(mail.sent[0]!.message).toContain("Subject: Hello from Leasing");
+    let cases = (await app.inject({ method: "GET", url: `/api/workflows/${id}/cases` })).json() as { status: string }[];
+    expect(cases[0]?.status).toBe("waiting");
+
+    mail.outlook.push({ id: "o9", threadId: "ot9", from: "Pat <pat@example.com>", to: "agent@example.org", subject: "RE: Hello from Leasing", snippet: "Yes, still interested", at: at(40) });
+    await app.inject({ method: "POST", url: "/api/comms/mailboxes/outlook/refresh" });
+    cases = (await app.inject({ method: "GET", url: `/api/workflows/${id}/cases` })).json() as { status: string }[];
+    expect(cases[0]?.status).toBe("done");
+    await app.close();
+  });
+
+  it("says why when the agent has no mailbox to send from", async () => {
+    const app = makeApp();
+    await setUp(app);
+    const saved = await app.inject({
+      method: "PUT",
+      url: "/api/workflows/new",
+      payload: {
+        name: "Say hello",
+        enabled: true,
+        trigger: { kind: "manual" },
+        nodes: [{ id: "hello", action: "outreach.email", mode: "auto", settings: { agentId: "leasing", to: "pat@example.com", subject: "Hi", purpose: "Say hi", content: "fixed", wording: "Hi" } }],
+        edges: [{ id: "a", from: "trigger", to: "hello" }],
+      },
+    });
+    const id = (saved.json() as { id: string }).id;
+    await app.inject({ method: "POST", url: `/api/workflows/${id}/run` });
+    const tasks = (await app.inject({ method: "GET", url: "/api/tasks" })).json() as { delivery?: { status: string; detail?: string } }[];
+    expect(tasks[0]?.delivery).toMatchObject({ status: "not_sent" });
+    expect(mail.sent).toEqual([]);
+    await app.close();
+  });
+});
+
+describe("Contact fields from email", () => {
+  it("fills a field set to fill from email, once, from a new email", async () => {
+    const app = makeApp(fakeLlm([{ args: { moveIn: "2026-11-01" } }]));
+    await setUp(app);
+    signIn("gmail");
+    const field = await app.inject({ method: "PUT", url: "/api/contacts/fields/moveIn", payload: { label: "Move-in date", kind: "date", fromEmail: { enabled: true, look: "When they want to move in" } } });
+    expect(field.statusCode).toBe(200);
+    await app.inject({ method: "GET", url: "/api/comms?area=team" });
+    mail.gmail.push({ id: "g5", threadId: "gt5", from: "Lee <lee@example.com>", to: "team@example.com", subject: "Apartment", snippet: "We'd like to move in Nov 1", at: at(50), text: "We'd like to move in on November 1." });
+    await app.inject({ method: "POST", url: "/api/comms/mailboxes/gmail/refresh" });
+    const contacts = (await app.inject({ method: "GET", url: "/api/contacts" })).json() as { contacts: { emails: string[]; fields: Record<string, { person?: { value: unknown } }> }[] };
+    const lee = contacts.contacts.find((one) => one.emails.includes("lee@example.com"));
+    expect(lee?.fields["moveIn"]?.person?.value).toBe("2026-11-01");
+    await app.close();
+  });
+});
+
+describe("Calendar sync", () => {
+  it("keeps a member's calendar busy times free, and writes their appointments into it", async () => {
+    const calendar = new MemoryCalendarStore();
+    const app = buildServer({ store, keys, catalog: new CatalogStore(seed, join(dir, "overlay")), llm: null, http: mail.http, calendar });
+    await setUp(app);
+    signIn("gmail");
+    const set = await app.inject({ method: "PUT", url: "/api/comms/mailboxes/gmail/calendar", payload: { calendar: { member: "local", busy: true, push: true } } });
+    expect(set.json()).toMatchObject({ calendar: { member: "local", busy: true, push: true } });
+
+    mail.calendars.gmail.push({ id: "busy1", title: "Dentist", start: "2026-10-20T15:00:00Z", end: "2026-10-20T16:00:00Z" });
+    mail.calendars.gmail.push({ id: "free1", title: "Focus time", start: "2026-10-20T17:00:00Z", end: "2026-10-20T18:00:00Z", free: true });
+    const busy = (await app.inject({ method: "GET", url: "/api/comms/calendar/busy?member=local&from=2026-10-20T00:00:00Z&to=2026-10-21T00:00:00Z" })).json();
+    expect(busy).toEqual([{ start: "2026-10-20T15:00:00.000Z", end: "2026-10-20T16:00:00.000Z" }]);
+
+    const now = Date.now();
+    const at = new Date(now + 3 * 86_400_000).toISOString();
+    await calendar.put({ id: "appt1", title: "Showing · Pat", at, end: new Date(Date.parse(at) + 30 * 60_000).toISOString(), allDay: false, kind: "appointment", status: "open", owner: { kind: "member", id: "local" }, booking: "b1", pinned: false, createdAt: new Date(now).toISOString() });
+    await app.inject({ method: "POST", url: "/api/comms/calendar/sync" });
+    const pushed = mail.calendars.gmail.find((one) => one.title === "Showing · Pat");
+    expect(pushed?.start).toBe(at);
+    /* What Dash wrote is its own appointment: not counted again as busy. */
+    const busyNow = (await app.inject({ method: "GET", url: `/api/comms/calendar/busy?member=local&from=${new Date(now).toISOString()}&to=${new Date(now + 7 * 86_400_000).toISOString()}` })).json() as unknown[];
+    expect(busyNow).toEqual([]);
+
+    /* Moved: changed there too; synced again with nothing new: nothing written. */
+    const moved = new Date(Date.parse(at) + 3_600_000).toISOString();
+    await calendar.put({ ...(await calendar.get("appt1"))!, at: moved, end: new Date(Date.parse(moved) + 30 * 60_000).toISOString() });
+    expect((await app.inject({ method: "POST", url: "/api/comms/calendar/sync" })).json()).toEqual({ written: 1 });
+    expect(mail.calendars.gmail.find((one) => one.id === pushed!.id)?.start).toBe(moved);
+    expect((await app.inject({ method: "POST", url: "/api/comms/calendar/sync" })).json()).toEqual({ written: 0 });
+
+    /* Cancelled: taken out. */
+    await calendar.put({ ...(await calendar.get("appt1"))!, status: "cancelled" });
+    await app.inject({ method: "POST", url: "/api/comms/calendar/sync" });
+    expect(mail.calendars.gmail.some((one) => one.id === pushed!.id)).toBe(false);
+    await app.close();
+  });
+});
+
+describe("Contact fields from earlier email", () => {
+  it("reads what each mailbox kept for a field just set to fill from email", async () => {
+    const app = makeApp(fakeLlm([{ args: { unit: "4B" } }]));
+    await setUp(app);
+    signIn("gmail");
+    await app.inject({ method: "GET", url: "/api/comms?area=team" });
+    await app.inject({ method: "PUT", url: "/api/contacts/fields/unit", payload: { label: "Unit", kind: "text", fromEmail: { enabled: true, look: "Which unit they live in" } } });
+    const done = (await app.inject({ method: "POST", url: "/api/comms/backfill-fields" })).json() as { read: number; filled: number };
+    expect(done).toEqual({ read: 1, filled: 1 });
+    const contacts = (await app.inject({ method: "GET", url: "/api/contacts" })).json() as { contacts: { emails: string[]; fields: Record<string, { person?: { value: unknown } }> }[] };
+    expect(contacts.contacts.find((one) => one.emails.includes("pat@example.com"))?.fields["unit"]?.person?.value).toBe("4B");
+    await app.close();
+  });
+});
+
+describe("Contacts, the rest", () => {
+  it("merges two contacts into one, and the old id still finds it", async () => {
+    const app = makeApp();
+    const a = (await app.inject({ method: "POST", url: "/api/contacts", payload: { name: "Pat Doe", emails: ["pat@example.com"] } })).json() as { id: string };
+    const b = (await app.inject({ method: "POST", url: "/api/contacts", payload: { emails: ["pat.doe@work.example"], phones: ["5125550142"] } })).json() as { id: string };
+    const merged = await app.inject({ method: "POST", url: `/api/contacts/${a.id}/merge`, payload: { other: b.id } });
+    expect(merged.statusCode).toBe(200);
+    expect(merged.json()).toMatchObject({ id: a.id, name: "Pat Doe", emails: ["pat@example.com", "pat.doe@work.example"], phones: ["+15125550142"] });
+    expect((await app.inject({ method: "GET", url: `/api/contacts/${b.id}` })).json()).toMatchObject({ id: a.id });
+    const list = (await app.inject({ method: "GET", url: "/api/contacts" })).json() as { contacts: unknown[] };
+    expect(list.contacts).toHaveLength(1);
+    await app.close();
+  });
+
+  it("shows a contact's email across mailboxes, and the contact beside a conversation", async () => {
+    const app = makeApp();
+    await setUp(app);
+    signIn("gmail");
+    await app.inject({ method: "GET", url: "/api/comms?area=team" });
+    const contacts = (await app.inject({ method: "GET", url: "/api/contacts" })).json() as { contacts: { id: string; emails: string[] }[] };
+    const pat = contacts.contacts.find((one) => one.emails.includes("pat@example.com"))!;
+    const theirs = (await app.inject({ method: "GET", url: `/api/comms/contacts/${pat.id}/messages` })).json() as { messages: { id: string }[] };
+    expect(theirs.messages.map((one) => one.id)).toEqual(["g3", "g1"]);
+    const thread = (await app.inject({ method: "GET", url: "/api/comms/threads/gmail/gt1" })).json() as { contact?: { id: string; name: string } };
+    expect(thread.contact).toMatchObject({ id: pat.id, name: "Pat Doe" });
+    await app.close();
+  });
+
+  it("starts a workflow once when someone new becomes a contact", async () => {
+    const app = makeApp();
+    const saved = await app.inject({
+      method: "PUT",
+      url: "/api/workflows/new",
+      payload: {
+        name: "Welcome",
+        enabled: true,
+        trigger: { kind: "contact_created" },
+        nodes: [{ id: "note", action: "create.note", mode: "auto", settings: { text: "New: {{ contact.email }}" } }],
+        edges: [{ id: "a", from: "trigger", to: "note" }],
+      },
+    });
+    const id = (saved.json() as { id: string }).id;
+    await app.inject({ method: "POST", url: "/api/contacts", payload: { emails: ["new@example.com"] } });
+    let cases: { status: string }[] = [];
+    for (let tries = 0; tries < 50 && cases.length === 0; tries++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      cases = (await app.inject({ method: "GET", url: `/api/workflows/${id}/cases` })).json() as { status: string }[];
+    }
+    expect(cases).toHaveLength(1);
+    expect(cases[0]?.status).toBe("done");
+    const tasks = (await app.inject({ method: "GET", url: "/api/tasks" })).json() as { title: string; body: { text?: string } }[];
+    expect(tasks.some((one) => one.body.text === "New: new@example.com")).toBe(true);
+    await app.close();
+  });
+});
+
+describe("An agent's Search mail tool", () => {
+  it("searches the mail the agent can read before it writes its reply", async () => {
+    const llm = fakeLlm([{ args: { query: "from:kim@example.net" } }, { text: "Hi Ivy, pets are welcome." }]);
+    const app = makeApp(llm);
+    await setUp(app);
+    await app.inject({ method: "PUT", url: "/api/agents/leasing", payload: { name: "Leasing", color: 3, tools: [{ id: "search", kind: "search_mail", mode: "auto" }] } });
+    signIn("outlook");
+    await app.inject({ method: "GET", url: "/api/comms?area=agent:leasing" });
+    await app.inject({
+      method: "PUT",
+      url: "/api/workflows/new",
+      payload: {
+        name: "Answer leasing mail",
+        enabled: true,
+        trigger: { kind: "message_received", channels: ["email"], mailboxes: ["outlook"] },
+        nodes: [{ id: "reply", action: "outreach.reply", mode: "auto", settings: { agentId: "leasing", send: "approval", timeout: "3d" } }],
+        edges: [{ id: "a", from: "trigger", to: "reply" }],
+      },
+    });
+    mail.outlook.push({ id: "o8", threadId: "ot8", from: "Ivy <ivy@example.net>", to: "agent@example.org", subject: "Pets", snippet: "Are pets allowed", at: at(60) });
+    await app.inject({ method: "POST", url: "/api/comms/mailboxes/outlook/refresh" });
+    expect(llm.calls[0]?.toolNames).toEqual(["search_mail"]);
+    expect(mail.requests.some((one) => decodeURIComponent(one.url).includes("$search"))).toBe(true);
+    const sawResults = llm.calls[1]?.messages.some((one) => typeof one.content === "string" && one.content.includes("Search results"));
+    expect(sawResults).toBe(true);
+    const drafts = (await app.inject({ method: "GET", url: "/api/comms/drafts" })).json() as { text: string }[];
+    expect(drafts[0]?.text).toBe("Hi Ivy, pets are welcome.");
+    await app.close();
+  });
+});
+
+describe("Marking mail, and the timeline", () => {
+  it("marks a message handled or set aside", async () => {
+    const app = makeApp();
+    await setUp(app);
+    signIn("gmail");
+    await app.inject({ method: "GET", url: "/api/comms?area=team" });
+    const marked = await app.inject({ method: "POST", url: "/api/comms/messages/gmail/g2/status", payload: { status: "ignored" } });
+    expect(marked.json()).toMatchObject({ status: "ignored" });
+    const team = (await app.inject({ method: "GET", url: "/api/comms?area=team" })).json() as MailPage;
+    expect(team.messages.find((one) => one.id === "g2")?.status).toBe("ignored");
+    const thread = (await app.inject({ method: "GET", url: "/api/comms/threads/gmail/gt2" })).json() as { messages: { id: string; status?: string }[] };
+    expect(thread.messages[0]?.status).toBe("ignored");
+
+    await app.close();
+  });
+});
+
+describe("emailTimeline", () => {
+  const draft = (over: Partial<MailDraft>): MailDraft => ({ id: "d1", mailbox: "gmail", to: '"Pat Doe" <pat@example.com>', cc: "", subject: "Re: Leak", text: "Hi", status: "sent", createdAt: at(1), updatedAt: at(2), sentAt: at(2), replyTo: "g1", ...over });
+  it("lists email a person sent, not a workflow's or one not sent", () => {
+    const rows = emailTimeline([draft({}), draft({ id: "d2", task: "t1" }), draft({ id: "d3", status: "open" })]);
+    expect(rows).toEqual([expect.objectContaining({ id: "email:d1", kind: "email", title: "Replied to Pat Doe", detail: "Re: Leak", at: at(2) })]);
+  });
+});

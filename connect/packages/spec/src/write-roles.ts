@@ -120,6 +120,28 @@ export const writeRoleOf = (op: WriteOpDef, paths: RolePaths): WriteRole | null 
 };
 
 /**
+ * The role a hand-checked entry declares for an endpoint (`WriteOpDef.role`),
+ * with the mode its method implies. Never guessed: only what was written.
+ */
+export const declaredRole = (op: WriteOpDef): WriteRole | null => {
+  const declared = op.role;
+  if (!declared) return null;
+  switch (declared.kind) {
+    case "create":
+      return { kind: "create", mode: op.method === "PUT" ? "upsert" : "create" };
+    case "update":
+      return { kind: "update", mode: op.method === "PUT" ? "replace" : "merge" };
+    case "delete":
+      return { kind: "delete", mode: "delete" };
+    case "action": {
+      const id = (declared.action ?? op.id).replace(ACTION_ID, "-").slice(0, 64);
+      const creates = actionCreates(op.title);
+      return { kind: "action", mode: "action", id, danger: declared.danger ?? (!creates && DANGER.test(`${id} ${op.title}`)), creates };
+    }
+  }
+};
+
+/**
  * Two actions that undo each other: `inactivationrequest` and
  * `reactivationrequest`, `archive` and `unarchive`. Read off the names, so a
  * journal entry can name the step that reverses it. A hint for whoever

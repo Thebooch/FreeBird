@@ -1027,7 +1027,8 @@ export class RestAdapter implements SourceAdapter {
     const sending = request.body !== undefined && op.method !== "DELETE";
     if (sending) headers["content-type"] = request.contentType ?? "application/json";
 
-    const sentBody = sending ? JSON.stringify(request.body) : undefined;
+    /* A body that is already text — an encoded email — is sent as it is. */
+    const sentBody = sending ? (typeof request.body === "string" ? request.body : JSON.stringify(request.body)) : undefined;
     const started = Date.now();
     let response: HttpResponse;
     try {

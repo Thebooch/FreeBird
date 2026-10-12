@@ -20,7 +20,7 @@ import { principalSchema } from "./access.js";
  *   never changes under a booking without someone seeing why.
  */
 
-export const CONTACT_ORIGINS = ["public_link", "agent", "member", "workflow"] as const;
+export const CONTACT_ORIGINS = ["public_link", "agent", "member", "workflow", "email"] as const;
 export type ContactOrigin = (typeof CONTACT_ORIGINS)[number];
 
 /** Where a field's value came from, weakest first. */
@@ -75,8 +75,13 @@ export const normalizePhone = (raw: unknown, callingCode = "1"): string | null =
 };
 
 /** The keys a contact is found by: "email:…" and "phone:…". */
-export const contactKeys = (contact: { readonly emails: readonly string[]; readonly phones: readonly string[] }): string[] => [
-  ...new Set([...contact.emails.map((email) => `email:${email}`), ...contact.phones.map((phone) => `phone:${phone}`)]),
+export const contactKeys = (contact: { readonly emails: readonly string[]; readonly phones: readonly string[]; readonly aliases?: readonly string[] }): string[] => [
+  ...new Set([
+    ...contact.emails.map((email) => `email:${email}`),
+    ...contact.phones.map((phone) => `phone:${phone}`),
+    /* A contact merged into this one: its old id still finds this one. */
+    ...(contact.aliases ?? []).map((id) => `alias:${id}`),
+  ]),
 ];
 
 /* ── values ────────────────────────────────────────────────────────────── */
@@ -197,6 +202,8 @@ export const contactSchema = z.object({
   /** What Comms has confirmed, once it can. */
   verified: z.object({ email: z.string().optional(), phone: z.string().optional() }).default({}),
   origin: z.enum(CONTACT_ORIGINS),
+  /** The ids of contacts merged into this one: an old booking or link naming one still finds this contact. */
+  aliases: z.array(z.string().min(1)).max(50).optional(),
   revision: z.number().int().positive().default(1),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -241,6 +248,12 @@ const fieldDefShape = z.object({
   /** Whether rules on it count only a record's or a member's value by default. */
   trust: z.enum(["any", "record"]).default("any"),
   sources: z.array(contactFieldSourceSchema).max(10).default([]),
+  /**
+   * Fill it from what they write: each new email from the contact is read
+   * once, and a value found for this is kept as theirs (`person`), only while
+   * the field is still empty. `look` says what to look for, in plain words.
+   */
+  fromEmail: z.object({ enabled: z.boolean().default(true), look: z.string().trim().max(400).default("") }).optional(),
   order: z.number().int().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -275,6 +288,12 @@ const matchRuleShape = z.object({
     )
     .min(1, "Say what to match on.")
     .max(3),
+  /**
+   * What a contact linked by this rule is: "Tenant", "Vendor". Workflows take
+   * a path by it (`contains(contact.types, "Tenant")`); a contact linked by
+   * several rules has several types, and one linked by none has none.
+   */
+  type: z.string().trim().max(60).optional(),
   savedBy: principalSchema,
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -338,4 +357,15 @@ export const fieldValueFor = (
       return value.length <= 2000 ? { ok: true, value } : bad("too long.");
     }
   }
+};
+
+/** A contact's types: those of the match rules whose record type it is linked to, each once, in rule order. */
+export const contactTypes = (contact: Pick<Contact, "links">, rules: readonly Pick<ContactMatchRule, "connection" | "entity" | "type">[]): string[] => {
+  const out: string[] = [];
+  for (const rule of rules) {
+    const type = rule.type?.trim();
+    if (!type || out.includes(type)) continue;
+    if (contact.links.some((link) => link.connection === rule.connection && link.entity === rule.entity)) out.push(type);
+  }
+  return out;
 };

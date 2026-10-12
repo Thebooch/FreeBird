@@ -1,0 +1,529 @@
+{
+  "id": "outlook",
+  "title": "Outlook",
+  "baseUrl": "https://graph.microsoft.com/v1.0",
+  "docsUrl": "https://learn.microsoft.com/en-us/graph/api/resources/mail-api-overview",
+  "keyHelp": "Outlook signs in with a Microsoft account. It needs an app registration's client ID and secret once per workspace: in Microsoft Entra, register an app with a Web redirect URI (the one Dash shows), add a client secret, and allow Mail.ReadWrite, Mail.Send, User.Read and offline_access.",
+  "dialect": {
+    "auth": {
+      "type": "oauth2",
+      "flow": "authorization_code",
+      "authorizeUrl": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+      "authorizeParams": {
+        "prompt": "select_account"
+      },
+      "tokenUrl": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+      "scopes": [
+        "offline_access",
+        "User.Read",
+        "Mail.ReadWrite",
+        "Mail.Send",
+        "Calendars.ReadWrite"
+      ],
+      "clientIdRef": "outlook-client-id",
+      "clientSecretRef": "outlook-client-secret",
+      "keyRef": "outlook-token",
+      "refreshRef": "outlook-refresh",
+      "clientAuth": "body",
+      "clientIdLabel": "Application (client) ID",
+      "clientSecretLabel": "Client secret"
+    },
+    "pagination": {
+      "kind": "none"
+    }
+  },
+  "ops": [
+    {
+      "id": "profile",
+      "title": "Mailbox profile",
+      "path": "/me",
+      "archetype": "summary",
+      "query": {
+        "$select": "mail,userPrincipalName,displayName"
+      }
+    },
+    {
+      "id": "messages",
+      "title": "Messages",
+      "path": "/me/messages",
+      "rowsPath": "$.value",
+      "timeFiltered": false,
+      "maxPages": 1,
+      "description": "Mail in every folder but drafts, newest first; one page at a time.",
+      "query": {
+        "$select": "id,conversationId,internetMessageId,from,toRecipients,ccRecipients,subject,bodyPreview,receivedDateTime,sentDateTime,isRead,isDraft,hasAttachments,parentFolderId",
+        "$orderby": "receivedDateTime desc",
+        "$filter": "receivedDateTime ge 1900-01-01T00:00:00Z and isDraft eq false"
+      },
+      "params": [
+        {
+          "name": "$top",
+          "in": "query",
+          "type": "number",
+          "default": 25
+        },
+        {
+          "name": "$skip",
+          "in": "query",
+          "type": "number"
+        },
+        {
+          "name": "$skiptoken",
+          "in": "query"
+        }
+      ]
+    },
+    {
+      "id": "search",
+      "title": "Search messages",
+      "path": "/me/messages",
+      "rowsPath": "$.value",
+      "timeFiltered": false,
+      "maxPages": 1,
+      "description": "Microsoft Search over every folder (KQL). Not sorted by date, and capped.",
+      "query": {
+        "$select": "id,conversationId,internetMessageId,from,toRecipients,ccRecipients,subject,bodyPreview,receivedDateTime,sentDateTime,isRead,isDraft,hasAttachments,parentFolderId"
+      },
+      "params": [
+        {
+          "name": "$search",
+          "in": "query",
+          "required": true,
+          "role": "search"
+        },
+        {
+          "name": "$top",
+          "in": "query",
+          "type": "number",
+          "default": 25
+        },
+        {
+          "name": "$skiptoken",
+          "in": "query"
+        }
+      ]
+    },
+    {
+      "id": "message",
+      "title": "Message",
+      "path": "/me/messages/{{param.id}}",
+      "archetype": "summary",
+      "query": {
+        "$select": "id,conversationId,internetMessageId,from,toRecipients,ccRecipients,subject,bodyPreview,receivedDateTime,sentDateTime,isRead,isDraft,hasAttachments,parentFolderId"
+      },
+      "params": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "role": "id"
+        }
+      ]
+    },
+    {
+      "id": "events",
+      "title": "Calendar events",
+      "path": "/me/calendarView",
+      "rowsPath": "$.value",
+      "timeFiltered": false,
+      "maxPages": 1,
+      "headers": {
+        "Prefer": "outlook.timezone=\"UTC\""
+      },
+      "query": {
+        "$select": "id,subject,start,end,showAs,isAllDay,isCancelled"
+      },
+      "params": [
+        {
+          "name": "startDateTime",
+          "in": "query",
+          "required": true
+        },
+        {
+          "name": "endDateTime",
+          "in": "query",
+          "required": true
+        },
+        {
+          "name": "$top",
+          "in": "query",
+          "type": "number",
+          "default": 250
+        }
+      ]
+    },
+    {
+      "id": "event",
+      "title": "Calendar event",
+      "path": "/me/events/{{param.id}}",
+      "archetype": "summary",
+      "headers": {
+        "Prefer": "outlook.timezone=\"UTC\""
+      },
+      "params": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "role": "id"
+        }
+      ]
+    },
+    {
+      "id": "delta",
+      "title": "New in the inbox",
+      "path": "/me/mailFolders/inbox/messages/delta",
+      "rowsPath": "$.value",
+      "timeFiltered": false,
+      "maxPages": 1,
+      "description": "What changed in the inbox since a delta token; $deltatoken=latest gives a token alone.",
+      "query": {
+        "$select": "id,conversationId,internetMessageId,from,toRecipients,ccRecipients,subject,bodyPreview,receivedDateTime,sentDateTime,isRead,isDraft,hasAttachments,parentFolderId"
+      },
+      "params": [
+        {
+          "name": "$deltatoken",
+          "in": "query"
+        },
+        {
+          "name": "$skiptoken",
+          "in": "query"
+        }
+      ]
+    },
+    {
+      "id": "conversation",
+      "title": "Conversation",
+      "path": "/me/messages",
+      "rowsPath": "$.value",
+      "timeFiltered": false,
+      "maxPages": 1,
+      "headers": {
+        "Prefer": "outlook.body-content-type=\"text\""
+      },
+      "query": {
+        "$select": "id,conversationId,internetMessageId,from,toRecipients,ccRecipients,subject,bodyPreview,receivedDateTime,sentDateTime,isRead,isDraft,hasAttachments,parentFolderId,body",
+        "$filter": "conversationId eq '{{param.conversationId}}'",
+        "$top": 50
+      }
+    }
+  ],
+  "resources": [
+    {
+      "id": "message",
+      "title": "Messages",
+      "idField": "id",
+      "listOp": "messages",
+      "detailOp": "message",
+      "detailParam": "id"
+    },
+    {
+      "id": "event",
+      "title": "Calendar events",
+      "idField": "id",
+      "listOp": "events",
+      "detailOp": "event",
+      "detailParam": "id"
+    }
+  ],
+  "entities": [
+    {
+      "id": "message",
+      "resource": "message",
+      "name": {
+        "one": "Message",
+        "many": "Messages"
+      },
+      "kind": "other",
+      "identity": {
+        "field": "id",
+        "observed": false
+      },
+      "fields": [],
+      "verified": false
+    },
+    {
+      "id": "event",
+      "resource": "event",
+      "name": {
+        "one": "Calendar event",
+        "many": "Calendar events"
+      },
+      "kind": "other",
+      "identity": {
+        "field": "id",
+        "observed": false
+      },
+      "fields": [],
+      "verified": false
+    }
+  ],
+  "writes": [
+    {
+      "id": "send",
+      "title": "Send an email",
+      "method": "POST",
+      "path": "/me/sendMail",
+      "returns": "none",
+      "confidence": "declared",
+      "body": {
+        "contentType": "text/plain",
+        "mime": {
+          "encoding": "base64"
+        },
+        "fields": [
+          {
+            "path": "to",
+            "label": "To",
+            "type": "string",
+            "required": true,
+            "description": "Addresses, separated by commas.",
+            "mappedBy": "person"
+          },
+          {
+            "path": "cc",
+            "label": "Cc",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "bcc",
+            "label": "Bcc",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "subject",
+            "label": "Subject",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "text",
+            "label": "Message",
+            "type": "string",
+            "required": true,
+            "mappedBy": "person"
+          },
+          {
+            "path": "inReplyTo",
+            "label": "In reply to",
+            "type": "string",
+            "mappedBy": "person",
+            "description": "The Message-ID it answers, so it threads."
+          },
+          {
+            "path": "references",
+            "label": "References",
+            "type": "string",
+            "mappedBy": "person"
+          }
+        ]
+      },
+      "role": {
+        "entity": "message",
+        "kind": "action",
+        "action": "send",
+        "danger": false
+      }
+    },
+    {
+      "id": "create-draft",
+      "title": "Save a draft",
+      "method": "POST",
+      "path": "/me/messages",
+      "returns": "record",
+      "confidence": "declared",
+      "body": {
+        "contentType": "text/plain",
+        "mime": {
+          "encoding": "base64"
+        },
+        "fields": [
+          {
+            "path": "to",
+            "label": "To",
+            "type": "string",
+            "required": true,
+            "description": "Addresses, separated by commas.",
+            "mappedBy": "person"
+          },
+          {
+            "path": "cc",
+            "label": "Cc",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "bcc",
+            "label": "Bcc",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "subject",
+            "label": "Subject",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "text",
+            "label": "Message",
+            "type": "string",
+            "required": true,
+            "mappedBy": "person"
+          },
+          {
+            "path": "inReplyTo",
+            "label": "In reply to",
+            "type": "string",
+            "mappedBy": "person",
+            "description": "The Message-ID it answers, so it threads."
+          },
+          {
+            "path": "references",
+            "label": "References",
+            "type": "string",
+            "mappedBy": "person"
+          }
+        ]
+      },
+      "role": {
+        "entity": "message",
+        "kind": "create"
+      }
+    },
+    {
+      "id": "create-event",
+      "title": "Add a calendar event",
+      "method": "POST",
+      "path": "/me/events",
+      "returns": "record",
+      "confidence": "declared",
+      "body": {
+        "contentType": "application/json",
+        "fields": [
+          {
+            "path": "subject",
+            "label": "Title",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "body.contentType",
+            "label": "Notes format",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "body.content",
+            "label": "Notes",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "start.dateTime",
+            "label": "Starts",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "start.timeZone",
+            "label": "Start zone",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "end.dateTime",
+            "label": "Ends",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "end.timeZone",
+            "label": "End zone",
+            "type": "string",
+            "mappedBy": "person"
+          }
+        ]
+      },
+      "role": {
+        "entity": "event",
+        "kind": "create"
+      }
+    },
+    {
+      "id": "update-event",
+      "title": "Change a calendar event",
+      "method": "PATCH",
+      "path": "/me/events/{{param.id}}",
+      "returns": "record",
+      "confidence": "declared",
+      "body": {
+        "contentType": "application/json",
+        "fields": [
+          {
+            "path": "subject",
+            "label": "Title",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "body.contentType",
+            "label": "Notes format",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "body.content",
+            "label": "Notes",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "start.dateTime",
+            "label": "Starts",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "start.timeZone",
+            "label": "Start zone",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "end.dateTime",
+            "label": "Ends",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "end.timeZone",
+            "label": "End zone",
+            "type": "string",
+            "mappedBy": "person"
+          }
+        ]
+      },
+      "role": {
+        "entity": "event",
+        "kind": "update"
+      }
+    },
+    {
+      "id": "delete-event",
+      "title": "Remove a calendar event",
+      "method": "DELETE",
+      "path": "/me/events/{{param.id}}",
+      "returns": "none",
+      "confidence": "declared",
+      "role": {
+        "entity": "event",
+        "kind": "delete"
+      }
+    }
+  ],
+  "writesVersion": 1,
+  "validateOpId": "profile"
+}

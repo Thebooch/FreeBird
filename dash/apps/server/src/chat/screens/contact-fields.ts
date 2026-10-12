@@ -37,6 +37,14 @@ const fieldChange = z.object({
   ask: z.string().trim().max(200).optional().describe("How to ask, like 'What's the address of the visit?'"),
   trust: z.enum(["any", "record"]).optional().describe("Whether rules count any value, or only a record's or a member's."),
   sources: z.array(sourceSchema).max(10).optional().describe("Records it copies from. Replaces the list."),
+  fromEmail: z
+    .object({
+      enabled: z.boolean().describe("Read it from each new email the contact sends, while it is still empty."),
+      look: z.string().trim().max(400).describe("What to look for, in plain words, like 'the date they want to move in'."),
+    })
+    .strict()
+    .optional()
+    .describe("Fill it from what they write: 'track their move-in date' turns this on."),
 });
 type FieldChange = z.infer<typeof fieldChange>;
 
@@ -49,10 +57,11 @@ const ruleChange = z.object({
     .min(1)
     .max(3)
     .describe("What equals what: the contact's email, phone or field, and the record's field."),
+  type: z.string().trim().max(60).optional().describe("What a contact this rule links is, like a customer: workflows take a path by it."),
 });
 type RuleChange = z.infer<typeof ruleChange>;
 
-const LABELS = { label: "Name", kind: "Holds", choices: "Choices", askable: "May be asked", ask: "Asked as", trust: "Rules count", sources: "Copies from" } as const;
+const LABELS = { label: "Name", kind: "Holds", choices: "Choices", askable: "May be asked", ask: "Asked as", trust: "Rules count", sources: "Copies from", fromEmail: "Read from their emails" } as const;
 
 export const contactFieldsScreen = (deps: ContactFieldsDeps): ComponentDefinition => {
   const { contacts, setup } = deps;
@@ -90,7 +99,7 @@ export const contactFieldsScreen = (deps: ContactFieldsDeps): ComponentDefinitio
       return {
         title: held ? `Change the contact field "${held.label}"` : `Add the contact field "${args.label ?? args.field}"`,
         summary: held ? "Only these change." : `Key: ${args.field}.`,
-        rows: changeRows((Object.keys(LABELS) as Array<keyof typeof LABELS>).map((key) => ({ label: LABELS[key], before: held?.[key], after: args[key], isNew: !held, words: key === "sources" ? (value: unknown) => ((value as ContactFieldDef["sources"]) ?? []).map((one) => `${one.connection} ${one.entity}.${one.field}`).join(", ") || "None" : shown }))),
+        rows: changeRows((Object.keys(LABELS) as Array<keyof typeof LABELS>).map((key) => ({ label: LABELS[key], before: held?.[key], after: args[key], isNew: !held, words: key === "sources" ? (value: unknown) => ((value as ContactFieldDef["sources"]) ?? []).map((one) => `${one.connection} ${one.entity}.${one.field}`).join(", ") || "None" : key === "fromEmail" ? (value: unknown) => { const one = value as ContactFieldDef["fromEmail"]; return one?.enabled ? `Yes: ${one.look}` : "No"; } : shown }))),
       };
     },
     handler: async (args) => {
@@ -143,10 +152,10 @@ export const contactFieldsScreen = (deps: ContactFieldsDeps): ComponentDefinitio
     preview: (args) => {
       const held = args.rule ? setup.matchRules.find((one) => one.id === args.rule) : undefined;
       const words = (rule: Pick<ContactMatchRule, "connection" | "entity" | "on">) => `${rule.connection} ${rule.entity}: ${rule.on.map((pair) => `${pair.contact} = ${pair.record}`).join(" and ")}`;
-      return { title: held ? "Change a match rule" : "Add a match rule", summary: "Contacts are matched to exactly one record; several leave a pick.", rows: [{ label: "Matches", value: held ? `${words(held)} → ${words(args)}` : words(args) }] };
+      return { title: held ? "Change a match rule" : "Add a match rule", summary: "Contacts are matched to exactly one record; several leave a pick.", rows: [{ label: "Matches", value: held ? `${words(held)} → ${words(args)}` : words(args) }, ...(args.type ? [{ label: "Contact type", value: args.type }] : [])] };
     },
     handler: async (args, ctx) => {
-      const saved = await contacts.putMatchRule(args.rule ?? null, { connection: args.connection, entity: args.entity, on: args.on }, actor(ctx));
+      const saved = await contacts.putMatchRule(args.rule ?? null, { connection: args.connection, entity: args.entity, on: args.on, ...(args.type?.trim() ? { type: args.type.trim() } : {}) }, actor(ctx));
       deps.changed();
       return landed({ saved: true, id: saved.id }, SCREEN, { title: "Match rules", item: saved.id, summary: `${args.rule ? "Changed" : "Added"} the match rule for ${saved.connection} ${saved.entity}.` });
     },

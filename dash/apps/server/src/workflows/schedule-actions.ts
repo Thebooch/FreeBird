@@ -472,7 +472,7 @@ const inform: ActionExecutor = async (ctx) => {
   const sender = env.outreach ?? notConnectedSender;
   let sent: Awaited<ReturnType<typeof sender.send>>;
   try {
-    sent = await sender.send({ channel, to, ...(channel === "email" ? { subject: `Your ${booking.type.name}` } : {}), text: wording, agent: { id: agent.id, name: agent.name }, key });
+    sent = await sender.send({ channel, to, ...(channel === "email" ? { subject: `Your ${booking.type.name}` } : {}), text: wording, agent: { id: agent.id, name: agent.name }, key, actor: ctx.actor });
   } catch (error) {
     return { kind: "failed", error: `Could not hand the message over to be sent: ${error instanceof Error ? error.message : String(error)}`, retryable: true };
   }

@@ -112,6 +112,24 @@ export const workflowTriggerSchema = z.discriminatedUnion("kind", [
     /** Cancelling the booking cancels this workflow's open cases for it, except ones a cancellation started. */
     endWhenCancelled: z.boolean().default(true),
   }),
+  /**
+   * A message arrives in Communications: an email now, a text or a call in
+   * step 9. Fired once per message, after its sender is a contact; the case's
+   * row is the message (`mailbox`, `id`, `threadId`, `from`, `subject`,
+   * `snippet`) with `contact.*`, its row key the mailbox and message id.
+   */
+  /**
+   * Someone new becomes a contact — by email, a booking page, an agent or a
+   * member — fired once, after they have been matched to the workspace's
+   * records, so `contact.types` is already known. The row is the contact.
+   */
+  z.object({ kind: z.literal("contact_created") }),
+  z.object({
+    kind: z.literal("message_received"),
+    channels: z.array(z.enum(["email", "text", "call"])).min(1).max(3).default(["email"]),
+    /** Mailboxes it listens to. Empty: every mailbox. */
+    mailboxes: z.array(idSchema).max(50).default([]),
+  }),
 ]);
 export type WorkflowTrigger = z.infer<typeof workflowTriggerSchema>;
 export type WorkflowTriggerKind = WorkflowTrigger["kind"];
@@ -327,7 +345,9 @@ export const chainEdges = (nodes: ReadonlyArray<{ id: string }>): WorkflowEdge[]
 
 /** How a run or a case started. */
 export const workflowStartSchema = z.object({
-  kind: z.enum(["schedule", "every", "record_created", "record_changed", "agent", "manual", "approval", "workflow", "booking"]),
+  kind: z.enum(["schedule", "every", "record_created", "record_changed", "agent", "manual", "approval", "workflow", "booking", "message", "contact"]),
+  /** For a case a message started: `<mailbox>:<message id>`. */
+  message: z.string().optional(),
   /** For a case a booking started: the event that started it. */
   bookingEvent: z.string().optional(),
   /** The person who started it by hand, or approved the request that did. */
@@ -752,6 +772,13 @@ export const describeTrigger = (
         : "When an agent is asked";
     case "manual":
       return "By hand";
+    case "contact_created":
+      return "When someone new becomes a contact";
+    case "message_received": {
+      const where = trigger.mailboxes.length === 0 ? "" : ` to ${trigger.mailboxes.map((id) => names.connection?.(id) ?? id).join(" or ")}`;
+      const what = trigger.channels.length === 1 && trigger.channels[0] === "email" ? "an email" : "a message";
+      return `When ${what} arrives${where}`;
+    }
     case "booking": {
       const types = trigger.types.map((id) => names.type?.(id) ?? id);
       const what = types.length === 0 ? "a booking" : types.length === 1 ? `a ${types[0]} booking` : `a ${types.slice(0, -1).join(", ")} or ${types.at(-1)} booking`;

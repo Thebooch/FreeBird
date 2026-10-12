@@ -30,6 +30,7 @@ import { DbSchedulingStore } from "../scheduling/store.js";
 import { DbSnapshotStore } from "../history/store.js";
 import { mailerFromEnv } from "../reports/mailer.js";
 import { DbReportStore } from "../reports/store.js";
+import { DbCommsStore } from "../comms/store.js";
 import { defaultModelId, llmForModel, modelForTask } from "../llm.js";
 import { TIER_MODELS, isTask, providerFor } from "../models.js";
 import { buildPartRegistry } from "../parts.js";
@@ -165,6 +166,7 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     bookings: new DbBookingStore(db, workspace),
     tokens: new DbPublicTokenStore(db, workspace),
     reports: new DbReportStore(db, workspace),
+    comms: new DbCommsStore(db, vault, workspace),
   });
 
   /**
@@ -379,6 +381,15 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     // The keeper: see `keeper/keeper.ts`. On here, off in tests.
     keeper: true,
     email: mailer.email,
+    /* Mail sign-in through the operator's own registered apps, when given: nobody else pastes anything. */
+    mailApps: {
+      ...(process.env.DASH_GOOGLE_CLIENT_ID && process.env.DASH_GOOGLE_CLIENT_SECRET
+        ? { gmail: { clientId: process.env.DASH_GOOGLE_CLIENT_ID, clientSecret: process.env.DASH_GOOGLE_CLIENT_SECRET } }
+        : {}),
+      ...(process.env.DASH_MICROSOFT_CLIENT_ID && process.env.DASH_MICROSOFT_CLIENT_SECRET
+        ? { outlook: { clientId: process.env.DASH_MICROSOFT_CLIENT_ID, clientSecret: process.env.DASH_MICROSOFT_CLIENT_SECRET } }
+        : {}),
+    },
     ...(mailer.problem ? { emailProblem: mailer.problem } : {}),
     // Workflows start by themselves on their schedules and API triggers. On here, off in tests.
     workflowRunner: true,

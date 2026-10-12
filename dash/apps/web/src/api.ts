@@ -1,6 +1,13 @@
 import type { ChatMessage } from "@freebirdai/core";
 import type { EachAnswer, EachRequest } from "@freebirdai/dash-react";
 import type {
+  CommsSettings,
+  MailboxOwner,
+  MailboxView,
+  MailDraft,
+  MailMessage,
+  MailPage,
+  MailThreadMessage,
   Report,
   ReportInput,
   ReportSend,
@@ -929,7 +936,7 @@ export interface ChatTopic {
 /** Work that finished, listed in the timeline beside the topics. */
 export interface ChatTimelineTask {
   readonly id: string;
-  readonly kind: "run" | "task" | "report";
+  readonly kind: "run" | "task" | "report" | "email";
   readonly at: string;
   readonly title: string;
   readonly detail?: string;
@@ -965,6 +972,14 @@ const timeZone = (): string => {
     return "UTC";
   }
 };
+
+/** The contact beside a conversation: who they are, their types and fields. */
+export interface CommsContactCard {
+  readonly id: string;
+  readonly name: string;
+  readonly types: readonly string[];
+  readonly fields: readonly { readonly label: string; readonly value: string }[];
+}
 
 /** A report as listed: when it is next due, by its schedule. */
 export type ReportView = Report & { readonly nextAt: string | null };
@@ -1477,6 +1492,48 @@ export const api = {
   workflowFromTemplate: (id: string, values: Record<string, string>, name?: string, types?: readonly string[]): Promise<WorkflowSpec> =>
     request(`/api/workflow-templates/${encodeURIComponent(id)}/workflow`, json({ values, ...(name ? { name } : {}), ...(types && types.length > 0 ? { types } : {}) })),
 
+  /* ── communications ────────────────────────────────────────────────── */
+
+  /** Every mailbox this person may read, and whether each provider's OAuth app has been given. */
+  commsMailboxes: (): Promise<{ mailboxes: MailboxView[]; apps: { gmail: boolean; outlook: boolean } }> => request("/api/comms/mailboxes"),
+  /** The workspace's own OAuth app for a provider, given once for every mailbox of it. */
+  setCommsApp: (provider: "gmail" | "outlook", clientId: string, clientSecret: string): Promise<{ gmail: boolean; outlook: boolean }> =>
+    request(`/api/comms/apps/${provider}`, json({ clientId, clientSecret })),
+  addMailbox: (input: { provider: "gmail" | "outlook"; owner: MailboxOwner; title?: string }): Promise<MailboxView> => request("/api/comms/mailboxes", json(input)),
+  setMailboxOwner: (id: string, owner: MailboxOwner): Promise<MailboxView> =>
+    request(`/api/comms/mailboxes/${encodeURIComponent(id)}/owner`, { ...json({ owner }), method: "PUT" }),
+  /** Use a mailbox's calendar as a member's: busy times kept free, appointments written in. Null stops it. */
+  setMailboxCalendar: (id: string, calendar: { member: string; busy: boolean; push: boolean } | null): Promise<MailboxView> =>
+    request(`/api/comms/mailboxes/${encodeURIComponent(id)}/calendar`, { ...json({ calendar }), method: "PUT" }),
+  syncCalendars: (): Promise<{ written: number }> => request("/api/comms/calendar/sync", json({})),
+  removeMailbox: (id: string): Promise<{ removed: string }> => request(`/api/comms/mailboxes/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  refreshMailbox: (id: string): Promise<MailboxView | null> => request(`/api/comms/mailboxes/${encodeURIComponent(id)}/refresh`, json({})),
+  /** One page of an area's mail, merged by time across the mailboxes named (all of them when none are). */
+  commsList: (input: { area: string; mailboxes?: readonly string[]; cursor?: string; q?: string }): Promise<MailPage> => {
+    const query = new URLSearchParams({ area: input.area });
+    if (input.mailboxes && input.mailboxes.length > 0) query.set("mailboxes", input.mailboxes.join(","));
+    if (input.cursor) query.set("cursor", input.cursor);
+    if (input.q) query.set("q", input.q);
+    return request(`/api/comms?${query.toString()}`);
+  },
+  commsThread: (mailbox: string, thread: string): Promise<{ messages: (MailThreadMessage & { status?: string })[]; drafts: MailDraft[]; mailbox: MailboxView; contact?: CommsContactCard }> =>
+    request(`/api/comms/threads/${encodeURIComponent(mailbox)}/${encodeURIComponent(thread)}`),
+  /** Mark a message looked at (triaged), set aside (ignored) or new again: Dash's own note. */
+  setMessageStatus: (mailbox: string, message: string, status: "new" | "triaged" | "ignored"): Promise<unknown> =>
+    request(`/api/comms/messages/${encodeURIComponent(mailbox)}/${encodeURIComponent(message)}/status`, json({ status })),
+  startReply: (mailbox: string, replyTo: string, threadId?: string): Promise<MailDraft> => request("/api/comms/drafts", json({ mailbox, replyTo, ...(threadId ? { threadId } : {}) })),
+  editDraft: (id: string, edit: Partial<Pick<MailDraft, "to" | "cc" | "subject" | "text">>): Promise<MailDraft> =>
+    request(`/api/comms/drafts/${encodeURIComponent(id)}`, { ...json(edit), method: "PUT" }),
+  /** What sending (or saving to the provider's drafts) would do: the review to approve. */
+  reviewDraft: (id: string, save = false): Promise<WriteReviewView> => request(`/api/comms/drafts/${encodeURIComponent(id)}/review`, json({ save })),
+  sendDraft: (id: string, review: Pick<WriteReviewView, "pendingId" | "digest">, save = false): Promise<MailDraft> =>
+    request(`/api/comms/drafts/${encodeURIComponent(id)}/send`, json({ pendingId: review.pendingId, digest: review.digest, ...(save ? { save: true } : {}) })),
+  discardDraft: (id: string): Promise<MailDraft> => request(`/api/comms/drafts/${encodeURIComponent(id)}/discard`, json({})),
+  /** Read the newest 100 of each mailbox for the contact fields set to fill from email. */
+  backfillContactFields: (): Promise<{ read: number; filled: number }> => request("/api/comms/backfill-fields", json({})),
+  commsSettings: (): Promise<CommsSettings> => request("/api/comms/settings"),
+  putCommsSettings: (settings: CommsSettings): Promise<CommsSettings> => request("/api/comms/settings", { ...json(settings), method: "PUT" }),
+
   /* ── timed reports ─────────────────────────────────────────────────── */
 
   /** Every report, or those drawing from one tab, and whether email is set up. */
@@ -1596,6 +1653,12 @@ export const api = {
   makeContactLink: (id: string, type?: string): Promise<{ url: string; link: BookingLinkInfo }> => request(`/api/contacts/${encodeURIComponent(id)}/links`, json(type ? { type } : {})),
   revokeContactLink: (id: string, link: string): Promise<BookingLinkInfo> => request(`/api/contacts/${encodeURIComponent(id)}/links/${encodeURIComponent(link)}/revoke`, json({})),
   contactSetup: (): Promise<ContactSetup> => request("/api/contacts/setup"),
+  /** Fold another contact into this one; its id keeps finding this one. */
+  mergeContact: (keep: string, other: string): Promise<Contact> => request(`/api/contacts/${encodeURIComponent(keep)}/merge`, json({ other })),
+  /** Try the match rules once on every contact not yet linked. */
+  matchAllContacts: (): Promise<{ tried: number; linked: number }> => request("/api/contacts/match-all", json({})),
+  /** Every message to or from a contact, across the mailboxes this person may read. */
+  contactMessages: (id: string): Promise<{ messages: MailMessage[]; problems: { mailbox: string; message: string }[] }> => request(`/api/comms/contacts/${encodeURIComponent(id)}/messages`),
   contactSources: (): Promise<ContactSource[]> => request("/api/contacts/sources"),
   putContactField: (key: string, input: ContactFieldDefInput): Promise<ContactFieldDef> =>
     request(`/api/contacts/fields/${encodeURIComponent(key)}`, { ...json(input), method: "PUT" }),

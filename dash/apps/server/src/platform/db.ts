@@ -163,6 +163,65 @@ ALTER TABLE dash_calendar_events ADD COLUMN IF NOT EXISTS ends_at TEXT;
 ALTER TABLE dash_calendar_events ADD COLUMN IF NOT EXISTS dedupe_key TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS dash_calendar_events_dedupe ON dash_calendar_events (workspace, dedupe_key) WHERE dedupe_key IS NOT NULL;
 
+-- Communications (comms/store.ts): the newest 100 per mailbox, sealed; where each stands; what agents did; drafts.
+CREATE TABLE IF NOT EXISTS dash_mail_recent (
+  workspace  TEXT NOT NULL,
+  mailbox    TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  at         TEXT NOT NULL,
+  record     TEXT NOT NULL,
+  PRIMARY KEY (workspace, mailbox, message_id)
+);
+
+CREATE INDEX IF NOT EXISTS dash_mail_recent_at ON dash_mail_recent (workspace, mailbox, at);
+
+CREATE TABLE IF NOT EXISTS dash_comms_mailboxes (
+  workspace TEXT NOT NULL,
+  mailbox   TEXT NOT NULL,
+  record    JSONB NOT NULL,
+  PRIMARY KEY (workspace, mailbox)
+);
+
+CREATE TABLE IF NOT EXISTS dash_comms_state (
+  workspace  TEXT NOT NULL,
+  mailbox    TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  record     JSONB NOT NULL,
+  PRIMARY KEY (workspace, mailbox, message_id)
+);
+
+CREATE TABLE IF NOT EXISTS dash_comms_drafts (
+  workspace  TEXT NOT NULL,
+  id         TEXT NOT NULL,
+  mailbox    TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  record     JSONB NOT NULL,
+  PRIMARY KEY (workspace, id)
+);
+
+CREATE INDEX IF NOT EXISTS dash_comms_drafts_mailbox ON dash_comms_drafts (workspace, mailbox, updated_at);
+
+CREATE TABLE IF NOT EXISTS dash_comms_calendar (
+  workspace TEXT NOT NULL,
+  mailbox   TEXT NOT NULL,
+  entry     TEXT NOT NULL,
+  external  TEXT NOT NULL,
+  digest    TEXT NOT NULL,
+  PRIMARY KEY (workspace, mailbox, entry)
+);
+
+CREATE TABLE IF NOT EXISTS dash_comms_notices (
+  workspace TEXT NOT NULL,
+  key       TEXT NOT NULL,
+  at        TEXT NOT NULL,
+  PRIMARY KEY (workspace, key)
+);
+
+CREATE TABLE IF NOT EXISTS dash_comms_settings (
+  workspace TEXT PRIMARY KEY,
+  record    JSONB NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS dash_tracked_values (
   workspace TEXT NOT NULL,
   id        TEXT NOT NULL,

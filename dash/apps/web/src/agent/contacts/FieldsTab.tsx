@@ -112,9 +112,12 @@ export const FieldsTab = ({ canManage }: { readonly canManage: boolean }): JSX.E
               <p className="dash-sched-panel__lede">A contact is linked to a record when exactly one record matches. Matching reads as the person who saved the rule.</p>
             </div>
             {canManage && (
-              <Button onClick={() => setEditing({ kind: "rule", rule: null })} testId="match-add">
-                New rule
-              </Button>
+              <span className="dash-sched-panel__actions">
+                {setup.matchRules.length > 0 && <MatchAllButton />}
+                <Button onClick={() => setEditing({ kind: "rule", rule: null })} testId="match-add">
+                  New rule
+                </Button>
+              </span>
             )}
           </header>
           {setup.matchRules.length === 0 ? (
@@ -128,7 +131,7 @@ export const FieldsTab = ({ canManage }: { readonly canManage: boolean }): JSX.E
                       ⇄
                     </span>
                     <span className="dash-sched-item__main">
-                      <span className="dash-sched-item__title">{recordTypeWords(rule.connection, rule.entity, sources)}</span>
+                      <span className="dash-sched-item__title">{recordTypeWords(rule.connection, rule.entity, sources)}{rule.type ? ` · ${rule.type}` : ""}</span>
                       <span className="dash-sched-item__meta">{rule.on.map((pair) => `${pair.contact} = ${pair.record}`).join(" and ")}</span>
                     </span>
                   </button>
@@ -195,7 +198,7 @@ const FieldSheet = ({
 }): JSX.Element => {
   const [draft, setDraft] = useState<ContactFieldDefInput>(() =>
     def
-      ? { label: def.label, kind: def.kind, ...(def.choices ? { choices: def.choices } : {}), askable: def.askable, ...(def.ask ? { ask: def.ask } : {}), trust: def.trust, sources: def.sources }
+      ? { label: def.label, kind: def.kind, ...(def.choices ? { choices: def.choices } : {}), askable: def.askable, ...(def.ask ? { ask: def.ask } : {}), trust: def.trust, sources: def.sources, ...(def.fromEmail ? { fromEmail: def.fromEmail } : {}) }
       : { label: "", kind: "text", askable: false, trust: "any", sources: [] },
   );
   const [key, setKey] = useState(def?.key ?? "");
@@ -277,6 +280,26 @@ const FieldSheet = ({
         {draft.kind === "choice" && (
           <FormRow label="Choices">{(field) => <ChipsInput id={field} values={draft.choices ?? []} placeholder="new, existing" onChange={(choices) => set("choices", choices)} testId="field-choices" />}</FormRow>
         )}
+      </SheetSection>
+
+      <SheetSection title="From their emails" description="Read from each new email they send, while the field is still empty. A value your team set, or a record holds, is never replaced.">
+        <FormRow label="Fill from email">
+          {() => (
+            <Switch
+              checked={draft.fromEmail?.enabled ?? false}
+              onChange={(enabled) => set("fromEmail", { enabled, look: draft.fromEmail?.look ?? "" })}
+              label={draft.fromEmail?.enabled ? "Read from their emails" : "Not read from email"}
+            />
+          )}
+        </FormRow>
+        {draft.fromEmail?.enabled && (
+          <FormRow label="What to look for">
+            {(field) => (
+              <TextInput id={field} value={draft.fromEmail?.look ?? ""} placeholder="The date they want to move in" maxLength={400} onChange={(look) => set("fromEmail", { enabled: true, look })} testId="field-from-email" />
+            )}
+          </FormRow>
+        )}
+        {def?.fromEmail?.enabled && <BackfillButton />}
       </SheetSection>
 
       <SheetSection title="Asking" description="Whether the booking page and agents may ask the person for it. Leave it off for anything they could answer to their own advantage.">
@@ -426,6 +449,67 @@ const SourceEditor = ({
 
 /* ── a match rule ──────────────────────────────────────────────────────── */
 
+/** The newest 100 of each mailbox, read once for every field set to fill from email: for a field just added. */
+const BackfillButton = (): JSX.Element => {
+  const [busy, setBusy] = useState(false);
+  const [said, setSaid] = useState<string | null>(null);
+  return (
+    <FormRow label="Earlier email" hint="New email is read as it arrives. This reads what each mailbox already kept (its newest 100) for the fields still empty.">
+      {() => (
+        <span className="dash-sched-panel__actions">
+          <Button
+            busy={busy}
+            testId="field-backfill"
+            onClick={() => {
+              setBusy(true);
+              setSaid(null);
+              void api
+                .backfillContactFields()
+                .then(
+                  (done) => setSaid(`Read ${done.read} email${done.read === 1 ? "" : "s"}; filled ${done.filled} value${done.filled === 1 ? "" : "s"}.`),
+                  (error: unknown) => setSaid(error instanceof Error ? error.message : String(error)),
+                )
+                .finally(() => setBusy(false));
+            }}
+          >
+            Read the newest 100 now
+          </Button>
+          {said && <span className="dash-hint">{said}</span>}
+        </span>
+      )}
+    </FormRow>
+  );
+};
+
+/** Try the rules once on every contact not yet linked: after adding or changing one. */
+const MatchAllButton = (): JSX.Element => {
+  const [busy, setBusy] = useState(false);
+  const [said, setSaid] = useState<string | null>(null);
+  return (
+    <>
+      {said && <span className="dash-hint">{said}</span>}
+      <Button
+        tone="ghost"
+        busy={busy}
+        testId="match-all"
+        onClick={() => {
+          setBusy(true);
+          setSaid(null);
+          void api
+            .matchAllContacts()
+            .then(
+              (done) => setSaid(done.tried === 0 ? "Every contact is already linked." : `Linked ${done.linked} of ${done.tried} contact${done.tried === 1 ? "" : "s"} not yet linked.`),
+              (error: unknown) => setSaid(error instanceof Error ? error.message : String(error)),
+            )
+            .finally(() => setBusy(false));
+        }}
+      >
+        Match existing contacts
+      </Button>
+    </>
+  );
+};
+
 const MatchRuleSheet = ({
   rule,
   fields,
@@ -440,7 +524,7 @@ const MatchRuleSheet = ({
   readonly onSaved: () => Promise<void>;
 }): JSX.Element => {
   const [draft, setDraft] = useState<ContactMatchRuleInput>(() =>
-    rule ? { connection: rule.connection, entity: rule.entity, on: rule.on.map((pair) => ({ ...pair })) } : { connection: sources[0]?.connection ?? "", entity: "", on: [{ contact: "email", record: "" }] },
+    rule ? { connection: rule.connection, entity: rule.entity, on: rule.on.map((pair) => ({ ...pair })), ...(rule.type ? { type: rule.type } : {}) } : { connection: sources[0]?.connection ?? "", entity: "", on: [{ contact: "email", record: "" }] },
   );
   const connection = sources.find((one) => one.connection === draft.connection);
   const entity = connection?.entities.find((one) => one.entity === draft.entity);
@@ -472,6 +556,9 @@ const MatchRuleSheet = ({
         : {})}
     >
       <SheetSection title="Match against" description="Saving makes you the person matching reads as: it can only find records you may read.">
+        <FormRow label="Contact type" hint="A name for what a contact linked by this rule is. Workflows can take a path by it.">
+          {(field) => <TextInput id={field} value={draft.type ?? ""} placeholder="A short label" maxLength={60} onChange={(type) => setDraft({ ...draft, type })} testId="match-type" />}
+        </FormRow>
         <FormRow label="Connection">
           {(field) => (
             <select id={field} className="dash-sched-input" value={draft.connection} onChange={(event) => setDraft({ ...draft, connection: event.target.value, entity: "", on: draft.on.map((pair) => ({ ...pair, record: "" })) })}>

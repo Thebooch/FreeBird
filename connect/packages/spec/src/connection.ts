@@ -180,6 +180,35 @@ export const opSchema = opObject.superRefine(readRules);
 
 export type OpSpec = z.infer<typeof opSchema>;
 
+/** Whose a mailbox is. See `connectionSchema.mailbox`. */
+export const mailboxOwnerSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("team") }),
+  z.object({ kind: z.literal("agent"), id: idSchema }),
+]);
+export type MailboxOwner = z.infer<typeof mailboxOwnerSchema>;
+
+export const MAIL_PROVIDERS = ["gmail", "outlook"] as const;
+
+export const mailboxSchema = z.object({
+  provider: z.enum(MAIL_PROVIDERS),
+  /** The address it sends from, once a read has said. */
+  address: z.string().max(320).optional(),
+  owner: mailboxOwnerSchema.default({ kind: "team" }),
+  /**
+   * Its calendar is this member's: their busy times there are kept free when
+   * they are booked (`busy`), and their appointments are written into it
+   * (`push`). Absent: its calendar is not used.
+   */
+  calendar: z
+    .object({
+      member: z.string().min(1).max(200),
+      busy: z.boolean().default(true),
+      push: z.boolean().default(true),
+    })
+    .optional(),
+});
+export type MailboxSpec = z.infer<typeof mailboxSchema>;
+
 export const connectionSchema = z.object({
   credentialsRevision: z.number().int().min(0).optional(),
   paginationPending: z.boolean().optional(),
@@ -253,6 +282,14 @@ export const connectionSchema = z.object({
   authRequired: z.boolean().default(false),
   /** Set when an MCP tool returns prose rather than a declared outputSchema. */
   brittle: z.boolean().optional(),
+  /**
+   * This connection is somebody's mailbox: Gmail or Outlook, signed in to.
+   * Its address once it is known, and whose it is — the team's own, or an
+   * address set up for one agent alone — which decides where its mail is
+   * shown and who may send from it. Owned by the host like `onboarding`;
+   * the engine reads and sends it like any other connection.
+   */
+  mailbox: mailboxSchema.optional(),
   /**
    * Which parts of this API somebody wanted, and the boards that came of it.
    *

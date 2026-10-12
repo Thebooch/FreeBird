@@ -1,5 +1,5 @@
 import { Button } from "@freebirdai/dash-components";
-import { BOOKING_EVENTS, BOOKING_EVENT_WORDS, WORKFLOW_EVERY, describeCron, type WorkflowInputDef, type WorkflowTrigger } from "@freebirdai/dash-spec";
+import { BOOKING_EVENTS, BOOKING_EVENT_WORDS, WORKFLOW_EVERY, describeCron, type MailboxView, type WorkflowInputDef, type WorkflowTrigger } from "@freebirdai/dash-spec";
 import { useEffect, useState } from "react";
 import { api, type ConnectionSummary } from "../../api";
 import type { Entities } from "../entities.js";
@@ -206,8 +206,48 @@ export const TriggerEditor = ({
     )}
     {trigger.kind === "manual" && <span className="dash-hint">Runs when someone presses Run now.</span>}
     {trigger.kind === "booking" && <BookingTriggerEditor trigger={trigger} onChange={onChange} />}
+    {trigger.kind === "message_received" && <MailTriggerEditor trigger={trigger} onChange={onChange} />}
+    {trigger.kind === "contact_created" && (
+      <span className="dash-hint">
+        Once per person, after they are matched to your records. The row is the contact: {"{{ contact.name }}"}, {"{{ contact.email }}"}, their types and fields.
+      </span>
+    )}
   </div>
 );
+
+/** Which mailboxes it listens to: none ticked is every one. */
+const MailTriggerEditor = ({
+  trigger,
+  onChange,
+}: {
+  readonly trigger: Extract<WorkflowTrigger, { kind: "message_received" }>;
+  readonly onChange: (trigger: WorkflowTrigger) => void;
+}): JSX.Element => {
+  const [boxes, setBoxes] = useState<readonly MailboxView[]>([]);
+  useEffect(() => {
+    void api.commsMailboxes().then((answer) => setBoxes(answer.mailboxes), () => setBoxes([]));
+  }, []);
+  return (
+    <div className="dash-wf-trigger__mail">
+      {boxes.map((box) => (
+        <label key={box.id} className="dash-check">
+          <input
+            type="checkbox"
+            checked={trigger.mailboxes.includes(box.id)}
+            onChange={(event) =>
+              onChange({ ...trigger, mailboxes: event.target.checked ? [...trigger.mailboxes, box.id] : trigger.mailboxes.filter((one) => one !== box.id) })
+            }
+          />
+          {box.address ?? box.title}
+        </label>
+      ))}
+      <span className="dash-hint">
+        {boxes.length === 0 ? "Add a mailbox under Comms first." : "Each email starts it once, after its sender is a contact. None ticked: every mailbox."} The row is the email:{" "}
+        {"{{ from.address }}"}, {"{{ subject }}"}, {"{{ snippet }}"}, and {"{{ contact.name }}"}.
+      </span>
+    </div>
+  );
+};
 
 /** Which booking events start it, for which appointment types, and whether cancelling the booking ends it. */
 const BookingTriggerEditor = ({

@@ -28,6 +28,8 @@ export const contactRoutes = (deps: {
   readonly contacts: ContactService;
   readonly policy: Policy;
   readonly sources?: (principal: NonNullable<FastifyRequest["principal"]>) => Promise<readonly ContactSource[]>;
+  /** Two contacts were merged: what else names the one that went (bookings) is moved to the one that stays. */
+  readonly merged?: (from: string, to: string) => Promise<void>;
 }) =>
   async (app: FastifyInstance): Promise<void> => {
     const { contacts, policy } = deps;
@@ -79,6 +81,18 @@ export const contactRoutes = (deps: {
         return { ok: true };
       }),
     );
+    app.post(
+      "/api/contacts/:id/merge",
+      manage(async (_principal, params, body) => {
+        const other = typeof (body as { other?: unknown } | null)?.other === "string" ? (body as { other: string }).other : "";
+        if (!other) throw new ContactError("Say which contact to merge into this one.");
+        const merged = await contacts.merge(params["id"]!, other);
+        await deps.merged?.(other, merged.id);
+        return merged;
+      }),
+    );
+    /* A match rule added or changed: tried once on every contact not yet linked. */
+    app.post("/api/contacts/match-all", manage(async () => contacts.matchAll()));
     app.post("/api/contacts/:id/match", manage(async (_principal, params) => contacts.matchWithDetail(params["id"]!)));
     app.post("/api/contacts/:id/refresh", manage(async (principal, params) => contacts.refreshWithDetail(params["id"]!, principal)));
     app.post("/api/contacts/:id/link", manage(async (principal, params, body) => contacts.link(params["id"]!, target(body), principal)));

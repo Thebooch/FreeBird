@@ -366,6 +366,7 @@ export {
   contactLinkSchema,
   contactMatchRuleInputSchema,
   contactMatchRuleSchema,
+  contactTypes,
   contactSchema,
   contactStatsSchema,
   fieldRefSchema,
@@ -581,3 +582,37 @@ export type {
   TrackedValueInput,
 } from "./report.js";
 export { DASH_SCREENS, type DashScreen } from "./screens.js";
+
+export {
+  COMMS_STATUSES,
+  DEFAULT_CONTACT_IGNORE,
+  DRAFT_STATUSES,
+  areaKey,
+  areaOf,
+  commsSettingsSchema,
+  commsStateSchema,
+  ignoredAddress,
+  isEmptyMailQuery,
+  mailAddressSchema,
+  mailDraftEditSchema,
+  mailDraftSchema,
+  mailMessageSchema,
+  matchesMailQuery,
+  parseAreaKey,
+  parseMailQuery,
+} from "./comms.js";
+
+export type {
+  CommsArea,
+  CommsSettings,
+  CommsState,
+  CommsStatus,
+  MailAddress,
+  MailDraft,
+  MailDraftStatus,
+  MailMessage,
+  MailPage,
+  MailQuery,
+  MailThreadMessage,
+  MailboxView,
+} from "./comms.js";

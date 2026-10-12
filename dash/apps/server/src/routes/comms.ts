@@ -1,0 +1,212 @@
+import { WriteError } from "@freebirdai/connect/host";
+import { COMMS_STATUSES, commsSettingsSchema, mailboxOwnerSchema, parseAreaKey, type Principal } from "@freebirdai/dash-spec";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { z } from "zod";
+import { CommsError, type CommsService } from "../comms/service.js";
+
+/**
+ * Communications (`comms/`).
+ *
+ * Reading mail needs `records.read` on each mailbox, asked per mailbox by the
+ * service. Adding a mailbox, its app and who owns it is connection work
+ * (`connections.manage`, guarded in `identity/guard.ts`). Sending a draft is
+ * `records.act` on its mailbox, asked by the service and again by the write
+ * service when it commits.
+ */
+
+const providerSchema = z.enum(["gmail", "outlook"]);
+
+/** Who a contact is, as Comms shows them beside a conversation. */
+export interface ContactCard {
+  readonly id: string;
+  readonly name: string;
+  readonly types: readonly string[];
+  readonly fields: readonly { readonly label: string; readonly value: string }[];
+}
+
+export const commsRoutes = (deps: {
+  readonly comms: CommsService;
+  /** A contact's addresses, by id; null when there is no such contact. */
+  readonly contactAddresses?: (id: string) => Promise<readonly string[] | null>;
+  /** Read the newest 100 of each mailbox for the contact fields set to fill from email. */
+  readonly backfillFields?: (principal: Principal) => Promise<{ readonly read: number; readonly filled: number }>;
+  /** The contact with this email, for the card beside a conversation. */
+  readonly contactCard?: (email: string) => Promise<ContactCard | null>;
+}) =>
+  async (app: FastifyInstance): Promise<void> => {
+    const { comms } = deps;
+    const handled =
+      <P = Record<string, string>, B = unknown, Q = Record<string, string | undefined>>(
+        run: (principal: Principal, request: { readonly params: P; readonly body: B; readonly query: Q }) => Promise<unknown>,
+      ) =>
+      async (request: FastifyRequest, reply: FastifyReply) => {
+        const principal = request.principal;
+        if (!principal) return reply.status(401).send({ error: "Sign in to continue." });
+        try {
+          return await run(principal, { params: (request.params ?? {}) as P, body: request.body as B, query: (request.query ?? {}) as Q });
+        } catch (error) {
+          if (error instanceof CommsError) return reply.status(error.status).send({ error: error.message, ...error.extra });
+          if (error instanceof WriteError)
+            return reply.status(error.status).send({ error: error.message, code: error.code, ...(error.extra.review ? { review: error.extra.review } : {}), ...(error.extra.fields ? { fields: error.extra.fields } : {}) });
+          if (error instanceof z.ZodError) return reply.status(400).send({ error: "That request is not one this understands.", detail: error.issues });
+          throw error;
+        }
+      };
+
+    app.get(
+      "/api/comms/mailboxes",
+      handled(async (principal) => ({ mailboxes: await comms.mailboxes(principal), apps: comms.apps() })),
+    );
+
+    app.post(
+      "/api/comms/apps/:provider",
+      handled<{ provider: string }, { clientId?: string; clientSecret?: string }>(async (_principal, request) => {
+        comms.setApp(providerSchema.parse(request.params.provider), String(request.body?.clientId ?? ""), String(request.body?.clientSecret ?? ""));
+        return comms.apps();
+      }),
+    );
+
+    app.post(
+      "/api/comms/mailboxes",
+      handled<Record<string, string>, unknown>(async (_principal, request) => {
+        const body = z.object({ provider: providerSchema, owner: mailboxOwnerSchema, title: z.string().max(120).optional() }).parse(request.body);
+        return comms.addMailbox(body);
+      }),
+    );
+
+    app.put(
+      "/api/comms/mailboxes/:id/owner",
+      handled<{ id: string }, { owner?: unknown }>(async (_principal, request) => comms.setOwner(request.params.id, mailboxOwnerSchema.parse(request.body?.owner))),
+    );
+
+    app.put(
+      "/api/comms/mailboxes/:id/calendar",
+      handled<{ id: string }, { calendar?: unknown }>(async (principal, request) => {
+        const calendar = z.object({ member: z.string().min(1).max(200), busy: z.boolean(), push: z.boolean() }).nullable().parse(request.body?.calendar ?? null);
+        return comms.setCalendar(principal, request.params.id, calendar);
+      }),
+    );
+
+    app.delete(
+      "/api/comms/mailboxes/:id",
+      handled<{ id: string }>(async (_principal, request) => {
+        await comms.removeMailbox(request.params.id);
+        return { removed: request.params.id };
+      }),
+    );
+
+    app.post(
+      "/api/comms/mailboxes/:id/refresh",
+      handled<{ id: string }>(async (principal, request) => {
+        await comms.refresh(request.params.id);
+        return (await comms.mailboxes(principal)).find((one) => one.id === request.params.id) ?? null;
+      }),
+    );
+
+    app.get(
+      "/api/comms",
+      handled<Record<string, string>, unknown, { area?: string; mailboxes?: string; cursor?: string; q?: string; size?: string }>(async (principal, request) => {
+        const area = parseAreaKey(request.query.area);
+        if (!area) throw new CommsError("That is not an area of Communications.");
+        const mailboxes = request.query.mailboxes ? request.query.mailboxes.split(",").map((one) => one.trim()).filter(Boolean) : undefined;
+        return comms.list(principal, {
+          area,
+          ...(mailboxes ? { mailboxes } : {}),
+          ...(request.query.cursor ? { cursor: request.query.cursor } : {}),
+          ...(request.query.q ? { q: request.query.q } : {}),
+          ...(request.query.size ? { size: Number(request.query.size) } : {}),
+        });
+      }),
+    );
+
+    app.get(
+      "/api/comms/threads/:mailbox/:id",
+      handled<{ mailbox: string; id: string }>(async (principal, request) => {
+        const thread = await comms.thread(principal, request.params.mailbox, request.params.id);
+        /* The person writing in, as a contact: who they are, their types and fields. */
+        const from = thread.messages.find((one) => !one.sent && one.from)?.from?.address;
+        const contact = from && deps.contactCard ? await deps.contactCard(from).catch(() => null) : null;
+        return { ...thread, ...(contact ? { contact } : {}) };
+      }),
+    );
+
+    app.get(
+      "/api/comms/contacts/:id/messages",
+      handled<{ id: string }>(async (principal, request) => {
+        const addresses = await deps.contactAddresses?.(request.params.id);
+        if (!addresses) throw new CommsError("There is no such contact.", 404);
+        return comms.messagesWith(principal, addresses);
+      }),
+    );
+
+    app.post(
+      "/api/comms/messages/:mailbox/:id/status",
+      handled<{ mailbox: string; id: string }>(async (principal, request) => {
+        const body = z.object({ status: z.enum(COMMS_STATUSES) }).parse(request.body);
+        return comms.setStatus(principal, request.params.mailbox, request.params.id, body.status);
+      }),
+    );
+
+    app.get(
+      "/api/comms/drafts",
+      handled<Record<string, string>, unknown, { mailbox?: string }>(async (principal, request) => comms.drafts(principal, request.query.mailbox)),
+    );
+
+    app.post(
+      "/api/comms/drafts",
+      handled<Record<string, string>, unknown>(async (principal, request) => {
+        const body = z.object({ mailbox: z.string().min(1), replyTo: z.string().min(1), threadId: z.string().optional() }).parse(request.body);
+        return comms.startReply(principal, body.mailbox, body.replyTo, body.threadId);
+      }),
+    );
+
+    app.put(
+      "/api/comms/drafts/:id",
+      handled<{ id: string }>(async (principal, request) => comms.editDraft(principal, request.params.id, request.body)),
+    );
+
+    app.post(
+      "/api/comms/drafts/:id/review",
+      handled<{ id: string }, { save?: boolean }>(async (principal, request) => comms.review(principal, request.params.id, { save: request.body?.save === true })),
+    );
+
+    app.post(
+      "/api/comms/drafts/:id/send",
+      handled<{ id: string }>(async (principal, request) => {
+        const body = z.object({ pendingId: z.string().min(1), digest: z.string().min(1), save: z.boolean().optional() }).parse(request.body);
+        return comms.commit(principal, request.params.id, { pendingId: body.pendingId, digest: body.digest, ...(body.save ? { save: true } : {}) });
+      }),
+    );
+
+    app.post(
+      "/api/comms/drafts/:id/discard",
+      handled<{ id: string }>(async (principal, request) => comms.discard(principal, request.params.id)),
+    );
+
+    /* Write appointments into the calendars set to take them, now rather than on the next pass. */
+    app.post("/api/comms/calendar/sync", handled(async () => ({ written: await comms.pushCalendars() })));
+
+    /* What a member's own calendars say is busy, as booking sees it: for checking a calendar is read. */
+    app.get(
+      "/api/comms/calendar/busy",
+      handled<Record<string, string>, unknown, { member?: string; from?: string; to?: string }>(async (_principal, request) => {
+        const from = Date.parse(request.query.from ?? "");
+        const to = Date.parse(request.query.to ?? "");
+        if (!request.query.member || !Number.isFinite(from) || !Number.isFinite(to)) throw new CommsError("Say whose calendar, from and to.");
+        return (await comms.busy(request.query.member, from, to)).map((one) => ({ start: new Date(one.start).toISOString(), end: new Date(one.end).toISOString() }));
+      }),
+    );
+
+    app.post(
+      "/api/comms/backfill-fields",
+      handled(async (principal) => {
+        if (!deps.backfillFields) throw new CommsError("Contacts are not set up on this server.", 501);
+        return deps.backfillFields(principal);
+      }),
+    );
+    app.get("/api/comms/settings", handled(async () => comms.settings()));
+    app.put(
+      "/api/comms/settings",
+      handled(async (_principal, request) => comms.putSettings(commsSettingsSchema.parse(request.body))),
+    );
+  };
