@@ -166,7 +166,7 @@ select.dash-sched-input { width: auto; min-width: 180px; cursor: pointer; }
 .dash-sched-rules { display: flex; flex-direction: column; gap: var(--dash-space-3); width: 100%; }
 .dash-sched-rules__group { display: flex; flex-direction: column; gap: 6px; padding: var(--dash-space-3); border: 1px solid var(--dash-border); border-radius: var(--dash-radius-sm); background: var(--dash-surface-sunken); }
 .dash-sched-rules__group-head { display: flex; align-items: baseline; gap: var(--dash-space-2); }
-.dash-sched-rules__group-title { font-size: var(--dash-text-xs); font-weight: var(--dash-weight-semi); color: var(--dash-ink); text-transform: uppercase; letter-spacing: 0.06em; }
+.dash-sched-rules__group-title { font-size: var(--dash-text-xs); font-weight: var(--dash-weight-semi); color: var(--dash-ink); text-transform: var(--dash-label-case); letter-spacing: var(--dash-tracking-label); }
 .dash-sched-rules__empty { margin: 0; font-size: var(--dash-text-xs); color: var(--dash-muted); }
 .dash-sched-rule { display: grid; grid-template-columns: minmax(190px, 1.4fr) minmax(130px, auto) minmax(150px, 1.2fr) auto auto; gap: 6px; align-items: center; }
 .dash-sched-rule .dash-sched-input, .dash-sched-rule .dash-sched-chips { width: 100% !important; min-width: 0; }
@@ -274,7 +274,7 @@ select.dash-sched-input { width: auto; min-width: 180px; cursor: pointer; }
 
 /* == a workflow's booking trigger ======================================== */
 .dash-trigger-group { border: 1px solid var(--dash-border); border-radius: var(--dash-radius-sm); padding: 8px 12px 10px; margin: 0; min-width: 0; background: var(--dash-surface); }
-.dash-trigger-group__title { padding: 0 4px; font-family: var(--dash-font-mono); font-size: var(--dash-text-micro); text-transform: uppercase; letter-spacing: var(--dash-tracking-label); color: var(--dash-muted); }
+.dash-trigger-group__title { padding: 0 4px; font-family: var(--dash-label-font); font-size: var(--dash-label-size); text-transform: var(--dash-label-case); letter-spacing: var(--dash-tracking-label); color: var(--dash-muted); }
 .dash-trigger-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px 14px; padding-top: 4px; }
 .dash-trigger-check { display: inline-flex; align-items: center; gap: 7px; font-size: var(--dash-text-sm); color: var(--dash-ink); cursor: pointer; line-height: 1.3; }
 .dash-trigger-check input { accent-color: var(--dash-accent); width: 15px; height: 15px; flex: none; }
