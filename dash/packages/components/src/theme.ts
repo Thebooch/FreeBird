@@ -31,6 +31,7 @@ const DARK_TOKENS = `
   --dash-axis: #353b42;
   --dash-border: rgba(255, 255, 255, 0.085);
   --dash-border-strong: rgba(255, 255, 255, 0.15);
+  --dash-rule: rgba(255, 255, 255, 0.055);
   --dash-delta-up: #7fe0d5;
   --dash-track: #23282d;
   --dash-wash: rgba(255, 255, 255, 0.04);
@@ -98,6 +99,8 @@ export const DASH_STYLES = `
   --dash-border: rgba(22, 23, 26, 0.085);
   /* The edge a card takes on hover — one step up from the resting one. */
   --dash-border-strong: rgba(22, 23, 26, 0.15);
+  /* Between rows of a list, a table or a record: lighter than a card's edge. */
+  --dash-rule: rgba(22, 23, 26, 0.06);
   --dash-delta-up: #16751b;
   --dash-track: #e2e0d8;
   --dash-wash: rgba(22, 23, 26, 0.04);
@@ -345,10 +348,11 @@ ${seriesVars(SERIES_LIGHT)}
      over it. Measured at 7-10px of overlap before this. */
   flex: none;
 }
+/* Medium, not semibold: the title names the tile; the number or rows under it are what is read. */
 .dash-widget__title {
   font-size: var(--dash-text-md);
-  font-weight: var(--dash-weight-semi);
-  letter-spacing: -0.01em;
+  font-weight: var(--dash-weight-medium);
+  letter-spacing: -0.005em;
   line-height: var(--dash-leading-tight);
   color: var(--dash-ink);
   margin: 0;
@@ -412,6 +416,12 @@ ${seriesVars(SERIES_LIGHT)}
 /* One line, always: on a narrow tile the count is cut short with an ellipsis
    (the whole of it is on hover) rather than wrapping onto a second line the
    card then clips. */
+.dash-widget__actions .dash-iconbtn { opacity: 0.55; }
+.dash-widget:hover .dash-widget__actions .dash-iconbtn,
+.dash-widget:focus-within .dash-widget__actions .dash-iconbtn,
+.dash-widget__actions .dash-iconbtn[aria-expanded="true"],
+.dash-widget__actions .dash-iconbtn:has(.dash-menu__badge) { opacity: 1; }
+@media (hover: none) { .dash-widget__actions .dash-iconbtn { opacity: 1; } }
 .dash-widget__count { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dash-widget__updated { white-space: nowrap; }
 .dash-widget__more { color: var(--dash-serious); }
@@ -424,7 +434,8 @@ ${seriesVars(SERIES_LIGHT)}
 .dash-widget__history {
   flex: 0 1 auto; min-height: 0; overflow: hidden;
   display: flex; align-items: center;
-  padding: 0 var(--dash-pad-x, 12px) var(--dash-space-2, 8px);
+  /* No vertical padding: padding cannot shrink, and this has to be able to vanish. */
+  padding: 0 var(--dash-pad-x, 12px);
   color: var(--dash-axis); opacity: 0.8;
 }
 .dash-widget__history svg { flex: none; }
@@ -520,7 +531,8 @@ ${seriesVars(SERIES_LIGHT)}
 
 .dash-iconbtn {
   border: none; background: transparent; color: var(--dash-muted);
-  cursor: pointer; font-size: var(--dash-text-sm); line-height: 1; padding: 4px 5px; border-radius: var(--dash-radius-sm);
+  cursor: pointer; font-size: var(--dash-text-sm); line-height: 1; padding: 5px 6px; border-radius: var(--dash-radius-sm);
+  transition: background var(--dash-dur-fast) var(--dash-ease), color var(--dash-dur-fast) var(--dash-ease), opacity var(--dash-dur-fast) var(--dash-ease);
 }
 .dash-iconbtn:hover:not(:disabled) { background: var(--dash-wash); color: var(--dash-ink); }
 .dash-iconbtn:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 1px; }
@@ -642,10 +654,12 @@ ${seriesVars(SERIES_LIGHT)}
 .dash-menu__list { max-height: min(60vh, 420px); overflow-y: auto; max-width: 280px; }
 /* How many filters are on, readable without opening the menu. */
 .dash-menu__badge {
-  position: absolute; top: -3px; right: -3px; min-width: 14px; height: 14px; padding: 0 3px;
+  position: absolute; top: -4px; right: -5px; min-width: 15px; height: 15px; padding: 0 4px;
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 999px; background: var(--dash-accent); color: var(--dash-on-accent, #fff);
+  border-radius: 999px; background: var(--dash-accent); color: var(--dash-accent-ink, #fff);
+  box-shadow: 0 0 0 2px var(--dash-surface);
   font-size: 10px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 .dash-menu > .dash-iconbtn { position: relative; overflow: visible; }
 /* Lined up on the trigger's left edge, for a menu that opens from the left of a toolbar. */
@@ -762,7 +776,9 @@ ${seriesVars(SERIES_LIGHT)}
 .dash-table__sort:hover { color: var(--dash-ink); }
 .dash-table__sort:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 2px; }
 .dash-table__sort[data-active="true"] { color: var(--dash-accent); }
-.dash-table__arrow { opacity: 0.4; font-size: var(--dash-text-micro); }
+/* Hidden until the header is pointed at or sorted by: a ↕ on every column was noise. Its space stays, so nothing shifts. */
+.dash-table__arrow { opacity: 0; font-size: var(--dash-text-micro); transition: opacity var(--dash-dur-fast) var(--dash-ease); }
+.dash-table__sort:hover .dash-table__arrow, .dash-table__sort:focus-visible .dash-table__arrow { opacity: 0.5; }
 .dash-table__sort[data-active="true"] .dash-table__arrow { opacity: 1; }
 .dash-num .dash-table__sort { flex-direction: row-reverse; }
 
@@ -1049,7 +1065,7 @@ ${seriesVars(SERIES_LIGHT)}
 .dash-feed__item {
   display: flex; align-items: flex-start; gap: 8px;
   padding: var(--dash-row-gap, var(--dash-space-3)) 0;
-  border-bottom: 1px solid var(--dash-border);
+  border-bottom: 1px solid var(--dash-rule);
 }
 .dash-feed__item:last-child { border-bottom: none; }
 .dash-feed__body { flex: 1 1 auto; min-width: 0; }
@@ -1327,7 +1343,7 @@ ${seriesVars(SERIES_LIGHT)}
    (data-fit, set by Stat after measuring) rather than wrapping or clipping. */
 /* A number's row is never squeezed below the number: on a short tile the
    history line under it gives way instead (see .dash-widget__history). */
-.dash-widget__body:has(> .dash-stat) { flex: 1 0 auto; }
+.dash-widget__body:has(> .dash-stat) { flex: 1 0 auto; padding-bottom: var(--dash-space-2); }
 .dash-stat {
   display: flex; flex-direction: column; justify-content: flex-start;
   height: 100%; gap: 4px; position: relative; min-width: 0;
@@ -1397,8 +1413,8 @@ ${seriesVars(SERIES_LIGHT)}
   z-index: 1;
   background: var(--dash-surface-sunken);
   text-align: left;
-  font-weight: var(--dash-weight-semi);
-  font-size: var(--dash-text-2xs);
+  font-weight: var(--dash-weight-medium);
+  font-size: var(--dash-label-size);
   letter-spacing: var(--dash-tracking-label);
   text-transform: var(--dash-label-case);
   color: var(--dash-muted);
@@ -1408,7 +1424,7 @@ ${seriesVars(SERIES_LIGHT)}
 }
 .dash-table td {
   padding: var(--dash-cell-y, var(--dash-space-2)) var(--dash-space-3);
-  border-bottom: 1px solid var(--dash-border);
+  border-bottom: 1px solid var(--dash-rule);
   color: var(--dash-ink);
   white-space: nowrap;
   max-width: 280px;
@@ -1492,7 +1508,7 @@ ${seriesVars(SERIES_LIGHT)}
   gap: var(--dash-space-4);
   align-items: baseline;
   padding: var(--dash-space-2) 0;
-  border-bottom: 1px solid var(--dash-border);
+  border-bottom: 1px solid var(--dash-rule);
 }
 .dash-record__pair:last-child { border-bottom: none; }
 /*
@@ -1577,7 +1593,7 @@ ${seriesVars(SERIES_LIGHT)}
   align-items: center;
   gap: 10px;
   padding: var(--dash-row-gap, var(--dash-space-3)) 0;
-  border-bottom: 1px solid var(--dash-border);
+  border-bottom: 1px solid var(--dash-rule);
   font-size: var(--dash-text, var(--dash-text-sm));
 }
 .dash-list__item:last-child { border-bottom: none; }

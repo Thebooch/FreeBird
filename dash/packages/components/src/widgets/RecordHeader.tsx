@@ -24,6 +24,8 @@ export const RecordHeader = (props: WidgetRenderProps): JSX.Element => {
 
   const formatTitle = makeFormatter(props, titleColumn);
   const formatSubtitle = makeFormatter(props, subtitleColumn);
+  /* The status as the record reads it everywhere else: a flag says "Active", a code reads as words. */
+  const formatStatus = makeFormatter(props, statusColumn);
   const factFormatters = new Map(factColumns.map((name) => [name, makeFormatter(props, name)]));
 
   const row = props.rows[0];
@@ -35,8 +37,8 @@ export const RecordHeader = (props: WidgetRenderProps): JSX.Element => {
         <h3 className="dash-record-head__title">
           {titleColumn ? formatTitle(row[titleColumn]) : props.title}
         </h3>
-        {statusColumn && row[statusColumn] != null && (
-          <StatusPill tone={statusTone(row[statusColumn])} label={String(row[statusColumn])} />
+        {statusColumn && row[statusColumn] != null && formatStatus(row[statusColumn]) !== "—" && (
+          <StatusPill tone={statusTone(formatStatus(row[statusColumn]))} label={formatStatus(row[statusColumn])} />
         )}
       </div>
 
