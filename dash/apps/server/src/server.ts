@@ -1335,7 +1335,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         const row: Record<string, unknown> = {
           ...message,
           channel: "email",
-          ...(contact ? { contact: { id: contact.id, name: contact.name, emails: contact.emails, phones: contact.phones, fields: Object.fromEntries(Object.entries(contact.fields).map(([key, value]) => [key, fieldValueOf(value)?.value])) } } : {}),
+          ...(contact ? { contact: { id: contact.id, name: contact.name, email: contact.emails[0] ?? "", emails: contact.emails, phones: contact.phones, types: await contacts.typesOf(contact), fields: Object.fromEntries(Object.entries(contact.fields).map(([key, value]) => [key, fieldValueOf(value)?.value])) } } : {}),
         };
         for (const workflow of listening) {
           if (workflow.trigger.mailboxes.length > 0 && !workflow.trigger.mailboxes.includes(message.mailbox)) continue;

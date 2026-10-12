@@ -14,6 +14,7 @@ import {
   type ContactLink,
   type ContactMatchRule,
   type ContactOrigin,
+  contactTypes,
   type MatchOutcome,
   type Principal,
 } from "@freebirdai/dash-spec";
@@ -128,6 +129,11 @@ export class ContactService implements ContactDirectory {
     ]);
     for (const def of await this.deps.store.fields()) kinds.set(`contact.${def.key}`, def.kind);
     return kinds;
+  }
+
+  /** What a contact is, by the match rules that linked it: "Tenant", "Vendor". */
+  async typesOf(contact: Pick<Contact, "links">): Promise<string[]> {
+    return contactTypes(contact, await this.deps.store.matchRules());
   }
 
   async facts(id: string): Promise<Facts> {

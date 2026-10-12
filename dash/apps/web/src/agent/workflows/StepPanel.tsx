@@ -213,6 +213,39 @@ const Field = ({
   );
 };
 
+/** "Contact type is …": the types the match rules give, written into Only when as a condition. */
+export const contactTypeCondition = (type: string): string =>
+  type === "" ? "len(contact.types) == 0" : `contains(contact.types, ${JSON.stringify(type)})`;
+
+const ContactTypePick = ({ onPick }: { readonly onPick: (condition: string) => void }): JSX.Element | null => {
+  const [types, setTypes] = useState<readonly string[]>([]);
+  useEffect(() => {
+    void api.contactSetup().then(
+      (setup) => setTypes([...new Set(setup.matchRules.flatMap((rule) => (rule.type?.trim() ? [rule.type.trim()] : [])))]),
+      () => setTypes([]),
+    );
+  }, []);
+  if (types.length === 0) return null;
+  return (
+    <select
+      aria-label="Contact type is"
+      value=""
+      onChange={(event) => {
+        if (event.target.value === "") return;
+        onPick(contactTypeCondition(event.target.value === "(none)" ? "" : event.target.value));
+      }}
+    >
+      <option value="">Contact type is…</option>
+      {types.map((type) => (
+        <option key={type} value={type}>
+          {type}
+        </option>
+      ))}
+      <option value="(none)">No type yet (someone unknown)</option>
+    </select>
+  );
+};
+
 export const StepPanel = ({
   node,
   nodes,
@@ -331,6 +364,7 @@ export const StepPanel = ({
       <label className="dash-workflow-field">
         <span className="dash-workflow-field__label">Only when</span>
         <input className="dash-tool__when" aria-label="Only when" placeholder="Optional, e.g. cost >= 500" value={node.when ?? ""} onChange={(event) => onChange({ ...node, when: event.target.value })} />
+        <ContactTypePick onPick={(condition) => onChange({ ...node, when: node.when?.trim() ? `${node.when.trim()} and ${condition}` : condition })} />
       </label>
       <label className="dash-workflow-field">
         <span className="dash-workflow-field__label">If it fails</span>

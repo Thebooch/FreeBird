@@ -49,7 +49,8 @@ export const workflowBookings = (deps: {
       const best = fieldValueOf(field);
       return best ? [[key, best.value]] : [];
     }));
-    return { contact, row: { ...fields, id, name: contact?.name || contact?.emails[0] || "", email: contact?.emails[0] ?? "", phone: contact?.phones[0] ?? "" } };
+    const types = contact ? await deps.contacts.typesOf(contact) : [];
+    return { contact, row: { ...fields, id, name: contact?.name || contact?.emails[0] || "", email: contact?.emails[0] ?? "", phone: contact?.phones[0] ?? "", types } };
   };
   return {
     service: deps.service,
@@ -97,6 +98,7 @@ export const workflowBookings = (deps: {
         link,
         contact: {
           ...fields,
+          types: contact ? await deps.contacts.typesOf(contact) : [],
           id: booking.contact,
           name: contact?.name || contact?.emails[0] || "",
           email: contact?.emails[0] ?? "",

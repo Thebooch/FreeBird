@@ -281,6 +281,12 @@ const matchRuleShape = z.object({
     )
     .min(1, "Say what to match on.")
     .max(3),
+  /**
+   * What a contact linked by this rule is: "Tenant", "Vendor". Workflows take
+   * a path by it (`contains(contact.types, "Tenant")`); a contact linked by
+   * several rules has several types, and one linked by none has none.
+   */
+  type: z.string().trim().max(60).optional(),
   savedBy: principalSchema,
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -344,4 +350,15 @@ export const fieldValueFor = (
       return value.length <= 2000 ? { ok: true, value } : bad("too long.");
     }
   }
+};
+
+/** A contact's types: those of the match rules whose record type it is linked to, each once, in rule order. */
+export const contactTypes = (contact: Pick<Contact, "links">, rules: readonly Pick<ContactMatchRule, "connection" | "entity" | "type">[]): string[] => {
+  const out: string[] = [];
+  for (const rule of rules) {
+    const type = rule.type?.trim();
+    if (!type || out.includes(type)) continue;
+    if (contact.links.some((link) => link.connection === rule.connection && link.entity === rule.entity)) out.push(type);
+  }
+  return out;
 };

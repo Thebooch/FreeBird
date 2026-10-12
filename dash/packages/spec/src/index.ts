@@ -366,6 +366,7 @@ export {
   contactLinkSchema,
   contactMatchRuleInputSchema,
   contactMatchRuleSchema,
+  contactTypes,
   contactSchema,
   contactStatsSchema,
   fieldRefSchema,
