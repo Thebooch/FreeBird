@@ -15,6 +15,7 @@ import {
   type CommsArea,
   type CommsSettings,
   type CommsState,
+  type CommsStatus,
   type ConnectionSpec,
   type Contact,
   type MailboxOwner,
@@ -571,10 +572,12 @@ export class CommsService {
   }
 
   /** A conversation, read live, with the drafts waiting on it. */
-  async thread(principal: Principal, mailbox: string, threadId: string): Promise<{ readonly messages: readonly MailThreadMessage[]; readonly drafts: readonly MailDraft[]; readonly mailbox: MailboxView }> {
+  async thread(principal: Principal, mailbox: string, threadId: string): Promise<{ readonly messages: readonly (MailThreadMessage & { readonly status?: CommsStatus | undefined })[]; readonly drafts: readonly MailDraft[]; readonly mailbox: MailboxView }> {
     const connection = this.need(mailbox);
     if (!(await this.deps.policy.can(principal, "records.read", { connection: mailbox })).ok) throw new CommsError("You may not read this mailbox.", 403);
-    const messages = await this.provider(connection).thread(threadId);
+    const read = await this.provider(connection).thread(threadId);
+    const states = new Map((await this.deps.store.states(mailbox, read.map((one) => one.id))).map((one) => [one.message, one.status]));
+    const messages = read.map((one) => (states.has(one.id) ? { ...one, status: states.get(one.id) } : one));
     const drafts = (await this.deps.store.drafts({ mailbox, threadId })).filter((one) => one.status === "open" || one.status === "failed");
     return { messages, drafts, mailbox: await this.view(connection) };
   }
@@ -631,6 +634,16 @@ export class CommsService {
       found.push(...page.messages);
     }
     return found.sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit);
+  }
+
+  /** Mark a message as looked at, set aside, or new again: Dash's own note, never sent to the provider. */
+  async setStatus(principal: Principal, mailbox: string, message: string, status: CommsStatus, agent?: string): Promise<CommsState> {
+    this.need(mailbox);
+    if (!(await this.deps.policy.can(principal, "records.read", { connection: mailbox })).ok) throw new CommsError("You may not read this mailbox.", 403);
+    const held = (await this.deps.store.states(mailbox, [message]))[0];
+    const state: CommsState = { mailbox, message, status, ...(agent ?? held?.agent ? { agent: agent ?? held?.agent } : {}), ...(held?.processed ? { processed: true } : {}), updatedAt: this.iso() };
+    await this.deps.store.putState(state);
+    return state;
   }
 
   /* ── drafts and sending ───────────────────────────────────────────── */

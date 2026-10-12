@@ -936,7 +936,7 @@ export interface ChatTopic {
 /** Work that finished, listed in the timeline beside the topics. */
 export interface ChatTimelineTask {
   readonly id: string;
-  readonly kind: "run" | "task" | "report";
+  readonly kind: "run" | "task" | "report" | "email";
   readonly at: string;
   readonly title: string;
   readonly detail?: string;
@@ -1516,8 +1516,11 @@ export const api = {
     if (input.q) query.set("q", input.q);
     return request(`/api/comms?${query.toString()}`);
   },
-  commsThread: (mailbox: string, thread: string): Promise<{ messages: MailThreadMessage[]; drafts: MailDraft[]; mailbox: MailboxView; contact?: CommsContactCard }> =>
+  commsThread: (mailbox: string, thread: string): Promise<{ messages: (MailThreadMessage & { status?: string })[]; drafts: MailDraft[]; mailbox: MailboxView; contact?: CommsContactCard }> =>
     request(`/api/comms/threads/${encodeURIComponent(mailbox)}/${encodeURIComponent(thread)}`),
+  /** Mark a message looked at (triaged), set aside (ignored) or new again: Dash's own note. */
+  setMessageStatus: (mailbox: string, message: string, status: "new" | "triaged" | "ignored"): Promise<unknown> =>
+    request(`/api/comms/messages/${encodeURIComponent(mailbox)}/${encodeURIComponent(message)}/status`, json({ status })),
   startReply: (mailbox: string, replyTo: string, threadId?: string): Promise<MailDraft> => request("/api/comms/drafts", json({ mailbox, replyTo, ...(threadId ? { threadId } : {}) })),
   editDraft: (id: string, edit: Partial<Pick<MailDraft, "to" | "cc" | "subject" | "text">>): Promise<MailDraft> =>
     request(`/api/comms/drafts/${encodeURIComponent(id)}`, { ...json(edit), method: "PUT" }),

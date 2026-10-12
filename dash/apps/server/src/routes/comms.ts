@@ -1,5 +1,5 @@
 import { WriteError } from "@freebirdai/connect/host";
-import { commsSettingsSchema, mailboxOwnerSchema, parseAreaKey, type Principal } from "@freebirdai/dash-spec";
+import { COMMS_STATUSES, commsSettingsSchema, mailboxOwnerSchema, parseAreaKey, type Principal } from "@freebirdai/dash-spec";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { CommsError, type CommsService } from "../comms/service.js";
@@ -136,6 +136,14 @@ export const commsRoutes = (deps: {
         const addresses = await deps.contactAddresses?.(request.params.id);
         if (!addresses) throw new CommsError("There is no such contact.", 404);
         return comms.messagesWith(principal, addresses);
+      }),
+    );
+
+    app.post(
+      "/api/comms/messages/:mailbox/:id/status",
+      handled<{ mailbox: string; id: string }>(async (principal, request) => {
+        const body = z.object({ status: z.enum(COMMS_STATUSES) }).parse(request.body);
+        return comms.setStatus(principal, request.params.mailbox, request.params.id, body.status);
       }),
     );
 

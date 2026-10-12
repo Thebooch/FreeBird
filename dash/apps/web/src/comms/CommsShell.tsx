@@ -244,6 +244,7 @@ export const CommsShell = (): JSX.Element => {
                     type="button"
                     className="dash-comms-row"
                     data-unread={one.unread ? "true" : undefined}
+                    data-set-aside={one.status === "ignored" ? "true" : undefined}
                     data-active={active ? "true" : undefined}
                     onClick={() => setOpen({ mailbox: one.mailbox, thread: one.threadId })}
                   >
@@ -257,6 +258,8 @@ export const CommsShell = (): JSX.Element => {
                       {several && <span className="dash-comms-tag">{titleOf(one.mailbox)?.address ?? one.mailbox}</span>}
                       {one.draft && <span className="dash-comms-tag" data-tone="draft">Draft waiting</span>}
                       {one.status === "replied" && <span className="dash-comms-tag">Replied</span>}
+                      {one.status === "triaged" && <span className="dash-comms-tag">Handled</span>}
+                      {one.status === "ignored" && <span className="dash-comms-tag">Set aside</span>}
                       {agent && <AgentChip name={agent.name} color={agent.color} size="sm" title={one.sent ? `Sent by ${agent.name}` : `Handled by ${agent.name}`} />}
                     </span>
                   </button>

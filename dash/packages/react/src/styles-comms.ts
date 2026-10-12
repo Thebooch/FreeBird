@@ -108,4 +108,6 @@ export const DASH_COMMS_STYLES = `
 .dash-contact-messages__snippet { grid-column: 2 / -1; color: var(--dash-muted); font-size: var(--dash-text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dash-sched-panel__actions { display: inline-flex; align-items: center; gap: var(--dash-space-2); flex-wrap: wrap; }
 .dash-workflow-field__picks { display: inline-flex; gap: var(--dash-space-2); margin-top: var(--dash-space-1); flex-wrap: wrap; }
+.dash-comms-row[data-set-aside="true"] { opacity: 0.6; }
+.dash-comms-thread__marks { margin-left: auto; display: inline-flex; gap: var(--dash-space-1); }
 `;

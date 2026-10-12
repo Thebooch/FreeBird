@@ -3,13 +3,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CatalogStore, KeyStore, LocalAesVault } from "@freebirdai/connect/host";
-import type { ConnectionSpec, MailPage, MailboxView } from "@freebirdai/dash-spec";
+import type { ConnectionSpec, MailDraft, MailPage, MailboxView } from "@freebirdai/dash-spec";
 import { fakeLlm } from "@freebirdai/dash-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
 import { MemoryCalendarStore } from "../workflows/store.js";
 import { fakeMailServer, type FakeMailServer } from "./fixtures.js";
+import { emailTimeline } from "./timeline.js";
 
 /**
  * Communications end to end, against a fake Gmail and a fake Outlook that
@@ -501,5 +502,30 @@ describe("An agent's Search mail tool", () => {
     const drafts = (await app.inject({ method: "GET", url: "/api/comms/drafts" })).json() as { text: string }[];
     expect(drafts[0]?.text).toBe("Hi Ivy, pets are welcome.");
     await app.close();
+  });
+});
+
+describe("Marking mail, and the timeline", () => {
+  it("marks a message handled or set aside", async () => {
+    const app = makeApp();
+    await setUp(app);
+    signIn("gmail");
+    await app.inject({ method: "GET", url: "/api/comms?area=team" });
+    const marked = await app.inject({ method: "POST", url: "/api/comms/messages/gmail/g2/status", payload: { status: "ignored" } });
+    expect(marked.json()).toMatchObject({ status: "ignored" });
+    const team = (await app.inject({ method: "GET", url: "/api/comms?area=team" })).json() as MailPage;
+    expect(team.messages.find((one) => one.id === "g2")?.status).toBe("ignored");
+    const thread = (await app.inject({ method: "GET", url: "/api/comms/threads/gmail/gt2" })).json() as { messages: { id: string; status?: string }[] };
+    expect(thread.messages[0]?.status).toBe("ignored");
+
+    await app.close();
+  });
+});
+
+describe("emailTimeline", () => {
+  const draft = (over: Partial<MailDraft>): MailDraft => ({ id: "d1", mailbox: "gmail", to: '"Pat Doe" <pat@example.com>', cc: "", subject: "Re: Leak", text: "Hi", status: "sent", createdAt: at(1), updatedAt: at(2), sentAt: at(2), replyTo: "g1", ...over });
+  it("lists email a person sent, not a workflow's or one not sent", () => {
+    const rows = emailTimeline([draft({}), draft({ id: "d2", task: "t1" }), draft({ id: "d3", status: "open" })]);
+    expect(rows).toEqual([expect.objectContaining({ id: "email:d1", kind: "email", title: "Replied to Pat Doe", detail: "Re: Leak", at: at(2) })]);
   });
 });

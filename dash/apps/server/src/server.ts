@@ -150,6 +150,7 @@ import { commsRoutes } from "./routes/comms.js";
 import { CommsError, CommsService } from "./comms/service.js";
 import { emailHighlightNotifier, emailTeamNotifier } from "./comms/notify.js";
 import { extractFields, fieldsToFill } from "./comms/extract.js";
+import { emailTimeline } from "./comms/timeline.js";
 import { activeHighlights, checkHighlights } from "./agents/highlights.js";
 
 /** How often each signed-in mailbox is read with nobody looking, so new mail starts its workflows. */
@@ -3276,11 +3277,12 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       new TopicStore(chatDb, { userId: owner.userId || LOCAL_USER_ID, tenantId: workspaceKey });
     /** Finished work for the timeline: workflow runs that ended and tasks that were done. */
     const finishedWork = async (): Promise<TimelineTask[]> => {
-      const [runs, tasks, sends, reports] = await Promise.all([
+      const [runs, tasks, sends, reports, emails] = await Promise.all([
         workflowStore.runs({ limit: 500 }),
         workflowEnv.tasks.list({ status: "done", limit: 500 }),
         reportService.sends(undefined, 500),
         reportService.list(),
+        commsStore.drafts({ status: "sent" }),
       ]);
       const reportTab = new Map(reports.map((one) => [one.id, reportDashboards(one)[0]]));
       const link = (workflow: string | undefined) =>
@@ -3325,6 +3327,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             link: tab ? `#/d/${encodeURIComponent(tab)}` : undefined,
           };
         }),
+        /* Email a person sent from Comms (a workflow's shows as its task). */
+        ...emailTimeline(emails),
       ].sort((a, b) => b.at.localeCompare(a.at));
     };
     void app.register(

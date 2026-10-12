@@ -145,7 +145,7 @@ export const ThreadView = ({
   readonly onBack: () => void;
   readonly onChanged: () => void;
 }): JSX.Element => {
-  const [messages, setMessages] = useState<readonly MailThreadMessage[] | null>(null);
+  const [messages, setMessages] = useState<readonly (MailThreadMessage & { readonly status?: string })[] | null>(null);
   const [drafts, setDrafts] = useState<readonly MailDraft[]>([]);
   const [contact, setContact] = useState<CommsContactCard | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -168,6 +168,18 @@ export const ThreadView = ({
   }, [load]);
 
   const last = messages?.at(-1);
+  /* The newest message someone sent in: what Mark handled and Set aside apply to. */
+  const latestIn = messages?.filter((one) => !one.sent).at(-1);
+  const mark = async (status: "new" | "triaged" | "ignored") => {
+    if (!latestIn) return;
+    try {
+      await api.setMessageStatus(mailbox, latestIn.id, status);
+      await load();
+      onChanged();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
   const reply = async () => {
     if (!last) return;
     setStarting(true);
@@ -188,6 +200,24 @@ export const ThreadView = ({
           ← Back
         </Button>
         <h2 className="dash-comms-thread__subject">{messages?.[0]?.subject || "(no subject)"}</h2>
+        {latestIn && (
+          <span className="dash-comms-thread__marks">
+            {latestIn.status === "triaged" || latestIn.status === "ignored" ? (
+              <Button size="sm" tone="ghost" onClick={() => void mark("new")}>
+                {latestIn.status === "ignored" ? "Set aside · undo" : "Handled · undo"}
+              </Button>
+            ) : (
+              <>
+                <Button size="sm" tone="ghost" onClick={() => void mark("triaged")} testId="comms-mark-handled">
+                  Mark handled
+                </Button>
+                <Button size="sm" tone="ghost" onClick={() => void mark("ignored")}>
+                  Set aside
+                </Button>
+              </>
+            )}
+          </span>
+        )}
       </header>
       {contact && (
         <aside className="dash-comms-contact" data-testid="comms-contact">
