@@ -50,13 +50,12 @@ export const WidgetHistory = ({
       return `${index === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
     })
     .join(" ");
-  const first = points[0]!;
   /*
-   * The meaning on hover rather than as a caption. "History starts <date>"
-   * read as how far back the records go; it is when FreeBird began keeping
-   * this tile's daily value, which is worth saying once, quietly.
+   * No date on screen, not even on hover. The day history starts is when
+   * FreeBird began keeping this tile's value, which is bookkeeping; shown,
+   * it read as how far back the records go.
    */
-  const meaning = `This number each day since ${first.day}, when FreeBird started recording it`;
+  const meaning = `This number, day by day (${points.length} days)`;
   return (
     <div className="dash-widget__history" data-testid={`history-${widget}`} title={meaning}>
       <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label={meaning}>
