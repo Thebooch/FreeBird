@@ -15,7 +15,7 @@ import { DASH_COMMS_STYLES } from "./styles-comms.js";
 export const DASH_REACT_STYLES = `
 .dash-page { background: var(--dash-plane); min-height: 100%; padding: 16px; }
 .dash-page__head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
-.dash-page__title { font-size: var(--dash-text-lg); font-weight: 650; margin: 0; color: var(--dash-ink); }
+.dash-page__title { font-size: var(--dash-text-lg); font-weight: var(--dash-weight-semi); letter-spacing: -0.01em; line-height: var(--dash-leading-tight); margin: 0; color: var(--dash-ink); }
 .dash-page__description { font-size: var(--dash-text-sm); color: var(--dash-muted); margin: 0; }
 
 /* Filters sit in one row above the charts, with Refresh all on the right. */
@@ -758,7 +758,6 @@ export const DASH_REACT_STYLES = `
   background: var(--dash-accent); color: var(--dash-accent-ink);
   /* One squared corner points the bubble at its own side of the column. */
   border-bottom-right-radius: 4px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 }
 .dash-chat__msg[data-role="assistant"] {
   align-self: flex-start;
@@ -904,7 +903,7 @@ export const DASH_REACT_STYLES = `
 .dash-chat__tabs .dash-tabs__tab:hover { color: var(--dash-ink); }
 .dash-chat__tabs .dash-tabs__tab[data-selected="true"] {
   color: var(--dash-ink); background: var(--dash-surface-raised);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 0 0 1px var(--dash-border);
+  box-shadow: 0 0 0 1px var(--dash-border);
 }
 .dash-chat__tabs .dash-tabs__tab:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 1px; }
 
@@ -2030,7 +2029,7 @@ export const DASH_REACT_STYLES = `
 .dash-canvas__node {
   position: absolute; display: flex; flex-direction: column; box-sizing: border-box;
   background: var(--dash-surface); border: 1px solid var(--dash-border); border-radius: var(--dash-radius);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06); cursor: pointer; user-select: none;
+  box-shadow: var(--dash-shadow-sm); cursor: pointer; user-select: none;
 }
 .dash-canvas__node[data-selected="true"] { border-color: var(--dash-accent); box-shadow: 0 0 0 2px var(--dash-accent-wash); }
 .dash-canvas__node[data-target="true"]:hover { border-color: var(--dash-accent); }
