@@ -1297,13 +1297,39 @@ ${seriesVars(SERIES_LIGHT)}
 .dash-crosshair { stroke: var(--dash-axis); stroke-width: 1; shape-rendering: crispEdges; }
 
 /* ── stat ────────────────────────────────────────────────────────────────── */
-.dash-stat { display: flex; flex-direction: column; justify-content: center; height: 100%; gap: 4px; position: relative; }
+/* A fixed anatomy: number under the title, delta on its own line, sparkline
+   at the foot. The tile is its own size container, so the number steps down
+   with the tile's width rather than wrapping or clipping a long currency. */
+.dash-stat {
+  display: flex; flex-direction: column; justify-content: flex-start;
+  height: 100%; gap: 4px; position: relative; min-width: 0;
+  container-type: inline-size;
+}
 .dash-stat__value {
-  font-size: var(--dash-text-3xl); font-weight: var(--dash-weight-semi);
+  font-size: clamp(var(--dash-text-lg), 13cqi, var(--dash-text-3xl)); font-weight: var(--dash-weight-semi);
   line-height: 1.05; letter-spacing: -0.025em; color: var(--dash-ink);
   font-variant-numeric: tabular-nums; font-feature-settings: "tnum";
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
 }
-.dash-stat__value--hero { font-size: var(--dash-text-hero); }
+.dash-stat__value--hero { font-size: clamp(var(--dash-text-xl), 18cqi, var(--dash-text-hero)); }
+.dash-stat__foot { margin-top: auto; padding-top: 6px; }
+.dash-stat__foot .dash-stat__spark { margin-top: 0; }
+/* The tile as a button: no button chrome, the card's own hover, a real focus ring. */
+.dash-stat--drill {
+  appearance: none; border: 0; background: transparent; padding: 0; margin: 0;
+  font: inherit; color: inherit; text-align: left; width: 100%; cursor: pointer;
+  border-radius: var(--dash-radius-sm);
+}
+.dash-stat--drill:hover .dash-stat__value { color: var(--dash-accent); }
+.dash-stat--drill:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 2px; }
+/* The list behind a number, in the drawer. */
+.dash-drill__count { font-weight: var(--dash-weight-normal, 400); color: var(--dash-muted); font-size: var(--dash-text-sm); }
+.dash-drill__table { display: flex; flex-direction: column; min-height: 0; }
+.dash-drill__total {
+  display: flex; justify-content: space-between; margin: 0; padding: 8px 12px;
+  border-top: 1px solid var(--dash-border-strong); font-size: var(--dash-text-sm);
+  font-weight: var(--dash-weight-semi); font-variant-numeric: tabular-nums;
+}
 .dash-stat__delta { display: inline-flex; align-items: center; gap: 4px; font-size: var(--dash-text-sm); font-weight: 500; }
 .dash-stat__delta--up { color: var(--dash-delta-up); }
 .dash-stat__delta--down { color: var(--dash-critical); }

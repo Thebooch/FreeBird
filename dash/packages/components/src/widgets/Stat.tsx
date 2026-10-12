@@ -31,9 +31,18 @@ export const Stat = (props: WidgetRenderProps): JSX.Element => {
 
   const spark = seriesColumn ? numericValues(props.rows, seriesColumn) : [];
 
-  return (
-    <div className="dash-stat">
-      <div className={`dash-stat__value${props.hero ? " dash-stat__value--hero" : ""}`}>
+  /*
+   * A fixed anatomy rather than a centred stack: the number sits directly
+   * under the title, so numbers in a row of tiles line up whatever is below
+   * them; the delta has a line of its own; the sparkline is pinned to the
+   * foot. Centring moved each number by however much its neighbours had.
+   */
+  const body = (
+    <>
+      <div
+        className={`dash-stat__value${props.hero ? " dash-stat__value--hero" : ""}`}
+        title={formatValue(value)}
+      >
         {formatValue(value)}
       </div>
 
@@ -56,7 +65,30 @@ export const Stat = (props: WidgetRenderProps): JSX.Element => {
         </div>
       )}
 
-      {spark.length > 1 && <Sparkline values={spark.slice(-12)} />}
-    </div>
+      {spark.length > 1 && (
+        <div className="dash-stat__foot">
+          <Sparkline values={spark.slice(-12)} />
+        </div>
+      )}
+    </>
+  );
+
+  /*
+   * The whole tile is the control when the number comes from rows that can be
+   * listed — a target the size of the card rather than a link in a corner.
+   */
+  return props.drill ? (
+    <button
+      type="button"
+      className="dash-stat dash-stat--drill"
+      aria-label={props.drill.label}
+      title={props.drill.label}
+      onClick={props.drill.open}
+      data-testid="stat-drill-open"
+    >
+      {body}
+    </button>
+  ) : (
+    <div className="dash-stat">{body}</div>
   );
 };

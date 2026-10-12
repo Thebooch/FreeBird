@@ -40,6 +40,12 @@ export interface WidgetRenderProps {
    */
   readonly onSelectRow?: (row: Row) => void;
   /**
+   * Open the records a number was taken over. Only a number tile reads it,
+   * and absent means the number does not come from rows anyone can list — the
+   * tile then stays plain, with no pointer.
+   */
+  readonly drill?: { readonly label: string; readonly open: () => void };
+  /**
    * What can be done to the record behind each row — edit, record actions,
    * delete — drawn as a small menu at the row's end.
    *

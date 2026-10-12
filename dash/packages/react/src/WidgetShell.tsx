@@ -29,12 +29,14 @@ import {
   slotLabel,
 } from "@freebirdai/dash-spec";
 import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
+import { StatDrillSheet } from "./StatDrillSheet.jsx";
 import { WidgetDetail } from "./WidgetDetail.jsx";
 import { WidgetErrorBoundary } from "./WidgetErrorBoundary.jsx";
 import { WidgetHistory } from "./WidgetHistory.jsx";
 import { WidgetInspector } from "./WidgetInspector.jsx";
 import { useDashboard } from "./context.jsx";
 import type { OpenReference } from "./entityDetail.js";
+import { drillLabel, statDrill } from "./drill.js";
 import { entityFor } from "./references.js";
 import { chromePresentationFor, presentationFor, presentationStyle } from "./presentation.js";
 import type { WidgetData } from "./useWidgetData.js";
@@ -177,6 +179,13 @@ export const WidgetShell = ({
     widget.pipeline.some((step) => step.op === "group") ||
     widget.sources.some((source) => source.pipeline.some((step) => step.op === "group"));
   const opensPage = Boolean(onOpenPage) && Boolean(recordType?.identity) && !aggregated;
+
+  /*
+   * The rows behind a number tile, when the number was taken over rows that
+   * can be listed: its own request with the counting taken off.
+   */
+  const drill = useMemo(() => statDrill(widget), [widget]);
+  const [drilling, setDrilling] = useState(false);
 
   /*
    * What the reader has narrowed this widget to.
@@ -386,9 +395,10 @@ export const WidgetShell = ({
                 : `Filter ${widget.title}`
             }
             testId={`filters-${widget.id}`}
+            floating
           />
         )}
-        <Menu items={actions} label={`Actions for ${widget.title}`} testId={`actions-${widget.id}`} />
+        <Menu items={actions} label={`Actions for ${widget.title}`} testId={`actions-${widget.id}`} floating />
       </span>
     ),
   };
@@ -507,8 +517,29 @@ export const WidgetShell = ({
                 : {})}
             {...(openReference ? { onOpenReference: openReference } : {})}
             {...(onRowActions ? { rowActions: (row: Row) => onRowActions(widget.id, row) } : {})}
+            {...(drill && data.state === "ok"
+              ? {
+                  drill: {
+                    label: drillLabel(
+                      drill.measure.fn === "count" ? countOf(faceted.rows, widget) : null,
+                      recordType?.name.many,
+                    ),
+                    open: () => setDrilling(true),
+                  },
+                }
+              : {})}
           />
         </WidgetErrorBoundary>
+        {drilling && drill && (
+          <StatDrillSheet
+            widget={widget}
+            drill={drill}
+            link={recordType}
+            onClose={() => setDrilling(false)}
+            {...(onOpenPage && recordType?.identity ? { onOpenPage } : {})}
+            {...(openReference ? { onOpenReference: openReference } : {})}
+          />
+        )}
         {openRow && widget.drilldown && (
           <WidgetDetail
             parent={widget}
@@ -536,6 +567,13 @@ export const WidgetShell = ({
       {inspecting && <WidgetInspector data={data} onClose={() => setInspecting(false)} />}
     </div>
   );
+};
+
+/** A count tile's number, as the count of records it promises to list. */
+const countOf = (rows: readonly Row[], widget: WidgetSpec): number | null => {
+  const column = widget.roles["value"];
+  const value = typeof column === "string" ? rows[rows.length - 1]?.[column] : undefined;
+  return typeof value === "number" && Number.isInteger(value) ? value : null;
 };
 
 /**
@@ -737,6 +775,7 @@ const WidgetBody = ({
   onSelectRow,
   onOpenReference,
   rowActions,
+  drill,
 }: {
   data: WidgetData;
   /**
@@ -757,6 +796,7 @@ const WidgetBody = ({
   onSelectRow?: (row: Row) => void;
   onOpenReference?: (target: { entity: string; id: string | number }) => void;
   rowActions?: (row: Row) => readonly RowAction[];
+  drill?: { label: string; open: () => void };
 }): JSX.Element => {
   switch (data.state) {
     case "loading":
@@ -859,6 +899,7 @@ const WidgetBody = ({
           {...(onSelectRow ? { onSelectRow } : {})}
           {...(onOpenReference ? { onOpenReference } : {})}
           {...(rowActions ? { rowActions } : {})}
+          {...(drill ? { drill } : {})}
           {...(Object.keys(data.referenceNames).length > 0
             ? { referenceNames: data.referenceNames }
             : {})}
