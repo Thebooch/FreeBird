@@ -217,34 +217,64 @@ const Field = ({
 export const contactTypeCondition = (type: string): string =>
   type === "" ? "len(contact.types) == 0" : `contains(contact.types, ${JSON.stringify(type)})`;
 
+/** "Contact type is …" and "Contact field …": conditions on the contact a case is about, written into Only when. */
 const ContactTypePick = ({ onPick }: { readonly onPick: (condition: string) => void }): JSX.Element | null => {
   const [types, setTypes] = useState<readonly string[]>([]);
+  const [fields, setFields] = useState<readonly { readonly key: string; readonly label: string; readonly kind: string }[]>([]);
   useEffect(() => {
     void api.contactSetup().then(
-      (setup) => setTypes([...new Set(setup.matchRules.flatMap((rule) => (rule.type?.trim() ? [rule.type.trim()] : [])))]),
+      (setup) => {
+        setTypes([...new Set(setup.matchRules.flatMap((rule) => (rule.type?.trim() ? [rule.type.trim()] : [])))]);
+        setFields(setup.fields.map((one) => ({ key: one.key, label: one.label, kind: one.kind })));
+      },
       () => setTypes([]),
     );
   }, []);
-  if (types.length === 0) return null;
+  if (types.length === 0 && fields.length === 0) return null;
   return (
-    <select
-      aria-label="Contact type is"
-      value=""
-      onChange={(event) => {
-        if (event.target.value === "") return;
-        onPick(contactTypeCondition(event.target.value === "(none)" ? "" : event.target.value));
-      }}
-    >
-      <option value="">Contact type is…</option>
-      {types.map((type) => (
-        <option key={type} value={type}>
-          {type}
-        </option>
-      ))}
-      <option value="(none)">No type yet (someone unknown)</option>
-    </select>
+    <span className="dash-workflow-field__picks">
+      {types.length > 0 && (
+        <select
+          aria-label="Contact type is"
+          value=""
+          onChange={(event) => {
+            if (event.target.value === "") return;
+            onPick(contactTypeCondition(event.target.value === "(none)" ? "" : event.target.value));
+          }}
+        >
+          <option value="">Contact type is…</option>
+          {types.map((type) => (
+            <option key={type} value={type}>
+              {type}
+            </option>
+          ))}
+          <option value="(none)">No type yet (someone unknown)</option>
+        </select>
+      )}
+      {fields.length > 0 && (
+        <select
+          aria-label="Contact field"
+          value=""
+          onChange={(event) => {
+            const field = fields.find((one) => one.key === event.target.value);
+            if (field) onPick(contactFieldCondition(field.key, field.kind));
+          }}
+        >
+          <option value="">Contact field…</option>
+          {fields.map((field) => (
+            <option key={field.key} value={field.key}>
+              {field.label}
+            </option>
+          ))}
+        </select>
+      )}
+    </span>
   );
 };
+
+/** A condition on one contact field to finish in place: it has a value, or equals one. */
+export const contactFieldCondition = (key: string, kind: string): string =>
+  kind === "boolean" ? `contact.${key} == true` : kind === "number" ? `contact.${key} >= 0` : `contact.${key} != ""`;
 
 export const StepPanel = ({
   node,

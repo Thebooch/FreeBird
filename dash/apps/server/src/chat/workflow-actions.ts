@@ -59,11 +59,11 @@ export interface WorkflowChatOps {
 /** New workflows from the chat start in trial for this many cases. */
 export const CHAT_TRIAL_CASES = 5;
 
-const TRIGGER_KINDS = ["record_created", "record_changed", "schedule", "every", "agent", "manual", "booking", "message_received"] as const;
+const TRIGGER_KINDS = ["record_created", "record_changed", "schedule", "every", "agent", "manual", "booking", "message_received", "contact_created"] as const;
 const VARIANT_IDS = ACTION_VARIANTS.filter((one) => one.available).map((one) => one.id) as [string, ...string[]];
 
 const triggerFields = {
-  trigger: z.enum(TRIGGER_KINDS).describe("What starts it: record_created / record_changed (an API's records), schedule (cron), every (an interval), agent (an agent's tool), manual (by hand), booking (something happens to a booking), message_received (an email arrives in Comms)."),
+  trigger: z.enum(TRIGGER_KINDS).describe("What starts it: record_created / record_changed (an API's records), schedule (cron), every (an interval), agent (an agent's tool), manual (by hand), booking (something happens to a booking), message_received (an email arrives in Comms), contact_created (someone new becomes a contact)."),
   cron: z.string().optional().describe("For schedule: five cron fields, e.g. '0 7 * * 1-5'."),
   timezone: z.string().optional().describe("For schedule: an IANA time zone. Default UTC."),
   every: z.enum(WORKFLOW_EVERY).optional().describe("For every and record_*: how often. Default 15m for API triggers."),
@@ -157,6 +157,8 @@ const triggerOf = (args: Fields, held?: WorkflowTrigger): WorkflowTrigger => {
     case "agent":
       return { kind, inputs: (args.inputs ?? (was["inputs"] as Array<{ name: string; description: string; required?: boolean }> | undefined) ?? []).map((one) => ({ name: one.name, description: one.description, required: one.required ?? true })) };
     case "manual":
+      return { kind };
+    case "contact_created":
       return { kind };
     case "message_received":
       return { kind, channels: (was["channels"] as ("email" | "text" | "call")[] | undefined) ?? ["email"], mailboxes: (was["mailboxes"] as string[] | undefined) ?? [] };

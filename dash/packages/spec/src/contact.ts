@@ -75,8 +75,13 @@ export const normalizePhone = (raw: unknown, callingCode = "1"): string | null =
 };
 
 /** The keys a contact is found by: "email:…" and "phone:…". */
-export const contactKeys = (contact: { readonly emails: readonly string[]; readonly phones: readonly string[] }): string[] => [
-  ...new Set([...contact.emails.map((email) => `email:${email}`), ...contact.phones.map((phone) => `phone:${phone}`)]),
+export const contactKeys = (contact: { readonly emails: readonly string[]; readonly phones: readonly string[]; readonly aliases?: readonly string[] }): string[] => [
+  ...new Set([
+    ...contact.emails.map((email) => `email:${email}`),
+    ...contact.phones.map((phone) => `phone:${phone}`),
+    /* A contact merged into this one: its old id still finds this one. */
+    ...(contact.aliases ?? []).map((id) => `alias:${id}`),
+  ]),
 ];
 
 /* ── values ────────────────────────────────────────────────────────────── */
@@ -197,6 +202,8 @@ export const contactSchema = z.object({
   /** What Comms has confirmed, once it can. */
   verified: z.object({ email: z.string().optional(), phone: z.string().optional() }).default({}),
   origin: z.enum(CONTACT_ORIGINS),
+  /** The ids of contacts merged into this one: an old booking or link naming one still finds this contact. */
+  aliases: z.array(z.string().min(1)).max(50).optional(),
   revision: z.number().int().positive().default(1),
   createdAt: z.string(),
   updatedAt: z.string(),

@@ -323,6 +323,24 @@ export class BookingService {
     this.deps.afterChange?.();
   }
 
+  /**
+   * Two contacts were merged: every booking of the one that went is the one
+   * that stays. Nothing else about the booking changes, and no event is
+   * written: it is the same booking, now filed under one person.
+   */
+  async moveContact(from: string, to: string): Promise<number> {
+    let moved = 0;
+    for (const booking of await this.deps.store.list({ contact: from })) {
+      await this.deps.store.withHosts([booking.host], async (tx) => {
+        const fresh = await tx.get(booking.id);
+        if (!fresh || fresh.contact !== from) return;
+        await tx.put({ ...fresh, contact: to, revision: fresh.revision + 1, updatedAt: iso(this.deps.now()) }, fresh.revision);
+        moved++;
+      });
+    }
+    return moved;
+  }
+
   /* ── changing one ────────────────────────────────────────────────────── */
 
   /**

@@ -33,7 +33,7 @@ import type {
   TimeRange,
   WidgetBrief,
 } from "@freebirdai/dash-spec";
-import { fieldValueOf, type MailDraft, type WorkflowSpec as MailWorkflow } from "@freebirdai/dash-spec";
+import { fieldValueOf, type Contact, type MailDraft, type WorkflowSpec as MailWorkflow } from "@freebirdai/dash-spec";
 import {
   readField,
   authTokenRefs,
@@ -1193,8 +1193,37 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     return entities.find((one) => one.id === record) ?? entities.find((one) => one.name.one.toLowerCase() === wanted || one.name.many.toLowerCase() === wanted);
   };
   const bookingStore = options.bookings ?? new MemoryBookingStore();
-  const contacts = new ContactService({
+  /** A contact as a workflow step reads it: who they are, their types, and each field's strongest value. */
+  const contactRowOf = async (contact: Contact): Promise<Record<string, unknown>> => ({
+    ...Object.fromEntries(Object.entries(contact.fields).flatMap(([key, field]) => {
+      const best = fieldValueOf(field);
+      return best ? [[key, best.value]] : [];
+    })),
+    id: contact.id,
+    name: contact.name || contact.emails[0] || "",
+    email: contact.emails[0] ?? "",
+    phone: contact.phones[0] ?? "",
+    emails: contact.emails,
+    phones: contact.phones,
+    types: await contacts.typesOf(contact),
+  });
+  const contacts: ContactService = new ContactService({
     store: options.contacts ?? new MemoryContactStore(),
+    /* Someone new, matched once: "When someone new becomes a contact" workflows open a case each, once. */
+    created: async (contact) => {
+      const listening = (await workflowStore.list()).filter((one) => one.trigger.kind === "contact_created" && one.enabled && !one.parked);
+      if (listening.length === 0) return;
+      const row = { ...(await contactRowOf(contact)), contact: await contactRowOf(contact) };
+      for (const workflow of listening) {
+        const id = `cc-${createHash("sha1").update(`${workflow.id}:${contact.id}`).digest("hex").slice(0, 16)}`;
+        try {
+          await workflowEngine.create(workflow, { id, row, rowKey: contact.id, start: { kind: "contact" } });
+          await workflowEngine.advance(id);
+        } catch (error) {
+          if (!(error instanceof CaseBusy) && !(error instanceof RevisionConflict)) app.log.warn(`"${workflow.name}" did not start for a new contact: ${String(error)}`);
+        }
+      }
+    },
     reads: {
       read: async (as, target, fresh) => {
         const may = await policy.can(as, "records.read", { connection: target.connection });
@@ -1238,7 +1267,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     }
     return out;
   };
-  void app.register(contactRoutes({ contacts, policy, sources: contactSources }));
+  void app.register(contactRoutes({ contacts, policy, sources: contactSources, merged: async (from, to) => void (await bookings.moveContact(from, to)) }));
 
   /*
    * Communications (`comms/`): mailboxes are connections, read through the
@@ -1289,7 +1318,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     agents: agentStore,
     store: commsStore,
     ...(options.mailApps ? { builtInApps: options.mailApps } : {}),
-    contacts: { findOrCreate: (input) => contacts.findOrCreate(input), match: (id) => contacts.match(id) },
+    contacts: { findOrCreate: (input) => contacts.findOrCreate(input), settle: (id) => contacts.settle(id) },
     draftSettled: (draft) => commsDraftSettled(draft),
     /* A member's appointments, which go into their mailbox calendar when it is set to. */
     appointments: {
@@ -1341,7 +1370,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         const row: Record<string, unknown> = {
           ...message,
           channel: "email",
-          ...(contact ? { contact: { id: contact.id, name: contact.name, email: contact.emails[0] ?? "", emails: contact.emails, phones: contact.phones, types: await contacts.typesOf(contact), fields: Object.fromEntries(Object.entries(contact.fields).map(([key, value]) => [key, fieldValueOf(value)?.value])) } } : {}),
+          ...(contact ? { contact: await contactRowOf(contact) } : {}),
         };
         for (const workflow of listening) {
           if (workflow.trigger.mailboxes.length > 0 && !workflow.trigger.mailboxes.includes(message.mailbox)) continue;
@@ -1366,7 +1395,26 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     if (!draft.task) return;
     await workflowEngine.emit(`draft:${draft.id}`, { status: draft.status, ...(draft.sentBy ? { by: draft.sentBy } : {}) }, `draft:${draft.id}:${draft.status}`);
   };
-  void app.register(commsRoutes({ comms }));
+  void app.register(
+    commsRoutes({
+      comms,
+      contactAddresses: async (id) => (await contacts.get(id))?.emails ?? null,
+      contactCard: async (email) => {
+        const contact = await contacts.byEmail(email);
+        if (!contact) return null;
+        const defs = (await contacts.setup()).fields;
+        return {
+          id: contact.id,
+          name: contact.name || contact.emails[0] || "",
+          types: await contacts.typesOf(contact),
+          fields: defs.flatMap((def) => {
+            const best = fieldValueOf(contact.fields[def.key]);
+            return best && best.value !== null && best.value !== undefined && best.value !== "" ? [{ label: def.label, value: typeof best.value === "object" ? JSON.stringify(best.value) : String(best.value) }] : [];
+          }),
+        };
+      },
+    }),
+  );
   /* Who is in the workspace: hosts, and who may answer an approval. Without sign-in, the one person this server answers to. */
   const workspaceMembers = options.members ?? (async () => [{ userId: LOCAL_USER_ID, email: "", role: "owner" as const }]);
   /* Scheduling: who can be booked, on what terms (`scheduling/`). */

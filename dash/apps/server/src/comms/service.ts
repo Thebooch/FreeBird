@@ -88,8 +88,9 @@ export interface CommsDeps {
   readonly builtInApps?: Partial<Record<"gmail" | "outlook", { readonly clientId: string; readonly clientSecret: string }>>;
   /** Every new sender becomes a contact; absent, none do. */
   readonly contacts?: {
-    findOrCreate(input: { readonly email: string; readonly name?: string; readonly origin: "email" }): Promise<Contact>;
-    match(id: string): Promise<unknown>;
+    findOrCreate(input: { readonly email: string; readonly name?: string; readonly origin: "email"; readonly settle: "caller" }): Promise<Contact>;
+    /** Matched once and announced: before any workflow for the email sees them. */
+    settle(id: string): Promise<Contact | null>;
   };
   /**
    * New mail that arrived after a mailbox was first read (never the newest
@@ -381,10 +382,10 @@ export class CommsService {
       if (message.sent || !from || seen.has(from.address) || own.has(from.address) || ignoredAddress(from.address, contactIgnore)) continue;
       seen.add(from.address);
       try {
-        const contact = await contacts.findOrCreate({ email: from.address, ...(from.name ? { name: from.name } : {}), origin: "email" });
+        let contact = await contacts.findOrCreate({ email: from.address, ...(from.name ? { name: from.name } : {}), origin: "email", settle: "caller" });
+        const madeNow = contact.revision === 1 && contact.origin === "email" && this.deps.now() - Date.parse(contact.createdAt) < 60_000;
+        if (madeNow) contact = (await contacts.settle(contact.id)) ?? contact;
         found.set(from.address, contact);
-        const madeNow = contact.origin === "email" && contact.links.length === 0 && this.deps.now() - Date.parse(contact.createdAt) < 60_000;
-        if (madeNow) await contacts.match(contact.id).catch(() => undefined);
       } catch (error) {
         this.deps.log?.warn(`a contact for ${from.address} could not be made: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -576,6 +577,38 @@ export class CommsService {
     const messages = await this.provider(connection).thread(threadId);
     const drafts = (await this.deps.store.drafts({ mailbox, threadId })).filter((one) => one.status === "open" || one.status === "failed");
     return { messages, drafts, mailbox: await this.view(connection) };
+  }
+
+  /**
+   * Every message to or from these addresses, across every mailbox this
+   * person may read: what is kept, and each mailbox's own search for the rest.
+   * Newest first, at most `limit`.
+   */
+  async messagesWith(principal: Principal, addresses: readonly string[], limit = 50): Promise<{ readonly messages: readonly MailMessage[]; readonly problems: readonly { readonly mailbox: string; readonly message: string }[] }> {
+    const wanted = new Set(addresses.map((one) => one.trim().toLowerCase()).filter(Boolean));
+    if (wanted.size === 0) return { messages: [], problems: [] };
+    const found = new Map<string, MailMessage>();
+    const problems: { mailbox: string; message: string }[] = [];
+    const involves = (one: MailMessage) => [one.from, ...one.to, ...one.cc].some((who) => who !== undefined && wanted.has(who.address));
+    for (const connection of this.mailboxConnections()) {
+      if (this.statusOf(connection) !== "ready") continue;
+      if (!(await this.deps.policy.can(principal, "records.read", { connection: connection.id })).ok) continue;
+      for (const one of await this.deps.store.recent(connection.id)) if (involves(one)) found.set(`${one.mailbox}:${one.id}`, one);
+      const provider = this.provider(connection);
+      for (const address of [...wanted].slice(0, 3)) {
+        for (const query of [parseMailQuery(`from:${address}`), parseMailQuery(`to:${address}`)]) {
+          try {
+            const page = await provider.search(query, undefined, 25);
+            for (const one of page.messages) if (involves(one)) found.set(`${one.mailbox}:${one.id}`, one);
+          } catch (error) {
+            problems.push({ mailbox: connection.id, message: error instanceof Error ? error.message : String(error) });
+            break;
+          }
+        }
+      }
+    }
+    const messages = [...found.values()].sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit);
+    return { messages, problems };
   }
 
   /* ── drafts and sending ───────────────────────────────────────────── */

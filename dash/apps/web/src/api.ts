@@ -5,6 +5,7 @@ import type {
   MailboxOwner,
   MailboxView,
   MailDraft,
+  MailMessage,
   MailPage,
   MailThreadMessage,
   Report,
@@ -972,6 +973,14 @@ const timeZone = (): string => {
   }
 };
 
+/** The contact beside a conversation: who they are, their types and fields. */
+export interface CommsContactCard {
+  readonly id: string;
+  readonly name: string;
+  readonly types: readonly string[];
+  readonly fields: readonly { readonly label: string; readonly value: string }[];
+}
+
 /** A report as listed: when it is next due, by its schedule. */
 export type ReportView = Report & { readonly nextAt: string | null };
 
@@ -1507,7 +1516,7 @@ export const api = {
     if (input.q) query.set("q", input.q);
     return request(`/api/comms?${query.toString()}`);
   },
-  commsThread: (mailbox: string, thread: string): Promise<{ messages: MailThreadMessage[]; drafts: MailDraft[]; mailbox: MailboxView }> =>
+  commsThread: (mailbox: string, thread: string): Promise<{ messages: MailThreadMessage[]; drafts: MailDraft[]; mailbox: MailboxView; contact?: CommsContactCard }> =>
     request(`/api/comms/threads/${encodeURIComponent(mailbox)}/${encodeURIComponent(thread)}`),
   startReply: (mailbox: string, replyTo: string, threadId?: string): Promise<MailDraft> => request("/api/comms/drafts", json({ mailbox, replyTo, ...(threadId ? { threadId } : {}) })),
   editDraft: (id: string, edit: Partial<Pick<MailDraft, "to" | "cc" | "subject" | "text">>): Promise<MailDraft> =>
@@ -1639,6 +1648,12 @@ export const api = {
   makeContactLink: (id: string, type?: string): Promise<{ url: string; link: BookingLinkInfo }> => request(`/api/contacts/${encodeURIComponent(id)}/links`, json(type ? { type } : {})),
   revokeContactLink: (id: string, link: string): Promise<BookingLinkInfo> => request(`/api/contacts/${encodeURIComponent(id)}/links/${encodeURIComponent(link)}/revoke`, json({})),
   contactSetup: (): Promise<ContactSetup> => request("/api/contacts/setup"),
+  /** Fold another contact into this one; its id keeps finding this one. */
+  mergeContact: (keep: string, other: string): Promise<Contact> => request(`/api/contacts/${encodeURIComponent(keep)}/merge`, json({ other })),
+  /** Try the match rules once on every contact not yet linked. */
+  matchAllContacts: (): Promise<{ tried: number; linked: number }> => request("/api/contacts/match-all", json({})),
+  /** Every message to or from a contact, across the mailboxes this person may read. */
+  contactMessages: (id: string): Promise<{ messages: MailMessage[]; problems: { mailbox: string; message: string }[] }> => request(`/api/comms/contacts/${encodeURIComponent(id)}/messages`),
   contactSources: (): Promise<ContactSource[]> => request("/api/contacts/sources"),
   putContactField: (key: string, input: ContactFieldDefInput): Promise<ContactFieldDef> =>
     request(`/api/contacts/fields/${encodeURIComponent(key)}`, { ...json(input), method: "PUT" }),

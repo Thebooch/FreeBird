@@ -118,6 +118,12 @@ export const workflowTriggerSchema = z.discriminatedUnion("kind", [
    * row is the message (`mailbox`, `id`, `threadId`, `from`, `subject`,
    * `snippet`) with `contact.*`, its row key the mailbox and message id.
    */
+  /**
+   * Someone new becomes a contact — by email, a booking page, an agent or a
+   * member — fired once, after they have been matched to the workspace's
+   * records, so `contact.types` is already known. The row is the contact.
+   */
+  z.object({ kind: z.literal("contact_created") }),
   z.object({
     kind: z.literal("message_received"),
     channels: z.array(z.enum(["email", "text", "call"])).min(1).max(3).default(["email"]),
@@ -339,7 +345,7 @@ export const chainEdges = (nodes: ReadonlyArray<{ id: string }>): WorkflowEdge[]
 
 /** How a run or a case started. */
 export const workflowStartSchema = z.object({
-  kind: z.enum(["schedule", "every", "record_created", "record_changed", "agent", "manual", "approval", "workflow", "booking", "message"]),
+  kind: z.enum(["schedule", "every", "record_created", "record_changed", "agent", "manual", "approval", "workflow", "booking", "message", "contact"]),
   /** For a case a message started: `<mailbox>:<message id>`. */
   message: z.string().optional(),
   /** For a case a booking started: the event that started it. */
@@ -766,6 +772,8 @@ export const describeTrigger = (
         : "When an agent is asked";
     case "manual":
       return "By hand";
+    case "contact_created":
+      return "When someone new becomes a contact";
     case "message_received": {
       const where = trigger.mailboxes.length === 0 ? "" : ` to ${trigger.mailboxes.map((id) => names.connection?.(id) ?? id).join(" or ")}`;
       const what = trigger.channels.length === 1 && trigger.channels[0] === "email" ? "an email" : "a message";

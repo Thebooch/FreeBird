@@ -112,9 +112,12 @@ export const FieldsTab = ({ canManage }: { readonly canManage: boolean }): JSX.E
               <p className="dash-sched-panel__lede">A contact is linked to a record when exactly one record matches. Matching reads as the person who saved the rule.</p>
             </div>
             {canManage && (
-              <Button onClick={() => setEditing({ kind: "rule", rule: null })} testId="match-add">
-                New rule
-              </Button>
+              <span className="dash-sched-panel__actions">
+                {setup.matchRules.length > 0 && <MatchAllButton />}
+                <Button onClick={() => setEditing({ kind: "rule", rule: null })} testId="match-add">
+                  New rule
+                </Button>
+              </span>
             )}
           </header>
           {setup.matchRules.length === 0 ? (
@@ -444,6 +447,35 @@ const SourceEditor = ({
 };
 
 /* ── a match rule ──────────────────────────────────────────────────────── */
+
+/** Try the rules once on every contact not yet linked: after adding or changing one. */
+const MatchAllButton = (): JSX.Element => {
+  const [busy, setBusy] = useState(false);
+  const [said, setSaid] = useState<string | null>(null);
+  return (
+    <>
+      {said && <span className="dash-hint">{said}</span>}
+      <Button
+        tone="ghost"
+        busy={busy}
+        testId="match-all"
+        onClick={() => {
+          setBusy(true);
+          setSaid(null);
+          void api
+            .matchAllContacts()
+            .then(
+              (done) => setSaid(done.tried === 0 ? "Every contact is already linked." : `Linked ${done.linked} of ${done.tried} contact${done.tried === 1 ? "" : "s"} not yet linked.`),
+              (error: unknown) => setSaid(error instanceof Error ? error.message : String(error)),
+            )
+            .finally(() => setBusy(false));
+        }}
+      >
+        Match existing contacts
+      </Button>
+    </>
+  );
+};
 
 const MatchRuleSheet = ({
   rule,

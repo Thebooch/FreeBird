@@ -16,7 +16,21 @@ import { CommsError, type CommsService } from "../comms/service.js";
 
 const providerSchema = z.enum(["gmail", "outlook"]);
 
-export const commsRoutes = (deps: { readonly comms: CommsService }) =>
+/** Who a contact is, as Comms shows them beside a conversation. */
+export interface ContactCard {
+  readonly id: string;
+  readonly name: string;
+  readonly types: readonly string[];
+  readonly fields: readonly { readonly label: string; readonly value: string }[];
+}
+
+export const commsRoutes = (deps: {
+  readonly comms: CommsService;
+  /** A contact's addresses, by id; null when there is no such contact. */
+  readonly contactAddresses?: (id: string) => Promise<readonly string[] | null>;
+  /** The contact with this email, for the card beside a conversation. */
+  readonly contactCard?: (email: string) => Promise<ContactCard | null>;
+}) =>
   async (app: FastifyInstance): Promise<void> => {
     const { comms } = deps;
     const handled =
@@ -105,7 +119,22 @@ export const commsRoutes = (deps: { readonly comms: CommsService }) =>
 
     app.get(
       "/api/comms/threads/:mailbox/:id",
-      handled<{ mailbox: string; id: string }>(async (principal, request) => comms.thread(principal, request.params.mailbox, request.params.id)),
+      handled<{ mailbox: string; id: string }>(async (principal, request) => {
+        const thread = await comms.thread(principal, request.params.mailbox, request.params.id);
+        /* The person writing in, as a contact: who they are, their types and fields. */
+        const from = thread.messages.find((one) => !one.sent && one.from)?.from?.address;
+        const contact = from && deps.contactCard ? await deps.contactCard(from).catch(() => null) : null;
+        return { ...thread, ...(contact ? { contact } : {}) };
+      }),
+    );
+
+    app.get(
+      "/api/comms/contacts/:id/messages",
+      handled<{ id: string }>(async (principal, request) => {
+        const addresses = await deps.contactAddresses?.(request.params.id);
+        if (!addresses) throw new CommsError("There is no such contact.", 404);
+        return comms.messagesWith(principal, addresses);
+      }),
     );
 
     app.get(

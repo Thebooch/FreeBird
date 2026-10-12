@@ -401,3 +401,59 @@ describe("Calendar sync", () => {
     await app.close();
   });
 });
+
+describe("Contacts, the rest", () => {
+  it("merges two contacts into one, and the old id still finds it", async () => {
+    const app = makeApp();
+    const a = (await app.inject({ method: "POST", url: "/api/contacts", payload: { name: "Pat Doe", emails: ["pat@example.com"] } })).json() as { id: string };
+    const b = (await app.inject({ method: "POST", url: "/api/contacts", payload: { emails: ["pat.doe@work.example"], phones: ["5125550142"] } })).json() as { id: string };
+    const merged = await app.inject({ method: "POST", url: `/api/contacts/${a.id}/merge`, payload: { other: b.id } });
+    expect(merged.statusCode).toBe(200);
+    expect(merged.json()).toMatchObject({ id: a.id, name: "Pat Doe", emails: ["pat@example.com", "pat.doe@work.example"], phones: ["+15125550142"] });
+    expect((await app.inject({ method: "GET", url: `/api/contacts/${b.id}` })).json()).toMatchObject({ id: a.id });
+    const list = (await app.inject({ method: "GET", url: "/api/contacts" })).json() as { contacts: unknown[] };
+    expect(list.contacts).toHaveLength(1);
+    await app.close();
+  });
+
+  it("shows a contact's email across mailboxes, and the contact beside a conversation", async () => {
+    const app = makeApp();
+    await setUp(app);
+    signIn("gmail");
+    await app.inject({ method: "GET", url: "/api/comms?area=team" });
+    const contacts = (await app.inject({ method: "GET", url: "/api/contacts" })).json() as { contacts: { id: string; emails: string[] }[] };
+    const pat = contacts.contacts.find((one) => one.emails.includes("pat@example.com"))!;
+    const theirs = (await app.inject({ method: "GET", url: `/api/comms/contacts/${pat.id}/messages` })).json() as { messages: { id: string }[] };
+    expect(theirs.messages.map((one) => one.id)).toEqual(["g3", "g1"]);
+    const thread = (await app.inject({ method: "GET", url: "/api/comms/threads/gmail/gt1" })).json() as { contact?: { id: string; name: string } };
+    expect(thread.contact).toMatchObject({ id: pat.id, name: "Pat Doe" });
+    await app.close();
+  });
+
+  it("starts a workflow once when someone new becomes a contact", async () => {
+    const app = makeApp();
+    const saved = await app.inject({
+      method: "PUT",
+      url: "/api/workflows/new",
+      payload: {
+        name: "Welcome",
+        enabled: true,
+        trigger: { kind: "contact_created" },
+        nodes: [{ id: "note", action: "create.note", mode: "auto", settings: { text: "New: {{ contact.email }}" } }],
+        edges: [{ id: "a", from: "trigger", to: "note" }],
+      },
+    });
+    const id = (saved.json() as { id: string }).id;
+    await app.inject({ method: "POST", url: "/api/contacts", payload: { emails: ["new@example.com"] } });
+    let cases: { status: string }[] = [];
+    for (let tries = 0; tries < 50 && cases.length === 0; tries++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      cases = (await app.inject({ method: "GET", url: `/api/workflows/${id}/cases` })).json() as { status: string }[];
+    }
+    expect(cases).toHaveLength(1);
+    expect(cases[0]?.status).toBe("done");
+    const tasks = (await app.inject({ method: "GET", url: "/api/tasks" })).json() as { title: string; body: { text?: string } }[];
+    expect(tasks.some((one) => one.body.text === "New: new@example.com")).toBe(true);
+    await app.close();
+  });
+});

@@ -8,6 +8,7 @@ import { Segmented } from "../calendar/controls.jsx";
 import { ChipsInput, FormRow, SheetSection, TextInput } from "../calendar/scheduling/inputs.jsx";
 import { SetupSheet } from "../calendar/scheduling/SetupSheet.jsx";
 import { BookingLinks } from "./BookingLinks.jsx";
+import { ContactMessages, MergeContact } from "./ContactExtras.jsx";
 import { timeZones } from "../calendar/scheduling/model.js";
 import { FROM_WORDS, KIND_WORDS, MATCH_TONES, MATCH_WORDS, contactColor, contactTitle, fieldValues, formatPhone, initials, recordTypeWords, relativeTime, valueWords } from "./model.js";
 
@@ -347,6 +348,9 @@ export const ContactSheet = ({
       </SheetSection>
 
       {canManage ? <BookingLinks contact={contact.id} /> : null}
+
+      <ContactMessages contact={contact} />
+      {canManage ? <MergeContact contact={contact} onMerged={onChanged} /> : null}
 
       <SheetSection title="Activity" description="Counted by Dash as bookings happen. Block rules can use these too.">
         <div className="dash-contact-stats">

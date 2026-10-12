@@ -66,6 +66,11 @@ export interface ContactDeps {
   readonly reads?: ContactReads;
   /** The country code a phone number written without one is read in. */
   readonly callingCode?: () => string;
+  /**
+   * Someone new became a contact, and has been matched once: what starts
+   * "When someone new becomes a contact" workflows.
+   */
+  readonly created?: (contact: Contact) => Promise<void>;
   readonly now: () => number;
   readonly newId: () => string;
 }
@@ -102,12 +107,67 @@ export class ContactService implements ContactDirectory {
 
   /* ── reading ─────────────────────────────────────────────────────────── */
 
+  /** A contact by its id, or by the id of a contact merged into it. */
   async get(id: string): Promise<Contact | null> {
-    return this.deps.store.get(id);
+    return (await this.deps.store.get(id)) ?? (await this.deps.store.byKey(`alias:${id}`));
+  }
+
+  /** The contact with this email, if there is one. Never made. */
+  async byEmail(email: string): Promise<Contact | null> {
+    const normal = normalizeEmail(email);
+    return normal ? this.deps.store.byKey(`email:${normal}`) : null;
+  }
+
+  /**
+   * Two records of one person, made one: `other` folds into `keep`. Emails,
+   * phones, links and counts are added together; a field keeps `keep`'s value
+   * from each place it has one and takes `other`'s where it has none. `other`
+   * is removed, and its id stays an alias of `keep`, so a booking or link that
+   * names it still finds this contact (`get`).
+   */
+  async merge(keepId: string, otherId: string): Promise<Contact> {
+    const keep = await this.require(keepId);
+    const other = await this.require(otherId);
+    if (keep.id === other.id) throw new ContactError("That is the same contact.");
+    const union = <T>(a: readonly T[], b: readonly T[], key: (one: T) => string = String): T[] => {
+      const seen = new Map<string, T>();
+      for (const one of [...a, ...b]) if (!seen.has(key(one))) seen.set(key(one), one);
+      return [...seen.values()];
+    };
+    const fields: Contact["fields"] = { ...other.fields };
+    for (const [key, field] of Object.entries(keep.fields)) fields[key] = { ...other.fields[key], ...Object.fromEntries(Object.entries(field).filter(([, value]) => value !== undefined)) };
+    const lastBooked = [keep.stats.lastBookedAt, other.stats.lastBookedAt].filter((one): one is string => Boolean(one)).sort().at(-1);
+    const merged: Contact = {
+      ...keep,
+      name: keep.name || other.name,
+      emails: union(keep.emails, other.emails).slice(0, 10),
+      phones: union(keep.phones, other.phones).slice(0, 10),
+      ...(keep.timezone ?? other.timezone ? { timezone: keep.timezone ?? other.timezone } : {}),
+      fields,
+      links: union(keep.links, other.links, (one) => `${one.connection}/${one.entity}/${one.recordId}`).slice(0, 20),
+      stats: {
+        bookings: keep.stats.bookings + other.stats.bookings,
+        cancellations: keep.stats.cancellations + other.stats.cancellations,
+        noShows: keep.stats.noShows + other.stats.noShows,
+        firstContactAt: [keep.stats.firstContactAt, other.stats.firstContactAt].sort()[0]!,
+        ...(lastBooked ? { lastBookedAt: lastBooked } : {}),
+      },
+      verified: { ...other.verified, ...keep.verified },
+      ...(keep.preferredHost ?? other.preferredHost ? { preferredHost: keep.preferredHost ?? other.preferredHost } : {}),
+      aliases: union(keep.aliases ?? [], [...(other.aliases ?? []), other.id]).slice(0, 50),
+    };
+    /* The other goes first, so its emails and phones are free for the one that stays. */
+    await this.deps.store.delete(other.id);
+    const saved = await this.deps.store.put({ ...merged, revision: keep.revision + 1, updatedAt: iso(this.deps.now()) }, keep.revision);
+    if (!saved.ok) {
+      await this.deps.store.put(other).catch(() => undefined);
+      throw new ContactError("They could not be merged just now: one of them changed. Try again.", 409);
+    }
+    return saved.contact;
   }
 
   async require(id: string): Promise<Contact> {
-    const contact = await this.deps.store.get(id);
+    const contact = await this.get(id);
     if (!contact) throw new ContactError("There is no such contact.", 404);
     return contact;
   }
@@ -183,6 +243,8 @@ export class ContactService implements ContactDirectory {
     readonly origin: ContactOrigin;
     /** Typed on a public page by someone not yet verified: a contact found is used as it is, never added to. */
     readonly unverified?: boolean;
+    /** `caller`: a new contact is matched and announced by the caller (`settle`), when it is ready to. */
+    readonly settle?: "background" | "caller";
   }): Promise<Contact> {
     const email = input.email ? normalizeEmail(input.email) : null;
     const phone = input.phone ? normalizePhone(input.phone, this.callingCode) : null;
@@ -210,7 +272,11 @@ export class ContactService implements ContactDirectory {
         updatedAt: now,
       };
       const saved = await this.deps.store.put(made);
-      if (saved.ok) return saved.contact;
+      if (saved.ok) {
+        /* Matched, then announced, in the background: the caller has what it asked for already. */
+        if (input.settle !== "caller") void this.settle(saved.contact.id).catch(() => undefined);
+        return saved.contact;
+      }
       /* Someone made them a moment ago: look again, and use theirs. */
     }
     throw new ContactError("They could not be saved just now. Try again.", 503);
@@ -225,6 +291,14 @@ export class ContactService implements ContactDirectory {
     const next: Contact = { ...found, emails: emails.slice(0, 10), phones: phones.slice(0, 10), name, revision: found.revision + 1, updatedAt: iso(this.deps.now()) };
     const saved = await this.deps.store.put(next, found.revision);
     return saved.ok ? saved.contact : found;
+  }
+
+  /** A new contact, settled: matched once to the workspace's records, then announced to workflows. */
+  async settle(id: string): Promise<Contact | null> {
+    await this.match(id).catch(() => undefined);
+    const contact = await this.get(id);
+    if (contact) await this.deps.created?.(contact).catch(() => undefined);
+    return contact;
   }
 
   /** A contact a member adds by hand. One that already has the email or phone is not made twice. */
@@ -367,6 +441,28 @@ export class ContactService implements ContactDirectory {
    */
   async match(id: string): Promise<MatchOutcome> {
     return (await this.matchWithDetail(id)).outcome;
+  }
+
+  /**
+   * Every contact not yet linked to a record, tried once against the match
+   * rules: for a rule just added or changed. A read that fails leaves a
+   * contact as it was; it is tried again next time.
+   */
+  async matchAll(): Promise<{ readonly tried: number; readonly linked: number }> {
+    let tried = 0;
+    let linked = 0;
+    let after: string | undefined;
+    for (let pages = 0; pages < 100; pages++) {
+      const page = await this.deps.store.list({ limit: 200, ...(after ? { after } : {}) });
+      for (const contact of page.contacts) {
+        if (contact.links.length > 0) continue;
+        tried++;
+        if ((await this.match(contact.id).catch(() => "unavailable" as const)) === "linked") linked++;
+      }
+      if (!page.next) break;
+      after = page.next;
+    }
+    return { tried, linked };
   }
 
   async matchWithDetail(id: string): Promise<{ readonly outcome: MatchOutcome; readonly contact: Contact }> {

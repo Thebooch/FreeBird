@@ -1,7 +1,7 @@
 import { AgentChip, Button, EmptyState } from "@freebirdai/dash-components";
 import type { AgentSpec, MailDraft, MailThreadMessage, WriteReviewView } from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useState } from "react";
-import { api } from "../api.js";
+import { api, type CommsContactCard } from "../api.js";
 import { when } from "./model.js";
 
 /**
@@ -147,6 +147,7 @@ export const ThreadView = ({
 }): JSX.Element => {
   const [messages, setMessages] = useState<readonly MailThreadMessage[] | null>(null);
   const [drafts, setDrafts] = useState<readonly MailDraft[]>([]);
+  const [contact, setContact] = useState<CommsContactCard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
 
@@ -156,6 +157,7 @@ export const ThreadView = ({
       const thread = await api.commsThread(mailbox, threadId);
       setMessages(thread.messages);
       setDrafts(thread.drafts);
+      setContact(thread.contact ?? null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -187,6 +189,30 @@ export const ThreadView = ({
         </Button>
         <h2 className="dash-comms-thread__subject">{messages?.[0]?.subject || "(no subject)"}</h2>
       </header>
+      {contact && (
+        <aside className="dash-comms-contact" data-testid="comms-contact">
+          <div className="dash-comms-contact__head">
+            <a className="dash-comms-contact__name" href="#/agent/contacts" title="Open Contacts">
+              {contact.name}
+            </a>
+            {contact.types.map((type) => (
+              <span key={type} className="dash-comms-tag">
+                {type}
+              </span>
+            ))}
+          </div>
+          {contact.fields.length > 0 && (
+            <dl className="dash-comms-review__rows">
+              {contact.fields.slice(0, 8).map((field) => (
+                <div key={field.label} className="dash-comms-review__row">
+                  <dt>{field.label}</dt>
+                  <dd>{field.value}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
+        </aside>
+      )}
       {error && <p className="dash-sched-error">{error}</p>}
       {messages === null && !error && <p className="dash-hint">Reading the conversation…</p>}
       {messages?.length === 0 && <EmptyState glyph="✉" title="Nothing here" body="This conversation has no messages Dash can read." />}

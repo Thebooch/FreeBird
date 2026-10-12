@@ -207,6 +207,11 @@ export const TriggerEditor = ({
     {trigger.kind === "manual" && <span className="dash-hint">Runs when someone presses Run now.</span>}
     {trigger.kind === "booking" && <BookingTriggerEditor trigger={trigger} onChange={onChange} />}
     {trigger.kind === "message_received" && <MailTriggerEditor trigger={trigger} onChange={onChange} />}
+    {trigger.kind === "contact_created" && (
+      <span className="dash-hint">
+        Once per person, after they are matched to your records. The row is the contact: {"{{ contact.name }}"}, {"{{ contact.email }}"}, their types and fields.
+      </span>
+    )}
   </div>
 );
 
