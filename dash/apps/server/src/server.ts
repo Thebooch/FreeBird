@@ -149,6 +149,7 @@ import { reportRoutes } from "./routes/reports.js";
 import { commsRoutes } from "./routes/comms.js";
 import { CommsError, CommsService } from "./comms/service.js";
 import { emailHighlightNotifier, emailTeamNotifier } from "./comms/notify.js";
+import { extractFields, fieldsToFill } from "./comms/extract.js";
 import { activeHighlights, checkHighlights } from "./agents/highlights.js";
 
 /** How often each signed-in mailbox is read with nobody looking, so new mail starts its workflows. */
@@ -1299,7 +1300,23 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         (one): one is MailWorkflow & { trigger: Extract<MailWorkflow["trigger"], { kind: "message_received" }> } =>
           one.trigger.kind === "message_received" && one.enabled && !one.parked && one.trigger.channels.includes("email"),
       );
-      for (const { message, contact } of arrived) {
+      const fieldDefs = (await contacts.setup()).fields;
+      for (const arrival of arrived) {
+        const { message } = arrival;
+        let contact = arrival.contact;
+        /* Fields set to fill from email, still empty on this contact: read once from this email, before any workflow sees the contact. */
+        const toFill = contact ? fieldsToFill(fieldDefs, contact) : [];
+        const extractor = toFill.length > 0 ? resolveLlm("extract") : null;
+        if (contact && extractor) {
+          try {
+            const words = (await comms.conversationText(message.mailbox, message.id, message.threadId)).text.split("\n\n---\n\n").at(-1) ?? message.snippet;
+            const found = await extractFields(extractor, toFill, `Subject: ${message.subject}\n\n${words}`);
+            for (const [key, value] of Object.entries(found)) await contacts.record(contact.id, key, value, "person").catch(() => undefined);
+            if (Object.keys(found).length > 0) contact = (await contacts.get(contact.id)) ?? contact;
+          } catch (error) {
+            app.log.warn(`contact fields were not read from a new email: ${String(error)}`);
+          }
+        }
         /* An agent's own mailbox: the message is checked against that agent's highlights, and a match tells the team. */
         const owner = store.getConnection(message.mailbox)?.mailbox?.owner;
         if (owner?.kind === "agent") {

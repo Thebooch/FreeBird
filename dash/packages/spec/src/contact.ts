@@ -241,6 +241,12 @@ const fieldDefShape = z.object({
   /** Whether rules on it count only a record's or a member's value by default. */
   trust: z.enum(["any", "record"]).default("any"),
   sources: z.array(contactFieldSourceSchema).max(10).default([]),
+  /**
+   * Fill it from what they write: each new email from the contact is read
+   * once, and a value found for this is kept as theirs (`person`), only while
+   * the field is still empty. `look` says what to look for, in plain words.
+   */
+  fromEmail: z.object({ enabled: z.boolean().default(true), look: z.string().trim().max(400).default("") }).optional(),
   order: z.number().int().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),

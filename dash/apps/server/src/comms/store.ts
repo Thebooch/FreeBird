@@ -124,7 +124,7 @@ export class MemoryCommsStore implements CommsStore {
   async putSettings(settings: CommsSettings): Promise<void> {
     this.held = commsSettingsSchema.parse(settings);
   }
-  async claimNotice(key: string): Promise<boolean> {
+  async claimNotice(key: string, _at?: string): Promise<boolean> {
     if (this.notices.has(key)) return false;
     this.notices.add(key);
     return true;

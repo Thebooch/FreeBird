@@ -195,7 +195,7 @@ const FieldSheet = ({
 }): JSX.Element => {
   const [draft, setDraft] = useState<ContactFieldDefInput>(() =>
     def
-      ? { label: def.label, kind: def.kind, ...(def.choices ? { choices: def.choices } : {}), askable: def.askable, ...(def.ask ? { ask: def.ask } : {}), trust: def.trust, sources: def.sources }
+      ? { label: def.label, kind: def.kind, ...(def.choices ? { choices: def.choices } : {}), askable: def.askable, ...(def.ask ? { ask: def.ask } : {}), trust: def.trust, sources: def.sources, ...(def.fromEmail ? { fromEmail: def.fromEmail } : {}) }
       : { label: "", kind: "text", askable: false, trust: "any", sources: [] },
   );
   const [key, setKey] = useState(def?.key ?? "");
@@ -276,6 +276,25 @@ const FieldSheet = ({
         </FormRow>
         {draft.kind === "choice" && (
           <FormRow label="Choices">{(field) => <ChipsInput id={field} values={draft.choices ?? []} placeholder="new, existing" onChange={(choices) => set("choices", choices)} testId="field-choices" />}</FormRow>
+        )}
+      </SheetSection>
+
+      <SheetSection title="From their emails" description="Read from each new email they send, while the field is still empty. A value your team set, or a record holds, is never replaced.">
+        <FormRow label="Fill from email">
+          {() => (
+            <Switch
+              checked={draft.fromEmail?.enabled ?? false}
+              onChange={(enabled) => set("fromEmail", { enabled, look: draft.fromEmail?.look ?? "" })}
+              label={draft.fromEmail?.enabled ? "Read from their emails" : "Not read from email"}
+            />
+          )}
+        </FormRow>
+        {draft.fromEmail?.enabled && (
+          <FormRow label="What to look for">
+            {(field) => (
+              <TextInput id={field} value={draft.fromEmail?.look ?? ""} placeholder="The date they want to move in" maxLength={400} onChange={(look) => set("fromEmail", { enabled: true, look })} testId="field-from-email" />
+            )}
+          </FormRow>
         )}
       </SheetSection>
 
