@@ -1211,6 +1211,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   });
   const contacts: ContactService = new ContactService({
     store: options.contacts ?? new MemoryContactStore(),
+    wantsCreated: async () => (await workflowStore.list()).some((one) => one.trigger.kind === "contact_created" && one.enabled && !one.parked),
     /* Someone new, matched once: "When someone new becomes a contact" workflows open a case each, once. */
     created: async (contact) => {
       const listening = (await workflowStore.list()).filter((one) => one.trigger.kind === "contact_created" && one.enabled && !one.parked);

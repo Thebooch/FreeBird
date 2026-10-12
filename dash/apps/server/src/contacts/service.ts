@@ -71,6 +71,8 @@ export interface ContactDeps {
    * "When someone new becomes a contact" workflows.
    */
   readonly created?: (contact: Contact) => Promise<void>;
+  /** Whether anything listens for new contacts. Without, a new contact is not matched in the background: matching stays explicit. */
+  readonly wantsCreated?: () => Promise<boolean>;
   readonly now: () => number;
   readonly newId: () => string;
 }
@@ -274,7 +276,10 @@ export class ContactService implements ContactDirectory {
       const saved = await this.deps.store.put(made);
       if (saved.ok) {
         /* Matched, then announced, in the background: the caller has what it asked for already. */
-        if (input.settle !== "caller") void this.settle(saved.contact.id).catch(() => undefined);
+        if (input.settle !== "caller" && this.deps.created)
+          void (async () => {
+            if (await (this.deps.wantsCreated?.() ?? Promise.resolve(true))) await this.settle(saved.contact.id);
+          })().catch(() => undefined);
         return saved.contact;
       }
       /* Someone made them a moment ago: look again, and use theirs. */
