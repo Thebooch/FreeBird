@@ -25,11 +25,13 @@ const DARK_TOKENS = `
   --dash-plane: #0e1013;
   --dash-ink: #f4f4f2;
   --dash-ink-secondary: #b9bcc2;
-  --dash-muted: #8a8d93;
-  --dash-grid: #262b31;
-  --dash-axis: #363c43;
-  --dash-border: rgba(255, 255, 255, 0.1);
-  --dash-border-strong: rgba(255, 255, 255, 0.16);
+  /* 6.7:1 on the surface: secondary text that is still comfortably read. */
+  --dash-muted: #9a9ea5;
+  --dash-grid: #20252a;
+  --dash-axis: #353b42;
+  --dash-border: rgba(255, 255, 255, 0.085);
+  --dash-border-strong: rgba(255, 255, 255, 0.15);
+  --dash-rule: rgba(255, 255, 255, 0.055);
   --dash-delta-up: #7fe0d5;
   --dash-track: #23282d;
   --dash-wash: rgba(255, 255, 255, 0.04);
@@ -56,7 +58,8 @@ const DARK_TOKENS = `
   --dash-surface-raised: #23282d;
   --dash-surface-sunken: #101215;
   --dash-shadow: none;
-  --dash-shadow-sm: 0 1px 0 rgba(255, 255, 255, 0.03) inset;
+  --dash-shadow-sm: none;
+  --dash-shadow-hover: 0 1px 0 rgba(255, 255, 255, 0.04) inset;
   --dash-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
   --dash-shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.6), 0 1px 0 rgba(255, 255, 255, 0.05) inset;
   --dash-ring: rgba(63, 181, 173, 0.32);
@@ -81,16 +84,23 @@ export const DASH_STYLES = `
    */
   --dash-surface: #ffffff;
   --dash-surface-raised: #ffffff;
-  --dash-surface-sunken: #faf9f6;
-  --dash-plane: #eceae4;
+  --dash-surface-sunken: #fafaf8;
+  /*
+   * Off-white rather than bone: on a pale plane a white card is told apart by
+   * its hairline, not by a tinted field around it or a shadow under it.
+   */
+  --dash-plane: #f4f3f0;
   --dash-ink: #16171a;
   --dash-ink-secondary: #3f4147;
-  --dash-muted: #767a80;
-  --dash-grid: #e7e5df;
-  --dash-axis: #c9c6be;
-  --dash-border: rgba(22, 23, 26, 0.09);
+  /* 5.3:1 on white — the old #767a80 sat just under AA for small text. */
+  --dash-muted: #686c73;
+  --dash-grid: #efede8;
+  --dash-axis: #cfccc4;
+  --dash-border: rgba(22, 23, 26, 0.085);
   /* The edge a card takes on hover — one step up from the resting one. */
-  --dash-border-strong: rgba(22, 23, 26, 0.13);
+  --dash-border-strong: rgba(22, 23, 26, 0.15);
+  /* Between rows of a list, a table or a record: lighter than a card's edge. */
+  --dash-rule: rgba(22, 23, 26, 0.06);
   --dash-delta-up: #16751b;
   --dash-track: #e2e0d8;
   --dash-wash: rgba(22, 23, 26, 0.04);
@@ -132,10 +142,11 @@ ${seriesVars(SERIES_LIGHT)}
    * calendar day cell and a chart tick — and nowhere else.
    */
   --dash-text-micro: 10px;
-  --dash-text-2xs: 11.5px;
+  /* Kept as a name, merged into xs: 11.5px beside 12px was a size nobody could tell apart. */
+  --dash-text-2xs: 12px;
   --dash-text-xs: 12px;
   --dash-text-sm: 13px;
-  --dash-text-md: 14.5px;
+  --dash-text-md: 14px;
   --dash-text-lg: 17px;
   --dash-text-xl: 21px;
   --dash-text-2xl: 25px;
@@ -153,12 +164,20 @@ ${seriesVars(SERIES_LIGHT)}
   --dash-leading-relaxed: 1.65;
 
   /*
-   * Eyebrows are set in the mono face, uppercase and widely tracked — the
-   * refresh leans on that one treatment to mark every label, count and
-   * timestamp as chrome rather than as data. 0.055em was too tight to read as
-   * deliberate once the face changed.
+   * Eyebrows used to be set in the mono face, uppercase and widely tracked.
+   * They are labels now (below): untracked, in sentence case.
    */
-  --dash-tracking-label: 0.12em;
+  --dash-tracking-label: 0;
+
+  /*
+   * Labels — column heads, section heads, footers, badges — in the body face,
+   * sentence case, at a size that reads. They were mono, uppercase, tracked
+   * and 10px, which marked them as chrome and made them hard to read; muted
+   * colour and a smaller size already say "chrome" without that.
+   */
+  --dash-label-font: var(--dash-font);
+  --dash-label-size: var(--dash-text-xs);
+  --dash-label-case: none;
 
   /* ── space ─────────────────────────────────────────────────────────────
    * A 4px rhythm. Component padding reads from the density block below, which
@@ -175,28 +194,28 @@ ${seriesVars(SERIES_LIGHT)}
   --dash-space-8: 40px;
 
   /* Chips, badges and swatches — the step below a control. */
-  --dash-radius-xs: 6px;
-  --dash-radius-sm: 8px;
-  --dash-radius: 14px;
-  --dash-radius-lg: 20px;
+  --dash-radius-xs: 4px;
+  --dash-radius-sm: 6px;
+  --dash-radius: 10px;
+  --dash-radius-lg: 14px;
   --dash-radius-pill: 999px;
-  --dash-gap: 14px;
+  --dash-gap: 12px;
 
   /* ── elevation ─────────────────────────────────────────────────────────
    * Three steps. "sm" is the resting card, "md" is anything that floats over
    * the page (menu, tooltip), "lg" is a sheet. "--dash-shadow" is kept as the
    * name the existing rules use and aliases "sm".
    */
-  --dash-shadow-sm: 0 1px 2px rgba(22, 23, 26, 0.04), 0 12px 26px -20px rgba(22, 23, 26, 0.4);
-  --dash-shadow-md: 0 2px 6px rgba(22, 23, 26, 0.05), 0 6px 16px -8px rgba(22, 23, 26, 0.35);
-  --dash-shadow-lg: 0 2px 5px rgba(22, 23, 26, 0.05), 0 24px 56px -24px rgba(22, 23, 26, 0.5);
+  --dash-shadow-sm: 0 1px 1px rgba(22, 23, 26, 0.025);
+  --dash-shadow-md: 0 1px 3px rgba(22, 23, 26, 0.06), 0 8px 20px -10px rgba(22, 23, 26, 0.28);
+  --dash-shadow-lg: 0 2px 5px rgba(22, 23, 26, 0.05), 0 24px 56px -24px rgba(22, 23, 26, 0.45);
   --dash-shadow: var(--dash-shadow-sm);
   /*
    * The lift a card takes on hover. The negative spread keeps the throw long
    * and the contact shadow tight, so the card reads as picked up rather than
    * as blurred.
    */
-  --dash-shadow-hover: 0 2px 5px rgba(22, 23, 26, 0.05), 0 20px 40px -22px rgba(22, 23, 26, 0.5);
+  --dash-shadow-hover: 0 1px 2px rgba(22, 23, 26, 0.04), 0 6px 16px -10px rgba(22, 23, 26, 0.22);
 
   /* ── motion ────────────────────────────────────────────────────────────
    * Durations are tokens so the reduced-motion block below can zero all of
@@ -329,10 +348,11 @@ ${seriesVars(SERIES_LIGHT)}
      over it. Measured at 7-10px of overlap before this. */
   flex: none;
 }
+/* Medium, not semibold: the title names the tile; the number or rows under it are what is read. */
 .dash-widget__title {
   font-size: var(--dash-text-md);
-  font-weight: var(--dash-weight-semi);
-  letter-spacing: -0.01em;
+  font-weight: var(--dash-weight-medium);
+  letter-spacing: -0.005em;
   line-height: var(--dash-leading-tight);
   color: var(--dash-ink);
   margin: 0;
@@ -379,14 +399,14 @@ ${seriesVars(SERIES_LIGHT)}
   border-top: 1px solid var(--dash-border);
   background: var(--dash-surface-sunken);
   /*
-   * Set as chrome, not as data: mono, uppercase and tracked, so a row count
-   * and a timestamp are never mistaken at a glance for a figure the widget is
-   * reporting. It is the same treatment every eyebrow in the app uses.
+   * Set as chrome, not as data: the label treatment, small and muted, so a
+   * row count and a timestamp are never mistaken at a glance for a figure
+   * the widget is reporting.
    */
-  font-family: var(--dash-font-mono);
-  font-size: var(--dash-text-micro);
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
+  font-family: var(--dash-label-font);
+  font-size: var(--dash-label-size);
+  letter-spacing: var(--dash-tracking-label);
+  text-transform: var(--dash-label-case);
   color: var(--dash-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -396,6 +416,12 @@ ${seriesVars(SERIES_LIGHT)}
 /* One line, always: on a narrow tile the count is cut short with an ellipsis
    (the whole of it is on hover) rather than wrapping onto a second line the
    card then clips. */
+.dash-widget__actions .dash-iconbtn { opacity: 0.55; }
+.dash-widget:hover .dash-widget__actions .dash-iconbtn,
+.dash-widget:focus-within .dash-widget__actions .dash-iconbtn,
+.dash-widget__actions .dash-iconbtn[aria-expanded="true"],
+.dash-widget__actions .dash-iconbtn:has(.dash-menu__badge) { opacity: 1; }
+@media (hover: none) { .dash-widget__actions .dash-iconbtn { opacity: 1; } }
 .dash-widget__count { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dash-widget__updated { white-space: nowrap; }
 .dash-widget__more { color: var(--dash-serious); }
@@ -408,7 +434,8 @@ ${seriesVars(SERIES_LIGHT)}
 .dash-widget__history {
   flex: 0 1 auto; min-height: 0; overflow: hidden;
   display: flex; align-items: center;
-  padding: 0 var(--dash-pad-x, 12px) var(--dash-space-2, 8px);
+  /* No vertical padding: padding cannot shrink, and this has to be able to vanish. */
+  padding: 0 var(--dash-pad-x, 12px);
   color: var(--dash-axis); opacity: 0.8;
 }
 .dash-widget__history svg { flex: none; }
@@ -504,7 +531,8 @@ ${seriesVars(SERIES_LIGHT)}
 
 .dash-iconbtn {
   border: none; background: transparent; color: var(--dash-muted);
-  cursor: pointer; font-size: var(--dash-text-sm); line-height: 1; padding: 4px 5px; border-radius: var(--dash-radius-sm);
+  cursor: pointer; font-size: var(--dash-text-sm); line-height: 1; padding: 5px 6px; border-radius: var(--dash-radius-sm);
+  transition: background var(--dash-dur-fast) var(--dash-ease), color var(--dash-dur-fast) var(--dash-ease), opacity var(--dash-dur-fast) var(--dash-ease);
 }
 .dash-iconbtn:hover:not(:disabled) { background: var(--dash-wash); color: var(--dash-ink); }
 .dash-iconbtn:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 1px; }
@@ -521,8 +549,8 @@ ${seriesVars(SERIES_LIGHT)}
  */
 .dash-badge {
   display: inline-flex; align-items: center; gap: 5px;
-  font-family: var(--dash-font-mono);
-  font-size: var(--dash-text-micro); letter-spacing: 0.06em; text-transform: uppercase;
+  font-family: var(--dash-label-font);
+  font-size: var(--dash-label-size); letter-spacing: var(--dash-tracking-label); text-transform: var(--dash-label-case);
   padding: 3px 8px; border-radius: var(--dash-radius-xs);
   background: var(--dash-wash); color: var(--dash-muted); white-space: nowrap;
   box-shadow: inset 0 0 0 1px var(--dash-border);
@@ -626,10 +654,12 @@ ${seriesVars(SERIES_LIGHT)}
 .dash-menu__list { max-height: min(60vh, 420px); overflow-y: auto; max-width: 280px; }
 /* How many filters are on, readable without opening the menu. */
 .dash-menu__badge {
-  position: absolute; top: -3px; right: -3px; min-width: 14px; height: 14px; padding: 0 3px;
+  position: absolute; top: -4px; right: -5px; min-width: 15px; height: 15px; padding: 0 4px;
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 999px; background: var(--dash-accent); color: var(--dash-on-accent, #fff);
+  border-radius: 999px; background: var(--dash-accent); color: var(--dash-accent-ink, #fff);
+  box-shadow: 0 0 0 2px var(--dash-surface);
   font-size: 10px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 .dash-menu > .dash-iconbtn { position: relative; overflow: visible; }
 /* Lined up on the trigger's left edge, for a menu that opens from the left of a toolbar. */
@@ -706,9 +736,9 @@ ${seriesVars(SERIES_LIGHT)}
 }
 .dash-section-head__title {
   margin: 0; order: 10;
-  font-family: var(--dash-font-mono);
-  font-size: var(--dash-text-micro); font-weight: var(--dash-weight-medium);
-  text-transform: uppercase; letter-spacing: var(--dash-tracking-label);
+  font-family: var(--dash-label-font);
+  font-size: var(--dash-label-size); font-weight: var(--dash-weight-medium);
+  text-transform: var(--dash-label-case); letter-spacing: var(--dash-tracking-label);
   color: var(--dash-muted);
 }
 .dash-section-head__meta {
@@ -746,7 +776,9 @@ ${seriesVars(SERIES_LIGHT)}
 .dash-table__sort:hover { color: var(--dash-ink); }
 .dash-table__sort:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 2px; }
 .dash-table__sort[data-active="true"] { color: var(--dash-accent); }
-.dash-table__arrow { opacity: 0.4; font-size: var(--dash-text-micro); }
+/* Hidden until the header is pointed at or sorted by: a ↕ on every column was noise. Its space stays, so nothing shifts. */
+.dash-table__arrow { opacity: 0; font-size: var(--dash-text-micro); transition: opacity var(--dash-dur-fast) var(--dash-ease); }
+.dash-table__sort:hover .dash-table__arrow, .dash-table__sort:focus-visible .dash-table__arrow { opacity: 0.5; }
 .dash-table__sort[data-active="true"] .dash-table__arrow { opacity: 1; }
 .dash-num .dash-table__sort { flex-direction: row-reverse; }
 
@@ -804,7 +836,7 @@ ${seriesVars(SERIES_LIGHT)}
 .dash-metric__name {
   font-size: var(--dash-text-2xs); color: var(--dash-muted);
   font-weight: var(--dash-weight-medium);
-  text-transform: uppercase; letter-spacing: var(--dash-tracking-label);
+  text-transform: var(--dash-label-case); letter-spacing: var(--dash-tracking-label);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .dash-metric__value {
@@ -916,7 +948,7 @@ ${seriesVars(SERIES_LIGHT)}
 .dash-record-head__fact dt {
   font-size: var(--dash-text-2xs); color: var(--dash-muted);
   font-weight: var(--dash-weight-medium);
-  text-transform: uppercase; letter-spacing: var(--dash-tracking-label);
+  text-transform: var(--dash-label-case); letter-spacing: var(--dash-tracking-label);
 }
 .dash-record-head__fact dd {
   margin: 0;
@@ -1011,7 +1043,7 @@ ${seriesVars(SERIES_LIGHT)}
 .dash-timeline__body { flex: 1 1 auto; min-width: 0; }
 .dash-timeline__when {
   font-size: var(--dash-text-2xs); color: var(--dash-muted);
-  text-transform: uppercase; letter-spacing: 0.04em;
+  text-transform: var(--dash-label-case); letter-spacing: var(--dash-tracking-label);
 }
 .dash-timeline__title { font-size: var(--dash-text-sm); color: var(--dash-ink); overflow-wrap: anywhere; }
 .dash-timeline__subtitle { font-size: var(--dash-text-xs); color: var(--dash-muted); overflow-wrap: anywhere; }
@@ -1028,12 +1060,12 @@ ${seriesVars(SERIES_LIGHT)}
   margin: 0 0 2px; padding: 4px 0;
   background: var(--dash-surface);
   font-size: var(--dash-text-2xs); font-weight: 600; color: var(--dash-muted);
-  text-transform: uppercase; letter-spacing: 0.05em;
+  text-transform: var(--dash-label-case); letter-spacing: var(--dash-tracking-label);
 }
 .dash-feed__item {
   display: flex; align-items: flex-start; gap: 8px;
   padding: var(--dash-row-gap, var(--dash-space-3)) 0;
-  border-bottom: 1px solid var(--dash-border);
+  border-bottom: 1px solid var(--dash-rule);
 }
 .dash-feed__item:last-child { border-bottom: none; }
 .dash-feed__body { flex: 1 1 auto; min-width: 0; }
@@ -1311,7 +1343,7 @@ ${seriesVars(SERIES_LIGHT)}
    (data-fit, set by Stat after measuring) rather than wrapping or clipping. */
 /* A number's row is never squeezed below the number: on a short tile the
    history line under it gives way instead (see .dash-widget__history). */
-.dash-widget__body:has(> .dash-stat) { flex: 1 0 auto; }
+.dash-widget__body:has(> .dash-stat) { flex: 1 0 auto; padding-bottom: var(--dash-space-2); }
 .dash-stat {
   display: flex; flex-direction: column; justify-content: flex-start;
   height: 100%; gap: 4px; position: relative; min-width: 0;
@@ -1371,7 +1403,7 @@ ${seriesVars(SERIES_LIGHT)}
 /*
  * Headers recede and rows lead.
  *
- * A header is a label for a column, not content: uppercase at caption size in
+ * A header is a label for a column, not content: the label treatment, in
  * muted ink says "this names the thing below" without competing with it. The
  * sunken background is what keeps it legible once rows scroll under it.
  */
@@ -1381,10 +1413,10 @@ ${seriesVars(SERIES_LIGHT)}
   z-index: 1;
   background: var(--dash-surface-sunken);
   text-align: left;
-  font-weight: var(--dash-weight-semi);
-  font-size: var(--dash-text-2xs);
+  font-weight: var(--dash-weight-medium);
+  font-size: var(--dash-label-size);
   letter-spacing: var(--dash-tracking-label);
-  text-transform: uppercase;
+  text-transform: var(--dash-label-case);
   color: var(--dash-muted);
   padding: var(--dash-space-2) var(--dash-space-3);
   border-bottom: 1px solid var(--dash-border);
@@ -1392,7 +1424,7 @@ ${seriesVars(SERIES_LIGHT)}
 }
 .dash-table td {
   padding: var(--dash-cell-y, var(--dash-space-2)) var(--dash-space-3);
-  border-bottom: 1px solid var(--dash-border);
+  border-bottom: 1px solid var(--dash-rule);
   color: var(--dash-ink);
   white-space: nowrap;
   max-width: 280px;
@@ -1476,7 +1508,7 @@ ${seriesVars(SERIES_LIGHT)}
   gap: var(--dash-space-4);
   align-items: baseline;
   padding: var(--dash-space-2) 0;
-  border-bottom: 1px solid var(--dash-border);
+  border-bottom: 1px solid var(--dash-rule);
 }
 .dash-record__pair:last-child { border-bottom: none; }
 /*
@@ -1561,7 +1593,7 @@ ${seriesVars(SERIES_LIGHT)}
   align-items: center;
   gap: 10px;
   padding: var(--dash-row-gap, var(--dash-space-3)) 0;
-  border-bottom: 1px solid var(--dash-border);
+  border-bottom: 1px solid var(--dash-rule);
   font-size: var(--dash-text, var(--dash-text-sm));
 }
 .dash-list__item:last-child { border-bottom: none; }

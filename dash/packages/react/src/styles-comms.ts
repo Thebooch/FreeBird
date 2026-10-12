@@ -25,8 +25,8 @@ export const DASH_COMMS_STYLES = `
 .dash-comms__boxes-head { display: flex; align-items: center; justify-content: space-between; gap: var(--dash-space-2); margin-bottom: var(--dash-space-3); }
 .dash-comms__title { font-size: var(--dash-text-lg); font-weight: var(--dash-weight-semi); margin: 0; color: var(--dash-ink); }
 .dash-comms__group {
-  font-family: var(--dash-font-mono); font-size: var(--dash-text-micro); font-weight: var(--dash-weight-medium);
-  text-transform: uppercase; letter-spacing: var(--dash-tracking-label); color: var(--dash-muted);
+  font-family: var(--dash-label-font); font-size: var(--dash-label-size); font-weight: var(--dash-weight-medium);
+  text-transform: var(--dash-label-case); letter-spacing: var(--dash-tracking-label); color: var(--dash-muted);
   margin: var(--dash-space-4) 0 var(--dash-space-2);
 }
 .dash-comms__list { list-style: none; margin: 0 0 var(--dash-space-2); padding: 0; }
@@ -87,7 +87,7 @@ export const DASH_COMMS_STYLES = `
 .dash-comms-message__text { font: inherit; font-size: var(--dash-text-sm); color: var(--dash-ink-secondary); white-space: pre-wrap; word-break: break-word; margin: 0; }
 .dash-comms-draft { border: 1px dashed var(--dash-accent); border-radius: var(--dash-radius); padding: var(--dash-space-3); display: flex; flex-direction: column; gap: var(--dash-space-2); background: var(--dash-surface); }
 .dash-comms-draft__head { display: flex; align-items: center; gap: var(--dash-space-2); }
-.dash-comms-draft__label { font-family: var(--dash-font-mono); font-size: var(--dash-text-micro); text-transform: uppercase; letter-spacing: var(--dash-tracking-label); color: var(--dash-accent); }
+.dash-comms-draft__label { font-family: var(--dash-label-font); font-size: var(--dash-label-size); text-transform: var(--dash-label-case); letter-spacing: var(--dash-tracking-label); color: var(--dash-accent); }
 .dash-comms-field { display: grid; grid-template-columns: 64px 1fr; align-items: center; gap: var(--dash-space-2); font-size: var(--dash-text-xs); color: var(--dash-muted); }
 .dash-comms-draft__text { width: 100%; box-sizing: border-box; resize: vertical; min-height: 140px; font: inherit; font-size: var(--dash-text-sm); }
 .dash-comms-draft__actions { display: flex; flex-wrap: wrap; gap: var(--dash-space-2); }

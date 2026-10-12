@@ -328,6 +328,9 @@ export const flagValue = (value: unknown): boolean | null => {
 /** How a flag reads on screen. */
 export const flagLabel = (on: boolean): string => (on ? "Active" : "Inactive");
 
+/** A date with no time of day, or with exactly midnight UTC. */
+const DAY_ONLY = /^\d{4}-\d{2}-\d{2}(?:[T ]00:00(?::00(?:\.0+)?)?(?:Z|[+-]00:?00)?)?$/;
+
 export const formatValue = (
   value: unknown,
   format: FormatSpec | undefined,
@@ -355,6 +358,27 @@ export const formatValue = (
     if (!Number.isFinite(ms)) return "—";
     if (semantic === "relative_time") {
       return formatRelative(ms, options.now ?? Date.now(), locale);
+    }
+    /*
+     * A day, not a moment: "2025-07-31", or that day at midnight UTC, which
+     * is how most APIs send a date with no time. Shown as the day alone —
+     * "Jul 31, 2025, 12:00 AM" on every row is noise that reads as a time
+     * somebody chose — and in UTC, so the day never slips back one in a zone
+     * west of Greenwich.
+     */
+    if (typeof value === "string" && DAY_ONLY.test(value.trim())) {
+      // Read from its digits, not parsed: a string with no zone parses as local time.
+      const [year, month, day] = value.trim().slice(0, 10).split("-").map(Number) as [number, number, number];
+      return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeZone: "UTC" }).format(
+        new Date(Date.UTC(year, month - 1, day)),
+      );
+    }
+    /*
+     * The same day once a coerce step has made it a number: exactly midnight
+     * UTC, to the millisecond, is a date that was sent without a time.
+     */
+    if (typeof value === "number" && ms % 86_400_000 === 0) {
+      return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeZone: "UTC" }).format(new Date(ms));
     }
     return new Intl.DateTimeFormat(locale, {
       dateStyle: "medium",

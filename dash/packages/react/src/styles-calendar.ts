@@ -157,8 +157,8 @@ export const DASH_CALENDAR_STYLES = `
   border-bottom: 1px solid var(--dash-border); background: var(--dash-surface-sunken);
 }
 .dash-cal-month__weekday {
-  padding: 8px 10px; font-family: var(--dash-font-mono); font-size: var(--dash-text-micro);
-  text-transform: uppercase; letter-spacing: var(--dash-tracking-label); color: var(--dash-muted);
+  padding: 8px 10px; font-family: var(--dash-label-font); font-size: var(--dash-label-size);
+  text-transform: var(--dash-label-case); letter-spacing: var(--dash-tracking-label); color: var(--dash-muted);
 }
 .dash-cal-month__grid {
   display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); grid-auto-rows: minmax(118px, auto);
@@ -217,7 +217,7 @@ export const DASH_CALENDAR_STYLES = `
   display: flex; align-items: baseline; gap: 6px; padding: 8px 10px; min-width: 0;
   border-left: 1px solid var(--dash-grid);
 }
-.dash-cal-week__dow { font-family: var(--dash-font-mono); font-size: var(--dash-text-micro); text-transform: uppercase; letter-spacing: var(--dash-tracking-label); color: var(--dash-muted); }
+.dash-cal-week__dow { font-family: var(--dash-label-font); font-size: var(--dash-label-size); text-transform: var(--dash-label-case); letter-spacing: var(--dash-tracking-label); color: var(--dash-muted); }
 .dash-cal-week__date { font-size: var(--dash-text-lg); font-weight: var(--dash-weight-semi); color: var(--dash-ink-secondary); line-height: 1; }
 .dash-cal-week__day[data-today="true"] .dash-cal-week__date {
   color: var(--dash-accent-ink); background: var(--dash-accent); border-radius: var(--dash-radius-pill); padding: 3px 8px;
@@ -276,7 +276,7 @@ export const DASH_CALENDAR_STYLES = `
   position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: var(--dash-space-2);
   padding: 10px var(--dash-space-4) 8px; background: var(--dash-surface-sunken); border-bottom: 1px solid var(--dash-grid);
 }
-.dash-cal-agenda__dow { font-family: var(--dash-font-mono); font-size: var(--dash-text-micro); text-transform: uppercase; letter-spacing: var(--dash-tracking-label); color: var(--dash-muted); width: 34px; }
+.dash-cal-agenda__dow { font-family: var(--dash-label-font); font-size: var(--dash-label-size); text-transform: var(--dash-label-case); letter-spacing: var(--dash-tracking-label); color: var(--dash-muted); width: 34px; }
 .dash-cal-agenda__date { font-size: var(--dash-text-sm); font-weight: var(--dash-weight-semi); color: var(--dash-ink); }
 .dash-cal-agenda__count { margin-left: auto; font-size: var(--dash-text-xs); color: var(--dash-muted); }
 .dash-cal-agenda__list { list-style: none; margin: 0; padding: var(--dash-space-1) 0; }
@@ -312,8 +312,8 @@ export const DASH_CALENDAR_STYLES = `
 .dash-cal-legend__group { display: flex; flex-direction: column; gap: 2px; }
 .dash-cal-legend__group > select.dash-sched-input { width: 100%; min-width: 0; }
 .dash-cal-legend__title {
-  margin: 0 0 var(--dash-space-1); font-family: var(--dash-font-mono); font-size: var(--dash-text-micro); font-weight: var(--dash-weight-medium);
-  text-transform: uppercase; letter-spacing: var(--dash-tracking-label); color: var(--dash-muted);
+  margin: 0 0 var(--dash-space-1); font-family: var(--dash-label-font); font-size: var(--dash-label-size); font-weight: var(--dash-weight-medium);
+  text-transform: var(--dash-label-case); letter-spacing: var(--dash-tracking-label); color: var(--dash-muted);
   display: flex; align-items: center; justify-content: space-between;
 }
 .dash-cal-legend__reset { font: inherit; font-family: var(--dash-font); text-transform: none; letter-spacing: 0; font-size: var(--dash-text-2xs); color: var(--dash-accent); background: none; border: 0; cursor: pointer; padding: 0; }

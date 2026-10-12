@@ -16,8 +16,8 @@ export const DASH_CHAT_CARD_STYLES = `
 .dash-action-card__head { display: flex; align-items: center; justify-content: space-between; gap: var(--dash-space-2); min-width: 0; }
 .dash-action-card__eyebrow {
   display: inline-flex; align-items: center; gap: 6px;
-  font-family: var(--dash-font-mono); font-size: var(--dash-text-micro, 10.5px); font-weight: var(--dash-weight-medium);
-  text-transform: uppercase; letter-spacing: var(--dash-tracking-label); color: var(--dash-accent);
+  font-family: var(--dash-label-font); font-size: var(--dash-text-micro, 10.5px); font-weight: var(--dash-weight-medium);
+  text-transform: var(--dash-label-case); letter-spacing: var(--dash-tracking-label); color: var(--dash-accent);
 }
 .dash-action-card__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dash-accent); box-shadow: 0 0 0 3px var(--dash-accent-wash); flex: none; }
 .dash-action-card__where {
