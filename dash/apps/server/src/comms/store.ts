@@ -33,7 +33,10 @@ export const KEPT_PER_MAILBOX = 100;
 
 export interface MailboxMark {
   readonly refreshedAt?: string | undefined;
+  /** Where the provider's record of changes stands: Gmail's history id, Graph's delta token. */
   readonly historyId?: string | undefined;
+  /** When the newest page was last read in full. */
+  readonly fullAt?: string | undefined;
   readonly error?: string | undefined;
   /** Who turned on putting appointments in its calendar: the changes are made as them. */
   readonly calendarBy?: Principal | undefined;

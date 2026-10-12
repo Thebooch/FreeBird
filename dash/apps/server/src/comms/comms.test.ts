@@ -208,6 +208,30 @@ describe("Communications", () => {
   });
 });
 
+describe("Keeping up with new mail", () => {
+  it("asks each provider what changed rather than reading the newest page again", async () => {
+    const app = makeApp();
+    const { agent } = await setUp(app);
+    signIn("gmail");
+    signIn("outlook");
+    await app.inject({ method: "GET", url: "/api/comms?area=team" });
+    await app.inject({ method: "GET", url: `/api/comms?area=agent:${agent.id}` });
+    mail.requests.length = 0;
+    mail.gmail.push({ id: "g7", threadId: "gt7", from: "Max <max@example.com>", to: "team@example.com", subject: "Parking", snippet: "Is there parking", at: at(55) });
+    mail.outlook.push({ id: "o7", threadId: "ot7", from: "Ivy <ivy@example.net>", to: "agent@example.org", subject: "Pets", snippet: "Are pets allowed", at: at(56) });
+    await app.inject({ method: "POST", url: "/api/comms/mailboxes/gmail/refresh" });
+    await app.inject({ method: "POST", url: "/api/comms/mailboxes/outlook/refresh" });
+    expect(mail.requests.some((one) => one.url.startsWith("/gmail/v1/users/me/history"))).toBe(true);
+    expect(mail.requests.some((one) => one.url.startsWith("/v1.0/me/mailFolders/inbox/messages/delta") || one.url.includes("/messages/delta"))).toBe(true);
+    expect(mail.requests.some((one) => /\/gmail\/v1\/users\/me\/messages\?/.test(one.url))).toBe(false);
+    const team = (await app.inject({ method: "GET", url: "/api/comms?area=team" })).json() as MailPage;
+    expect(team.messages[0]?.id).toBe("g7");
+    const theirs = (await app.inject({ method: "GET", url: `/api/comms?area=agent:${agent.id}` })).json() as MailPage;
+    expect(theirs.messages[0]?.id).toBe("o7");
+    await app.close();
+  });
+});
+
 describe("Reply to the email, in a workflow", () => {
   it("drafts a reply when an email arrives, sends it from a team mailbox only with the agent's leave, and goes on", async () => {
     const app = makeApp(fakeLlm([{ text: "Thanks Rae, a plumber will call you today." }]));

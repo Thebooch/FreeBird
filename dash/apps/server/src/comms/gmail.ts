@@ -103,6 +103,32 @@ export const gmailProvider = (read: MailRead, mailbox: string): MailProvider => 
       const body = answer.body as { emailAddress?: string; historyId?: string } | null;
       return { ...(body?.emailAddress ? { address: body.emailAddress.toLowerCase() } : {}), ...(body?.historyId ? { historyId: String(body.historyId) } : {}) };
     },
+    changes: async (cursor) => {
+      const fresh = async () => {
+        const answer = await read("profile", {}, { fresh: 0 });
+        const id = (answer.body as { historyId?: unknown } | null)?.historyId;
+        return id === undefined ? undefined : String(id);
+      };
+      if (!cursor) return { messages: [], cursor: await fresh(), reset: true };
+      const ids = new Set<string>();
+      let latest = cursor;
+      let pageToken: string | undefined;
+      try {
+        for (let pages = 0; pages < 5; pages++) {
+          const answer = await read("history", { startHistoryId: cursor, historyTypes: "messageAdded", ...(pageToken ? { pageToken } : {}) }, { fresh: 0 });
+          const body = answer.body as { history?: readonly { messagesAdded?: readonly { message?: { id?: string } }[] }[]; historyId?: unknown; nextPageToken?: string } | null;
+          for (const one of body?.history ?? []) for (const added of one.messagesAdded ?? []) if (typeof added.message?.id === "string") ids.add(added.message.id);
+          if (body?.historyId !== undefined) latest = String(body.historyId);
+          pageToken = body?.nextPageToken;
+          if (!pageToken) break;
+        }
+      } catch (error) {
+        /* A history id Gmail no longer keeps (about a week): start again from now. */
+        if ((error as { upstreamStatus?: number } | null)?.upstreamStatus === 404) return { messages: [], cursor: await fresh(), reset: true };
+        throw error;
+      }
+      return { messages: await details([...ids]), cursor: latest };
+    },
     list: (token, size) => page({ maxResults: size, ...(token ? { pageToken: token } : {}) }, token ? "10m" : 0),
     search: (query: MailQuery, token, size) => page({ maxResults: size, q: gmailQuery(query), ...(token ? { pageToken: token } : {}) }, "2m"),
     thread: async (threadId) => {

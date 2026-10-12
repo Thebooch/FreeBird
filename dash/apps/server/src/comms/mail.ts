@@ -55,6 +55,13 @@ export interface CalendarOut {
 }
 
 export interface MailProvider {
+  /**
+   * What is new since `cursor` (Gmail's history id, Graph's delta token),
+   * with the cursor to ask from next time. Without a cursor, or with one the
+   * provider no longer knows (`reset`), only a fresh cursor comes back: the
+   * newest page is read instead.
+   */
+  changes(cursor: string | undefined): Promise<{ readonly messages: readonly MailMessage[]; readonly cursor?: string | undefined; readonly reset?: boolean }>;
   /** The calendar's events overlapping [from, to). */
   events(from: number, to: number): Promise<readonly CalendarItem[]>;
   /** What adds, changes or removes an event: through the write service, like a send. */

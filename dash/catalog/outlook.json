@@ -170,6 +170,28 @@
       ]
     },
     {
+      "id": "delta",
+      "title": "New in the inbox",
+      "path": "/me/mailFolders/inbox/messages/delta",
+      "rowsPath": "$.value",
+      "timeFiltered": false,
+      "maxPages": 1,
+      "description": "What changed in the inbox since a delta token; $deltatoken=latest gives a token alone.",
+      "query": {
+        "$select": "id,conversationId,internetMessageId,from,toRecipients,ccRecipients,subject,bodyPreview,receivedDateTime,sentDateTime,isRead,isDraft,hasAttachments,parentFolderId"
+      },
+      "params": [
+        {
+          "name": "$deltatoken",
+          "in": "query"
+        },
+        {
+          "name": "$skiptoken",
+          "in": "query"
+        }
+      ]
+    },
+    {
       "id": "conversation",
       "title": "Conversation",
       "path": "/me/messages",

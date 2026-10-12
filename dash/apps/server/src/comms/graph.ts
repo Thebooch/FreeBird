@@ -105,6 +105,45 @@ export const graphProvider = (read: MailRead, mailbox: string, own: () => string
       const address = body?.mail || body?.userPrincipalName;
       return address ? { address: address.toLowerCase() } : {};
     },
+    changes: async (cursor) => {
+      const tokenOf = (body: unknown): { delta?: string; skip?: string } => {
+        const read = (key: string, name: string) => {
+          const link = (body as Record<string, unknown> | null)?.[key];
+          if (typeof link !== "string") return undefined;
+          try {
+            return new URL(link).searchParams.get(name) ?? undefined;
+          } catch {
+            return undefined;
+          }
+        };
+        return { delta: read("@odata.deltaLink", "$deltatoken"), skip: read("@odata.nextLink", "$skiptoken") };
+      };
+      if (!cursor) {
+        const answer = await read("delta", { $deltatoken: "latest" }, { fresh: 0 });
+        return { messages: [], cursor: tokenOf(answer.body).delta, reset: true };
+      }
+      const messages: MailMessage[] = [];
+      let params: Record<string, string> = { $deltatoken: cursor };
+      try {
+        for (let pages = 0; pages < 5; pages++) {
+          const answer = await read("delta", params, { fresh: 0 });
+          messages.push(...normalized(answer.rows.filter((row) => !(row as Record<string, unknown>)["@removed"])));
+          const next = tokenOf(answer.body);
+          if (next.delta) return { messages, cursor: next.delta };
+          if (!next.skip) break;
+          params = { $skiptoken: next.skip };
+        }
+      } catch (error) {
+        /* A delta token Graph no longer keeps: start again from now. */
+        const status = (error as { upstreamStatus?: number } | null)?.upstreamStatus;
+        if (status === 410 || status === 400) {
+          const answer = await read("delta", { $deltatoken: "latest" }, { fresh: 0 });
+          return { messages: [], cursor: tokenOf(answer.body).delta, reset: true };
+        }
+        throw error;
+      }
+      return { messages, cursor };
+    },
     list: async (token, size) => {
       const at = decodeToken<GraphToken>(token);
       const answer = await read(

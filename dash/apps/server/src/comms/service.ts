@@ -112,6 +112,8 @@ export interface CommsDeps {
 }
 
 const PAGE = 50;
+/** How often a mailbox's newest page is read in full, beside the cheap reads of what changed. */
+const FULL_EVERY_MS = 30 * 60_000;
 /** A mailbox read within this long is not read again just because the list was opened. */
 const FRESH_MS = 60_000;
 
@@ -305,21 +307,53 @@ export class CommsService {
       }
       const kept = await this.deps.store.recent(id);
       const known = new Set(kept.map((one) => one.id));
-      const fresh: MailMessage[] = [];
+      const mark = await this.deps.store.mark(id);
+      let fresh: MailMessage[] = [];
       /* A provider that answers a list with each message whole (Outlook) refreshes the kept copies' flags too. */
       const updated = new Map<string, MailMessage>();
-      let token: string | undefined;
-      /* The newest page; more only while every message on it is new and fewer than 100 are kept. */
-      for (let pages = 0; pages < 4; pages++) {
-        const page = await provider.list(token, kept.length === 0 ? KEPT_PER_MAILBOX : 25);
-        const unseen = page.messages.filter((one) => !known.has(one.id));
-        for (const one of page.messages) if (known.has(one.id)) updated.set(one.id, one);
-        fresh.push(...unseen);
-        if (unseen.length < page.messages.length || !page.next || fresh.length >= KEPT_PER_MAILBOX) break;
-        token = page.next;
+      /*
+       * What is new since last time, from the provider's own record of changes
+       * (Gmail's history, Graph's delta): one cheap read. The newest page is
+       * read instead the first time, when that record is gone, and every half
+       * hour, which also brings the kept copies' flags up to date.
+       */
+      const fullDue = !mark.fullAt || this.deps.now() - Date.parse(mark.fullAt) > FULL_EVERY_MS;
+      let cursor: string | undefined;
+      let viaChanges = false;
+      if (kept.length > 0 && mark.historyId && !fullDue) {
+        try {
+          const changes = await provider.changes(mark.historyId);
+          cursor = changes.cursor;
+          if (!changes.reset) {
+            viaChanges = true;
+            fresh = changes.messages.filter((one) => !known.has(one.id));
+          }
+        } catch {
+          /* The record of changes could not be read: the newest page is. */
+        }
+      }
+      if (!viaChanges) {
+        /* The cursor first, so nothing that arrives while the page is read is missed next time. */
+        if (!cursor) cursor = await provider.changes(undefined).then((one) => one.cursor, () => undefined);
+        let token: string | undefined;
+        /* The newest page; more only while every message on it is new and fewer than 100 are kept. */
+        for (let pages = 0; pages < 4; pages++) {
+          const page = await provider.list(token, kept.length === 0 ? KEPT_PER_MAILBOX : 25);
+          const unseen = page.messages.filter((one) => !known.has(one.id));
+          for (const one of page.messages) if (known.has(one.id)) updated.set(one.id, one);
+          fresh.push(...unseen);
+          if (unseen.length < page.messages.length || !page.next || fresh.length >= KEPT_PER_MAILBOX) break;
+          token = page.next;
+        }
       }
       await this.deps.store.keep(id, [...fresh, ...kept.map((one) => updated.get(one.id) ?? one)]);
-      await this.deps.store.setMark(id, { ...(await this.deps.store.mark(id)), refreshedAt: this.iso(), error: undefined });
+      await this.deps.store.setMark(id, {
+        ...(await this.deps.store.mark(id)),
+        refreshedAt: this.iso(),
+        error: undefined,
+        historyId: cursor,
+        ...(viaChanges ? {} : { fullAt: this.iso() }),
+      });
       const contacts = await this.senders(fresh);
       if (kept.length > 0) await this.hearReplies(id, fresh.filter((one) => !one.sent));
       /* The first read takes in what was already there: only mail after it is news. */

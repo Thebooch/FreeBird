@@ -130,7 +130,14 @@ export const fakeMailServer = (seed: { gmail?: FakeMail[]; outlook?: FakeMail[] 
 
     if (parsed.hostname === "www.googleapis.com" && parsed.pathname.startsWith("/gmail/v1/users/me")) {
       const path = parsed.pathname.replace("/gmail/v1/users/me", "");
-      if (path === "/profile") return json(url, { emailAddress: "team@example.com", historyId: "100" });
+      /* History ids count every message ever added, from 100: what came after one is the messages pushed since. */
+      if (path === "/profile") return json(url, { emailAddress: "team@example.com", historyId: String(100 + gmail.length) });
+      if (path === "/history") {
+        const start = Number(parsed.searchParams.get("startHistoryId") ?? 0) - 100;
+        if (start < 0) return json(url, { error: "not found" }, 404);
+        const added = gmail.slice(start).map((one) => ({ messagesAdded: [{ message: { id: one.id, threadId: one.threadId } }] }));
+        return json(url, { ...(added.length > 0 ? { history: added } : {}), historyId: String(100 + gmail.length) });
+      }
       if (path === "/messages" && method === "GET") {
         const q = (parsed.searchParams.get("q") ?? "").toLowerCase();
         const from = /from:(\S+)/.exec(q)?.[1];
@@ -158,6 +165,12 @@ export const fakeMailServer = (seed: { gmail?: FakeMail[]; outlook?: FakeMail[] 
     if (parsed.hostname === "graph.microsoft.com") {
       const path = parsed.pathname.replace("/v1.0", "");
       if (path === "/me") return json(url, { mail: "agent@example.org", userPrincipalName: "agent@example.org" });
+      if (path === "/me/mailFolders/inbox/messages/delta") {
+        const token = parsed.searchParams.get("$deltatoken");
+        const link = `https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=${outlook.length}`;
+        if (token === "latest") return json(url, { value: [], "@odata.deltaLink": link });
+        return json(url, { value: outlook.slice(Number(token ?? 0)).map((one) => graphShape(one, false)), "@odata.deltaLink": link });
+      }
       if (path === "/me/messages" && method === "GET") {
         const filter = parsed.searchParams.get("$filter") ?? "";
         const conversation = /conversationId eq '([^']+)'/.exec(filter)?.[1];
