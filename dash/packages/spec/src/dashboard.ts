@@ -229,6 +229,13 @@ export const widgetSchema = z
    */
   compiler: z.number().int().min(0).optional(),
   /**
+   * The first day this widget's daily history counts from (YYYY-MM-DD).
+   * Set when a rebuild changes how its number is worked out: the days before
+   * measured something else, and drawn beside today's they read as a change
+   * in the records rather than in the widget.
+   */
+  historyFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  /**
    * Written by an earlier build when a rebuild changed what a widget counts.
    * No longer written or shown; kept so boards saved with it still parse,
    * and dropped the next time the widget is rebuilt or edited.

@@ -57,6 +57,8 @@ export const recompileWidget = (previous: WidgetSpec, compiled: WidgetSpec): Wid
    * the one that made the original either.
    */
   ...(previous.producedBy ? { producedBy: previous.producedBy } : {}),
+  /* Where its history starts counting from: an edit does not bring back days that measured something else. */
+  ...(previous.historyFrom ? { historyFrom: previous.historyFrom } : {}),
   /*
    * Chrome the brief has no word for yet. Both are statements about finished
    * rows rather than steps that produce them, so a recompiled pipeline does

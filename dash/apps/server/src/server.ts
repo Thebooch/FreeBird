@@ -3074,7 +3074,15 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       // Logged, not shown: on the tile it read as noise rather than as an answer.
       app.log.info(`widget ${board.id}/${widget.id} rebuilt from its brief: ${said}`);
       const { revised: _old, ...plain } = rebuilt;
-      return plain;
+      /*
+       * Its history starts again: the days before measured something else,
+       * and a line from 28 to 25 would read as three leases ending rather than
+       * as the widget being corrected.
+       */
+      snapshots
+        .forget(board.id, widget.id)
+        .catch((error: unknown) => app.log.warn(`history for ${board.id}/${widget.id} could not be cleared: ${String(error)}`));
+      return { ...plain, historyFrom: dayOf(Date.now()) };
     });
     if (!changed) return board;
     const valid = parseDashboard({ ...board, widgets });
@@ -3317,7 +3325,11 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       if (!board?.widgets.some((widget) => widget.id === request.params.widgetId)) {
         return reply.status(404).send({ error: "no such widget" });
       }
-      const points = await snapshots.list(request.params.id, request.params.widgetId);
+      const from = board.widgets.find((widget) => widget.id === request.params.widgetId)?.historyFrom;
+      /* Only the days that measured what the widget measures now — see `historyFrom`. */
+      const points = (await snapshots.list(request.params.id, request.params.widgetId)).filter(
+        (point) => !from || point.day >= from,
+      );
       return { points, ...(points[0] ? { since: points[0].day } : {}) };
     },
   );

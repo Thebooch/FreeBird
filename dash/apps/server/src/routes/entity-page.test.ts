@@ -443,6 +443,8 @@ describe("widgets built by an older compiler", () => {
     expect(ops.indexOf("filter")).toBeLessThan(ops.indexOf("group"));
     // Logged rather than shown on the tile.
     expect(widget.revised).toBeUndefined();
+    // Its history starts again: the days before measured every supplier.
+    expect(widget.historyFrom).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     // What the person chose outside the brief survives the rebuild.
     expect(widget.presentation).toMatchObject({ density: "compact" });
     // And it is saved, so the keeper's numbers follow it too.

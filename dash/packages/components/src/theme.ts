@@ -393,13 +393,20 @@ ${seriesVars(SERIES_LIGHT)}
 .dash-widget[data-border="off"] .dash-widget__foot {
   padding-left: 0; padding-right: 0; background: transparent;
 }
-.dash-widget__count { flex: 1 1 auto; min-width: 0; }
+/* One line, always: on a narrow tile the count is cut short with an ellipsis
+   (the whole of it is on hover) rather than wrapping onto a second line the
+   card then clips. */
+.dash-widget__count { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-widget__updated { white-space: nowrap; }
 .dash-widget__more { color: var(--dash-serious); }
 /* How far the read got: a fact about the numbers, not a warning, so in the count's own colour. */
 .dash-widget__coverage { cursor: help; }
 /* A number's history under it: quiet, in the muted colour, never competing with the number. */
-/* What the number was, day by day: a quiet line, its meaning on hover. */
+/* What the number was, day by day: a quiet line, its meaning on hover. It
+   gives way first on a short tile — shrinking to nothing rather than letting
+   the number above spill onto it. */
 .dash-widget__history {
+  flex: 0 1 auto; min-height: 0; overflow: hidden;
   display: flex; align-items: center;
   padding: 0 var(--dash-pad-x, 12px) var(--dash-space-2, 8px);
   color: var(--dash-axis); opacity: 0.8;
@@ -1302,6 +1309,9 @@ ${seriesVars(SERIES_LIGHT)}
    at the foot. One size for every tile's number, whatever its length, so a
    row of tiles reads level; a value that would not fit steps down
    (data-fit, set by Stat after measuring) rather than wrapping or clipping. */
+/* A number's row is never squeezed below the number: on a short tile the
+   history line under it gives way instead (see .dash-widget__history). */
+.dash-widget__body:has(> .dash-stat) { flex: 1 0 auto; }
 .dash-stat {
   display: flex; flex-direction: column; justify-content: flex-start;
   height: 100%; gap: 4px; position: relative; min-width: 0;

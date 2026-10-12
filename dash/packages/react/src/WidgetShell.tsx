@@ -1,5 +1,4 @@
 import {
-  Badge,
   EmptyState,
   ErrorState,
   type FacetSelection,
@@ -285,8 +284,25 @@ export const WidgetShell = ({
     });
   }
 
+  /*
+   * What the widget has to say about itself — a binding that only half fits,
+   * rows a join dropped, a narrowing that matched nothing — as menu items
+   * that open the inspector, where each is said in full.
+   */
+  const cautions: readonly string[] =
+    data.state === "ok"
+      ? [...(data.binding?.warnings.map((warning) => warning.message) ?? []), ...(data.runMeta?.warnings ?? [])]
+      : [];
+
   const createLabel = onCreateRecord?.label(widget.id);
   const actions: MenuItem[] = [
+    ...cautions.map((said, index) => ({
+      id: `caution-${index}`,
+      label: said.length > 90 ? `${said.slice(0, 89)}…` : said,
+      icon: "⚠",
+      section: "About this number",
+      onSelect: () => setInspecting(true),
+    })),
     { id: "refresh", label: "Refresh", icon: "↻", onSelect: data.refetch },
     {
       id: "inspect",
@@ -350,27 +366,11 @@ export const WidgetShell = ({
          * refresh the API refused still gets its banner below, because that
          * one changes whether the number can be trusted.
          */}
-        {data.state === "ok" && data.binding && data.binding.warnings.length > 0 && (
-          <Badge tone="warn" title={data.binding.warnings.map((w) => w.message).join("\n")}>
-            {data.binding.warnings.length} note(s)
-          </Badge>
-        )}
         {/*
-         * What the run itself had to say, which until now only the inspector
-         * showed.
-         *
-         * These are the warnings that change what a number *means*: rows a
-         * join dropped for want of a match, rows it repeated because one
-         * matched several, a page cut short. A widget can be wrong in exactly
-         * those ways while looking entirely fine, and the count was already
-         * being computed — it just never reached the place somebody reading
-         * the number would look.
+         * Nor the "note(s)" and "caveat(s)" badges: on the face of the tile they
+         * pushed the number down and read as alarms. They are in the ⋯ menu,
+         * counted on its button, and said in full in the inspector.
          */}
-        {data.state === "ok" && data.runMeta && data.runMeta.warnings.length > 0 && (
-          <Badge tone="danger" title={data.runMeta.warnings.join("\n")}>
-            {data.runMeta.warnings.length} caveat(s)
-          </Badge>
-        )}
       </>
     ),
     actions: (
@@ -399,7 +399,17 @@ export const WidgetShell = ({
             floating
           />
         )}
-        <Menu items={actions} label={`Actions for ${widget.title}`} testId={`actions-${widget.id}`} floating />
+        <Menu
+          items={actions}
+          label={
+            cautions.length > 0
+              ? `Actions for ${widget.title}, ${cautions.length} caveat${cautions.length === 1 ? "" : "s"}`
+              : `Actions for ${widget.title}`
+          }
+          testId={`actions-${widget.id}`}
+          {...(cautions.length > 0 ? { badge: cautions.length } : {})}
+          floating
+        />
       </span>
     ),
   };
@@ -564,6 +574,7 @@ export const WidgetShell = ({
           data={data}
           rows={faceted.rows}
           now={now}
+          single={widget.component === "stat"}
           {...(widget.timeWindow ? { timeWindow: widget.timeWindow } : {})}
         />
       )}
@@ -592,11 +603,18 @@ const WidgetFooter = ({
   rows,
   now,
   timeWindow,
+  single = false,
 }: {
   data: WidgetData;
   /** After the facets, so the count describes what is actually on screen. */
   rows: readonly Row[];
   now: number;
+  /**
+   * One number rather than rows: "1 row · all 28 read" says nothing to
+   * somebody reading a total, so only what changes how far to trust it stays
+   * — partial, its own time window — beside how long ago it was read.
+   */
+  single?: boolean;
   /** The widget's own time, where its request named one, or all time: said, so the board's range is not mistaken for it. */
   timeWindow?: TimeWindow;
 }): JSX.Element => {
@@ -612,15 +630,18 @@ const WidgetFooter = ({
    * not cut short — that one says what it left out, above.
    */
   const read = data.runMeta?.steps.find((step) => step.op === "extract")?.rowsOut;
-  const coverage = !truncated && data.fetchMeta && read !== undefined ? readCoverage(data.fetchMeta, read) : null;
+  const coverage =
+    !single && !truncated && data.fetchMeta && read !== undefined ? readCoverage(data.fetchMeta, read) : null;
+  /* The separator before a part: none before the first one a number tile draws. */
+  const dot = single ? "" : " · ";
   return (
     <div className="dash-widget__foot">
       <span className="dash-widget__count">
-        {rows.length.toLocaleString()} {rows.length === 1 ? "row" : "rows"}
+        {!single && `${rows.length.toLocaleString()} ${rows.length === 1 ? "row" : "rows"}`}
         {truncated && (
           <span className="dash-widget__more" title={data.incomplete.join("\n") || "Not every record was read"}>
-            {" "}
-            · {unsure ? "may be partial" : "partial"}
+            {dot}
+            {unsure ? "may be partial" : "partial"}
           </span>
         )}
         {timeWindow && (
@@ -629,8 +650,7 @@ const WidgetFooter = ({
             data-testid="own-window"
             title="This widget reads its own time, whatever window the board shows."
           >
-            {" "}
-            ·{" "}
+            {single && !truncated ? "" : " · "}
             {"all" in timeWindow
               ? "all time"
               : timeWindow.to
@@ -674,6 +694,7 @@ const WidgetFooter = ({
          * acts; an answer that arrived after it — a read finished in the
          * background — is "now", never "in 4 seconds".
          */}
+        {single ? "Updated " : ""}
         {formatValue(data.lastFetchedAt, { semantic: "relative_time" }, { now: Math.max(now, data.lastFetchedAt) })}
       </span>
     </div>
