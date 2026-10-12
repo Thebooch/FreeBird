@@ -345,11 +345,12 @@ export const WidgetShell = ({
     ) : null,
     badges: (
       <>
-        {data.stale && data.state === "ok" && (
-          <Badge tone="stale" title="Older than this widget's freshness window">
-            stale · {formatValue(data.lastFetchedAt, { semantic: "relative_time" }, { now: Math.max(now, data.lastFetchedAt) })}
-          </Badge>
-        )}
+        {/*
+         * No "stale" badge. How long ago the tile was read is in its footer,
+         * which is enough for a figure that is merely a few minutes old; a
+         * refresh the API refused still gets its banner below, because that
+         * one changes whether the number can be trusted.
+         */}
         {data.state === "ok" && data.binding && data.binding.warnings.length > 0 && (
           <Badge tone="warn" title={data.binding.warnings.map((w) => w.message).join("\n")}>
             {data.binding.warnings.length} note(s)
@@ -413,6 +414,7 @@ export const WidgetShell = ({
     <div
       ref={frameRef}
       className="dash-widget"
+      {...(drill && data.state === "ok" ? { "data-drill": "true" } : {})}
       data-density={chrome.density ?? "cozy"}
       data-border={settingBool(chrome, "border", true) ? "on" : "off"}
       style={presentationStyle(chrome)}
@@ -437,8 +439,8 @@ export const WidgetShell = ({
       {/*
        * Why the reader is looking at something old.
        *
-       * Deliberately louder than the stale badge beside the title. That badge
-       * says "this is a bit old", which is a normal condition; this says the
+       * Deliberately louder than the footer's "4 minutes ago". That says
+       * "this is a bit old", which is a normal condition; this says the
        * upstream refused us and these numbers are not current. Someone
        * screenshotting a figure needs to have been told which of those it is.
        */}

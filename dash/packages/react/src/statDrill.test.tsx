@@ -156,6 +156,15 @@ describe("number tile in the shell", () => {
     expect(rows.length).toBe(3);
   });
 
+  it("makes the whole card the target, with the menus kept above it", async () => {
+    const page = await mount("count()");
+    // The card carries the marker the stretched button and the raised menus key off.
+    expect(page.querySelector(".dash-widget")?.getAttribute("data-drill")).toBe("true");
+    expect(page.querySelector(".dash-widget [data-testid=stat-drill-open]")).not.toBeNull();
+    // No "stale" badge: the footer says how long ago it was read.
+    expect(page.querySelector(".dash-badge")?.textContent ?? "").not.toContain("stale");
+  });
+
   it("shows a sum tile's total at the foot of its list", async () => {
     const page = await mount("sum(Rent)");
     await act(async () => page.querySelector<HTMLButtonElement>("[data-testid=stat-drill-open]")!.click());

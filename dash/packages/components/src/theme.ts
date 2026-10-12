@@ -398,10 +398,11 @@ ${seriesVars(SERIES_LIGHT)}
 /* How far the read got: a fact about the numbers, not a warning, so in the count's own colour. */
 .dash-widget__coverage { cursor: help; }
 /* A number's history under it: quiet, in the muted colour, never competing with the number. */
+/* What the number was, day by day: a quiet line, its meaning on hover. */
 .dash-widget__history {
-  display: flex; align-items: center; gap: var(--dash-space-2, 8px);
-  padding: 0 var(--dash-space-3, 12px) var(--dash-space-2, 8px);
-  color: var(--dash-muted); font-size: var(--dash-text-xs);
+  display: flex; align-items: center;
+  padding: 0 var(--dash-pad-x, 12px) var(--dash-space-2, 8px);
+  color: var(--dash-axis); opacity: 0.8;
 }
 .dash-widget__history svg { flex: none; }
 .dash-widget__updated { flex: none; }
@@ -1298,15 +1299,15 @@ ${seriesVars(SERIES_LIGHT)}
 
 /* ── stat ────────────────────────────────────────────────────────────────── */
 /* A fixed anatomy: number under the title, delta on its own line, sparkline
-   at the foot. The tile is its own size container, so the number steps down
-   with the tile's width rather than wrapping or clipping a long currency. */
+   at the foot. One size for every tile's number, whatever its length, so a
+   row of tiles reads level; a value that would not fit steps down
+   (data-fit, set by Stat after measuring) rather than wrapping or clipping. */
 .dash-stat {
   display: flex; flex-direction: column; justify-content: flex-start;
   height: 100%; gap: 4px; position: relative; min-width: 0;
-  container-type: inline-size;
 }
 .dash-stat__value {
-  font-size: clamp(var(--dash-text-lg), 13cqi, var(--dash-text-3xl)); font-weight: var(--dash-weight-semi);
+  font-size: var(--dash-text-3xl); font-weight: var(--dash-weight-semi);
   line-height: 1.05; letter-spacing: -0.025em; color: var(--dash-ink);
   font-variant-numeric: tabular-nums; font-feature-settings: "tnum";
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
@@ -1314,17 +1315,28 @@ ${seriesVars(SERIES_LIGHT)}
      height to zero, and a short tile then squeezed the number out of sight. */
   flex: none;
 }
-.dash-stat__value--hero { font-size: clamp(var(--dash-text-xl), 18cqi, var(--dash-text-hero)); }
+.dash-stat__value[data-fit="1"] { font-size: var(--dash-text-2xl); }
+.dash-stat__value[data-fit="2"] { font-size: var(--dash-text-xl); }
+.dash-stat__value[data-fit="3"] { font-size: var(--dash-text-lg); }
 .dash-stat__foot { margin-top: auto; padding-top: 6px; }
 .dash-stat__foot .dash-stat__spark { margin-top: 0; }
-/* The tile as a button: no button chrome, the card's own hover, a real focus ring. */
+/*
+ * The whole card is the control, not just the number: the button stays where
+ * it is in the reading order, and its ::after is stretched over the card.
+ * The card is isolated so that sheet never rises above the grid's edit guard,
+ * and the header's menus sit above it so they still open on their own.
+ */
+.dash-widget[data-drill="true"] { position: relative; isolation: isolate; cursor: pointer; }
+.dash-widget[data-drill="true"] .dash-widget__actions { position: relative; z-index: 2; cursor: default; }
 .dash-stat--drill {
   appearance: none; border: 0; background: transparent; padding: 0; margin: 0;
   font: inherit; color: inherit; text-align: left; width: 100%; cursor: pointer;
-  border-radius: var(--dash-radius-sm);
+  position: static;
 }
-.dash-stat--drill:hover .dash-stat__value { color: var(--dash-accent); }
-.dash-stat--drill:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 2px; }
+.dash-stat--drill::after { content: ""; position: absolute; inset: 0; z-index: 1; border-radius: inherit; }
+.dash-widget[data-drill="true"]:hover .dash-stat__value { color: var(--dash-accent); }
+.dash-stat--drill:focus-visible { outline: none; }
+.dash-stat--drill:focus-visible::after { outline: 2px solid var(--dash-accent); outline-offset: -2px; border-radius: var(--dash-radius); }
 /* The list behind a number, in the drawer. */
 .dash-drill__count { font-weight: var(--dash-weight-normal, 400); color: var(--dash-muted); font-size: var(--dash-text-sm); }
 .dash-drill__table { display: flex; flex-direction: column; min-height: 0; }
