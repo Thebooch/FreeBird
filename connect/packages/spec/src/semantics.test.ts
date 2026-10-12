@@ -23,6 +23,23 @@ describe("formatValue", () => {
     expect(formatValue({}, undefined)).toBe("{}");
   });
 
+  it("reads a nested record as its name", () => {
+    // A Buildium work order's task, as the API sends it.
+    const task = {
+      Id: 9998,
+      Type: "ResidentRequest",
+      UnitId: 18057,
+      UnitAgreement: { Id: 13329, Type: "Lease", Href: "https://apisandbox.buildium.com/v1/leases/13329" },
+      Title: "There's a mouse in the house!",
+      Priority: "Normal",
+    };
+    expect(formatValue(task, undefined)).toBe("There's a mouse in the house!");
+    expect(formatValue({ Id: 1, FirstName: "Ada", LastName: "Park" }, undefined)).toBe("Ada Park");
+    expect(formatValue({ id: 7, display_name: "Acme Plumbing" }, undefined)).toBe("Acme Plumbing");
+    // Nothing that names it: the summary stands.
+    expect(formatValue({ Id: 13329, Type: "Lease" }, undefined)).toBe("{Id, Type}");
+  });
+
   it("counts array members rather than listing them", () => {
     expect(formatValue([1, 2, 3], undefined)).toBe("3 items");
     expect(formatValue(["only"], undefined)).toBe("1 item");

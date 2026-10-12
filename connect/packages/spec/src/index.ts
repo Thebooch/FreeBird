@@ -317,6 +317,7 @@ export {
   isFieldNoise,
   looksLikeApiLink,
   looksLikeIdentifier,
+  nameOfObject,
   normaliseName,
   semanticTypeSchema,
   valueTypeSchema,

@@ -1,5 +1,5 @@
 import type { ColumnMeta, EntityLinkView, WidgetSpec } from "@freebirdai/dash-spec";
-import { ALL_ROWS, parseAggregation } from "@freebirdai/dash-spec";
+import { ALL_ROWS, nameOfObject, parseAggregation } from "@freebirdai/dash-spec";
 import { rankKeyFields } from "@freebirdai/dash-components";
 
 /**
@@ -85,9 +85,20 @@ export const drillColumns = (
   link: EntityLinkView | undefined,
   measure: StatDrill["measure"],
   cap = 5,
+  rows: readonly Readonly<Record<string, unknown>>[] = [],
 ): string[] => {
-  const picked = rankKeyFields(
-    columns.map((column) => ({
+  /*
+   * A column of nested records that do not say what they are called would
+   * draw as `{Id, Type, …}` on every row: left out, so a readable one takes
+   * its place. One whose records are named reads as the name and stays.
+   */
+  const unreadable = (name: string): boolean =>
+    rows.some((row) => {
+      const value = row[name];
+      return value !== null && typeof value === "object" && (Array.isArray(value) || nameOfObject(value) === undefined);
+    });
+  const ranked = rankKeyFields(
+    columns.filter((column) => !unreadable(column.name)).map((column) => ({
       key: column.name,
       semantic: column.semantic,
       valueType: column.valueType,
@@ -96,8 +107,24 @@ export const drillColumns = (
       title: (link?.title ?? []).map(columnFor),
       ...(link?.identity ? { identity: columnFor(link.identity) } : {}),
     },
-    cap,
+    columns.length,
   );
+  /*
+   * A column that says on every row what an earlier one already says — a
+   * work order's task, named by the same title as the work order — spends a
+   * slot on nothing; the next readable column has it instead.
+   */
+  const said = (row: Readonly<Record<string, unknown>>, name: string): string => {
+    const value = row[name];
+    return value !== null && typeof value === "object" ? (nameOfObject(value) ?? "") : String(value ?? "");
+  };
+  const sampled = rows.filter((row) => Object.keys(row).length > 0);
+  const distinct: string[] = [];
+  for (const name of ranked) {
+    const repeats = sampled.length > 0 && distinct.some((earlier) => sampled.every((row) => said(row, earlier) === said(row, name)));
+    if (!repeats) distinct.push(name);
+  }
+  const picked = distinct.slice(0, cap);
   if (measure.fn !== "sum") return picked;
   const field = measure.field;
   if (!columns.some((column) => column.name === field)) return picked;

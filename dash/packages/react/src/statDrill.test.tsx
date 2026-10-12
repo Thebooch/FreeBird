@@ -78,6 +78,42 @@ describe("statDrill", () => {
     expect(columns).not.toContain("CreatedAt");
   });
 
+  it("leaves out a column of nested records that name nothing", () => {
+    const drill = statDrill(tile("count()"))!;
+    const columns = drillColumns(
+      [
+        { name: "Title", valueType: "text" },
+        { name: "Task", valueType: "unknown" },
+        { name: "Agreement", valueType: "unknown" },
+      ],
+      undefined,
+      drill.measure,
+      5,
+      [{ Title: "Leak", Task: { Id: 1, Title: "Leak under the sink" }, Agreement: { Id: 2, Type: "Lease" } }],
+    );
+    expect(columns).toContain("Task");
+    expect(columns).not.toContain("Agreement");
+  });
+
+  it("drops a column that repeats an earlier one on every row", () => {
+    const drill = statDrill(tile("count()"))!;
+    const columns = drillColumns(
+      [
+        { name: "Title", valueType: "text" },
+        { name: "Task", valueType: "unknown" },
+        { name: "Priority", valueType: "categorical" },
+      ],
+      undefined,
+      drill.measure,
+      5,
+      [
+        { Title: "Leak", Task: { Id: 1, Title: "Leak" }, Priority: "Low" },
+        { Title: "No water", Task: { Id: 2, Title: "No water" }, Priority: "High" },
+      ],
+    );
+    expect(columns).toEqual(["Title", "Priority"]);
+  });
+
   it("offers nothing for a number that is not taken over all the rows", () => {
     expect(statDrill(tile("avg(Rent)"))).toBeNull();
     const monthly = tile("count()", [

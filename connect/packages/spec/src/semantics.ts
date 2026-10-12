@@ -267,8 +267,35 @@ export interface FormatOptions {
  * `{…}` and `[…]` are already this codebase's mark for an elided container
  * (`inferShape`'s sampler uses them), so the two agree.
  */
+/** Keys that name the record an object is, best first. */
+const NAME_KEYS = ["name", "displayname", "fullname", "title", "subject", "label"];
+
+/**
+ * What a nested record is called, where it says: its `Name`, `Title`,
+ * `DisplayName`, or `FirstName` and `LastName` together. Undefined when it
+ * names nothing — an address, a bare reference — and the summary stands.
+ */
+export const nameOfObject = (value: unknown): string | undefined => {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value as Record<string, unknown>);
+  const text = (key: string): string | undefined => {
+    const found = entries.find(([name]) => name.toLowerCase().replace(/[^a-z]/g, "") === key)?.[1];
+    return typeof found === "string" && found.trim() !== "" ? found.trim() : undefined;
+  };
+  const person = [text("firstname"), text("lastname")].filter(Boolean).join(" ");
+  if (person) return person;
+  for (const key of NAME_KEYS) {
+    const found = text(key);
+    if (found) return found;
+  }
+  return undefined;
+};
+
 const summarise = (value: unknown): string => {
   if (Array.isArray(value)) return value.length === 1 ? "1 item" : `${value.length} items`;
+  // A nested record reads as its name: a work order's task is "Leak under the sink", not `{Id, Type, …}`.
+  const named = nameOfObject(value);
+  if (named) return named;
   if (typeof value === "object") {
     const keys = Object.keys(value as Record<string, unknown>);
     if (keys.length === 0) return "{}";

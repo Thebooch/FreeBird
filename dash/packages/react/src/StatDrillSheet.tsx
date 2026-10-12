@@ -52,8 +52,8 @@ export const StatDrillSheet = ({
   }, [onClose]);
 
   const columns = useMemo(
-    () => drillColumns(data.columns, link, drill.measure),
-    [data.columns, link, drill.measure],
+    () => drillColumns(data.columns, link, drill.measure, 5, data.rows.slice(0, 50)),
+    [data.columns, link, drill.measure, data.rows],
   );
 
   const valueColumn = typeof widget.roles["value"] === "string" ? widget.roles["value"] : undefined;
