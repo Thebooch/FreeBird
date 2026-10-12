@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compileBrief, type WidgetBrief } from "./brief.js";
+import { BRIEF_COMPILER, compileBrief, type WidgetBrief } from "./brief.js";
 import { entitySchema, type EntitySpec } from "@freebirdai/connect-spec";
 import { resourceSchema, type ResourceSpec } from "@freebirdai/connect-spec";
 import { parseDashboard } from "./dashboard.js";
@@ -123,6 +123,24 @@ describe("compileBrief", () => {
     expect(wrapped.widget?.pipeline[0]).toEqual({ op: "extract", path: "$.data" });
     /* A caller that does not say gets what every caller had. */
     expect(compile({ intent: "measure" }).widget?.pipeline[0]).toEqual({ op: "extract", path: "$" });
+  });
+
+  /* A widget says which compiler built it, so a host can rebuild one an older compiler got wrong. */
+  it("stamps every widget with the compiler that built it", () => {
+    expect(compile({ intent: "measure" }).widget?.compiler).toBe(BRIEF_COMPILER);
+    expect(compile({ intent: "records" }).widget?.compiler).toBe(BRIEF_COMPILER);
+  });
+
+  /*
+   * The rule a number tile's title depends on: "Active leases" counted every
+   * lease when a value filter on a number was dropped. A chart narrows the
+   * same way, before its buckets are counted.
+   */
+  it("narrows a chart by the values the request named, before it groups", () => {
+    const result = compile({ intent: "compare", groupBy: "Category.Name", filters: [{ field: "Status", values: ["Done"] }] });
+    expect(result.errors).toEqual([]);
+    expect(stepOps(result)).toContain("filter");
+    expect(stepOps(result).indexOf("filter")).toBeLessThan(stepOps(result).indexOf("group"));
   });
 
   /* Unscripted benchmark, 2026-09-28: "done tasks" counted every task, and nothing said so. */

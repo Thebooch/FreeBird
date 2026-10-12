@@ -398,6 +398,13 @@ ${seriesVars(SERIES_LIGHT)}
 /* How far the read got: a fact about the numbers, not a warning, so in the count's own colour. */
 .dash-widget__coverage { cursor: help; }
 /* A number's history under it: quiet, in the muted colour, never competing with the number. */
+/* A widget rebuilt from its request, saying what it counts now. Quiet: one muted line. */
+.dash-widget__revised {
+  display: flex; gap: 6px; align-items: baseline; margin: 0;
+  padding: 0 var(--dash-pad-x, 12px) var(--dash-space-2, 8px);
+  font-size: var(--dash-text-2xs); color: var(--dash-muted); line-height: 1.35;
+}
+.dash-widget__revised > span:last-child { overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 /* What the number was, day by day: a quiet line, its meaning on hover. */
 .dash-widget__history {
   display: flex; align-items: center;

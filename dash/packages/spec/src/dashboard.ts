@@ -221,6 +221,20 @@ export const widgetSchema = z
    */
   metric: metricSchema.optional(),
   /**
+   * The version of `compileBrief` that built this widget (`BRIEF_COMPILER`).
+   * Absent on a widget built by hand or before versions were stamped; a
+   * widget with a brief and an older stamp is rebuilt from that brief.
+   *
+   * Optional with no default, for the reason `brief` is.
+   */
+  compiler: z.number().int().min(0).optional(),
+  /**
+   * Said on the tile when a rebuild changed what the widget counts, so a
+   * number never moves without a word: "Now counts only leases whose status
+   * is Active." Cleared by the next edit.
+   */
+  revised: z.object({ at: z.string().min(1).max(40), said: z.string().min(1).max(400) }).optional(),
+  /**
    * This widget's own changes to the record page its rows open.
    *
    * Only what differs from the entity's shared page — an extra fact, a

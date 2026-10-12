@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connectionSchema } from "@freebirdai/dash-spec";
+import { BRIEF_COMPILER, connectionSchema, parseDashboard } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CatalogStore, KeyStore, LocalAesVault } from "@freebirdai/connect/host";
 import { buildServer } from "../server.js";
@@ -395,5 +395,64 @@ describe("PUT /api/connections/:id/entities/:entity/keys", () => {
     connect(["tasks", "vendors", "vendor"]);
     const response = await put("/api/connections/works/entities/vendor/keys", { path: "Href", to: "key" });
     expect(response.statusCode).toBe(400);
+  });
+});
+
+/*
+ * A widget built by an older compiler is built again from its own request.
+ *
+ * Found on a real board: "Active leases" stored the request "leases whose
+ * status is Active", but it was compiled before a value filter on a number
+ * narrowed the count, so it counted every lease. Nothing per API: any widget
+ * with a brief and an older (or no) compiler stamp is rebuilt.
+ */
+describe("widgets built by an older compiler", () => {
+  const staleBoard = () =>
+    parseDashboard({
+      id: "board",
+      title: "Board",
+      params: { defaultRange: "30d", timeZone: "UTC", filters: [] },
+      widgets: [
+        {
+          id: "acme_suppliers",
+          title: "Acme suppliers",
+          component: "stat",
+          entity: "vendor",
+          source: { connection: "works", op: "vendors", params: {} },
+          brief: { entity: "vendor", intent: "measure", filters: [{ field: "CompanyName", values: ["Acme"] }] },
+          pipeline: [
+            { op: "extract", path: "$" },
+            { op: "derive", fields: { _all: "1" } },
+            { op: "group", by: [{ field: "_all" }], agg: { value: "count()" } },
+          ],
+          roles: { value: "value" },
+          presentation: { density: "compact" },
+        },
+      ],
+    }).value!;
+
+  it("rebuilds it from its brief when the board is read, and says what changed", async () => {
+    connect(["tasks", "vendors", "vendor"]);
+    store.putDashboard(staleBoard());
+
+    const board = (await get("/api/dashboards/board")).json();
+    const widget = board.widgets[0];
+    expect(widget.compiler).toBe(BRIEF_COMPILER);
+    const ops = widget.pipeline.map((step: { op: string }) => step.op);
+    expect(ops).toContain("filter");
+    expect(ops.indexOf("filter")).toBeLessThan(ops.indexOf("group"));
+    expect(widget.revised.said).toMatch(/^Now counts only .*Acme/);
+    // What the person chose outside the brief survives the rebuild.
+    expect(widget.presentation).toMatchObject({ density: "compact" });
+    // And it is saved, so the keeper's numbers follow it too.
+    expect(store.getDashboard("board")?.widgets[0]?.compiler).toBe(BRIEF_COMPILER);
+  });
+
+  it("leaves a widget it cannot rebuild exactly as it was", async () => {
+    // No connection: the record type's endpoint is nowhere to be found.
+    store.putDashboard(staleBoard());
+    const board = (await get("/api/dashboards/board")).json();
+    expect(board.widgets[0].compiler).toBeUndefined();
+    expect(board.widgets[0].pipeline).toHaveLength(3);
   });
 });

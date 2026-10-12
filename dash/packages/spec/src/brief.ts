@@ -692,6 +692,21 @@ const axisOn = (far: EntitySpec, primary: EntityField): Resolved<string> => {
  * approximated to the nearest match — a widget that silently filtered on some
  * other column would be confidently, invisibly wrong.
  */
+/**
+ * Which version of this compiler built a widget, stamped on it as `compiler`.
+ *
+ * A saved widget is what the compiler made of its brief on the day it was
+ * built, and nothing used to notice when the compiler later learned to do
+ * better: a number narrowed to "status is Active" kept counting every record,
+ * because on the day it was built a value filter on a number was dropped.
+ * The host rebuilds any widget stamped lower than this (or not stamped) from
+ * its own brief, so raise it whenever a change here would build a different
+ * widget from the same brief.
+ *
+ * 1: value filters on a number or a chart narrow the calculation (2026-09-30).
+ */
+export const BRIEF_COMPILER = 1;
+
 export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
   const { brief, entity, resource, connection } = input;
   const errors: string[] = [];
@@ -1907,6 +1922,7 @@ export const compileBrief = (input: CompileBriefInput): CompiledBrief => {
     id: input.id,
     title: brief.title?.trim() || entity.name.many,
     component,
+    compiler: BRIEF_COMPILER,
     /*
      * Carried on the widget so it can be changed later. Everything below is
      * derived from it, so storing the derivation without what it came from is

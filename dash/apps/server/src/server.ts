@@ -220,6 +220,7 @@ import {
   parseDashboard,
   rerootBrief,
   recompileWidget,
+  BRIEF_COMPILER,
   entityPageView,
   fieldGroupSchema,
   fieldPathSchema,
@@ -2839,8 +2840,9 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   );
 
   app.get<{ Params: { id: string } }>("/api/dashboards/:id", async (request, reply) => {
-    const dashboard = store.getDashboard(request.params.id);
-    if (!dashboard) return reply.status(404).send({ error: "no such dashboard" });
+    const stored = store.getDashboard(request.params.id);
+    if (!stored) return reply.status(404).send({ error: "no such dashboard" });
+    const dashboard = rebuildStale(stored);
     // Approval state rides alongside the spec rather than inside it, so the
     // board on the wire stays byte-for-byte the board on disk.
     if (!options.grants) return dashboard;
@@ -3001,6 +3003,87 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     }
     return rebuilt;
   };
+
+  /**
+   * Build again, from its own brief, every widget on a board that an older
+   * compiler built (`BRIEF_COMPILER`).
+   *
+   * A saved widget is what the compiler made of its request on the day it was
+   * built. When the compiler later learns to do better — a value filter on a
+   * number that used to be dropped, so "Active leases" counted every lease —
+   * nothing else would ever notice, and the tile would go on saying what its
+   * title does not mean. Through the same compile an edit uses, keeping what
+   * the person chose (`recompileWidget`). A rebuild that changes how the
+   * number is taken says so on the tile (`revised`); one the compiler would
+   * build identically only gains its stamp; one that cannot be rebuilt is
+   * left exactly as it was, and the log says why.
+   */
+  const rebuildStale = (board: DashboardSpec): DashboardSpec => {
+    let changed = false;
+    const widgets = board.widgets.map((widget) => {
+      if (!widget.brief || (widget.compiler ?? 0) >= BRIEF_COMPILER) return widget;
+      const found = settingsFor(board.id, widget.id);
+      const resource =
+        found.ok && found.entity && found.connection
+          ? found.connection.resources.find((one) => one.id === found.entity!.resource)
+          : undefined;
+      if (!found.ok || !found.brief || !found.entity || !found.connection || !resource) {
+        app.log.warn(`widget ${board.id}/${widget.id} was built by an older compiler and could not be rebuilt: its record type or endpoint is not on the connection`);
+        return widget;
+      }
+      const compiled = compileBrief({
+        brief: found.brief,
+        entity: found.entity,
+        resource,
+        connection: found.connection.id,
+        listPath: pathOf(found.connection, resource.listOp),
+        rowsPathOf: rowsPathsOf(found.connection),
+        filterParamOf: filterParamsOf(found.connection),
+        readsRange: readsRangeOf(found.connection),
+        related: relatedFor(found.connection, found.entities ?? []),
+        id: widget.id,
+      });
+      if (!compiled.widget) {
+        app.log.warn(`widget ${board.id}/${widget.id} could not be rebuilt from its brief: ${compiled.errors.join("; ")}`);
+        return widget;
+      }
+      const rebuilt = recompileWidget(widget, compiled.widget);
+      changed = true;
+      /*
+       * What the calculation does now that it did not: the compiler's own
+       * notes about narrowing ("Only leases whose LeaseStatus is Active are
+       * counted"), said only when the steps that take the number changed.
+       */
+      const sameSteps =
+        JSON.stringify([widget.pipeline, widget.sources, widget.source]) ===
+        JSON.stringify([rebuilt.pipeline, rebuilt.sources, rebuilt.source]);
+      if (sameSteps) return rebuilt;
+      const narrowing = compiled.notes
+        .filter((note) => /^Only /.test(note))
+        .map((note) => note.replace(/^Only (.+?) (?:are|is) counted\.$/, "Now counts only $1."));
+      const said =
+        narrowing.length > 0
+          ? narrowing.join(" ")
+          : "Rebuilt from its request by a newer FreeBird, so how this is worked out changed.";
+      app.log.info(`widget ${board.id}/${widget.id} rebuilt from its brief: ${said}`);
+      return { ...rebuilt, revised: { at: new Date().toISOString(), said: said.slice(0, 400) } };
+    });
+    if (!changed) return board;
+    const valid = parseDashboard({ ...board, widgets });
+    if (!valid.ok || !valid.value) {
+      app.log.warn(`board ${board.id} could not be saved after rebuilding its widgets: ${valid.errors?.join("; ") ?? "invalid"}`);
+      return board;
+    }
+    store.putDashboard(valid.value);
+    return store.getDashboard(board.id) ?? valid.value;
+  };
+  /* Every board, once the server is up, so the keeper's numbers follow the rebuilt widgets too. */
+  app.addHook("onReady", async () => {
+    for (const summary of store.listDashboards()) {
+      const board = store.getDashboard(summary.id);
+      if (board) rebuildStale(board);
+    }
+  });
 
   /** A widget's own changes to a record page, with its paths moved inside `wrapper`. */
   const rerootRecordOverride = (record: RecordOverride, wrapper: string): RecordOverride => {

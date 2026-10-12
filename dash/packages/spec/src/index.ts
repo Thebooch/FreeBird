@@ -87,6 +87,7 @@ export {
   ALONGSIDE_MODES,
   WIDGET_INTENTS,
   columnForPath,
+  BRIEF_COMPILER,
   compileBrief,
   widgetBriefSchema,
 } from "./brief.js";

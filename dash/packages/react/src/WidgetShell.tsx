@@ -482,6 +482,17 @@ export const WidgetShell = ({
         </p>
       )}
 
+      {/*
+       * The widget was rebuilt from its request by a newer compiler, and what
+       * it counts changed: said, so a number never moves without a word.
+       */}
+      {widget.revised && (
+        <p className="dash-widget__revised" role="note" data-testid={`revised-${widget.id}`} title={widget.revised.said}>
+          <span aria-hidden="true">ⓘ</span>
+          <span>{widget.revised.said}</span>
+        </p>
+      )}
+
       {/* An endpoint that no longer answers as it did when this was built: said, never repaired into the widget. */}
       {(data.state === "ok" || data.state === "empty") && data.changed.length > 0 && (
         <p className="dash-widget__incomplete" role="note" data-testid={`changed-${widget.id}`} title={data.changed.join("\n")}>
