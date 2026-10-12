@@ -8,6 +8,7 @@ import {
   type CommsState,
   type MailDraft,
   type MailMessage,
+  type Principal,
 } from "@freebirdai/dash-spec";
 import { sql } from "kysely";
 import type { DashDb } from "../platform/db.js";
@@ -34,6 +35,22 @@ export interface MailboxMark {
   readonly refreshedAt?: string | undefined;
   readonly historyId?: string | undefined;
   readonly error?: string | undefined;
+  /** Who turned on putting appointments in its calendar: the changes are made as them. */
+  readonly calendarBy?: Principal | undefined;
+  /** What went wrong putting appointments in its calendar, last time. */
+  readonly calendarError?: string | undefined;
+  readonly calendarAt?: string | undefined;
+}
+
+/** One appointment written into a mailbox's calendar: the event it became, and what it said then. */
+export interface CalendarLink {
+  readonly mailbox: string;
+  /** The Dash calendar entry's id. */
+  readonly entry: string;
+  /** The provider's event id. */
+  readonly external: string;
+  /** What was written, so a change is written again and nothing else is. */
+  readonly digest: string;
 }
 
 export interface CommsStore {
@@ -55,6 +72,10 @@ export interface CommsStore {
 
   settings(): Promise<CommsSettings>;
   putSettings(settings: CommsSettings): Promise<void>;
+
+  calendarLinks(mailbox: string): Promise<CalendarLink[]>;
+  putCalendarLink(link: CalendarLink): Promise<void>;
+  deleteCalendarLink(mailbox: string, entry: string): Promise<void>;
 
   /** Take a notice's turn to be sent: false when it was sent (or is being sent) already. */
   claimNotice(key: string, at: string): Promise<boolean>;
@@ -82,6 +103,7 @@ export class MemoryCommsStore implements CommsStore {
   private readonly draftsById = new Map<string, MailDraft>();
   private held: CommsSettings = commsSettingsSchema.parse({});
   private readonly notices = new Set<string>();
+  private readonly links = new Map<string, CalendarLink>();
 
   async recent(mailbox: string): Promise<MailMessage[]> {
     return [...(this.kept.get(mailbox) ?? [])];
@@ -100,6 +122,7 @@ export class MemoryCommsStore implements CommsStore {
     this.marks.delete(mailbox);
     for (const key of [...this.state.keys()]) if (key.startsWith(`${mailbox}\u0000`)) this.state.delete(key);
     for (const [id, draft] of [...this.draftsById]) if (draft.mailbox === mailbox) this.draftsById.delete(id);
+    for (const [key, link] of [...this.links]) if (link.mailbox === mailbox) this.links.delete(key);
   }
   async states(mailbox: string, messages: readonly string[]): Promise<CommsState[]> {
     return messages.map((id) => this.state.get(`${mailbox}\u0000${id}`)).filter((one): one is CommsState => one !== undefined);
@@ -131,6 +154,15 @@ export class MemoryCommsStore implements CommsStore {
   }
   async releaseNotice(key: string): Promise<void> {
     this.notices.delete(key);
+  }
+  async calendarLinks(mailbox: string): Promise<CalendarLink[]> {
+    return [...this.links.values()].filter((one) => one.mailbox === mailbox);
+  }
+  async putCalendarLink(link: CalendarLink): Promise<void> {
+    this.links.set(`${link.mailbox}\u0000${link.entry}`, link);
+  }
+  async deleteCalendarLink(mailbox: string, entry: string): Promise<void> {
+    this.links.delete(`${mailbox}\u0000${entry}`);
   }
 }
 
@@ -182,7 +214,7 @@ export class DbCommsStore implements CommsStore {
     `.execute(this.db.kysely);
   }
   async forget(mailbox: string): Promise<void> {
-    for (const table of ["dash_mail_recent", "dash_comms_mailboxes", "dash_comms_state", "dash_comms_drafts"] as const) {
+    for (const table of ["dash_mail_recent", "dash_comms_mailboxes", "dash_comms_state", "dash_comms_drafts", "dash_comms_calendar"] as const) {
       await sql`DELETE FROM ${sql.table(table)} WHERE workspace = ${this.workspace} AND mailbox = ${mailbox}`.execute(this.db.kysely);
     }
   }
@@ -240,5 +272,20 @@ export class DbCommsStore implements CommsStore {
   }
   async releaseNotice(key: string): Promise<void> {
     await sql`DELETE FROM dash_comms_notices WHERE workspace = ${this.workspace} AND key = ${key}`.execute(this.db.kysely);
+  }
+  async calendarLinks(mailbox: string): Promise<CalendarLink[]> {
+    const result = await sql<{ entry: string; external: string; digest: string }>`
+      SELECT entry, external, digest FROM dash_comms_calendar WHERE workspace = ${this.workspace} AND mailbox = ${mailbox}
+    `.execute(this.db.kysely);
+    return result.rows.map((row) => ({ mailbox, entry: row.entry, external: row.external, digest: row.digest }));
+  }
+  async putCalendarLink(link: CalendarLink): Promise<void> {
+    await sql`
+      INSERT INTO dash_comms_calendar (workspace, mailbox, entry, external, digest) VALUES (${this.workspace}, ${link.mailbox}, ${link.entry}, ${link.external}, ${link.digest})
+      ON CONFLICT (workspace, mailbox, entry) DO UPDATE SET external = EXCLUDED.external, digest = EXCLUDED.digest
+    `.execute(this.db.kysely);
+  }
+  async deleteCalendarLink(mailbox: string, entry: string): Promise<void> {
+    await sql`DELETE FROM dash_comms_calendar WHERE workspace = ${this.workspace} AND mailbox = ${mailbox} AND entry = ${entry}`.execute(this.db.kysely);
   }
 }

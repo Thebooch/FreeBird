@@ -8,6 +8,7 @@ import { fakeLlm } from "@freebirdai/dash-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
+import { MemoryCalendarStore } from "../workflows/store.js";
 import { fakeMailServer, type FakeMailServer } from "./fixtures.js";
 
 /**
@@ -334,6 +335,45 @@ describe("Contact fields from email", () => {
     const contacts = (await app.inject({ method: "GET", url: "/api/contacts" })).json() as { contacts: { emails: string[]; fields: Record<string, { person?: { value: unknown } }> }[] };
     const lee = contacts.contacts.find((one) => one.emails.includes("lee@example.com"));
     expect(lee?.fields["moveIn"]?.person?.value).toBe("2026-11-01");
+    await app.close();
+  });
+});
+
+describe("Calendar sync", () => {
+  it("keeps a member's calendar busy times free, and writes their appointments into it", async () => {
+    const calendar = new MemoryCalendarStore();
+    const app = buildServer({ store, keys, catalog: new CatalogStore(seed, join(dir, "overlay")), llm: null, http: mail.http, calendar });
+    await setUp(app);
+    signIn("gmail");
+    const set = await app.inject({ method: "PUT", url: "/api/comms/mailboxes/gmail/calendar", payload: { calendar: { member: "local", busy: true, push: true } } });
+    expect(set.json()).toMatchObject({ calendar: { member: "local", busy: true, push: true } });
+
+    mail.calendars.gmail.push({ id: "busy1", title: "Dentist", start: "2026-10-20T15:00:00Z", end: "2026-10-20T16:00:00Z" });
+    mail.calendars.gmail.push({ id: "free1", title: "Focus time", start: "2026-10-20T17:00:00Z", end: "2026-10-20T18:00:00Z", free: true });
+    const busy = (await app.inject({ method: "GET", url: "/api/comms/calendar/busy?member=local&from=2026-10-20T00:00:00Z&to=2026-10-21T00:00:00Z" })).json();
+    expect(busy).toEqual([{ start: "2026-10-20T15:00:00.000Z", end: "2026-10-20T16:00:00.000Z" }]);
+
+    const now = Date.now();
+    const at = new Date(now + 3 * 86_400_000).toISOString();
+    await calendar.put({ id: "appt1", title: "Showing · Pat", at, end: new Date(Date.parse(at) + 30 * 60_000).toISOString(), allDay: false, kind: "appointment", status: "open", owner: { kind: "member", id: "local" }, booking: "b1", pinned: false, createdAt: new Date(now).toISOString() });
+    await app.inject({ method: "POST", url: "/api/comms/calendar/sync" });
+    const pushed = mail.calendars.gmail.find((one) => one.title === "Showing · Pat");
+    expect(pushed?.start).toBe(at);
+    /* What Dash wrote is its own appointment: not counted again as busy. */
+    const busyNow = (await app.inject({ method: "GET", url: `/api/comms/calendar/busy?member=local&from=${new Date(now).toISOString()}&to=${new Date(now + 7 * 86_400_000).toISOString()}` })).json() as unknown[];
+    expect(busyNow).toEqual([]);
+
+    /* Moved: changed there too; synced again with nothing new: nothing written. */
+    const moved = new Date(Date.parse(at) + 3_600_000).toISOString();
+    await calendar.put({ ...(await calendar.get("appt1"))!, at: moved, end: new Date(Date.parse(moved) + 30 * 60_000).toISOString() });
+    expect((await app.inject({ method: "POST", url: "/api/comms/calendar/sync" })).json()).toEqual({ written: 1 });
+    expect(mail.calendars.gmail.find((one) => one.id === pushed!.id)?.start).toBe(moved);
+    expect((await app.inject({ method: "POST", url: "/api/comms/calendar/sync" })).json()).toEqual({ written: 0 });
+
+    /* Cancelled: taken out. */
+    await calendar.put({ ...(await calendar.get("appt1"))!, status: "cancelled" });
+    await app.inject({ method: "POST", url: "/api/comms/calendar/sync" });
+    expect(mail.calendars.gmail.some((one) => one.id === pushed!.id)).toBe(false);
     await app.close();
   });
 });

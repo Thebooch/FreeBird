@@ -140,6 +140,42 @@ export const graphProvider = (read: MailRead, mailbox: string, own: () => string
     },
     sendIntent: (mail: MailOutgoing) => ({ connection: mailbox, entity: "message", kind: "action", action: "send", values: values(mail) }),
     draftIntent: (mail: MailOutgoing) => ({ connection: mailbox, entity: "message", kind: "create", values: values(mail) }),
+    events: async (from, to) => {
+      const answer = await read("events", { startDateTime: new Date(from).toISOString(), endDateTime: new Date(to).toISOString() }, { fresh: "5m" });
+      return answer.rows.flatMap((row) => {
+        const one = row as { id?: string; showAs?: string; isAllDay?: boolean; isCancelled?: boolean; start?: { dateTime?: string }; end?: { dateTime?: string } };
+        if (typeof one.id !== "string") return [];
+        /* Asked for in UTC; Graph writes it without the Z. */
+        const utc = (value: string | undefined) => Date.parse(value && !/[zZ]|[+-]\d\d:?\d\d$/.test(value) ? `${value}Z` : (value ?? ""));
+        const start = utc(one.start?.dateTime);
+        const end = utc(one.end?.dateTime);
+        if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
+        return [{ id: one.id, start, end, busy: !one.isCancelled && !one.isAllDay && one.showAs !== "free" && one.showAs !== "workingElsewhere" }];
+      });
+    },
+    eventIntent: (kind, event, id) => ({
+      connection: mailbox,
+      entity: "event",
+      kind,
+      ...(id ? { id } : {}),
+      ...(event
+        ? {
+            values: {
+              subject: event.title,
+              "body.contentType": "Text",
+              "body.content": event.notes,
+              "start.dateTime": event.start.replace(/Z$/, ""),
+              "start.timeZone": "UTC",
+              "end.dateTime": event.end.replace(/Z$/, ""),
+              "end.timeZone": "UTC",
+            },
+          }
+        : {}),
+    }),
+    eventId: (record) => {
+      const id = (record as { id?: unknown } | null)?.id;
+      return typeof id === "string" ? id : undefined;
+    },
     /* `sendMail` answers 202 with nothing. */
     sentId: () => undefined,
   };

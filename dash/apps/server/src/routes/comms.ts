@@ -63,6 +63,14 @@ export const commsRoutes = (deps: { readonly comms: CommsService }) =>
       handled<{ id: string }, { owner?: unknown }>(async (_principal, request) => comms.setOwner(request.params.id, mailboxOwnerSchema.parse(request.body?.owner))),
     );
 
+    app.put(
+      "/api/comms/mailboxes/:id/calendar",
+      handled<{ id: string }, { calendar?: unknown }>(async (principal, request) => {
+        const calendar = z.object({ member: z.string().min(1).max(200), busy: z.boolean(), push: z.boolean() }).nullable().parse(request.body?.calendar ?? null);
+        return comms.setCalendar(principal, request.params.id, calendar);
+      }),
+    );
+
     app.delete(
       "/api/comms/mailboxes/:id",
       handled<{ id: string }>(async (_principal, request) => {
@@ -134,6 +142,20 @@ export const commsRoutes = (deps: { readonly comms: CommsService }) =>
     app.post(
       "/api/comms/drafts/:id/discard",
       handled<{ id: string }>(async (principal, request) => comms.discard(principal, request.params.id)),
+    );
+
+    /* Write appointments into the calendars set to take them, now rather than on the next pass. */
+    app.post("/api/comms/calendar/sync", handled(async () => ({ written: await comms.pushCalendars() })));
+
+    /* What a member's own calendars say is busy, as booking sees it: for checking a calendar is read. */
+    app.get(
+      "/api/comms/calendar/busy",
+      handled<Record<string, string>, unknown, { member?: string; from?: string; to?: string }>(async (_principal, request) => {
+        const from = Date.parse(request.query.from ?? "");
+        const to = Date.parse(request.query.to ?? "");
+        if (!request.query.member || !Number.isFinite(from) || !Number.isFinite(to)) throw new CommsError("Say whose calendar, from and to.");
+        return (await comms.busy(request.query.member, from, to)).map((one) => ({ start: new Date(one.start).toISOString(), end: new Date(one.end).toISOString() }));
+      }),
     );
 
     app.get("/api/comms/settings", handled(async () => comms.settings()));

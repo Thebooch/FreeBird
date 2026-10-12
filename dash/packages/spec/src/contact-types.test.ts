@@ -3,7 +3,7 @@ import { contactTypes } from "./contact.js";
 import { passes } from "./workflow-expr.js";
 
 const rule = (connection: string, entity: string, type?: string) => ({ connection, entity, ...(type ? { type } : {}) });
-const link = (connection: string, entity: string) => ({ connection, entity, recordId: "1", matchedOn: ["email"], syncedAt: "2026-10-11T00:00:00.000Z" });
+const link = (connection: string, entity: string) => ({ connection, entity, recordId: "1", by: "match" as const, matchedOn: ["email"], syncedAt: "2026-10-11T00:00:00.000Z" });
 
 describe("contact types", () => {
   const rules = [rule("rv", "tenant", "Tenant"), rule("bill", "vendor", "Vendor"), rule("rv", "owner")];

@@ -36,7 +36,31 @@ export interface MailOutgoing {
   readonly references?: string | undefined;
 }
 
+/** One event in the mailbox's calendar, as busy time reads it. */
+export interface CalendarItem {
+  readonly id: string;
+  readonly start: number;
+  readonly end: number;
+  /** Shown as busy: not free, not cancelled, not all day. */
+  readonly busy: boolean;
+}
+
+/** An appointment as it is written into the calendar. */
+export interface CalendarOut {
+  readonly title: string;
+  readonly notes: string;
+  /** ISO, UTC. */
+  readonly start: string;
+  readonly end: string;
+}
+
 export interface MailProvider {
+  /** The calendar's events overlapping [from, to). */
+  events(from: number, to: number): Promise<readonly CalendarItem[]>;
+  /** What adds, changes or removes an event: through the write service, like a send. */
+  eventIntent(kind: "create" | "update" | "delete", event: CalendarOut | null, id?: string): WriteIntent;
+  /** The new event's id, from what the create answered with. */
+  eventId(record: unknown): string | undefined;
   readonly kind: "gmail" | "outlook";
   /** The address it sends from, and (Gmail) where its history stands. */
   profile(): Promise<{ readonly address?: string | undefined; readonly historyId?: string | undefined }>;

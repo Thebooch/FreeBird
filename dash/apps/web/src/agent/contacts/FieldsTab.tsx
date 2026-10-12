@@ -491,8 +491,8 @@ const MatchRuleSheet = ({
         : {})}
     >
       <SheetSection title="Match against" description="Saving makes you the person matching reads as: it can only find records you may read.">
-        <FormRow label="Contact type" hint="What a contact linked by this rule is, e.g. Tenant. Workflows can take a path by it.">
-          {(field) => <TextInput id={field} value={draft.type ?? ""} placeholder="Tenant" maxLength={60} onChange={(type) => setDraft({ ...draft, type })} testId="match-type" />}
+        <FormRow label="Contact type" hint="A name for what a contact linked by this rule is. Workflows can take a path by it.">
+          {(field) => <TextInput id={field} value={draft.type ?? ""} placeholder="A short label" maxLength={60} onChange={(type) => setDraft({ ...draft, type })} testId="match-type" />}
         </FormRow>
         <FormRow label="Connection">
           {(field) => (

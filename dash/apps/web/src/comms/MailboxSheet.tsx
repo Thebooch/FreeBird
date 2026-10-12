@@ -126,6 +126,13 @@ export const MailboxSheet = ({
   readonly onChanged: () => void;
 }): JSX.Element => {
   const [owner, setOwner] = useState(ownerKey(mailbox.owner));
+  const [calendarMember, setCalendarMember] = useState(mailbox.calendar?.member ?? "");
+  const [calendarBusy, setCalendarBusy] = useState(mailbox.calendar?.busy ?? true);
+  const [calendarPush, setCalendarPush] = useState(mailbox.calendar?.push ?? true);
+  const [members, setMembers] = useState<readonly { userId: string; email: string }[]>([]);
+  useEffect(() => {
+    void api.scheduling().then((overview) => setMembers(overview.members), () => setMembers([]));
+  }, []);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   useEffect(() => setOwner(ownerKey(mailbox.owner)), [mailbox]);
@@ -137,6 +144,8 @@ export const MailboxSheet = ({
       onClose={onClose}
       onSave={async () => {
         if (owner !== ownerKey(mailbox.owner)) await api.setMailboxOwner(mailbox.id, ownerOf(owner));
+        const calendar = calendarMember ? { member: calendarMember, busy: calendarBusy, push: calendarPush } : null;
+        if (JSON.stringify(calendar) !== JSON.stringify(mailbox.calendar ?? null)) await api.setMailboxCalendar(mailbox.id, calendar);
         onChanged();
         onClose();
       }}
@@ -149,6 +158,35 @@ export const MailboxSheet = ({
     >
       <SheetSection title="Whose it is" description="Changing this only moves where its mail is shown.">
         <FormRow label="Owner">{(id) => <OwnerSelect id={id} value={owner} agents={agents.filter((one) => !one.archived)} onChange={setOwner} />}</FormRow>
+      </SheetSection>
+      <SheetSection
+        title="Calendar"
+        description="Use this mailbox's own calendar for someone you book: their busy times there stay free, and their appointments go into it. The first time, sign in again so it may use the calendar."
+      >
+        <FormRow label="Whose calendar">
+          {(id) => (
+            <select id={id} className="dash-sched-input" value={calendarMember} onChange={(event) => setCalendarMember(event.target.value)} data-testid="mailbox-calendar-member">
+              <option value="">Not used</option>
+              {members.map((one) => (
+                <option key={one.userId} value={one.userId}>
+                  {one.email || (one.userId === "local" ? "You" : one.userId)}
+                </option>
+              ))}
+            </select>
+          )}
+        </FormRow>
+        {calendarMember && (
+          <>
+            <label className="dash-check">
+              <input type="checkbox" checked={calendarBusy} onChange={(event) => setCalendarBusy(event.target.checked)} /> Keep its busy times free when booking
+            </label>
+            <label className="dash-check">
+              <input type="checkbox" checked={calendarPush} onChange={(event) => setCalendarPush(event.target.checked)} /> Put appointments in it
+            </label>
+          </>
+        )}
+        {mailbox.calendarError && <p className="dash-sched-error">{mailbox.calendarError}</p>}
+        {mailbox.calendarAt && <p className="dash-hint">Appointments last written {new Date(mailbox.calendarAt).toLocaleString()}.</p>}
       </SheetSection>
       <SheetSection
         title="Sign-in"

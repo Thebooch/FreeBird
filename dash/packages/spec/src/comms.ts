@@ -81,6 +81,10 @@ export interface MailboxView {
   readonly kept: number;
   readonly refreshedAt?: string | undefined;
   readonly error?: string | undefined;
+  /** Whose calendar it is, and what is done with it. */
+  readonly calendar?: { readonly member: string; readonly busy: boolean; readonly push: boolean } | undefined;
+  readonly calendarError?: string | undefined;
+  readonly calendarAt?: string | undefined;
 }
 
 /** One page of the merged list: newest first across every mailbox asked for. */

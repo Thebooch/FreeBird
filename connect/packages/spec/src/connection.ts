@@ -194,6 +194,18 @@ export const mailboxSchema = z.object({
   /** The address it sends from, once a read has said. */
   address: z.string().max(320).optional(),
   owner: mailboxOwnerSchema.default({ kind: "team" }),
+  /**
+   * Its calendar is this member's: their busy times there are kept free when
+   * they are booked (`busy`), and their appointments are written into it
+   * (`push`). Absent: its calendar is not used.
+   */
+  calendar: z
+    .object({
+      member: z.string().min(1).max(200),
+      busy: z.boolean().default(true),
+      push: z.boolean().default(true),
+    })
+    .optional(),
 });
 export type MailboxSpec = z.infer<typeof mailboxSchema>;
 

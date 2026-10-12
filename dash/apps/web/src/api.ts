@@ -1493,6 +1493,10 @@ export const api = {
   addMailbox: (input: { provider: "gmail" | "outlook"; owner: MailboxOwner; title?: string }): Promise<MailboxView> => request("/api/comms/mailboxes", json(input)),
   setMailboxOwner: (id: string, owner: MailboxOwner): Promise<MailboxView> =>
     request(`/api/comms/mailboxes/${encodeURIComponent(id)}/owner`, { ...json({ owner }), method: "PUT" }),
+  /** Use a mailbox's calendar as a member's: busy times kept free, appointments written in. Null stops it. */
+  setMailboxCalendar: (id: string, calendar: { member: string; busy: boolean; push: boolean } | null): Promise<MailboxView> =>
+    request(`/api/comms/mailboxes/${encodeURIComponent(id)}/calendar`, { ...json({ calendar }), method: "PUT" }),
+  syncCalendars: (): Promise<{ written: number }> => request("/api/comms/calendar/sync", json({})),
   removeMailbox: (id: string): Promise<{ removed: string }> => request(`/api/comms/mailboxes/${encodeURIComponent(id)}`, { method: "DELETE" }),
   refreshMailbox: (id: string): Promise<MailboxView | null> => request(`/api/comms/mailboxes/${encodeURIComponent(id)}/refresh`, json({})),
   /** One page of an area's mail, merged by time across the mailboxes named (all of them when none are). */

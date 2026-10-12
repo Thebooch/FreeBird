@@ -129,6 +129,28 @@ export const gmailProvider = (read: MailRead, mailbox: string): MailProvider => 
       kind: "create",
       values: values(mail, "message.threadId"),
     }),
+    events: async (from, to) => {
+      const answer = await read("events", { timeMin: new Date(from).toISOString(), timeMax: new Date(to).toISOString() }, { fresh: "5m" });
+      return answer.rows.flatMap((row) => {
+        const one = row as { id?: string; status?: string; transparency?: string; start?: { dateTime?: string; date?: string }; end?: { dateTime?: string; date?: string } };
+        if (typeof one.id !== "string") return [];
+        const start = Date.parse(one.start?.dateTime ?? one.start?.date ?? "");
+        const end = Date.parse(one.end?.dateTime ?? one.end?.date ?? "");
+        if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
+        return [{ id: one.id, start, end, busy: one.status !== "cancelled" && one.transparency !== "transparent" && !one.start?.date }];
+      });
+    },
+    eventIntent: (kind, event, id) => ({
+      connection: mailbox,
+      entity: "event",
+      kind,
+      ...(id ? { id } : {}),
+      ...(event ? { values: { summary: event.title, description: event.notes, "start.dateTime": event.start, "end.dateTime": event.end } } : {}),
+    }),
+    eventId: (record) => {
+      const id = (record as { id?: unknown } | null)?.id;
+      return typeof id === "string" ? id : undefined;
+    },
     sentId: (record) => {
       const id = (record as { id?: unknown } | null)?.id;
       return typeof id === "string" ? id : undefined;

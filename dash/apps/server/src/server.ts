@@ -1291,6 +1291,12 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     ...(options.mailApps ? { builtInApps: options.mailApps } : {}),
     contacts: { findOrCreate: (input) => contacts.findOrCreate(input), match: (id) => contacts.match(id) },
     draftSettled: (draft) => commsDraftSettled(draft),
+    /* A member's appointments, which go into their mailbox calendar when it is set to. */
+    appointments: {
+      list: (member, from, to) =>
+        workflowEnv.calendar.list({ from: new Date(from).toISOString(), to: new Date(to).toISOString(), owners: [`member:${member}`], kinds: ["appointment"], limit: 5000 }),
+      get: (id) => workflowEnv.calendar.get(id),
+    },
     /* Somebody answered an email an agent started: a Wait for a reply on that conversation hears it. */
     replyHeard: async (draft, message) => {
       await workflowEngine.emit(`reply:${draft.id}`, { from: message.from?.address ?? "", subject: message.subject, text: message.snippet, message: message.id }, `reply:${draft.id}:${message.id}`);
@@ -1371,6 +1377,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     factKinds: () => contacts.factKinds(),
     contacts,
     bookings: bookingsAsBusy(bookingStore),
+    /* A member's own Google or Outlook calendar, where a mailbox's is theirs: its busy times are kept free. */
+    external: (member, from, to) => comms.busy(member, from, to),
     now: () => Date.now(),
   });
   /* Bookings (`bookings/`): the only code that changes one; the calendar mirrors each. */
@@ -1492,6 +1500,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       { name: "tracked values", run: () => reportService.recordDue() },
       /* New mail, with nobody looking: each signed-in mailbox read every few minutes, which starts its workflows. */
       { name: "mail", run: () => comms.refreshDue(COMMS_EVERY_MS) },
+      /* Appointments into the calendars of members whose mailbox calendar is set to take them. */
+      { name: "calendars", run: () => comms.pushCalendars() },
     ],
   });
   if (options.workflowRunner === true) workflowRunner.start();

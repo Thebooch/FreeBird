@@ -19,7 +19,17 @@ export interface FakeMail {
   readonly text?: string;
 }
 
+export interface FakeEvent {
+  id: string;
+  title: string;
+  start: string;
+  end: string;
+  free?: boolean;
+}
+
 export interface FakeMailServer {
+  /** Each provider's calendar, changed by what Dash writes. */
+  readonly calendars: { gmail: FakeEvent[]; outlook: FakeEvent[] };
   readonly http: HttpFetch;
   readonly gmail: FakeMail[];
   readonly outlook: FakeMail[];
@@ -82,6 +92,8 @@ export const fakeMailServer = (seed: { gmail?: FakeMail[]; outlook?: FakeMail[] 
   const gmail = [...(seed.gmail ?? [])];
   const outlook = [...(seed.outlook ?? [])];
   const requests: FakeMailServer["requests"] = [];
+  const calendars: FakeMailServer["calendars"] = { gmail: [], outlook: [] };
+  let events = 0;
   const sent: FakeMailServer["sent"] = [];
 
   const http: HttpFetch = async (url, init) => {
@@ -89,7 +101,34 @@ export const fakeMailServer = (seed: { gmail?: FakeMail[]; outlook?: FakeMail[] 
     requests.push({ method: init.method ?? "GET", url: `${parsed.pathname}${parsed.search}`, ...(typeof init.body === "string" ? { body: init.body } : {}) });
     const method = init.method ?? "GET";
 
-    if (parsed.hostname === "gmail.googleapis.com") {
+    if (parsed.hostname === "www.googleapis.com" && parsed.pathname.startsWith("/calendar/v3/calendars/primary/events")) {
+      const id = decodeURIComponent(parsed.pathname.split("/events/")[1] ?? "");
+      const body = typeof init.body === "string" && init.body ? (JSON.parse(init.body) as { summary?: string; start?: { dateTime?: string }; end?: { dateTime?: string } }) : {};
+      if (method === "GET" && !id) {
+        const from = Date.parse(parsed.searchParams.get("timeMin") ?? "");
+        const to = Date.parse(parsed.searchParams.get("timeMax") ?? "");
+        const items = calendars.gmail.filter((one) => Date.parse(one.end) > from && Date.parse(one.start) < to);
+        return json(url, { items: items.map((one) => ({ id: one.id, summary: one.title, status: "confirmed", ...(one.free ? { transparency: "transparent" } : {}), start: { dateTime: one.start }, end: { dateTime: one.end } })) });
+      }
+      const held = calendars.gmail.find((one) => one.id === id);
+      if (method === "GET") return held ? json(url, { id: held.id, summary: held.title, start: { dateTime: held.start }, end: { dateTime: held.end } }) : json(url, { error: "not found" }, 404);
+      if (method === "POST") {
+        const made = { id: `ev${++events}`, title: body.summary ?? "", start: body.start?.dateTime ?? "", end: body.end?.dateTime ?? "" };
+        calendars.gmail.push(made);
+        return json(url, { id: made.id, summary: made.title });
+      }
+      if (method === "PATCH" && held) {
+        Object.assign(held, { title: body.summary ?? held.title, start: body.start?.dateTime ?? held.start, end: body.end?.dateTime ?? held.end });
+        return json(url, { id: held.id, summary: held.title });
+      }
+      if (method === "DELETE" && held) {
+        calendars.gmail.splice(calendars.gmail.indexOf(held), 1);
+        return { status: 204, text: "", url, header: () => null };
+      }
+      return json(url, { error: "not found" }, 404);
+    }
+
+    if (parsed.hostname === "www.googleapis.com" && parsed.pathname.startsWith("/gmail/v1/users/me")) {
       const path = parsed.pathname.replace("/gmail/v1/users/me", "");
       if (path === "/profile") return json(url, { emailAddress: "team@example.com", historyId: "100" });
       if (path === "/messages" && method === "GET") {
@@ -145,5 +184,5 @@ export const fakeMailServer = (seed: { gmail?: FakeMail[]; outlook?: FakeMail[] 
     }
     return json(url, { error: `nothing at ${method} ${parsed.hostname}${parsed.pathname}` }, 404);
   };
-  return { http, gmail, outlook, requests, sent };
+  return { http, gmail, outlook, requests, sent, calendars };
 };

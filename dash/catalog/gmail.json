@@ -1,7 +1,7 @@
 {
   "id": "gmail",
   "title": "Gmail",
-  "baseUrl": "https://gmail.googleapis.com/gmail/v1/users/me",
+  "baseUrl": "https://www.googleapis.com",
   "docsUrl": "https://developers.google.com/gmail/api/reference/rest",
   "keyHelp": "Gmail signs in with a Google account. It needs an OAuth app's client ID and secret once per workspace: in Google Cloud, create a project, enable the Gmail API, set up the OAuth consent screen, and create an OAuth client of type Web application whose authorized redirect URI is the one Dash shows.",
   "dialect": {
@@ -17,7 +17,8 @@
       "tokenUrl": "https://oauth2.googleapis.com/token",
       "scopes": [
         "https://www.googleapis.com/auth/gmail.readonly",
-        "https://www.googleapis.com/auth/gmail.compose"
+        "https://www.googleapis.com/auth/gmail.compose",
+        "https://www.googleapis.com/auth/calendar.events"
       ],
       "clientIdRef": "gmail-client-id",
       "clientSecretRef": "gmail-client-secret",
@@ -35,14 +36,14 @@
     {
       "id": "profile",
       "title": "Mailbox profile",
-      "path": "/profile",
+      "path": "/gmail/v1/users/me/profile",
       "archetype": "summary",
       "description": "The mailbox's address and its newest history id."
     },
     {
       "id": "messages",
       "title": "Messages",
-      "path": "/messages",
+      "path": "/gmail/v1/users/me/messages",
       "rowsPath": "$.messages",
       "timeFiltered": false,
       "maxPages": 1,
@@ -69,7 +70,7 @@
     {
       "id": "message",
       "title": "Message",
-      "path": "/messages/{{param.id}}",
+      "path": "/gmail/v1/users/me/messages/{{param.id}}",
       "archetype": "summary",
       "params": [
         {
@@ -93,7 +94,7 @@
     {
       "id": "thread",
       "title": "Thread",
-      "path": "/threads/{{param.id}}",
+      "path": "/gmail/v1/users/me/threads/{{param.id}}",
       "archetype": "summary",
       "params": [
         {
@@ -117,7 +118,7 @@
     {
       "id": "history",
       "title": "Mailbox history",
-      "path": "/history",
+      "path": "/gmail/v1/users/me/history",
       "rowsPath": "$.history",
       "timeFiltered": false,
       "maxPages": 1,
@@ -141,7 +142,7 @@
     {
       "id": "labels",
       "title": "Labels",
-      "path": "/labels",
+      "path": "/gmail/v1/users/me/labels",
       "rowsPath": "$.labels",
       "timeFiltered": false,
       "maxPages": 1
@@ -149,7 +150,7 @@
     {
       "id": "drafts",
       "title": "Drafts",
-      "path": "/drafts",
+      "path": "/gmail/v1/users/me/drafts",
       "rowsPath": "$.drafts",
       "timeFiltered": false,
       "maxPages": 1,
@@ -167,9 +168,57 @@
       ]
     },
     {
+      "id": "events",
+      "title": "Calendar events",
+      "path": "/calendar/v3/calendars/primary/events",
+      "rowsPath": "$.items",
+      "timeFiltered": false,
+      "maxPages": 1,
+      "params": [
+        {
+          "name": "timeMin",
+          "in": "query"
+        },
+        {
+          "name": "timeMax",
+          "in": "query"
+        },
+        {
+          "name": "singleEvents",
+          "in": "query",
+          "type": "boolean",
+          "default": true
+        },
+        {
+          "name": "maxResults",
+          "in": "query",
+          "type": "number",
+          "default": 250
+        },
+        {
+          "name": "pageToken",
+          "in": "query"
+        }
+      ]
+    },
+    {
+      "id": "event",
+      "title": "Calendar event",
+      "path": "/calendar/v3/calendars/primary/events/{{param.id}}",
+      "archetype": "summary",
+      "params": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "role": "id"
+        }
+      ]
+    },
+    {
       "id": "draft",
       "title": "Draft",
-      "path": "/drafts/{{param.id}}",
+      "path": "/gmail/v1/users/me/drafts/{{param.id}}",
       "archetype": "summary",
       "params": [
         {
@@ -203,6 +252,14 @@
       "title": "Labels",
       "idField": "id",
       "listOp": "labels"
+    },
+    {
+      "id": "event",
+      "title": "Calendar events",
+      "idField": "id",
+      "listOp": "events",
+      "detailOp": "event",
+      "detailParam": "id"
     }
   ],
   "entities": [
@@ -235,6 +292,21 @@
       },
       "fields": [],
       "verified": false
+    },
+    {
+      "id": "event",
+      "resource": "event",
+      "name": {
+        "one": "Calendar event",
+        "many": "Calendar events"
+      },
+      "kind": "other",
+      "identity": {
+        "field": "id",
+        "observed": false
+      },
+      "fields": [],
+      "verified": false
     }
   ],
   "writes": [
@@ -242,7 +314,7 @@
       "id": "send",
       "title": "Send an email",
       "method": "POST",
-      "path": "/messages/send",
+      "path": "/gmail/v1/users/me/messages/send",
       "returns": "record",
       "confidence": "declared",
       "body": {
@@ -318,7 +390,7 @@
       "id": "create-draft",
       "title": "Save a draft",
       "method": "POST",
-      "path": "/drafts",
+      "path": "/gmail/v1/users/me/drafts",
       "returns": "record",
       "confidence": "declared",
       "body": {
@@ -385,6 +457,104 @@
       "role": {
         "entity": "draft",
         "kind": "create"
+      }
+    },
+    {
+      "id": "create-event",
+      "title": "Add a calendar event",
+      "method": "POST",
+      "path": "/calendar/v3/calendars/primary/events",
+      "returns": "record",
+      "confidence": "declared",
+      "body": {
+        "contentType": "application/json",
+        "fields": [
+          {
+            "path": "summary",
+            "label": "Title",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "description",
+            "label": "Notes",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "start.dateTime",
+            "label": "Starts",
+            "type": "string",
+            "format": "date-time",
+            "mappedBy": "person"
+          },
+          {
+            "path": "end.dateTime",
+            "label": "Ends",
+            "type": "string",
+            "format": "date-time",
+            "mappedBy": "person"
+          }
+        ]
+      },
+      "role": {
+        "entity": "event",
+        "kind": "create"
+      }
+    },
+    {
+      "id": "update-event",
+      "title": "Change a calendar event",
+      "method": "PATCH",
+      "path": "/calendar/v3/calendars/primary/events/{{param.id}}",
+      "returns": "record",
+      "confidence": "declared",
+      "body": {
+        "contentType": "application/json",
+        "fields": [
+          {
+            "path": "summary",
+            "label": "Title",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "description",
+            "label": "Notes",
+            "type": "string",
+            "mappedBy": "person"
+          },
+          {
+            "path": "start.dateTime",
+            "label": "Starts",
+            "type": "string",
+            "format": "date-time",
+            "mappedBy": "person"
+          },
+          {
+            "path": "end.dateTime",
+            "label": "Ends",
+            "type": "string",
+            "format": "date-time",
+            "mappedBy": "person"
+          }
+        ]
+      },
+      "role": {
+        "entity": "event",
+        "kind": "update"
+      }
+    },
+    {
+      "id": "delete-event",
+      "title": "Remove a calendar event",
+      "method": "DELETE",
+      "path": "/calendar/v3/calendars/primary/events/{{param.id}}",
+      "returns": "none",
+      "confidence": "declared",
+      "role": {
+        "entity": "event",
+        "kind": "delete"
       }
     }
   ],

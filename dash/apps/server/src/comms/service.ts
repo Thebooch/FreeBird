@@ -10,6 +10,7 @@ import {
   parseMailQuery,
   reachCovers,
   type AgentSpec,
+  type CalendarEvent,
   type CatalogEntry,
   type CommsArea,
   type CommsSettings,
@@ -98,6 +99,11 @@ export interface CommsDeps {
   readonly received?: (messages: readonly { readonly message: MailMessage; readonly contact?: Contact | undefined }[]) => Promise<void>;
   /** A draft a workflow step wrote was sent, saved or discarded: the step's case goes on. */
   readonly draftSettled?: (draft: MailDraft) => Promise<void>;
+  /** A member's appointments in Dash's calendar over a window, and one entry by id: what is written into their mailbox calendars. */
+  readonly appointments?: {
+    list(member: string, from: number, to: number): Promise<readonly CalendarEvent[]>;
+    get(id: string): Promise<CalendarEvent | null>;
+  };
   /** Somebody answered a message an agent started: a case waiting on that conversation hears it. */
   readonly replyHeard?: (draft: MailDraft, message: MailMessage) => Promise<void>;
   readonly now: () => number;
@@ -165,6 +171,9 @@ export class CommsService {
       kept,
       ...(mark.refreshedAt ? { refreshedAt: mark.refreshedAt } : {}),
       ...(mark.error ? { error: mark.error } : {}),
+      ...(connection.mailbox!.calendar ? { calendar: connection.mailbox!.calendar } : {}),
+      ...(mark.calendarError ? { calendarError: mark.calendarError } : {}),
+      ...(mark.calendarAt ? { calendarAt: mark.calendarAt } : {}),
     };
   }
 
@@ -747,6 +756,124 @@ export class CommsService {
       );
       if (draft) await this.deps.replyHeard(draft, message).catch((error: unknown) => this.deps.log?.warn(`a reply to ${draft.id} was not passed on: ${String(error)}`));
     }
+  }
+
+  /* ── calendars ────────────────────────────────────────────────────── */
+
+  /**
+   * Use a mailbox's calendar as a member's: their busy times there are kept
+   * free when they are booked, and (with `push`) their appointments are
+   * written into it, as the person who turned that on. Null stops both.
+   */
+  async setCalendar(principal: Principal, id: string, calendar: { readonly member: string; readonly busy: boolean; readonly push: boolean } | null): Promise<MailboxView> {
+    const connection = this.need(id);
+    if (calendar?.push && !(await this.deps.policy.can(principal, "records.create", { connection: id })).ok) throw new CommsError("You may not change this mailbox's calendar.", 403);
+    const mailbox = { ...connection.mailbox! };
+    if (calendar) mailbox.calendar = { member: calendar.member, busy: calendar.busy, push: calendar.push };
+    else delete mailbox.calendar;
+    const next: ConnectionSpec = { ...connection, mailbox };
+    this.deps.connections.put(next);
+    const mark = await this.deps.store.mark(id);
+    await this.deps.store.setMark(id, { ...mark, calendarBy: calendar?.push ? principal : undefined, calendarError: undefined });
+    return this.view(next);
+  }
+
+  private calendarsOf(member: string): ConnectionSpec[] {
+    return this.mailboxConnections().filter((one) => one.mailbox?.calendar?.member === member && this.statusOf(one) === "ready");
+  }
+
+  /**
+   * A member's busy times from every mailbox calendar that is theirs, read
+   * live (cached a few minutes). The events Dash wrote there itself are left
+   * out: they are its own appointments, already counted. A calendar that
+   * cannot be read adds nothing, and says so on its mailbox.
+   */
+  async busy(member: string, from: number, to: number): Promise<{ readonly start: number; readonly end: number }[]> {
+    const out: { start: number; end: number }[] = [];
+    for (const connection of this.calendarsOf(member)) {
+      if (!connection.mailbox?.calendar?.busy) continue;
+      try {
+        const ours = new Set((await this.deps.store.calendarLinks(connection.id)).map((one) => one.external));
+        for (const one of await this.provider(connection).events(from, to)) if (one.busy && !ours.has(one.id)) out.push({ start: one.start, end: one.end });
+      } catch (error) {
+        const mark = await this.deps.store.mark(connection.id);
+        await this.deps.store.setMark(connection.id, { ...mark, calendarError: `Its calendar could not be read (sign in again to allow it): ${error instanceof Error ? error.message : String(error)}`.slice(0, 400) });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Write each member's appointments into their mailbox calendars: new ones
+   * added, moved or renamed ones changed, cancelled or removed ones taken
+   * out. Through the write service as the person who turned it on, each once.
+   */
+  async pushCalendars(): Promise<number> {
+    const appointments = this.deps.appointments;
+    if (!appointments) return 0;
+    let written = 0;
+    const now = this.deps.now();
+    for (const connection of this.mailboxConnections()) {
+      const calendar = connection.mailbox?.calendar;
+      if (!calendar?.push || this.statusOf(connection) !== "ready") continue;
+      const mark = await this.deps.store.mark(connection.id);
+      const as = mark.calendarBy;
+      if (!as) continue;
+      const provider = this.provider(connection);
+      const links = new Map((await this.deps.store.calendarLinks(connection.id)).map((one) => [one.entry, one]));
+      const wanted = (await appointments.list(calendar.member, now - 86_400_000, now + 90 * 86_400_000)).filter((one) => one.kind === "appointment" && !one.allDay);
+      const problems: string[] = [];
+      const write = async (intent: WriteIntent): Promise<CommitResult> => {
+        const review = await this.deps.writes.prepare(as, intent, { via: "form" });
+        return this.deps.writes.commit(as, review.pendingId, review.digest);
+      };
+      const seen = new Set<string>();
+      for (const entry of wanted) {
+        seen.add(entry.id);
+        const link = links.get(entry.id);
+        try {
+          if (entry.status === "cancelled") {
+            if (link) {
+              await write(provider.eventIntent("delete", null, link.external));
+              await this.deps.store.deleteCalendarLink(connection.id, entry.id);
+              written++;
+            }
+            continue;
+          }
+          const start = new Date(Date.parse(entry.at)).toISOString();
+          const end = new Date(entry.end ? Date.parse(entry.end) : Date.parse(entry.at) + 30 * 60_000).toISOString();
+          const event = { title: entry.title, notes: entry.notes ?? "", start, end };
+          const digest = createHash("sha1").update(JSON.stringify(event)).digest("hex");
+          if (link?.digest === digest) continue;
+          if (link) {
+            await write(provider.eventIntent("update", event, link.external));
+            await this.deps.store.putCalendarLink({ ...link, digest });
+          } else {
+            const made = await write(provider.eventIntent("create", event));
+            const external = provider.eventId(made.record) ?? made.key?.id;
+            if (external) await this.deps.store.putCalendarLink({ mailbox: connection.id, entry: entry.id, external, digest });
+          }
+          written++;
+        } catch (error) {
+          problems.push(`${entry.title}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      /* An appointment Dash wrote that is gone from its calendar: taken out of theirs too. */
+      for (const link of links.values()) {
+        if (seen.has(link.entry)) continue;
+        const entry = await appointments.get(link.entry);
+        if (entry && entry.status !== "cancelled") continue;
+        try {
+          await write(provider.eventIntent("delete", null, link.external));
+          await this.deps.store.deleteCalendarLink(connection.id, link.entry);
+          written++;
+        } catch (error) {
+          problems.push(`removing an event: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      await this.deps.store.setMark(connection.id, { ...(await this.deps.store.mark(connection.id)), calendarAt: this.iso(), calendarError: problems.length > 0 ? problems.join("; ").slice(0, 400) : undefined });
+    }
+    return written;
   }
 
   /** A person starts a reply of their own. */

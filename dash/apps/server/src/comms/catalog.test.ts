@@ -14,7 +14,7 @@ describe("the shipped mail catalog entries", () => {
     const one = entry(id);
     expect(one.dialect.auth?.type).toBe("oauth2");
     expect(one.ops.map((op) => op.id)).toEqual(expect.arrayContaining(["profile", "messages", "message"]));
-    expect(one.writes.map((write) => write.id)).toEqual(["send", "create-draft"]);
+    expect(one.writes.map((write) => write.id)).toEqual(["send", "create-draft", "create-event", "update-event", "delete-event"]);
     const graph = entityGraph({ entities: one.entities, resources: one.resources, ops: one.ops.map((op) => ({ id: op.id, path: op.path, params: op.params })), writes: one.writes });
     const send = graph.writesOf("message").actions.find((action) => action.action?.id === "send");
     expect(send?.mime).toBeDefined();
@@ -22,6 +22,9 @@ describe("the shipped mail catalog entries", () => {
     const draft = graph.writesOf(id === "gmail" ? "draft" : "message").create;
     expect(draft?.op).toBe("create-draft");
     expect(draft?.mime).toBeDefined();
+    const events = graph.writesOf("event");
+    expect([events.create?.op, events.update?.op, events.remove?.op]).toEqual(["create-event", "update-event", "delete-event"]);
+    expect(events.update?.own?.param).toBe("id");
   });
 
   it("asks Google for a refresh token", () => {

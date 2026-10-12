@@ -201,6 +201,15 @@ CREATE TABLE IF NOT EXISTS dash_comms_drafts (
 
 CREATE INDEX IF NOT EXISTS dash_comms_drafts_mailbox ON dash_comms_drafts (workspace, mailbox, updated_at);
 
+CREATE TABLE IF NOT EXISTS dash_comms_calendar (
+  workspace TEXT NOT NULL,
+  mailbox   TEXT NOT NULL,
+  entry     TEXT NOT NULL,
+  external  TEXT NOT NULL,
+  digest    TEXT NOT NULL,
+  PRIMARY KEY (workspace, mailbox, entry)
+);
+
 CREATE TABLE IF NOT EXISTS dash_comms_notices (
   workspace TEXT NOT NULL,
   key       TEXT NOT NULL,
