@@ -31,6 +31,7 @@ export const DASH_COMMS_STYLES = `
 }
 .dash-comms__list { list-style: none; margin: 0 0 var(--dash-space-2); padding: 0; }
 .dash-comms__agent + .dash-comms__agent { margin-top: var(--dash-space-2); }
+.dash-comms__foot { margin-top: var(--dash-space-4); padding-top: var(--dash-space-2); border-top: 1px solid var(--dash-border); }
 .dash-comms-area {
   font: inherit; font-size: var(--dash-text-sm); width: 100%; display: flex; align-items: center; justify-content: space-between; gap: var(--dash-space-2);
   padding: 6px 8px; border: 1px solid transparent; border-radius: var(--dash-radius-sm); background: transparent; color: var(--dash-ink); cursor: pointer; text-align: left;

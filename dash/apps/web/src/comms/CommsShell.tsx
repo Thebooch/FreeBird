@@ -5,6 +5,7 @@ import { api } from "../api.js";
 import { AddMailboxSheet, MailboxSheet, signInTo } from "./MailboxSheet.jsx";
 import { areaGroups, filterShown, loadSelection, saveSelection, ticked, toggle, when, type AreaGroup } from "./model.js";
 import { ThreadView } from "./ThreadView.jsx";
+import { CommsSettingsSheet } from "./CommsSettingsSheet.jsx";
 
 /**
  * Comms: calls, texts and email, in a section of their own (`#/comms`).
@@ -45,6 +46,7 @@ export const CommsShell = (): JSX.Element => {
   const [open, setOpen] = useState<{ readonly mailbox: string; readonly thread: string } | null>(null);
   const [adding, setAdding] = useState(false);
   const [managing, setManaging] = useState<MailboxView | null>(null);
+  const [settingUp, setSettingUp] = useState(false);
   const asked = useRef(0);
 
   const loadMailboxes = useCallback(async () => {
@@ -189,6 +191,11 @@ export const CommsShell = (): JSX.Element => {
             <ul className="dash-comms__list">{one.mailboxes.map((box) => mailboxRow(box, one))}</ul>
           </div>
         ))}
+        <div className="dash-comms__foot">
+          <Button size="sm" tone="ghost" onClick={() => setSettingUp(true)} testId="comms-settings-open">
+            Settings
+          </Button>
+        </div>
       </aside>
 
       <section className="dash-comms__mail" aria-label="Mail">
@@ -299,6 +306,7 @@ export const CommsShell = (): JSX.Element => {
           }}
         />
       )}
+      {settingUp && <CommsSettingsSheet onClose={() => setSettingUp(false)} />}
       {managing && <MailboxSheet mailbox={managing} agents={agents} onClose={() => setManaging(null)} onChanged={() => void loadMailboxes()} />}
     </div>
   );

@@ -262,5 +262,16 @@ export const ignoredAddress = (address: string, patterns: readonly string[]): bo
 /** Comms settings a workspace keeps: senders never made into contacts. */
 export const commsSettingsSchema = z.object({
   contactIgnore: z.array(z.string().trim().min(1).max(200)).max(200).default([...DEFAULT_CONTACT_IGNORE]),
+  /**
+   * Where team notices go for a member with no email of their own: approval
+   * requests, booking changes and highlights. On a server nobody signs in to,
+   * that is every notice.
+   */
+  noticesTo: z
+    .string()
+    .trim()
+    .max(320)
+    .refine((value) => value === "" || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value), "That is not an email address.")
+    .optional(),
 });
 export type CommsSettings = z.infer<typeof commsSettingsSchema>;

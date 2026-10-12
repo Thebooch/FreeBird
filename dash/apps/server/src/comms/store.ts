@@ -55,6 +55,11 @@ export interface CommsStore {
 
   settings(): Promise<CommsSettings>;
   putSettings(settings: CommsSettings): Promise<void>;
+
+  /** Take a notice's turn to be sent: false when it was sent (or is being sent) already. */
+  claimNotice(key: string, at: string): Promise<boolean>;
+  /** It did not go: it may be sent again. */
+  releaseNotice(key: string): Promise<void>;
 }
 
 const newestFirst = (a: MailMessage, b: MailMessage): number => b.at.localeCompare(a.at) || b.id.localeCompare(a.id);
@@ -76,6 +81,7 @@ export class MemoryCommsStore implements CommsStore {
   private readonly state = new Map<string, CommsState>();
   private readonly draftsById = new Map<string, MailDraft>();
   private held: CommsSettings = commsSettingsSchema.parse({});
+  private readonly notices = new Set<string>();
 
   async recent(mailbox: string): Promise<MailMessage[]> {
     return [...(this.kept.get(mailbox) ?? [])];
@@ -117,6 +123,14 @@ export class MemoryCommsStore implements CommsStore {
   }
   async putSettings(settings: CommsSettings): Promise<void> {
     this.held = commsSettingsSchema.parse(settings);
+  }
+  async claimNotice(key: string): Promise<boolean> {
+    if (this.notices.has(key)) return false;
+    this.notices.add(key);
+    return true;
+  }
+  async releaseNotice(key: string): Promise<void> {
+    this.notices.delete(key);
   }
 }
 
@@ -215,5 +229,16 @@ export class DbCommsStore implements CommsStore {
       INSERT INTO dash_comms_settings (workspace, record) VALUES (${this.workspace}, ${JSON.stringify(one)}::jsonb)
       ON CONFLICT (workspace) DO UPDATE SET record = EXCLUDED.record
     `.execute(this.db.kysely);
+  }
+  async claimNotice(key: string, at: string): Promise<boolean> {
+    /* One statement: of two servers sending the same notice, one inserts. */
+    const result = await sql<{ key: string }>`
+      INSERT INTO dash_comms_notices (workspace, key, at) VALUES (${this.workspace}, ${key}, ${at})
+      ON CONFLICT (workspace, key) DO NOTHING RETURNING key
+    `.execute(this.db.kysely);
+    return result.rows.length > 0;
+  }
+  async releaseNotice(key: string): Promise<void> {
+    await sql`DELETE FROM dash_comms_notices WHERE workspace = ${this.workspace} AND key = ${key}`.execute(this.db.kysely);
   }
 }

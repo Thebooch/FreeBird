@@ -148,6 +148,8 @@ import type { EmailAdapter } from "@freebirdai/core";
 import { reportRoutes } from "./routes/reports.js";
 import { commsRoutes } from "./routes/comms.js";
 import { CommsError, CommsService } from "./comms/service.js";
+import { emailHighlightNotifier, emailTeamNotifier } from "./comms/notify.js";
+import { activeHighlights, checkHighlights } from "./agents/highlights.js";
 
 /** How often each signed-in mailbox is read with nobody looking, so new mail starts its workflows. */
 const COMMS_EVERY_MS = 5 * 60_000;
@@ -168,7 +170,7 @@ import { BOOKING_RECIPES } from "./workflows/recipes.js";
 import { MemoryBookingStore, type BookingStore } from "./bookings/store.js";
 import { BookingLinks } from "./bookings/links.js";
 import { replyWithScheduling } from "./scheduling/conversation.js";
-import { brandOf, notConnectedNotifier, type Brand, type TeamNotifier } from "./bookings/notify.js";
+import { brandOf, type Brand, type TeamNotifier } from "./bookings/notify.js";
 import { MemoryRateLimiter, type RateLimiter } from "./public/limits.js";
 import { MemoryPublicTokenStore, type PublicTokenStore } from "./public/tokens.js";
 import { MemoryContactStore, type ContactStore } from "./contacts/store.js";
@@ -1242,6 +1244,19 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * engine at the interactive priority a person looking deserves, and sent
    * only through the write service's review, as whoever clicks Send.
    */
+  /* What Communications keeps (`comms/store.ts`); made here so team notices can claim their sends. */
+  const commsStore = options.comms ?? new MemoryCommsStore();
+  /* Team notices and highlights by email, through the system mail reports use, to each member or the notices address. */
+  const noticeDeps = {
+    email: () => options.email ?? null,
+    ...(options.emailProblem ? { emailProblem: options.emailProblem } : {}),
+    settings: () => commsStore.settings(),
+    claim: (key: string, at: string) => commsStore.claimNotice(key, at),
+    release: (key: string) => commsStore.releaseNotice(key),
+    team: async () => (await workspaceMembers()).map((one) => ({ email: one.email })),
+    now: () => Date.now(),
+  };
+  const highlightNotifier = emailHighlightNotifier(noticeDeps);
   let commsDraftSettled: (draft: MailDraft) => Promise<void> = async () => {};
   const comms = new CommsService({
     connections: {
@@ -1271,7 +1286,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     },
     policy,
     agents: agentStore,
-    store: options.comms ?? new MemoryCommsStore(),
+    store: commsStore,
     ...(options.mailApps ? { builtInApps: options.mailApps } : {}),
     contacts: { findOrCreate: (input) => contacts.findOrCreate(input), match: (id) => contacts.match(id) },
     draftSettled: (draft) => commsDraftSettled(draft),
@@ -1285,6 +1300,21 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           one.trigger.kind === "message_received" && one.enabled && !one.parked && one.trigger.channels.includes("email"),
       );
       for (const { message, contact } of arrived) {
+        /* An agent's own mailbox: the message is checked against that agent's highlights, and a match tells the team. */
+        const owner = store.getConnection(message.mailbox)?.mailbox?.owner;
+        if (owner?.kind === "agent") {
+          const agent = await agentStore.get(owner.id);
+          const llm = agent && activeHighlights(agent).length > 0 ? resolveLlm("agent-tools") : null;
+          if (agent && llm) {
+            try {
+              const words = `Subject: ${message.subject}\n\n${(await comms.conversationText(message.mailbox, message.id, message.threadId).catch(() => ({ text: message.snippet }))).text}`;
+              const matches = await checkHighlights(llm, agent, words);
+              if (matches.length > 0) await highlightNotifier.notify({ agent: { id: agent.id, name: agent.name, color: agent.color }, matches, conversation: `${message.mailbox}:${message.id}`, message: words });
+            } catch (error) {
+              app.log.warn(`highlights for a new email were not checked: ${String(error)}`);
+            }
+          }
+        }
         const row: Record<string, unknown> = {
           ...message,
           channel: "email",
@@ -1349,7 +1379,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     scheduling,
     contacts,
     members: workspaceMembers,
-    notifier: options.notifier ?? notConnectedNotifier,
+    notifier: options.notifier ?? emailTeamNotifier(noticeDeps),
     brand,
     workspace: options.workspace?.id ?? LOCAL_WORKSPACE_ID,
     origin: (options.pagesOrigin ?? options.publicOrigin ?? "http://localhost:5400").replace(/\/+$/, ""),
