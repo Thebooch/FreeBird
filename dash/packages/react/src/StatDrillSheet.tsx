@@ -3,6 +3,7 @@ import type { Row } from "@freebirdai/dash-runtime";
 import type { EntityLinkView, WidgetSpec } from "@freebirdai/dash-spec";
 import { formatValue } from "@freebirdai/dash-spec";
 import { useEffect, useMemo, useRef } from "react";
+import { createPortal } from "react-dom";
 import { describeFailure } from "./WidgetShell.jsx";
 import { useDashboard } from "./context.jsx";
 import { type StatDrill, drillColumns } from "./drill.js";
@@ -22,6 +23,7 @@ export const StatDrillSheet = ({
   onClose,
   onOpenPage,
   onOpenReference,
+  container,
 }: {
   widget: WidgetSpec;
   drill: StatDrill;
@@ -29,6 +31,12 @@ export const StatDrillSheet = ({
   onClose: () => void;
   onOpenPage?: (widgetId: string, row: Row) => void;
   onOpenReference?: (target: { entity: string; id: string | number }) => void;
+  /**
+   * Where the drawer is drawn: the board's root. Never inside the tile, whose
+   * grid cell is moved with a transform — and a fixed drawer inside a
+   * transformed box is fixed to that box, so it opened the size of the tile.
+   */
+  container?: Element | null;
 }): JSX.Element => {
   const closeRef = useRef<HTMLButtonElement>(null);
   const data = useWidgetData(drill.spec);
@@ -69,7 +77,7 @@ export const StatDrillSheet = ({
    */
   const drawable = (data.state === "ok" || data.state === "invalid") && data.rows.length > 0;
 
-  return (
+  return createPortal(
     <div className="dash-sheet-backdrop" data-testid="stat-drill" onClick={onClose} role="presentation">
       <aside
         className="dash-sheet"
@@ -147,6 +155,7 @@ export const StatDrillSheet = ({
           )}
         </div>
       </aside>
-    </div>
+    </div>,
+    container ?? document.body,
   );
 };

@@ -28,7 +28,7 @@ import {
   settingString,
   slotLabel,
 } from "@freebirdai/dash-spec";
-import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { StatDrillSheet } from "./StatDrillSheet.jsx";
 import { WidgetDetail } from "./WidgetDetail.jsx";
 import { WidgetErrorBoundary } from "./WidgetErrorBoundary.jsx";
@@ -186,6 +186,7 @@ export const WidgetShell = ({
    */
   const drill = useMemo(() => statDrill(widget), [widget]);
   const [drilling, setDrilling] = useState(false);
+  const frameRef = useRef<HTMLDivElement>(null);
 
   /*
    * What the reader has narrowed this widget to.
@@ -410,6 +411,7 @@ export const WidgetShell = ({
 
   return (
     <div
+      ref={frameRef}
       className="dash-widget"
       data-density={chrome.density ?? "cozy"}
       data-border={settingBool(chrome, "border", true) ? "on" : "off"}
@@ -536,6 +538,7 @@ export const WidgetShell = ({
             drill={drill}
             link={recordType}
             onClose={() => setDrilling(false)}
+            container={frameRef.current?.closest(".dash-root") ?? null}
             {...(onOpenPage && recordType?.identity ? { onOpenPage } : {})}
             {...(openReference ? { onOpenReference: openReference } : {})}
           />

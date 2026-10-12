@@ -1310,6 +1310,9 @@ ${seriesVars(SERIES_LIGHT)}
   line-height: 1.05; letter-spacing: -0.025em; color: var(--dash-ink);
   font-variant-numeric: tabular-nums; font-feature-settings: "tnum";
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+  /* Never shrunk by the column: overflow hidden drops a flex item's minimum
+     height to zero, and a short tile then squeezed the number out of sight. */
+  flex: none;
 }
 .dash-stat__value--hero { font-size: clamp(var(--dash-text-xl), 18cqi, var(--dash-text-hero)); }
 .dash-stat__foot { margin-top: auto; padding-top: 6px; }
@@ -1330,7 +1333,7 @@ ${seriesVars(SERIES_LIGHT)}
   border-top: 1px solid var(--dash-border-strong); font-size: var(--dash-text-sm);
   font-weight: var(--dash-weight-semi); font-variant-numeric: tabular-nums;
 }
-.dash-stat__delta { display: inline-flex; align-items: center; gap: 4px; font-size: var(--dash-text-sm); font-weight: 500; }
+.dash-stat__delta { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: var(--dash-text-sm); font-weight: 500; }
 .dash-stat__delta--up { color: var(--dash-delta-up); }
 .dash-stat__delta--down { color: var(--dash-critical); }
 .dash-stat__delta--flat { color: var(--dash-muted); }
