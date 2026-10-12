@@ -3180,7 +3180,21 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         return reply.status(409).send({ error: compiled.errors[0] ?? "That change cannot be built." });
       }
 
-      const widget = recompileWidget(found.widget, compiled.widget);
+      const recompiled = recompileWidget(found.widget, compiled.widget);
+      /*
+       * An answer that changes how the number is worked out starts its
+       * history again, as a rebuild does: the days before measured something
+       * else.
+       */
+      const sameSteps =
+        JSON.stringify([found.widget.pipeline, found.widget.sources, found.widget.source]) ===
+        JSON.stringify([recompiled.pipeline, recompiled.sources, recompiled.source]);
+      if (!sameSteps) {
+        snapshots
+          .forget(found.dashboard.id, found.widget.id)
+          .catch((error: unknown) => app.log.warn(`history for ${found.dashboard.id}/${found.widget.id} could not be cleared: ${String(error)}`));
+      }
+      const widget = sameSteps ? recompiled : { ...recompiled, historyFrom: dayOf(Date.now()) };
       const board = {
         ...found.dashboard,
         widgets: found.dashboard.widgets.map((entry) =>
@@ -4504,7 +4518,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
                             },
                             reason: written.reason,
                             notes: mapped.notes,
-                            ambiguities: [],
+                            /* A title promising a narrowing the request does not make, asked before it is saved. */
+                            ambiguities: mapped.questions,
                           };
                         }
                         /*

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BRIEF_COMPILER, compileBrief, type WidgetBrief } from "./brief.js";
+import { BRIEF_COMPILER, compileBrief, titlePromises, type WidgetBrief } from "./brief.js";
 import { entitySchema, type EntitySpec } from "@freebirdai/connect-spec";
 import { resourceSchema, type ResourceSpec } from "@freebirdai/connect-spec";
 import { parseDashboard } from "./dashboard.js";
@@ -123,6 +123,51 @@ describe("compileBrief", () => {
     expect(wrapped.widget?.pipeline[0]).toEqual({ op: "extract", path: "$.data" });
     /* A caller that does not say gets what every caller had. */
     expect(compile({ intent: "measure" }).widget?.pipeline[0]).toEqual({ op: "extract", path: "$" });
+  });
+
+  /* "Open work orders" meaning anything but Closed: said as what is left out, so a new status still counts. */
+  it("leaves out the values a number was asked to leave out, before it counts", () => {
+    const result = compile({ intent: "measure", title: "Open tasks", filters: [{ field: "Status", except: ["Closed"] }] });
+    expect(result.errors).toEqual([]);
+    const filter = result.widget?.pipeline.find((step) => step.op === "filter");
+    expect(filter).toEqual({ op: "filter", where: '!(lower(string(Status)) in ["closed"])' });
+    expect(stepOps(result).indexOf("filter")).toBeLessThan(stepOps(result).indexOf("group"));
+    expect(result.notes.join(" ")).toMatch(/Only Tasks whose Status is not Closed are counted/);
+    // The title's "open" is met by the exclusion, so nothing is asked.
+    expect(result.questions).toBeUndefined();
+  });
+
+  it("starts a list's strip on every declared value but the ones left out", () => {
+    const declared = {
+      fields: [
+        { path: "Id", visibility: "hidden" },
+        { path: "Title", label: "Summary", visibility: "primary" },
+        { path: "Status", label: "Status", visibility: "primary", values: ["New", "InProgress", "Closed"] },
+      ],
+    };
+    const result = compile({ intent: "records", filters: [{ field: "Status", except: ["closed"] }] }, declared);
+    expect(result.widget?.facets[0]).toMatchObject({ field: "Status", default: ["New", "InProgress"] });
+    // The strip does it, visibly; nothing is baked into the rows.
+    expect(stepOps(result)).not.toContain("filter");
+  });
+
+  it("filters a list itself when the strip cannot know every value", () => {
+    const result = compile({ intent: "records", filters: [{ field: "Status", except: ["Closed"] }] });
+    expect(result.widget?.pipeline).toContainEqual({ op: "filter", where: '!(lower(string(Status)) in ["closed"])' });
+  });
+
+  /* Found on a real board: "Open work orders" counted every one, closed included, and only the title said "open". */
+  it("asks when the title promises a narrowing the request does not make", () => {
+    const result = compile({ intent: "measure", title: "Open tasks" });
+    expect(result.questions).toHaveLength(1);
+    expect(result.questions?.[0]?.field).toBe("open");
+    expect(result.notes.join(" ")).toMatch(/The title says "open", but nothing in the request narrows the tasks/);
+    // Any narrowing at all is the title's own: an API's word for "pending" need not be "pending".
+    expect(compile({ intent: "measure", title: "Pending tasks", filters: [{ field: "Status", values: ["Undecided"] }] }).questions).toBeUndefined();
+    // A title that promises nothing asks nothing.
+    expect(compile({ intent: "measure", title: "Tasks" }).questions).toBeUndefined();
+    expect(titlePromises("Reopened items", {})).toBeNull();
+    expect(titlePromises("Unpaid bills", {})).toBe("unpaid");
   });
 
   /* A widget says which compiler built it, so a host can rebuild one an older compiler got wrong. */

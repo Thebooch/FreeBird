@@ -89,11 +89,13 @@ export {
   columnForPath,
   BRIEF_COMPILER,
   compileBrief,
+  titlePromises,
   widgetBriefSchema,
 } from "./brief.js";
 
 export type {
   AlongsideMode,
+  BriefQuestion,
   CompileBriefInput,
   CompiledBrief,
   WidgetBrief,

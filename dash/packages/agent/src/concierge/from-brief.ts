@@ -1,4 +1,5 @@
 import type {
+  BriefQuestion,
   Coercion,
   CompileBriefInput,
   PipelineStep,
@@ -143,7 +144,13 @@ const shapeOf = (
 
 export const patchFromBrief = (
   input: CompileBriefInput,
-): { patch: DraftPatch; notes: readonly string[]; errors: readonly string[] } => {
+): {
+  patch: DraftPatch;
+  notes: readonly string[];
+  errors: readonly string[];
+  /** What to ask before saving — see `CompiledBrief.questions`. */
+  questions: readonly BriefQuestion[];
+} => {
   /*
    * A list of records, and deliberately nothing else.
    *
@@ -162,7 +169,7 @@ export const patchFromBrief = (
    */
   const compiled = compileBrief(input);
   const widget = compiled.widget;
-  if (!widget) return { patch: {}, notes: compiled.notes, errors: compiled.errors };
+  if (!widget) return { patch: {}, notes: compiled.notes, errors: compiled.errors, questions: compiled.questions ?? [] };
 
   const notes = [...compiled.notes];
 
@@ -238,6 +245,7 @@ export const patchFromBrief = (
         },
         notes,
         errors: compiled.errors,
+        questions: compiled.questions ?? [],
       };
     }
     if (!shape) {
@@ -246,7 +254,7 @@ export const patchFromBrief = (
           ? "This compares two kinds of record in a way the setup card cannot carry — ask for one of them and add the other afterwards."
           : `${input.entity.name.many} could not be measured from what this API offers.`,
       );
-      return { patch: {}, notes, errors: compiled.errors };
+      return { patch: {}, notes, errors: compiled.errors, questions: compiled.questions ?? [] };
     }
     return {
       patch: {
@@ -266,6 +274,7 @@ export const patchFromBrief = (
       },
       notes,
       errors: compiled.errors,
+      questions: compiled.questions ?? [],
     };
   }
 
@@ -373,5 +382,6 @@ export const patchFromBrief = (
     },
     notes,
     errors: compiled.errors,
+    questions: compiled.questions ?? [],
   };
 };

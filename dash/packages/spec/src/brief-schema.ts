@@ -84,6 +84,12 @@ export const widgetBriefSchema = z.object({
       z.object({
         field: fieldPathSchema,
         values: z.array(z.string().max(120)).max(20).optional(),
+        /**
+         * Every value but these: "open work orders" as "status is not Closed".
+         * Said as what is left out rather than as a list of what is kept, so a
+         * value the API adds later is counted rather than silently dropped.
+         */
+        except: z.array(z.string().max(120)).min(1).max(20).optional(),
         /** A number range: more than `above`, less than `below`. Both exclusive. */
         above: z.number().finite().optional(),
         below: z.number().finite().optional(),
@@ -168,6 +174,8 @@ export interface WidgetBrief {
      * cancelled ones silently.
      */
     readonly empty?: boolean;
+    /** Every value but these: "not Closed". See the schema. */
+    readonly except?: readonly string[];
   }[];
   /**
    * Columns read *through* a reference — a task's vendor's phone number.
