@@ -49,13 +49,6 @@ Everything below is in the code on `main`. Each line points at where to look.
 - **Timed reports**: a tab or chosen widgets emailed on a schedule with a short summary, plus tracked daily values.
 - Sign-in through OIDC with roles, and several workspaces on one server ([`dash/PLATFORM.md`](./dash/PLATFORM.md)).
 
-## Planned or in progress
-
-- **Widget polish and restyle** for Dash boards: in progress on its own branches.
-- **Texts and calls** for agents and workflows: not built. Outreach by text or call is a step that exists but sends nothing yet.
-- **A screen for tracked values**: they can be made through `POST /api/tracked` and shown in reports, but there is no screen for them.
-- **Not planned for v1**: history an API doesn't keep, joins across sources, and any write without a person's review. See [`dash/README.md`](./dash/README.md#what-v1-does-not-do).
-
 ## Run it locally
 
 You need Node 20+ and pnpm 10. Use pnpm, not npm: internal packages are linked with `workspace:*`.
@@ -72,7 +65,7 @@ cp dash/.env.example dash/.env
 pnpm dev:dash
 ```
 
-Open http://localhost:5400. Vite binds IPv6, so `127.0.0.1:5400` will not answer. Dash runs with an empty `.env`; adding `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` turns on reading documentation, the authoring agent and the chat. Data lives under `dash/apps/server/` unless `DASH_ROOT` says otherwise. After editing anything in `dash/packages/`, run `pnpm build:dash` again, because the web app imports built output.
+Open http://localhost:5400. Vite binds IPv6, so `127.0.0.1:5400` will not answer. Dash runs with an empty `.env`; adding `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` turns on reading documentation, the authoring agent and the chat. A fresh clone starts empty: no connections, boards, chats or keys. Those are written at runtime under `dash/apps/server/` (or `DASH_ROOT`) and in `.dash/`, all gitignored, so nothing from anyone else's machine comes with the repo. The only shipped catalog entries are Gmail and Outlook. After editing anything in `dash/packages/`, run `pnpm build:dash` again, because the web app imports built output.
 
 **Guide.** The Next.js starter is the quickest way in. The [Getting Started guide](./GETTING_STARTED.md) walks through the rest.
 
