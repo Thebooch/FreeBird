@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/manifest",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "FreeBird Registration Manifest: declarative site-component descriptions plus compilers into live registries.",
   "license": "MIT",
   "repository": {
