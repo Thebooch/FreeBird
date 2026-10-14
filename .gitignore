@@ -27,8 +27,9 @@ docs/.docusaurus/
 dash/**/connections/
 dash/**/dashboards/
 dash/**/reports/
-# The timed reports feature is source, not working data.
-!dash/apps/server/src/reports/
+# The timed reports feature is source, not working data, on the server and
+# in the web app alike.
+!dash/**/src/reports/
 
 # Dash benchmark run reports — working output, kept locally. The latest
 # figures are summarised in dash/bench/RESULTS.md.
