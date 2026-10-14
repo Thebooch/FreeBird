@@ -1,216 +1,140 @@
 # FreeBird
 
-> Two open-source TypeScript products for putting AI in front of your own data — one that guides people through your site, one that builds dashboards over any API.
+> Open-source TypeScript for putting AI in front of your own data: a chat that drives your website, an engine that connects to any API, and a dashboard with agents that do the work for you.
 
-This monorepo ships **FreeBird Guide** and **FreeBird Dash**. They are developed and versioned together, but they install independently: adopt either one without taking on the other.
+FreeBird is a pnpm monorepo with three products. They are developed and released together, but each one installs on its own.
 
-| | What it does | Lives in | Install |
+| | What it does | Lives in | Start with |
 |---|---|---|---|
-| **Guide** | Drops an AI chat backbone into any website and lets it drive your real components — actions, layout, citations, digests. | [`guide/`](./guide) | `@freebirdai/core` + a UI binding |
-| **Dash** | Turns a JSON spec into a working dashboard over any API — pipeline, states, formatting, time ranges, layout. | [`dash/`](./dash) | `@freebirdai/dash-spec` + `dash-react` |
+| **Guide** | Drops an AI chat into any website and lets it drive your real components: actions with confirmation, layouts, citations, digests. | [`guide/`](./guide) | `@freebirdai/core` + a UI binding |
+| **Connect** | Connects to an API it has never seen, works out its records, keeps their data fresh, and makes changes only after a person reviews them. | [`connect/`](./connect) | `@freebirdai/connect` |
+| **Dash** | A dashboard app over any API, built from JSON specs, with an Agent side for workflows, agents, a calendar, contacts and email. | [`dash/`](./dash) | `pnpm dev:dash` |
 
-Dash builds on Guide's foundation — it uses `@freebirdai/core` for the component registry, auth context, and database adapter — but the dependency runs **one way only**. Guide has no knowledge of Dash and works completely on its own.
+Dependencies run one way: Dash uses Connect and Guide, Connect's chat add-on uses Guide, and Guide knows about neither.
 
-```
-guide/packages/   20 packages   @freebirdai/core, react, vue, angular, server, embed, …
-shared/packages/   2 packages   @freebirdai/expr, contracts (shared by every product)
-connect/packages/  7 packages   @freebirdai/connect, connect-spec, connect-server, connect-actions, connect-postgres, connect-sandbox, connect-browser
-dash/packages/     6 packages   @freebirdai/dash-spec, dash-runtime, dash-react, …
-dash/apps/         2 apps       the Dash server and dashboard (private, not published)
-examples/                       reference apps for Guide
-docs/                           the documentation site
-integrations/                   WordPress/WooCommerce plugin
-```
+## What works today
 
----
+Everything below is in the code on `main`. Each line points at where to look.
 
-# FreeBird Guide
+**Guide** (`guide/packages/*`)
 
-> An AI-driven website framework. Turn any site's backbone into an LLM-controlled, chat-first experience.
+- Chat that drives your own components through a registry, with headless React, Vue 3 and Angular bindings and opt-in Tailwind presets.
+- Zod-typed **actions**: the model collects arguments in conversation, shows a preview, and runs only after the person confirms, with an audit journal and an `authorize` hook ([`ACTIONS.md`](./ACTIONS.md)).
+- Layouts chosen by the model and packed by a deterministic 12-column solver (`core/src/layout`).
+- Citations that scroll to and highlight the source section, and a retrieval hook for your own embeddings (`core/src/knowledge`).
+- Locking, saved tabs, and email **digests** of live component data on a schedule (`core/src/tabs`, `core/src/digest`, `digest-worker`).
+- Support escalation: issue classification and ticket drafting (`core/src/support`).
+- A script-tag **embed** for static sites and WordPress, a Registration **Manifest** with `freebird init` / `check` / `doctor`, and an **MCP** server for outside agents.
+- Adapters for Postgres, Prisma, OpenAI, Anthropic, Resend and SMTP.
 
-FreeBird Guide is an open-source TypeScript framework that drops an AI chat "backbone" into any website — from a React/Vue/Angular app to a static HTML page or a WordPress site. The chat can **drive your real components**: generate dashboard layouts, run **actions** you define (with previews, confirmation, and auditing), cite the exact page section an answer came from, and email **digests** of live component data on a schedule.
+**Connect** (`connect/packages/*`)
 
-## Highlights
+- Discovery from OpenAPI, GraphQL, documentation pages, MCP servers, or an API's name.
+- Keys and OAuth, with credentials encrypted in a vault.
+- Record types worked out from the API, reads by record or endpoint, a response cache, and a keeper that refreshes on each endpoint's cadence.
+- Drift checks when an endpoint's shape changes, and **reviewed writes** with a journal.
+- Requests guarded against SSRF, with an egress policy for private networks.
+- Optional add-ons: Postgres/PGlite stores, a QuickJS sandbox for generated connector code, a headless browser for docs drawn in JavaScript, and HTTP routes for Fastify, Express and Next.js.
 
-- **Embedded chat UX** that drives your existing components — not a canned widget.
-- **Actions layer** — declare Zod-typed actions on components; the LLM collects arguments in conversation, shows a preview card, and executes only after confirmation. Full audit journal, pause/resume, and authorization hooks.
-- **Dynamic layout generation** — the LLM picks which registered components to show; a deterministic solver arranges them on a 12-column grid respecting your size hints.
-- **Citations & knowledge** — replies grounded in a component's registered knowledge get clickable chips that navigate to, scroll to, and highlight the source. Bring your own embeddings via the retrieval hook.
-- **Script-tag embed** — one `<script>` on any static site or WordPress page mounts the chat widget in Shadow DOM, with declarative `data-freebird-*` component registration.
-- **Registration Manifest + codegen** — describe your site's components in one JSON manifest; `freebird init` generates the client/server registries and `freebird check` catches id drift in CI.
-- **Multi-framework** — headless React, Vue 3, and Angular bindings over one framework-agnostic core, each with an opt-in Tailwind preset.
-- **MCP server** — expose your registered components and actions to external AI agents over the Model Context Protocol.
-- **Support escalation** — built-in issue classification and ticket drafting/filing when the chat can't resolve something.
-- **Per-component locking, custom tabs, and digests** — lock layouts, save them as named tabs, and email periodic summaries of the live data inside them.
-- **BYO database / LLM / email** via adapter interfaces, with first-party adapters included.
+**Dash** (`dash/apps/*`, `dash/packages/*`)
 
-## Guide packages
+- **Boards** built from versioned JSON specs: a safe pipeline language with no `eval`, every loading/empty/error/stale state, a shared time range, and an inspector that shows where any number came from.
+- **Connection onboarding** that prepares an API once, previews the boards against the account, then builds them.
+- A **chat on every page** that can do anything the page can, through Guide's actions and approval cards, with topics by day and a timeline.
+- **Agents**: named AI workers with instructions, knowledge, tools, and a reach limited to what the approver holds.
+- **Workflows**: triggers (schedule, record change, new email, booking, by hand) and a graph of steps such as create, update, outreach, wait, branch and ask a person. Steps that leave Dash run automatically or wait for approval, and a task that changed something can be reversed.
+- **Calendar, scheduling and bookings**, with public booking pages, approval links and an `.ics` feed.
+- **Contacts**: created from new senders, fields filled from email, merged, and typed by match rules that workflows can branch on.
+- **Communications**: Gmail and Outlook mailboxes in one list, separate areas for team and agent mail, sending through the reviewed-write path, and calendar busy times.
+- **Timed reports**: a tab or chosen widgets emailed on a schedule with a short summary, plus tracked daily values.
+- Sign-in through OIDC with roles, and several workspaces on one server ([`dash/PLATFORM.md`](./dash/PLATFORM.md)).
 
-### Core
+## Run it locally
 
-| Package | Purpose |
-|---|---|
-| [`@freebirdai/core`](./guide/packages/core) | Framework-agnostic engine: registry, chat, actions, layout, tabs, digests, knowledge, support |
-| [`@freebirdai/core-state`](./guide/packages/core-state) | Framework-agnostic client store + HTTP/SSE transport (wrapped by every UI binding) |
-| [`@freebirdai/server`](./guide/packages/server) | Route handlers + Express / Fastify / Next.js integrations, middleware, digest scheduler |
-| [`@freebirdai/digest-worker`](./guide/packages/digest-worker) | Standalone cron worker for digests (optional, for multi-replica deployments) |
-
-### UI bindings
-
-| Package | Purpose |
-|---|---|
-| [`@freebirdai/react`](./guide/packages/react) | React provider, hooks, and headless primitives |
-| [`@freebirdai/react-tailwind`](./guide/packages/react-tailwind) | Opt-in pre-styled Tailwind preset for React |
-| [`@freebirdai/vue`](./guide/packages/vue) | Vue 3 plugin, composables, and headless components |
-| [`@freebirdai/vue-tailwind`](./guide/packages/vue-tailwind) | Opt-in pre-styled Tailwind preset for Vue |
-| [`@freebirdai/angular`](./guide/packages/angular) | Angular 17–20 provider, signals service, and standalone components |
-| [`@freebirdai/embed`](./guide/packages/embed) | Script-tag chat widget (Shadow DOM) + declarative registration for static sites |
-
-### Tooling
-
-| Package | Purpose |
-|---|---|
-| [`@freebirdai/manifest`](./guide/packages/manifest) | Registration Manifest schema + compiler into live registries |
-| [`@freebirdai/codegen`](./guide/packages/codegen) | Manifest → registry files, route wiring, and integration steps |
-| [`create-freebird`](./guide/packages/create-freebird) | CLI: `freebird init` scaffolds an integration, `freebird check` catches registry drift |
-| [`@freebirdai/mcp`](./guide/packages/mcp) | MCP server exposing components/actions to external AI agents |
-
-### Adapters
-
-| Package | Purpose |
-|---|---|
-| [`@freebirdai/adapters-db-postgres`](./guide/packages/adapters-db-postgres) | Postgres (Kysely) persistence |
-| [`@freebirdai/adapters-db-prisma`](./guide/packages/adapters-db-prisma) | Prisma persistence |
-| [`@freebirdai/adapters-llm-openai`](./guide/packages/adapters-llm-openai) | OpenAI LLM adapter (+ cost estimation) |
-| [`@freebirdai/adapters-llm-anthropic`](./guide/packages/adapters-llm-anthropic) | Anthropic Claude LLM adapter |
-| [`@freebirdai/adapters-email-resend`](./guide/packages/adapters-email-resend) | Resend email adapter |
-| [`@freebirdai/adapters-email-smtp`](./guide/packages/adapters-email-smtp) | SMTP (Nodemailer) email adapter |
-
-## Running Guide
-
-**Most readers should start with the full [Getting Started guide](./GETTING_STARTED.md).**
-It walks you from zero to a running FreeBird app in ~15 minutes, covering the
-registry model, server wiring, client wiring, Tailwind preset, the hero
-features, production adapters, digests, auth, and testing.
-
-To run the reference app directly:
+You need Node 20+ and pnpm 10. Use pnpm, not npm: internal packages are linked with `workspace:*`.
 
 ```bash
 pnpm install
 pnpm build
-OPENAI_API_KEY=sk-... pnpm --filter freebird-next-starter dev
 ```
 
-Reference apps:
-
-- [`examples/next-starter`](./examples/next-starter) — Next.js 15 App Router + Tailwind
-- [`examples/vite-express`](./examples/vite-express) — Vite SPA + Express API
-- [`examples/static-embed`](./examples/static-embed) — plain HTML + the script-tag embed widget
-- [`integrations/wordpress`](./integrations/wordpress) — WordPress/WooCommerce plugin
-
----
-
-# FreeBird Dash
-
-> A declarative binding runtime and a polished React component library for building dashboards over any API.
-
-The charts aren't the hard part — LLMs emit Recharts fine. What hand-built dashboards are missing is everything *around* the charts: loading, empty, error and stale states; consistent number formatting; a time-range filter every widget actually respects; responsive layout; a refresh policy; and a data pipeline that isn't fifteen bespoke `.map().filter().reduce()` chains scattered across components.
-
-Dash gives you all of that from a JSON spec:
-
-```jsonc
-{
-  "id": "revenue_trend",
-  "component": "timeseries",
-  "source": { "connection": "stripe", "op": "charges.list" },
-  "pipeline": [
-    { "op": "extract", "path": "$.data[*]" },
-    { "op": "coerce", "fields": { "created": "unix_s->datetime", "amount": "int->money:cents" } },
-    { "op": "filter", "where": "status == 'succeeded'" },
-    { "op": "group", "by": [{ "field": "created", "bucket": "{{range.grain}}" }],
-                     "agg": { "revenue": "sum(amount)" } }
-  ]
-}
-```
-
-An LLM writes that spec once, at authoring time — then the runtime executes it deterministically forever after. No model sits in the render path.
-
-## Dash highlights
-
-- **Spec-driven, not code-generated** — widgets are versioned JSON validated against role contracts, so a bad binding fails at save time rather than in production.
-- **Safe expression engine** — a hand-rolled, non-Turing-complete path/filter language with **no `eval` and no third-party JSONPath**, avoiding the embedded-subexpression class of RCE.
-- **Isomorphic pipeline** — the same executor runs on server or client, turning an API payload into rows a component can render.
-- **Every state handled** — loading, empty, error, stale, and partial come from the runtime, not from each widget.
-- **Provenance inspector** — click any number and see the request, the pipeline stage, and the row it came from.
-- **Colorblind-safe palette, no charting dependency** — components own their rendering.
-
-## Dash packages
-
-| Package | Purpose |
-|---|---|
-| [`@freebirdai/expr`](./shared/packages/expr) | Shared: the safe path + expression language, hand-rolled to an AST, no `eval` |
-| [`@freebirdai/contracts`](./shared/packages/contracts) | Shared: the LLM adapter contract and the approval digest guide, Connect and Dash agree on |
-| [`@freebirdai/connect`](./connect/packages/connect) | The integration engine: discovery, sign-in, mapping, reads, freshness and reviewed writes, plus the REST/MCP source adapters. Being split out of Dash |
-| [`@freebirdai/connect-server`](./connect/packages/server) | Optional: the engine's HTTP routes for Fastify, Express and Next.js |
-| [`@freebirdai/connect-actions`](./connect/packages/actions) | Optional: connect, read and change APIs from a FreeBird guide chat |
-| [`@freebirdai/connect-postgres`](./connect/packages/postgres) | Optional: Postgres / embedded PGlite stores for the engine's evidence, jobs, journal, shapes and leases |
-| [`@freebirdai/connect-sandbox`](./connect/packages/sandbox) | Optional: runs generated connector code in QuickJS (WebAssembly), one worker per run |
-| [`@freebirdai/connect-browser`](./connect/packages/browser) | Optional: reads API docs that are drawn in the browser, via headless Chromium |
-| [`@freebirdai/connect-spec`](./connect/packages/spec) | The connection side of the spec: connections, connectors, catalog entries, record types, evidence, rhythm and writes. Re-exported by `dash-spec` |
-| [`@freebirdai/dash-spec`](./dash/packages/spec) | Versioned schemas, semantic type registry, and the component role contracts every other package agrees on |
-| [`@freebirdai/dash-runtime`](./dash/packages/runtime) | Pure isomorphic pipeline executor: API payload → renderable rows |
-| [`@freebirdai/dash-components`](./dash/packages/components) | Role-contract-driven React widgets with a validated, colorblind-safe palette |
-| [`@freebirdai/dash-react`](./dash/packages/react) | Shared params, deduplicating query cache, widget states, provenance inspector, and the grid |
-| [`@freebirdai/dash-parts`](./dash/packages/parts) | Part registry: layered resolution of swappable units, storing only what you customise |
-| [`@freebirdai/dash-agent`](./dash/packages/agent) | Authoring agent — deterministic schema inference plus one LLM call proposing a binding, validated and previewed before save |
-
-Full detail in [`dash/README.md`](./dash/README.md).
-
-## Running Dash
+**Dash.** Copy the example environment, then start the server (port 4600) and the web app (port 5400):
 
 ```bash
-pnpm install
-pnpm build
+cp dash/.env.example dash/.env
 pnpm dev:dash
 ```
 
-## Documentation
+Open http://localhost:5400. Vite binds IPv6, so `127.0.0.1:5400` will not answer. Dash runs with an empty `.env`; adding `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` turns on reading documentation, the authoring agent and the chat. A fresh clone starts empty: no connections, boards, chats or keys. Those are written at runtime under `dash/apps/server/` (or `DASH_ROOT`) and in `.dash/`, all gitignored, so nothing from anyone else's machine comes with the repo. The only shipped catalog entries are Gmail and Outlook. After editing anything in `dash/packages/`, run `pnpm build:dash` again, because the web app imports built output.
 
-**Guide**
+**Guide.** The Next.js starter is the quickest way in. The [Getting Started guide](./GETTING_STARTED.md) walks through the rest.
 
-- [Getting Started](./GETTING_STARTED.md) — the end-to-end walkthrough
-- [Actions guide](./ACTIONS.md) — the LLM action layer in depth
-- [Docs site](./docs) — concepts, package guides, and recipes (`pnpm --filter freebird-docs start`)
+```bash
+OPENAI_API_KEY=sk-... pnpm --filter freebird-next-starter dev
+```
 
-**Dash**
+**Connect.** Read an API from a plain Node script:
 
-- [`dash/README.md`](./dash/README.md) — the spec format, pipeline ops, and component roles
-- [`dash/AGENTS.md`](./dash/AGENTS.md) — working notes on the package layout and conventions
+```bash
+pnpm --filter freebird-connect-node-example start
+```
 
-**Both**
+Other examples: [`examples/vite-express`](./examples/vite-express), [`examples/static-embed`](./examples/static-embed), [`examples/connect-express`](./examples/connect-express), and the WordPress plugin in [`integrations/wordpress`](./integrations/wordpress).
 
-- [AGENTS.md](./AGENTS.md) — a map of the repo for AI coding assistants; every major package also ships its own `AGENTS.md` integration guide
+## Repo layout
 
-## Contributing
+```
+guide/packages/     20 packages   chat engine, server routes, React/Vue/Angular, embed, manifest, CLI, MCP, adapters
+connect/packages/    8 packages   the integration engine, its spec, four add-ons, the chat add-on, and a private test bench
+shared/packages/     2 packages   @freebirdai/expr (safe expressions) and @freebirdai/contracts
+dash/packages/       6 packages   spec, runtime, components, react, parts, authoring agent
+dash/apps/           2 apps       server (Fastify) and web (Vite + React), private
+dash/catalog/                     shipped catalog entries, including Gmail and Outlook
+examples/                         runnable reference apps
+integrations/                     WordPress/WooCommerce plugin
+docs/                             Docusaurus documentation site
+```
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md). Development is `pnpm install && pnpm build && pnpm test` from the repo root, which covers both products.
+Thirty-five packages publish: 34 under `@freebirdai`, plus `create-freebird`. Changesets links their versions so they release together. The Dash apps, the examples and `connect-bench` are private.
 
-Useful narrower commands:
+### Where to read next
 
-| Command | Scope |
+| If you're working on | Read |
 |---|---|
-| `pnpm build:guide` | Build only `guide/packages/*` |
-| `pnpm build:dash` | Build only `dash/packages/*` |
-| `pnpm dev` | Watch-build the Guide packages |
-| `pnpm dev:dash` | Run the Dash server and dashboard |
+| Anything, as an AI assistant or a fast human | [`AGENTS.md`](./AGENTS.md), and the `AGENTS.md` inside each package |
+| Guide's action layer | [`ACTIONS.md`](./ACTIONS.md), then `guide/packages/core/src/actions/README.md` |
+| Connect | [`connect/packages/connect/README.md`](./connect/packages/connect/README.md) and its `AGENTS.md` |
+| Dash's specs, onboarding, agents and reports | [`dash/README.md`](./dash/README.md) |
+| Dash's server internals and conventions | [`dash/AGENTS.md`](./dash/AGENTS.md) |
+| Swapping Dash's storage, identity or transport | [`dash/PLATFORM.md`](./dash/PLATFORM.md) |
+| Concepts and recipes for humans | the docs site: `pnpm --filter freebird-docs start` |
 
-CI runs build, typecheck, lint, tests, and the docs build on every PR — across both products.
+## Contribute
+
+Read [CONTRIBUTING.md](./CONTRIBUTING.md) first. The short version:
+
+```bash
+pnpm build        # every package
+pnpm typecheck    # tsc --noEmit across all workspaces
+pnpm lint
+pnpm test         # vitest from the root
+pnpm changeset    # for any user-facing change to a published package
+```
+
+Narrower builds: `pnpm build:guide`, `pnpm build:connect` and `pnpm build:dash` (each includes `shared/` and whatever it depends on). Scope tests with `pnpm --filter <package> test`.
+
+CI runs build, typecheck, lint, tests and the docs build on every pull request. A change that bumps a schema version must ship its migration in the same PR (see "Schema changes ship their migration" in CONTRIBUTING.md).
+
+A few rules that hold across the repo:
+
+- In Dash, the model runs when something is set up, never when a board renders.
+- Nothing changes a connected account without a review a person approves.
+- Expressions never use `eval` or `new Function`; untrusted API data flows through them.
+- A fresh clone must run with nothing installed beyond Node and pnpm.
 
 ## Status
 
-Early-stage: APIs may move before 1.0. The package set is stable enough to build on, and every release goes through the changesets flow.
-
-All 28 published packages share one version line and release together under the `@freebirdai` scope, so a Guide and Dash release always agree with each other. The two Dash apps in `dash/apps/` are private and are not published.
+Early-stage. APIs may change before 1.0, and every release goes through changesets.
 
 ## License
 
