@@ -695,7 +695,25 @@ export const DASH_REACT_STYLES = `
   margin-right: 0;
   transition: margin-right var(--dash-dur-slow) var(--dash-ease);
 }
-.dash-shell[data-chat="open"] { margin-right: var(--dash-chat-width, 380px); }
+/*
+ * A dragged width ("--dash-chat-user-width", set on the shell) is the
+ * default; building still overrides it with "--dash-chat-width".
+ */
+.dash-shell[data-chat="open"] { margin-right: var(--dash-chat-width, var(--dash-chat-user-width, 380px)); }
+
+/*
+ * Full screen: the chat in place of the page, under the nav.
+ *
+ * The page stays mounted, only hidden, so the chat's own state survives (it
+ * renders inside the page's tree). Hidden with "visibility", which takes the
+ * page out of the tab order and the accessibility tree while letting the chat
+ * inside it opt back in. No right margin: the nav spans the window, and
+ * docking again slides the page back in from full width. The shell stops
+ * scrolling, so the wheel moves the conversation, not the page behind it.
+ */
+.dash-shell[data-chat="full"] { height: 100vh; overflow: hidden; }
+.dash-shell[data-chat="full"] .dash-root > :not(.dash-nav) { visibility: hidden; }
+.dash-shell[data-chat="full"] aside.dash-chat[data-mode="full"] { visibility: visible; }
 
 /*
  * Building a widget needs room to show it.
@@ -712,7 +730,7 @@ export const DASH_REACT_STYLES = `
 
 .dash-chat {
   position: fixed; top: 0; right: 0; height: 100%; z-index: 40;
-  width: var(--dash-chat-width, 380px); max-width: 90vw;
+  width: var(--dash-chat-width, var(--dash-chat-user-width, 380px)); max-width: 90vw;
   display: flex; flex-direction: column;
   background: var(--dash-surface);
   border-left: 1px solid var(--dash-border);
@@ -721,6 +739,74 @@ export const DASH_REACT_STYLES = `
   transition: transform var(--dash-dur-slow) var(--dash-ease);
 }
 .dash-chat[data-open="true"] { transform: translateX(0); }
+
+/*
+ * Growing to full screen is the one width change that animates: it happens
+ * once, on a click, and the page under it is hidden, so nothing reflows with
+ * it. "--dash-nav-height" is measured by the shell; 56px is the nav's own
+ * minimum, right whenever it has not wrapped.
+ */
+.dash-chat[data-mode="full"] {
+  top: var(--dash-nav-height, 56px); height: auto; bottom: 0;
+  width: 100%; max-width: none;
+  border-left: 0;
+  background:
+    radial-gradient(80% 22% at 40% 0%, var(--dash-accent-wash), transparent 100%),
+    var(--dash-surface);
+}
+.dash-chat[data-open="true"][data-mode] {
+  transition: transform var(--dash-dur-slow) var(--dash-ease), width var(--dash-dur-slow) var(--dash-ease);
+}
+.dash-chat[data-resizing="true"] { transition: none; user-select: none; }
+
+/* The docked column's draggable left edge: an 8px target over a 1px line. */
+.dash-chat__resize {
+  position: absolute; top: 0; bottom: 0; left: -4px; width: 8px; z-index: 2;
+  cursor: col-resize; touch-action: none;
+}
+.dash-chat__resize::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px;
+  background: transparent;
+  transition: background var(--dash-dur-fast) var(--dash-ease);
+}
+.dash-chat__resize:hover::after,
+.dash-chat[data-resizing="true"] .dash-chat__resize::after { background: var(--dash-accent-line); }
+
+/*
+ * The column's body: the conversation, and in full screen on a wide window
+ * the Timeline beside it. "position: relative" anchors "↓ Latest" to the
+ * conversation rather than the whole column.
+ */
+.dash-chat__body { flex: 1; min-height: 0; display: flex; }
+.dash-chat__main {
+  flex: 1; min-width: 0; position: relative;
+  display: flex; flex-direction: column;
+}
+.dash-chat__side {
+  flex: none; width: 300px; min-height: 0;
+  display: flex; flex-direction: column;
+  border-right: 1px solid var(--dash-border);
+}
+
+/* Full screen reads as a page: one centred column, the composer under it at the same width. */
+.dash-chat[data-mode="full"] .dash-chat__log,
+.dash-chat[data-mode="full"] .dash-chat__form {
+  padding-left: max(var(--dash-space-4), calc((100% - 720px) / 2));
+  padding-right: max(var(--dash-space-4), calc((100% - 720px) / 2));
+}
+.dash-chat[data-mode="full"] .dash-chat__log,
+.dash-chat[data-mode="full"] .dash-chat__head,
+.dash-chat[data-mode="full"] .dash-chat__form { background: transparent; }
+.dash-chat[data-mode="full"] .dash-chat__form { border-top: 0; }
+
+/* A topic's name, docked, is a way into it full screen. */
+.dash-chat__topic-open {
+  min-width: 0; padding: 0; border: 0; background: none;
+  font: inherit; color: inherit; cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dash-chat__topic-open:hover { color: var(--dash-accent); text-decoration: underline; text-underline-offset: 2px; }
+.dash-chat__topic-open:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 2px; border-radius: 2px; }
 
 .dash-chat__head {
   display: flex; align-items: center; gap: var(--dash-space-3);
@@ -1153,7 +1239,7 @@ export const DASH_REACT_STYLES = `
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dash-shell, .dash-chat { transition: none; }
+  .dash-shell, .dash-chat, .dash-chat[data-open="true"][data-mode] { transition: none; }
 }
 
 /* Narrow screens: the column covers rather than squeezes the board. */
