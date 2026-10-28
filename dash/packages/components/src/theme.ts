@@ -193,11 +193,15 @@ ${seriesVars(SERIES_LIGHT)}
   --dash-space-7: 32px;
   --dash-space-8: 40px;
 
-  /* Chips, badges and swatches — the step below a control. */
+  /*
+   * Chips, badges and swatches — the step below a control. Cards at 8px and
+   * sheets at 12px: tight enough that a board reads as a working surface
+   * rather than a stack of pebbles, with each step still visibly larger.
+   */
   --dash-radius-xs: 4px;
   --dash-radius-sm: 6px;
-  --dash-radius: 10px;
-  --dash-radius-lg: 14px;
+  --dash-radius: 8px;
+  --dash-radius-lg: 12px;
   --dash-radius-pill: 999px;
   --dash-gap: 12px;
 

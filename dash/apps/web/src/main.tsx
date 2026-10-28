@@ -1120,9 +1120,15 @@ const App = (): JSX.Element => {
   const toggleTheme = (): void => {
     const next = theme === "dark" ? "light" : "dark";
     document.documentElement.dataset.theme = next;
-    // Matches `--dash-plane` in each mode, so the page behind the shell is the
-    // same colour as the shell's own background rather than a seam.
-    document.body.style.background = next === "dark" ? "#0c100e" : "#f6f7f6";
+    /*
+     * The page behind the shell takes `--dash-plane` itself, read back from
+     * the sheet after the switch, so it can never drift from the token (it
+     * had: two hard-coded colours, neither the plane) and follows a
+     * workspace's own theme tokens too.
+     */
+    const shell = document.querySelector<HTMLElement>(".dash-root");
+    const plane = shell ? getComputedStyle(shell).getPropertyValue("--dash-plane").trim() : "";
+    document.body.style.background = plane || (next === "dark" ? "#0e1013" : "#f4f3f0");
     setTheme(next);
   };
 

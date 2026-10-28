@@ -982,7 +982,7 @@ export const DASH_REACT_STYLES = `
 .dash-chat__input {
   flex: 1; font: inherit; font-size: var(--dash-text-sm); resize: none;
   color: var(--dash-ink); background: var(--dash-surface-raised);
-  border: 1px solid var(--dash-border-strong); border-radius: 10px;
+  border: 1px solid var(--dash-border-strong); border-radius: var(--dash-radius-sm);
   padding: 9px var(--dash-space-3);
   min-height: 40px; max-height: 140px;
   line-height: var(--dash-leading-normal);
@@ -995,7 +995,7 @@ export const DASH_REACT_STYLES = `
 }
 .dash-chat__input:disabled { opacity: 0.6; cursor: not-allowed; }
 .dash-chat__send {
-  height: 40px; padding: 0 var(--dash-space-4); border-radius: 10px;
+  height: 40px; padding: 0 var(--dash-space-4); border-radius: var(--dash-radius-sm);
   font-weight: var(--dash-weight-semi);
   background: var(--dash-accent); color: var(--dash-accent-ink); border-color: transparent;
 }
@@ -1119,7 +1119,7 @@ export const DASH_REACT_STYLES = `
   padding: var(--dash-space-2) 2px 9px;
   font: inherit; color: var(--dash-ink); cursor: pointer;
   background: var(--dash-surface-raised);
-  border: 1px solid var(--dash-border-strong); border-radius: 10px;
+  border: 1px solid var(--dash-border-strong); border-radius: var(--dash-radius);
   box-shadow: var(--dash-shadow-sm);
   transition: border-color var(--dash-dur-fast) var(--dash-ease), background var(--dash-dur-fast) var(--dash-ease),
               box-shadow var(--dash-dur-fast) var(--dash-ease);
@@ -1169,7 +1169,7 @@ export const DASH_REACT_STYLES = `
   position: absolute; top: calc(100% + 6px); right: 0; z-index: 5;
   width: 272px; padding: var(--dash-space-3);
   background: var(--dash-surface-raised);
-  border: 1px solid var(--dash-border-strong); border-radius: 12px;
+  border: 1px solid var(--dash-border-strong); border-radius: var(--dash-radius-lg);
   box-shadow: var(--dash-shadow-lg);
   animation: dash-msg-in var(--dash-dur-fast) var(--dash-ease-out) both;
 }
@@ -1262,7 +1262,7 @@ export const DASH_REACT_STYLES = `
   display: flex; flex-direction: column; gap: 2px; min-width: 0;
   padding: var(--dash-space-2) var(--dash-space-3);
   font: inherit; font-size: var(--dash-text-sm); text-align: left;
-  border: 1px solid var(--dash-border); border-radius: 10px;
+  border: 1px solid var(--dash-border); border-radius: var(--dash-radius);
   background: var(--dash-surface-raised); color: var(--dash-ink);
   box-shadow: var(--dash-shadow-sm);
   cursor: pointer; text-decoration: none;
