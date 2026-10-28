@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { STATUS_TONES, statusTone } from "../palette.js";
-import { IconButton, Message, RowActions } from "../ui/index.js";
+import { Icon, IconButton, Message, RowActions } from "../ui/index.js";
 import { makeFormatter, roleColumn } from "../resolve.js";
 import type { WidgetRenderProps } from "../types.js";
 import { type CalendarDay, daysCovered, instantOf, monthGrid } from "./collectionModel.js";
@@ -72,11 +72,11 @@ export const Calendar = (props: WidgetRenderProps): JSX.Element => {
     <div className="dash-calendar" data-density={props.presentation?.density ?? "cozy"}>
       <div className="dash-calendar__bar">
         <IconButton label="Previous month" onClick={() => setOffset((value) => value - 1)}>
-          ‹
+          <Icon name="chevron-left" />
         </IconButton>
         <span className="dash-calendar__month">{monthLabel}</span>
         <IconButton label="Next month" onClick={() => setOffset((value) => value + 1)}>
-          ›
+          <Icon name="chevron-right" />
         </IconButton>
         {offset !== 0 && (
           <button type="button" className="dash-calendar__reset" onClick={() => setOffset(0)}>

@@ -31,7 +31,8 @@
   },
   "dependencies": {
     "@freebirdai/dash-runtime": "workspace:*",
-    "@freebirdai/dash-spec": "workspace:*"
+    "@freebirdai/dash-spec": "workspace:*",
+    "lucide-react": "1.56.0"
   },
   "peerDependencies": {
     "react": ">=18",

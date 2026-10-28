@@ -7,7 +7,7 @@ import {
   useSession,
 } from "@freebirdai/react";
 import { transientOf, type ChatMessage } from "@freebirdai/core";
-import { Tabs } from "@freebirdai/dash-components";
+import { Icon, Tabs } from "@freebirdai/dash-components";
 import { useCallback, useLayoutEffect, useMemo } from "react";
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { api } from "./api.js";
@@ -703,13 +703,7 @@ const ChatBody = ({
           data-testid="chat-full-screen"
         >
           {/* Arrows out to grow, in to shrink: the glyph says which way it goes. */}
-          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            {full ? (
-              <path d="M2.5 9.5h4v4M13.5 6.5h-4v-4M6.5 9.5 2 14M9.5 6.5 14 2" />
-            ) : (
-              <path d="M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5 9 7M2.5 13.5 7 9" />
-            )}
-          </svg>
+          <Icon name={full ? "minimize" : "maximize"} />
         </button>
         <button
           type="button"
@@ -718,7 +712,7 @@ const ChatBody = ({
           aria-label="Close the assistant"
           data-testid="chat-close"
         >
-          ✕
+          <Icon name="x" />
         </button>
       </div>
 
@@ -956,9 +950,7 @@ const ChatBody = ({
           aria-label="Back to the latest message"
           data-testid="chat-latest"
         >
-          <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.75">
-            <path d="M8 2.5v11M3.5 9 8 13.5 12.5 9" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
+          <Icon name="arrow-down" size={12} />
           Latest
         </button>
       )}

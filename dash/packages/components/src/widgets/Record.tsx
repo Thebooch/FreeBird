@@ -1,7 +1,7 @@
 import { isSlotHidden, settingBool, settingNumber } from "@freebirdai/dash-spec";
 import { useState } from "react";
 import { KEY_FIELD_CAP, rankKeyFields } from "../keyFields.js";
-import { Menu, Message, SectionHeader, StatusPill } from "../ui/index.js";
+import { Icon, Menu, Message, SectionHeader, StatusPill } from "../ui/index.js";
 import {
   type RecordEntry,
   highlightsFor,
@@ -193,7 +193,10 @@ export const Record = (props: WidgetRenderProps): JSX.Element => {
           open={open}
           onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
         >
-          <summary className="dash-record__more-summary">All fields ({more.length})</summary>
+          <summary className="dash-record__more-summary">
+            <Icon name="chevron-right" size={14} className="dash-record__more-chevron" />
+            All fields ({more.length})
+          </summary>
           {open && (
             <dl className="dash-record dash-record--compact" data-columns={2}>
               {more.map((entry) => (
@@ -214,7 +217,7 @@ export const Record = (props: WidgetRenderProps): JSX.Element => {
                           onClick={() => props.onEditField?.(entry.name)}
                           data-testid={`record-field-edit-${entry.name}`}
                         >
-                          ✎
+                          <Icon name="pencil" size={14} />
                         </button>
                       )}
                       {moveMenu(entry, "key")}

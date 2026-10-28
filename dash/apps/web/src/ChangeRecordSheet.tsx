@@ -1,4 +1,4 @@
-import { Button } from "@freebirdai/dash-components";
+import { Button, Icon } from "@freebirdai/dash-components";
 import {
   RecordForm,
   WriteReview,
@@ -234,7 +234,7 @@ export const ChangeRecordSheet = ({
         <div className="dash-sheet-panel__head">
           <h2>{step.kind === "review" ? step.review.title : heading}</h2>
           <Button tone="ghost" size="sm" onClick={close} ariaLabel="Close">
-            ✕
+            <Icon name="x" />
           </Button>
         </div>
 

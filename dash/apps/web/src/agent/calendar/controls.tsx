@@ -1,27 +1,8 @@
 import { useRef } from "react";
 
 /**
- * Small pieces the calendar's screens share: a segmented choice and a few
- * line icons drawn in `currentColor`, so they follow the text they sit in.
+ * Small pieces the calendar's screens share: a segmented choice and a switch.
  */
-
-export const ChevronLeft = (): JSX.Element => (
-  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M10 3.5 5.5 8 10 12.5" />
-  </svg>
-);
-
-export const ChevronRight = (): JSX.Element => (
-  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M6 3.5 10.5 8 6 12.5" />
-  </svg>
-);
-
-export const Check = (): JSX.Element => (
-  <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M2.5 6.2 5 8.5 9.5 3.5" />
-  </svg>
-);
 
 /**
  * One choice of several, as a single control.

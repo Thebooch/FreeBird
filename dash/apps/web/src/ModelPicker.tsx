@@ -1,3 +1,4 @@
+import { Icon } from "@freebirdai/dash-components";
 import { useEffect, useState } from "react";
 import {
   type ModelOption,
@@ -163,7 +164,8 @@ export const ModelPicker = ({
         data-testid="model-picker-loading"
         title={error ?? "Reading which model runs which action"}
       >
-        {error ? "⚠ Models unavailable" : "⚙ Models…"}
+        <Icon name={error ? "warning" : "settings"} />
+        {error ? "Models unavailable" : "Models…"}
       </span>
     );
   }
@@ -171,7 +173,8 @@ export const ModelPicker = ({
   if (!state.providers.anthropic && !state.providers.openai) {
     return (
       <span className={className} data-testid="model-picker-disabled" title="No AI key is set">
-        ⚠ No AI key
+        <Icon name="warning" />
+        No AI key
       </span>
     );
   }
@@ -267,7 +270,8 @@ export const ModelPicker = ({
         data-testid="model-picker"
         title="Which model runs which AI action"
       >
-        ⚙ {summary}
+        <Icon name="settings" />
+        {summary}
       </button>
 
       {open && (
@@ -287,7 +291,7 @@ export const ModelPicker = ({
                   onClick={() => show(false)}
                   aria-label="Close"
                 >
-                  ✕
+                  <Icon name="x" />
                 </button>
               </div>
               <span className="dash-sheet__trail">

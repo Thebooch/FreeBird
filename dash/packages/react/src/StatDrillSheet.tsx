@@ -1,4 +1,4 @@
-import { EmptyState, ErrorState, Skeleton, getComponent, skeletonShapeFor } from "@freebirdai/dash-components";
+import { EmptyState, ErrorState, Icon, Skeleton, getComponent, skeletonShapeFor } from "@freebirdai/dash-components";
 import type { Row } from "@freebirdai/dash-runtime";
 import type { EntityLinkView, WidgetSpec } from "@freebirdai/dash-spec";
 import { formatValue } from "@freebirdai/dash-spec";
@@ -104,7 +104,7 @@ export const StatDrillSheet = ({
               data-testid="stat-drill-close"
               aria-label="Close"
             >
-              ✕
+              <Icon name="x" />
             </button>
           </div>
         </header>
@@ -117,9 +117,9 @@ export const StatDrillSheet = ({
               onRetry={data.refetch}
             />
           )}
-          {data.state === "unapproved" && <EmptyState glyph="⏸" title="This widget is waiting for approval." />}
+          {data.state === "unapproved" && <EmptyState icon="pause" title="This widget is waiting for approval." />}
           {(data.state === "empty" || ((data.state === "ok" || data.state === "invalid") && data.rows.length === 0)) && (
-            <EmptyState glyph="○" title={`No ${noun} behind this number.`} />
+            <EmptyState icon="inbox" title={`No ${noun} behind this number.`} />
           )}
           {drawable && Table && (
             <>

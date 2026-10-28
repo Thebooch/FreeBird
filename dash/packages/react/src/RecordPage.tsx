@@ -1,4 +1,4 @@
-import { Button, Message } from "@freebirdai/dash-components";
+import { Button, Icon, Message } from "@freebirdai/dash-components";
 import { readField } from "@freebirdai/dash-spec";
 import type { Row } from "@freebirdai/dash-runtime";
 import { useMemo, useState } from "react";
@@ -55,7 +55,8 @@ export const RecordPage = ({
     return (
       <div className="dash-record-page">
         <Button size="sm" onClick={onBack}>
-          ‹ Back
+          <Icon name="chevron-left" size={14} />
+          Back
         </Button>
         <Message>
           This board has no widget called “{widgetId}”, or it no longer opens records.
@@ -69,7 +70,8 @@ export const RecordPage = ({
     return (
       <div className="dash-record-page">
         <Button size="sm" onClick={onBack}>
-          ‹ Back
+          <Icon name="chevron-left" size={14} />
+          Back
         </Button>
         {/*
          * An honest dead end rather than a request that will 404.
@@ -103,11 +105,12 @@ export const RecordPage = ({
     <div className="dash-record-page">
       <nav className="dash-record-page__crumbs" aria-label="Breadcrumb">
         <button type="button" className="dash-sheet__crumb" onClick={onBack} data-testid="record-back">
-          ‹ {dashboard.title}
+          <Icon name="chevron-left" size={14} />
+          {dashboard.title}
         </button>
         {steps.map((entry, index) => (
           <span key={index}>
-            <span className="dash-sheet__crumb-sep"> › </span>
+            <Icon name="chevron-right" size={14} className="dash-sheet__crumb-sep" />
             {index < steps.length - 1 ? (
               <button
                 type="button"

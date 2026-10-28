@@ -1,4 +1,4 @@
-import { AgentChip, Button, EmptyState, ErrorState, Tabs, agentColorVar } from "@freebirdai/dash-components";
+import { AgentChip, agentColorVar, Button, EmptyState, ErrorState, Icon, Tabs } from "@freebirdai/dash-components";
 import {
   AGENT_COLORS,
   composeResponsePrompt,
@@ -198,7 +198,7 @@ const ReachEditor = ({
             aria-label="Remove this access"
             onClick={() => onChange(removeRow(rows, row.scope))}
           >
-            ✕
+            <Icon name="x" size={14} />
           </button>
         </div>
       ))}
@@ -599,7 +599,8 @@ export const AgentsSection = ({
         <div className="dash-agents__head">
           <h2 className="dash-agents__title">Agents</h2>
           <Button size="sm" tone="primary" onClick={() => go(NEW)} testId="agent-new">
-            ＋ New agent
+            <Icon name="plus" size={14} />
+            New agent
           </Button>
         </div>
         <button
@@ -679,10 +680,10 @@ export const AgentsSection = ({
           </>
         ) : loaded ? (
           <EmptyState
-            glyph="✦"
+            icon="sparkle"
             title={selected ? "That agent is not here" : "Pick an agent, or make one"}
             body="You can also ask the assistant to make one, for example: create an agent called Helper that can read one kind of record."
-            action={{ label: "＋ New agent", onClick: () => go(NEW) }}
+            action={{ label: "New agent", onClick: () => go(NEW) }}
           />
         ) : null}
       </section>

@@ -1,4 +1,4 @@
-import { Button, Checkbox, Field, Message, StatusPill, Toolbar } from "@freebirdai/dash-components";
+import { Button, Checkbox, Field, Icon, Message, StatusPill, Toolbar } from "@freebirdai/dash-components";
 import { WidgetSettings } from "./WidgetSettings.jsx";
 import {
   DENSITIES,
@@ -396,7 +396,7 @@ const Panel = ({
       <header className="dash-sheet__head">
         <span className="dash-sheet__title">{title}</span>
         <button className="dash-control" onClick={onClose} aria-label="Close">
-          ✕
+          <Icon name="x" />
         </button>
       </header>
       <div className="dash-sheet__body">{children}</div>

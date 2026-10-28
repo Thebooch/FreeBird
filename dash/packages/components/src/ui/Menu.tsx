@@ -1,30 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-
-/**
- * The funnel every table has had since tables had filters.
- *
- * Drawn rather than typed: Unicode has no funnel, and the near misses are a
- * gear or a triangle — one reads as settings and the other as a sort. It sizes
- * itself from the button's font so it sits on the same line as the text glyphs
- * beside it.
- */
-export const FilterGlyph = (): JSX.Element => (
-  <svg
-    viewBox="0 0 16 16"
-    width="1em"
-    height="1em"
-    aria-hidden="true"
-    focusable="false"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.4"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-  >
-    <path d="M2 3.5h12L9.5 8.6v4.2l-3 1.7V8.6L2 3.5Z" />
-  </svg>
-);
+import { Icon } from "./Icon.jsx";
 
 /**
  * An overflow menu.
@@ -38,7 +14,8 @@ export const FilterGlyph = (): JSX.Element => (
 export interface MenuItem {
   readonly id: string;
   readonly label: string;
-  readonly icon?: string;
+  /** Drawn before the label, usually an `<Icon>`. */
+  readonly icon?: ReactNode;
   readonly onSelect: () => void;
   readonly disabled?: boolean;
   readonly tone?: "default" | "danger";
@@ -83,7 +60,7 @@ const FLOAT_ROOM = 220;
 export const Menu = ({
   items,
   label = "More actions",
-  glyph = "⋯",
+  glyph = <Icon name="ellipsis" />,
   testId,
   badge,
   floating = false,
@@ -93,9 +70,8 @@ export const Menu = ({
   readonly items: readonly MenuItem[];
   readonly label?: string;
   /**
-   * What the trigger draws. A string for the text glyphs the rest of the
-   * chrome uses, or a node where a character will not do — Unicode has no
-   * funnel, and a filter that opens from a gear reads as settings.
+   * What the trigger draws: the ellipsis unless a menu means something more
+   * particular, such as a filter.
    */
   readonly glyph?: ReactNode;
   readonly testId?: string;
@@ -216,7 +192,7 @@ export const Menu = ({
           // A tick that reserves its space whether or not it is shown, so the
           // labels stay in one column as items toggle.
           <span className="dash-menu__icon" aria-hidden="true">
-            {item.checked ? "✓" : ""}
+            {item.checked ? <Icon name="check" size={14} /> : null}
           </span>
         ) : (
           item.icon && (
@@ -305,12 +281,10 @@ export const Menu = ({
         {text ? (
           <>
             {text}
-            <span className="dash-menu__caret" aria-hidden="true">
-              ▾
-            </span>
+            <Icon name="chevron-down" size={14} className="dash-menu__caret" />
           </>
         ) : (
-          <span aria-hidden="true">{glyph}</span>
+          glyph
         )}
         {badge !== undefined && badge > 0 && (
           <span className="dash-menu__badge" aria-hidden="true">
@@ -349,7 +323,7 @@ export const MenuOrSingle = ({
         onClick={only.onSelect}
         disabled={only.disabled}
       >
-        <span aria-hidden="true">{only.icon ?? "⋯"}</span>
+        {only.icon ?? <Icon name="ellipsis" />}
       </button>
     );
   }

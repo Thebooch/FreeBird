@@ -1,5 +1,5 @@
 import { FIELD_RULE_OPS, type FieldRule, type RuleSet } from "@freebirdai/dash-spec";
-import { Button } from "@freebirdai/dash-components";
+import { Button, Icon } from "@freebirdai/dash-components";
 import { useId, useState } from "react";
 import { ChipsInput } from "./inputs.jsx";
 import { FACT_SUGGESTIONS, OP_WORDS, type FieldOption } from "./model.js";
@@ -88,7 +88,7 @@ export const RuleBuilder = ({
               </label>
             )}
             <button type="button" className="dash-sched-rule__remove" aria-label="Remove this condition" onClick={() => set(rules.filter((_, at) => at !== index))}>
-              ✕
+              <Icon name="x" size={14} />
             </button>
           </div>
         ))}

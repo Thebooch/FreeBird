@@ -1,5 +1,5 @@
 import { WEEKDAYS, minutesOf, type Consolidation, type PartialSettings, type ResolvedSettings, type SchedulingSettings, type SettingsLayer, type WeeklyHours } from "@freebirdai/dash-spec";
-import { Button } from "@freebirdai/dash-components";
+import { Button, Icon } from "@freebirdai/dash-components";
 import { Segmented, Switch } from "../controls.jsx";
 import { ChipsInput, DurationInput, FormRow, NumberInput } from "./inputs.jsx";
 import { APPROVAL_WORDS, DAY_LABELS, FACT_SUGGESTIONS, LAYER_WORDS, SETTING_META, settingWords, type FieldOption } from "./model.js";
@@ -196,7 +196,7 @@ export const HoursEditor = ({ value, onChange, testId }: { readonly value: Weekl
                       onChange={(event) => setDay(day, ranges.map((one, at) => (at === index ? { ...one, to: event.target.value || one.to } : one)))}
                     />
                     <button type="button" className="dash-sched-rule__remove" aria-label="Remove these hours" onClick={() => setDay(day, ranges.filter((_, at) => at !== index))}>
-                      ✕
+                      <Icon name="x" size={14} />
                     </button>
                   </span>
                 ))

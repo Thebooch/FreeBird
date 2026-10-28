@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Button } from "./Button.jsx";
+import { Icon, type IconName } from "./Icon.jsx";
 
 /**
  * The states a widget lands in when there is no chart to draw.
@@ -17,18 +18,18 @@ export const Message = ({ children }: { readonly children: ReactNode }): JSX.Ele
 export const EmptyState = ({
   title,
   body,
-  glyph,
+  icon,
   action,
 }: {
   readonly title: string;
   readonly body?: string;
-  readonly glyph?: string;
+  readonly icon?: IconName;
   readonly action?: { readonly label: string; readonly onClick: () => void };
 }): JSX.Element => (
   <div className="dash-state">
-    {glyph && (
+    {icon && (
       <span className="dash-state__glyph" aria-hidden="true">
-        {glyph}
+        <Icon name={icon} size={20} />
       </span>
     )}
     <p className="dash-state__title">{title}</p>
@@ -62,7 +63,7 @@ export const ErrorState = ({
      * before this they were the same grey box with different words in it.
      */}
     <span className="dash-state__glyph" aria-hidden="true">
-      !
+      <Icon name="alert" size={20} />
     </span>
     <p className="dash-state__title">{message}</p>
     {detail && detail.length > 0 && (

@@ -1,3 +1,4 @@
+import { Icon } from "@freebirdai/dash-components";
 import { useId, useMemo, useState, type ReactNode } from "react";
 import { DURATION_UNITS, splitDuration, timeZones, type DurationUnit } from "./model.js";
 
@@ -213,7 +214,7 @@ export const ChipsInput = ({
         <span key={value} className="dash-sched-chip">
           {value}
           <button type="button" className="dash-sched-chip__remove" aria-label={`Remove ${value}`} onClick={() => onChange(values.filter((one) => one !== value))}>
-            ✕
+            <Icon name="x" size={12} />
           </button>
         </span>
       ))}

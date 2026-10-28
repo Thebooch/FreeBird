@@ -1,3 +1,4 @@
+import { Icon } from "@freebirdai/dash-components";
 import { useEffect, useRef, useState } from "react";
 import { ModelPicker } from "./ModelPicker.jsx";
 import logo from "./assets/freebird-logo.png";
@@ -133,7 +134,7 @@ const EditableTab = ({
           aria-label={`Delete ${tab.title}`}
           data-testid={`nav-delete-${tab.id}`}
         >
-          ✕
+          <Icon name="x" size={12} />
         </button>
       )}
     </span>
@@ -196,7 +197,12 @@ export const TopNav = ({
   useEffect(() => {
     const rail = railRef.current;
     if (!rail) return undefined;
-    const measure = () => setOverflow({ left: rail.scrollLeft > 1, right: rail.scrollLeft + rail.clientWidth < rail.scrollWidth - 1 });
+    /* Kept when unchanged: the rail resizes on every frame the chat column animates, and a fresh object each time re-rendered the nav with it. */
+    const measure = () => {
+      const left = rail.scrollLeft > 1;
+      const right = rail.scrollLeft + rail.clientWidth < rail.scrollWidth - 1;
+      setOverflow((previous) => (previous.left === left && previous.right === right ? previous : { left, right }));
+    };
     measure();
     rail.addEventListener("scroll", measure, { passive: true });
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
@@ -276,7 +282,7 @@ export const TopNav = ({
       <div className="dash-nav__tabs">
       {overflow.left && (
         <button type="button" className="dash-nav__scroll" data-side="left" onClick={() => scrollRail(-1)} aria-label="Scroll tabs left" data-testid="nav-scroll-left">
-          ‹
+          <Icon name="chevron-left" />
         </button>
       )}
       <div
@@ -325,7 +331,7 @@ export const TopNav = ({
       </div>
       {overflow.right && (
         <button type="button" className="dash-nav__scroll" data-side="right" onClick={() => scrollRail(1)} aria-label="Scroll tabs right" data-testid="nav-scroll-right">
-          ›
+          <Icon name="chevron-right" />
         </button>
       )}
       </div>
@@ -334,7 +340,8 @@ export const TopNav = ({
       {!boardless && (
         <div className="dash-nav__bars">
           <button type="button" className="dash-nav__add" onClick={() => onCreate(shownBar)} data-testid="nav-new-tab">
-            ＋ New tab
+            <Icon name="plus" size={14} />
+            New tab
           </button>
           <span className="dash-nav__barnav" role="group" aria-label={`Tab bar ${barIndex + 1} of ${bars.length}`}>
             <button
@@ -346,7 +353,7 @@ export const TopNav = ({
               aria-label="Next tab bar"
               data-testid="nav-bar-up"
             >
-              <svg viewBox="0 0 12 8" aria-hidden="true"><path d="M1.5 6.5 6 2l4.5 4.5" /></svg>
+              <Icon name="chevron-up" size={12} />
             </button>
             <button
               type="button"
@@ -357,7 +364,7 @@ export const TopNav = ({
               aria-label="Previous tab bar"
               data-testid="nav-bar-down"
             >
-              <svg viewBox="0 0 12 8" aria-hidden="true"><path d="M1.5 1.5 6 6l4.5-4.5" /></svg>
+              <Icon name="chevron-down" size={12} />
             </button>
           </span>
         </div>
@@ -374,7 +381,7 @@ export const TopNav = ({
             aria-label={editing ? "Done editing" : "Edit tabs"}
             data-testid="nav-edit"
           >
-            {editing ? "✓" : "✎"}
+            <Icon name={editing ? "check" : "pencil"} />
           </button>
         )}
 
@@ -390,7 +397,7 @@ export const TopNav = ({
             aria-label="More actions"
             data-testid="nav-menu"
           >
-            ⋯
+            <Icon name="ellipsis" />
           </button>
 
           {menuOpen && (
@@ -414,7 +421,8 @@ export const TopNav = ({
                 disabled={addWidgetDisabled || boardless}
                 data-testid="add-widget"
               >
-                ✚ Add a widget
+                <Icon name="plus" />
+                Add a widget
               </button>
               <button
                 type="button"
@@ -430,7 +438,8 @@ export const TopNav = ({
                 }
                 data-testid="toggle-arrange"
               >
-                {layoutEditing ? "✓ Done arranging" : "⊞ Arrange"}
+                <Icon name={layoutEditing ? "check" : "layout-grid"} />
+                {layoutEditing ? "Done arranging" : "Arrange"}
               </button>
               {onOpenReports && (
                 <button
@@ -442,7 +451,8 @@ export const TopNav = ({
                   title="Email this tab, or some of its widgets, on a schedule"
                   data-testid="open-reports"
                 >
-                  ✉ Reports
+                  <Icon name="mail" />
+                  Reports
                 </button>
               )}
               <button
@@ -452,7 +462,8 @@ export const TopNav = ({
                 onClick={pick(onConnect)}
                 data-testid="open-connections"
               >
-                ⚯ Connect an API
+                <Icon name="plug" />
+                Connect an API
               </button>
 
               <div className="dash-nav__sep" role="separator" />
@@ -470,7 +481,8 @@ export const TopNav = ({
                 onClick={pick(onToggleTheme)}
                 data-testid="theme-toggle"
               >
-                {theme === "dark" ? "☀ Light theme" : "☾ Dark theme"}
+                <Icon name={theme === "dark" ? "sun" : "moon"} />
+                {theme === "dark" ? "Light theme" : "Dark theme"}
               </button>
             </div>
           )}
@@ -486,7 +498,7 @@ export const TopNav = ({
           aria-label={chatOpen ? "Close the assistant" : "Open the assistant"}
           data-testid="nav-chat-toggle"
         >
-          ✦
+          <Icon name="sparkle" />
         </button>
       </div>
     </header>

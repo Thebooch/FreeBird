@@ -1,3 +1,4 @@
+import { Icon } from "@freebirdai/dash-components";
 import { useState } from "react";
 import type { DashboardSpec } from "@freebirdai/dash-spec";
 import { groupOf, groupWidgets, setGroupDisplay, ungroupWidget } from "./editing.js";
@@ -67,7 +68,7 @@ export const FramePanel = ({
       <div className="dash-sheet__head">
         <h3>Shown with “{widget?.title ?? widgetId}”</h3>
         <button type="button" className="dash-iconbtn" onClick={onClose} aria-label="Close">
-          ✕
+          <Icon name="x" />
         </button>
       </div>
 

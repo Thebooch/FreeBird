@@ -1,5 +1,5 @@
 import type { CalendarEvent } from "@freebirdai/dash-spec";
-import { AgentChip, Badge, EmptyState } from "@freebirdai/dash-components";
+import { AgentChip, Badge, EmptyState, Icon } from "@freebirdai/dash-components";
 import { useMemo } from "react";
 import { KIND_LABELS, STATUS_LABELS, byDay, colorVar, dayKey, entryEnd, entryStart, isAllDay, startOfDay, viewDays, type OwnerInfo } from "./model.js";
 import { itemAttrs } from "../chatScreen.js";
@@ -44,7 +44,7 @@ export const AgendaView = ({
     return (
       <div className="dash-cal-agenda__empty" data-testid="calendar-agenda-empty">
         <EmptyState
-          glyph="▦"
+          icon="calendar"
           title="Nothing scheduled in these 30 days"
           body="Entries appear here as workflows schedule them, bookings come in, or you add them yourself."
           {...(onAdd ? { action: { label: "Add an entry", onClick: onAdd } } : {})}
@@ -102,7 +102,7 @@ export const AgendaView = ({
                       <span className="dash-cal-agenda__bar" aria-hidden="true" />
                       <span className="dash-cal-agenda__main">
                         <span className="dash-cal-agenda__title">
-                          {entry.kind === "deadline" ? "⚑ " : ""}
+                          {entry.kind === "deadline" && <Icon name="flag" size={12} className="dash-cal-agenda__flag" />}
                           {entry.title}
                         </span>
                         <span className="dash-cal-agenda__meta">{sourceOf(entry)}</span>

@@ -1,3 +1,4 @@
+import { Icon } from "@freebirdai/dash-components";
 import { AdapterRegistry, ProxyAdapter } from "@freebirdai/connect/adapters";
 import { FramePanel } from "./FramePanel.jsx";
 import { Dashboard, DashStyleSheet, RecordPage, changeRowActions, keyFieldsOf, recordChangeRequests } from "@freebirdai/dash-react";
@@ -890,7 +891,18 @@ const App = (): JSX.Element => {
     const nav = document.querySelector<HTMLElement>(".dash-nav");
     if (!nav || typeof ResizeObserver === "undefined") return;
     const root = document.documentElement;
-    const measure = (): void => root.style.setProperty("--dash-nav-height", `${nav.getBoundingClientRect().bottom}px`);
+    /*
+     * Written only when it moves. The nav resizes on every frame of the
+     * animation into full screen, and a custom property set on the root
+     * restyles the whole document each time it is set.
+     */
+    let last = "";
+    const measure = (): void => {
+      const height = `${nav.getBoundingClientRect().bottom}px`;
+      if (height === last) return;
+      last = height;
+      root.style.setProperty("--dash-nav-height", height);
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(nav);
@@ -1367,7 +1379,7 @@ const App = (): JSX.Element => {
           <div className="dash-page">
             <div className="dash-empty" data-testid="empty-state">
               <span className="dash-empty__mark" aria-hidden="true">
-                ⚯
+                <Icon name="plug" size={28} />
               </span>
               <h2 className="dash-empty__title">Connect an API to get started</h2>
               <p className="dash-empty__body">
@@ -1381,14 +1393,16 @@ const App = (): JSX.Element => {
                   onClick={() => setConnectionsOpen(true)}
                   data-testid="empty-connect"
                 >
-                  ⚯ Connect an API
+                  <Icon name="plug" size={14} />
+                  Connect an API
                 </button>
                 <button
                   className="dash-control"
                   onClick={() => setChatOpen(true)}
                   data-testid="empty-ask"
                 >
-                  ✦ Ask the assistant
+                  <Icon name="sparkle" size={14} />
+                  Ask the assistant
                 </button>
               </div>
             </div>

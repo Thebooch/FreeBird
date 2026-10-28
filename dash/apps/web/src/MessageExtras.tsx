@@ -1,3 +1,4 @@
+import { Icon } from "@freebirdai/dash-components";
 import type { ChatMessage, ComponentCitation } from "@freebirdai/core";
 import {
   activateCitation,
@@ -183,6 +184,7 @@ export const Citations = ({ message }: { readonly message: ChatMessage }): JSX.E
           title={`Show "${citation.title}"`}
           onClick={() => void goToCitation(citation)}
         >
+          <Icon name="arrow-up-right" size={12} />
           {citation.title}
         </button>
       ))}

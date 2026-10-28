@@ -1,5 +1,5 @@
 import { ROLE_PERMISSIONS, type AgentSpec, type Block, type CalendarEvent, type Principal, type SchedulingProfile, type WorkflowSpec } from "@freebirdai/dash-spec";
-import { Button, ErrorState } from "@freebirdai/dash-components";
+import { Button, ErrorState, Icon } from "@freebirdai/dash-components";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type HostOccurrence } from "../../api.js";
 import { isTypingTarget } from "../../editing.js";
@@ -7,7 +7,7 @@ import type { Route } from "../../route.js";
 import { AgendaView } from "./AgendaView.jsx";
 import { CalendarFeed } from "./CalendarFeed.jsx";
 import { CalendarLegend } from "./CalendarLegend.jsx";
-import { ChevronLeft, ChevronRight, Segmented } from "./controls.jsx";
+import { Segmented } from "./controls.jsx";
 import { EntryFormSheet } from "./EntryFormSheet.jsx";
 import { BookingSheet } from "./BookingSheet.jsx";
 import { screenAttrs, useChatFocus, useScreenChanged } from "../chatScreen.js";
@@ -228,10 +228,10 @@ export const CalendarBoard = ({
             </Button>
             <div className="dash-cal__steppers">
               <button type="button" className="dash-cal__step" onClick={() => setAnchor((at) => stepAnchor(view, at, -1))} aria-label={`Previous ${stepLabel}`} title={`Previous ${stepLabel} (←)`}>
-                <ChevronLeft />
+                <Icon name="chevron-left" size={14} />
               </button>
               <button type="button" className="dash-cal__step" onClick={() => setAnchor((at) => stepAnchor(view, at, 1))} aria-label={`Next ${stepLabel}`} title={`Next ${stepLabel} (→)`}>
-                <ChevronRight />
+                <Icon name="chevron-right" size={14} />
               </button>
             </div>
             <h2 className="dash-cal__period" aria-live="polite" data-testid="calendar-period">

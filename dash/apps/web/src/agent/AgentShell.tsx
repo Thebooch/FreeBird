@@ -1,4 +1,4 @@
-import { EmptyState } from "@freebirdai/dash-components";
+import { EmptyState, type IconName } from "@freebirdai/dash-components";
 import { AGENT_SECTIONS, type AgentSection, type Route } from "../route.js";
 import { AgentsSection } from "./AgentsSection.jsx";
 import { CalendarSection } from "./calendar/CalendarSection.jsx";
@@ -26,7 +26,7 @@ export const SECTION_TITLES: Readonly<Record<AgentSection, string>> = {
 export const AGENT_NAV_SECTIONS = AGENT_SECTIONS.map((id) => ({ id, title: SECTION_TITLES[id] }));
 
 /** What an unbuilt section says it will hold. */
-const COMING: Readonly<Partial<Record<AgentSection, { glyph: string; body: string }>>> = {};
+const COMING: Readonly<Partial<Record<AgentSection, { icon: IconName; body: string }>>> = {};
 
 export const AgentShell = ({
   route,
@@ -51,7 +51,7 @@ export const AgentShell = ({
           <ContactsSection tab={route.id ?? null} onNavigate={onNavigate} />
         ) : (
           <EmptyState
-            glyph={coming?.glyph ?? "✦"}
+            icon={coming?.icon ?? "sparkle"}
             title={`${SECTION_TITLES[route.section]}: coming soon`}
             body={coming?.body ?? ""}
           />

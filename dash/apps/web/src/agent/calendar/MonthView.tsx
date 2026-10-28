@@ -1,5 +1,5 @@
 import type { CalendarEvent } from "@freebirdai/dash-spec";
-import { IconButton } from "@freebirdai/dash-components";
+import { Icon, IconButton } from "@freebirdai/dash-components";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { EntryChip } from "./EntryChip.jsx";
 import { MONTH_CELL_ENTRIES, byDay, dayKey, startOfDay, viewDays, type OwnerInfo } from "./model.js";
@@ -112,7 +112,7 @@ export const MonthView = ({
                   <div className="dash-cal-pop__head">
                     <span className="dash-cal-pop__title">{long}</span>
                     <IconButton label="Close" onClick={() => setOpen(null)}>
-                      ✕
+                      <Icon name="x" />
                     </IconButton>
                   </div>
                   {list.map((entry) => (
