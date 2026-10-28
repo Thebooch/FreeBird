@@ -14,6 +14,7 @@ import { api } from "./api.js";
 import { clampChatWidth } from "./chatMode.js";
 import { buildStream, dayLabel, mergeLive, reachesLatest, withDay, type StreamDay } from "./chat/stream.js";
 import { ChatTimeline } from "./chat/Timeline.jsx";
+import { ReplyMarkdown } from "./chat/ReplyMarkdown.jsx";
 import { ConciergeCard } from "./ConciergeCard";
 import { CHANGE_ACTIONS, ChatChangeCard } from "./ChatChangeCard.jsx";
 import { ChatActionCard, OnceCard } from "./ChatActionCard.jsx";
@@ -787,7 +788,8 @@ const ChatBody = ({
               data-role={item.message.role}
               data-topic-start={item.topicStart}
             >
-              {item.message.content}
+              {/* A reply reads as a document; what you typed stays exactly as typed. */}
+              {item.message.role === "assistant" ? <ReplyMarkdown text={item.message.content} /> : item.message.content}
               {/*
                * Where the answer came from, and how far it looked. Both sit
                * under the text rather than in it — a footnote, not a hedge.
@@ -807,7 +809,7 @@ const ChatBody = ({
 
         {chat.streamingText && atLatest && (
           <div className="dash-chat__msg" data-role="assistant" data-streaming="true">
-            {chat.streamingText}
+            <ReplyMarkdown text={chat.streamingText} />
           </div>
         )}
 
@@ -829,7 +831,7 @@ const ChatBody = ({
          */}
         {chat.pendingQuestion && !chat.streaming && (
           <div className="dash-chat__msg" data-role="assistant" data-testid="chat-question">
-            {chat.pendingQuestion.question}
+            <ReplyMarkdown text={chat.pendingQuestion.question} />
             <div className="dash-row" style={{ flexWrap: "wrap", marginTop: 8 }}>
               {chat.pendingQuestion.options.map((option) => (
                 <button

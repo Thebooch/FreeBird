@@ -820,18 +820,23 @@ export const DASH_REACT_STYLES = `
   letter-spacing: -0.015em; margin: 0; color: var(--dash-ink);
 }
 
+/*
+ * Replies are read, not glanced at, so the log is the page itself: white,
+ * with the assistant's text set on it like a document and only what you
+ * typed in a box.
+ */
 .dash-chat__log {
   flex: 1; overflow-y: auto;
   padding: var(--dash-space-4) var(--dash-space-4) var(--dash-space-6);
   display: flex; flex-direction: column; gap: var(--dash-space-2);
-  background: var(--dash-surface-sunken);
+  background: var(--dash-surface);
 }
 
 .dash-chat__msg {
-  font-size: var(--dash-text-sm); line-height: var(--dash-leading-normal);
+  font-size: var(--dash-text-md); line-height: 1.55;
   white-space: pre-wrap; word-break: break-word;
-  padding: 9px 13px;
-  border-radius: 12px;
+  padding: 10px 14px;
+  border-radius: var(--dash-radius-sm);
   max-width: 86%;
   animation: dash-msg-in var(--dash-dur-base) var(--dash-ease-out) both;
 }
@@ -839,22 +844,60 @@ export const DASH_REACT_STYLES = `
   from { opacity: 0; transform: translateY(4px) }
   to { opacity: 1; transform: none }
 }
+/* Yours: a tinted box on your side, in ink — the teal is the tint, not the text. */
 .dash-chat__msg[data-role="user"] {
   align-self: flex-end;
-  background: var(--dash-accent); color: var(--dash-accent-ink);
-  /* One squared corner points the bubble at its own side of the column. */
-  border-bottom-right-radius: 4px;
+  background: var(--dash-accent-wash); color: var(--dash-ink);
 }
+/* Its reply: no box at all, the full width of the column. */
 .dash-chat__msg[data-role="assistant"] {
-  align-self: flex-start;
-  background: var(--dash-surface-raised); color: var(--dash-ink);
-  border: 1px solid var(--dash-border);
-  border-bottom-left-radius: 4px;
-  box-shadow: var(--dash-shadow-sm);
+  align-self: stretch; max-width: 100%;
+  padding: 0;
+  color: var(--dash-ink);
+  white-space: normal;
 }
 /* A change of speaker gets a little more air than a run from one side. */
 .dash-chat__msg[data-role="user"] + .dash-chat__msg[data-role="assistant"],
-.dash-chat__msg[data-role="assistant"] + .dash-chat__msg[data-role="user"] { margin-top: var(--dash-space-2); }
+.dash-chat__msg[data-role="assistant"] + .dash-chat__msg[data-role="user"] { margin-top: var(--dash-space-3); }
+
+/*
+ * Full screen is for reading at length: a size up. Your messages still fit
+ * their text, on the right of the reading column — a "yes" in a full-width
+ * band reads as a banner, not a reply.
+ */
+.dash-chat[data-mode="full"] .dash-chat__msg { font-size: 16px; line-height: 1.6; }
+
+/*
+ * A reply's markdown (apps/web chat/ReplyMarkdown). Spacing comes from the
+ * blocks, not the text: first and last sit flush, so the reply lines up with
+ * the citations and buttons under it.
+ */
+.dash-md > * { margin: 0; }
+.dash-md > * + * { margin-top: 0.7em; }
+.dash-md__h {
+  font-size: var(--dash-text-lg); font-weight: var(--dash-weight-semi);
+  line-height: var(--dash-leading-tight); letter-spacing: -0.01em;
+  color: var(--dash-ink);
+}
+.dash-md > * + .dash-md__h { margin-top: 1.1em; }
+.dash-md__h[data-level="2"] { font-size: 1em; }
+.dash-md__list { padding-left: 1.4em; }
+.dash-md__list li + li { margin-top: 0.3em; }
+.dash-md__list li::marker { color: var(--dash-muted); }
+.dash-md__code {
+  font-family: var(--dash-font-mono); font-size: 0.88em;
+  padding: 1px 5px; border-radius: 4px;
+  background: var(--dash-wash);
+}
+.dash-md__pre {
+  font-family: var(--dash-font-mono); font-size: var(--dash-text-xs); line-height: var(--dash-leading-normal);
+  padding: var(--dash-space-3); border-radius: var(--dash-radius-sm);
+  background: var(--dash-surface-sunken); border: 1px solid var(--dash-border);
+  overflow-x: auto; white-space: pre;
+}
+.dash-md__link { color: var(--dash-accent); text-decoration: underline; text-underline-offset: 2px; }
+.dash-md__link:hover { color: var(--dash-accent-strong); }
+.dash-md__rule { border: 0; border-top: 1px solid var(--dash-border); }
 .dash-chat__msg[data-role="tool"] {
   align-self: stretch; max-width: 100%;
   background: transparent; border: 1px dashed var(--dash-border-strong);
