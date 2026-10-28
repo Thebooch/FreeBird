@@ -1,4 +1,4 @@
-import { AgentChip, Button, EmptyState } from "@freebirdai/dash-components";
+import { AgentChip, Button, EmptyState, Icon } from "@freebirdai/dash-components";
 import type { AgentSpec, MailboxView, MailPage } from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
@@ -147,7 +147,7 @@ export const CommsShell = (): JSX.Element => {
           </Button>
         ) : (
           <button type="button" className="dash-comms-box__more" aria-label={`Manage ${box.address ?? box.title}`} onClick={() => setManaging(box)}>
-            ⋯
+            <Icon name="ellipsis" />
           </button>
         )}
       </li>
@@ -232,7 +232,7 @@ export const CommsShell = (): JSX.Element => {
           </p>
         ))}
         {mailboxes !== null && group.mailboxes.length === 0 ? (
-          <EmptyState glyph="✉" title="No mailboxes here yet" body="Add a Gmail or Outlook mailbox to read, sort and answer its mail here." />
+          <EmptyState icon="mail" title="No mailboxes here yet" body="Add a Gmail or Outlook mailbox to read, sort and answer its mail here." />
         ) : (
           <ul className="dash-comms__messages" data-testid="comms-messages">
             {shown.map((one) => {
@@ -293,7 +293,7 @@ export const CommsShell = (): JSX.Element => {
             onChanged={() => void load()}
           />
         ) : (
-          <EmptyState glyph="✉" title="Pick a conversation" body="Its messages are read live from the mailbox, with any reply an agent drafted underneath." />
+          <EmptyState icon="mail" title="Pick a conversation" body="Its messages are read live from the mailbox, with any reply an agent drafted underneath." />
         )}
       </section>
 

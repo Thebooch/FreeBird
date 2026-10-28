@@ -1,4 +1,4 @@
-import { Badge, Button, EmptyState, ErrorState } from "@freebirdai/dash-components";
+import { Badge, Button, EmptyState, ErrorState, Icon, type IconName } from "@freebirdai/dash-components";
 import { itemAttrs, screenAttrs, useChatFocus, useScreenChanged } from "../chatScreen.js";
 import {
   CONTACT_FIELD_KINDS,
@@ -72,14 +72,14 @@ export const FieldsTab = ({ canManage }: { readonly canManage: boolean }): JSX.E
             )}
           </header>
           {setup.fields.length === 0 ? (
-            <EmptyState glyph="◇" title="No fields yet" body="Add the facts your blocks decide on: a service area, a segment, whether they have pets. Each can come from a record, from asking, or from your team." />
+            <EmptyState icon="tag" title="No fields yet" body="Add the facts your blocks decide on: a service area, a segment, whether they have pets. Each can come from a record, from asking, or from your team." />
           ) : (
             <ul className="dash-sched-list">
               {setup.fields.map((def) => (
                 <li key={def.key} {...itemAttrs(def.key)}>
                   <button type="button" className="dash-sched-item" onClick={() => canManage && setEditing({ kind: "field", def })} disabled={!canManage} data-testid="fields-row">
                     <span className="dash-contacts-kind" aria-hidden="true">
-                      {KIND_GLYPHS[def.kind]}
+                      <Icon name={KIND_ICONS[def.kind]} size={14} />
                     </span>
                     <span className="dash-sched-item__main">
                       <span className="dash-sched-item__title">
@@ -121,14 +121,14 @@ export const FieldsTab = ({ canManage }: { readonly canManage: boolean }): JSX.E
             )}
           </header>
           {setup.matchRules.length === 0 ? (
-            <EmptyState glyph="⇄" title="No match rules" body="Without one, contacts stay in Dash only and fields with a record source stay empty." />
+            <EmptyState icon="arrow-left-right" title="No match rules" body="Without one, contacts stay in Dash only and fields with a record source stay empty." />
           ) : (
             <ul className="dash-sched-list">
               {setup.matchRules.map((rule) => (
                 <li key={rule.id} {...itemAttrs(rule.id)}>
                   <button type="button" className="dash-sched-item" onClick={() => canManage && setEditing({ kind: "rule", rule })} disabled={!canManage} data-testid="match-row">
                     <span className="dash-contacts-kind" aria-hidden="true">
-                      ⇄
+                      <Icon name="arrow-left-right" size={14} />
                     </span>
                     <span className="dash-sched-item__main">
                       <span className="dash-sched-item__title">{recordTypeWords(rule.connection, rule.entity, sources)}{rule.type ? ` · ${rule.type}` : ""}</span>
@@ -170,15 +170,15 @@ export const FieldsTab = ({ canManage }: { readonly canManage: boolean }): JSX.E
   );
 };
 
-const KIND_GLYPHS: Readonly<Record<ContactFieldKind, string>> = {
-  text: "Aa",
-  choice: "◉",
-  address: "⌂",
-  email: "@",
-  phone: "☏",
-  number: "#",
-  date: "▦",
-  boolean: "✓",
+const KIND_ICONS: Readonly<Record<ContactFieldKind, IconName>> = {
+  text: "type",
+  choice: "circle-dot",
+  address: "map-pin",
+  email: "at-sign",
+  phone: "phone",
+  number: "hash",
+  date: "calendar",
+  boolean: "toggle",
 };
 
 /* ── a field ───────────────────────────────────────────────────────────── */
@@ -407,7 +407,7 @@ const SourceEditor = ({
           ))}
         </select>
         <button type="button" className="dash-sched-rule__remove" aria-label="Remove this source" onClick={onRemove}>
-          ✕
+          <Icon name="x" size={14} />
         </button>
       </div>
       {samples.length > 0 && (
@@ -418,7 +418,7 @@ const SourceEditor = ({
               {samples.map((sample) => (
                 <label key={sample} className="dash-contact-source__map-row">
                   <code className="dash-contacts-key">{sample}</code>
-                  <span aria-hidden="true">→</span>
+                  <Icon name="arrow-right" size={14} />
                   <select
                     className="dash-sched-input"
                     value={map[sample] ?? ""}
@@ -617,7 +617,7 @@ const MatchRuleSheet = ({
               ))}
             </select>
             <button type="button" className="dash-sched-rule__remove" aria-label="Remove this line" disabled={draft.on.length === 1} onClick={() => setDraft({ ...draft, on: draft.on.filter((_, at) => at !== index) })}>
-              ✕
+              <Icon name="x" size={14} />
             </button>
           </div>
         ))}

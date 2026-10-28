@@ -1,5 +1,5 @@
+import { Icon } from "@freebirdai/dash-components";
 import type { CalendarKind } from "@freebirdai/dash-spec";
-import { Check } from "./controls.jsx";
 import { KIND_LABELS, colorVar, type CalendarFilter, type OwnerInfo } from "./model.js";
 
 /**
@@ -39,7 +39,7 @@ export const CalendarLegend = ({
     <label key={key} className="dash-cal-legend__row" data-off={on ? undefined : "true"} style={{ ["--cal-color" as string]: color }}>
       <input type="checkbox" checked={on} onChange={toggle} />
       <span className="dash-cal-legend__box" aria-hidden="true">
-        <Check />
+        <Icon name="check" size={10} />
       </span>
       <span className="dash-cal-legend__name">{name}</span>
       {count !== undefined && <span className="dash-cal-legend__count">{count}</span>}

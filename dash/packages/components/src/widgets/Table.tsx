@@ -1,6 +1,8 @@
 import { isSlotHidden, settingBool, settingNumber } from "@freebirdai/dash-spec";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Button,
+  Icon,
   Menu,
   Message,
   Pagination,
@@ -30,6 +32,27 @@ import {
   sortRows,
   visibleColumns,
 } from "./tableModel.js";
+
+/**
+ * Rows drawn at first in a table that is not paged, and added each time the
+ * reader nears the end of them.
+ */
+const ROW_BATCH = 100;
+
+/**
+ * The box a table scrolls in: the nearest ancestor that scrolls and has
+ * somewhere to go. None means the page itself, which is what a table on a
+ * record page or in a sheet, given all the height it asks for, scrolls with.
+ */
+const scrollParent = (node: HTMLElement): HTMLElement | null => {
+  for (let element = node.parentElement; element; element = element.parentElement) {
+    const { overflowY } = getComputedStyle(element);
+    if ((overflowY === "auto" || overflowY === "scroll") && element.scrollHeight > element.clientHeight) {
+      return element;
+    }
+  }
+  return null;
+};
 
 /**
  * The workhorse.
@@ -66,6 +89,17 @@ export const Table = (props: WidgetRenderProps): JSX.Element => {
   const [query, setQuery] = useState("");
   const [hidden, setHidden] = useState<ReadonlySet<string>>(() => new Set<string>());
   const [page, setPage] = useState(1);
+  /*
+   * How many rows an unpaged table draws. A tile shows a dozen and scrolls the
+   * rest, and drawing all six hundred of a long endpoint made the board slow
+   * to open, to sort and to search for rows nobody had scrolled to. Without an
+   * observer to say when the end is near — on the server, rendering a digest —
+   * every row is drawn, as before.
+   */
+  const [limit, setLimit] = useState(() =>
+    typeof IntersectionObserver === "undefined" ? Number.POSITIVE_INFINITY : ROW_BATCH,
+  );
+  const moreRef = useRef<HTMLTableRowElement>(null);
 
   const columns = visibleColumns(allColumns, hidden);
   const activeSort = effectiveSort(sort, columns);
@@ -130,6 +164,25 @@ export const Table = (props: WidgetRenderProps): JSX.Element => {
 
   const searched = searchable ? filterRows(props.rows, columns, query, display) : props.rows;
   const shaped = sortRows(searched, activeSort);
+  const more = pageSize === 0 && shaped.length > limit;
+
+  /*
+   * The next batch, before the reader reaches the end of this one. Watched
+   * again after each batch, so a short batch that still leaves the end in
+   * range keeps going until it does not.
+   */
+  useEffect(() => {
+    const node = moreRef.current;
+    if (!more || !node || typeof IntersectionObserver === "undefined") return undefined;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) setLimit((count) => count + ROW_BATCH);
+      },
+      { root: scrollParent(node), rootMargin: "0px 0px 600px 0px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [more, limit]);
 
   /*
    * Highlights are index-parallel to the *original* rows, so the index has to
@@ -146,7 +199,7 @@ export const Table = (props: WidgetRenderProps): JSX.Element => {
   if (props.rows.length === 0) return <Message>No rows in this range.</Message>;
 
   const paged = pageSize > 0 ? pageSlice(shaped, page, pageSize) : null;
-  const rows = paged ? paged.rows : shaped;
+  const rows = paged ? paged.rows : more ? shaped.slice(0, limit) : shaped;
   const totals = showTotals ? columnTotals(shaped, columns, props.columns) : [];
   const totalByColumn = new Map(totals.map((total) => [total.column, total]));
   const labelCell = columns.find((name) => !totalByColumn.has(name));
@@ -159,7 +212,7 @@ export const Table = (props: WidgetRenderProps): JSX.Element => {
           end={
             pickable ? (
               <Menu
-                glyph="◫"
+                glyph={<Icon name="columns" />}
                 label="Choose columns"
                 testId="table-columns"
                 items={allColumns.map((name) => ({
@@ -188,6 +241,7 @@ export const Table = (props: WidgetRenderProps): JSX.Element => {
                 setQuery(value);
                 // A narrower result set makes the current page meaningless.
                 setPage(1);
+                setLimit((count) => Math.min(count, ROW_BATCH));
               }}
               label={`Search ${props.title}`}
               placeholder="Search these rows"
@@ -250,9 +304,11 @@ export const Table = (props: WidgetRenderProps): JSX.Element => {
                         onClick={() => setSort((previous) => nextSort(previous, name))}
                       >
                         {labelOf(props.columns, name)}
-                        <span className="dash-table__arrow" aria-hidden="true">
-                          {active ? (activeSort?.direction === "asc" ? "↑" : "↓") : "↕"}
-                        </span>
+                        <Icon
+                          name={active ? (activeSort?.direction === "asc" ? "arrow-up" : "arrow-down") : "arrow-up-down"}
+                          size={12}
+                          className="dash-table__arrow"
+                        />
                       </button>
                     </th>
                   );
@@ -336,6 +392,23 @@ export const Table = (props: WidgetRenderProps): JSX.Element => {
                 </tr>
               );
             })}
+            {/*
+             * Where the next batch comes from, and what it says while it is
+             * on its way. The button is for whoever gets here without
+             * scrolling — the keyboard, or a page that is not drawing frames.
+             */}
+            {more && (
+              <tr ref={moreRef} className="dash-table__more" data-testid="table-more">
+                <td colSpan={columns.length + (props.rowActions ? 1 : 0)}>
+                  <span>
+                    Showing {rows.length} of {shaped.length} rows
+                  </span>
+                  <Button size="sm" tone="ghost" onClick={() => setLimit((count) => count + ROW_BATCH)}>
+                    Show more
+                  </Button>
+                </td>
+              </tr>
+            )}
           </tbody>
 
           {totals.length > 0 && (

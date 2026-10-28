@@ -11,7 +11,7 @@ export const DASH_CONTACTS_STYLES = `
 .dash-contacts-search {
   position: relative; display: flex; align-items: center; flex: 1 1 320px; max-width: 460px;
 }
-.dash-contacts-search__icon { position: absolute; left: 11px; width: 15px; height: 15px; color: var(--dash-muted); pointer-events: none; }
+.dash-contacts-search__icon { position: absolute; left: 11px; width: 16px; height: 16px; color: var(--dash-muted); pointer-events: none; }
 .dash-contacts-search__input {
   font: inherit; font-size: var(--dash-text-sm); color: var(--dash-ink); width: 100%; box-sizing: border-box;
   padding: 8px 12px 8px 34px; min-height: 38px; border: 1px solid var(--dash-border-strong); border-radius: var(--dash-radius-sm);

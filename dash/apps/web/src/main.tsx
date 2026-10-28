@@ -1,3 +1,4 @@
+import { Icon } from "@freebirdai/dash-components";
 import { AdapterRegistry, ProxyAdapter } from "@freebirdai/connect/adapters";
 import { FramePanel } from "./FramePanel.jsx";
 import { Dashboard, DashStyleSheet, RecordPage, changeRowActions, keyFieldsOf, recordChangeRequests } from "@freebirdai/dash-react";
@@ -20,10 +21,11 @@ import type {
   WidgetSpec,
 } from "@freebirdai/dash-spec";
 import { connectionSchema, parseDashboard, withoutWidget } from "@freebirdai/dash-spec";
-import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { StrictMode, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createRoot } from "react-dom/client";
 import { api } from "./api.js";
 import { ChatColumn } from "./ChatColumn.jsx";
+import { useChatMode } from "./chatMode.js";
 import { ChatScopeReporter, ChatSession } from "./ChatSession.jsx";
 import { BoardAsk } from "./BoardAsk.jsx";
 import { DASH_SCREENS } from "@freebirdai/dash-spec";
@@ -379,7 +381,11 @@ const App = (): JSX.Element => {
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   /* Stable, so a board address asking for the panel opens it once. */
   const openConnections = useCallback(() => setConnectionsOpen(true), []);
-  const [chatOpen, setChatOpen] = useState(false);
+  const chat = useChatMode();
+  const { open: chatOpen, setOpen: setChatOpen } = chat;
+  /* `open` keeps every existing rule for the docked column; `full` adds to it. */
+  const chatShell = chat.mode === "full" ? "full" : chatOpen ? "open" : "closed";
+  const chatWidthStyle = chat.width ? ({ "--dash-chat-user-width": `${chat.width}px` } as CSSProperties) : undefined;
   /** Something the shell is saying for the user, cleared once the chat has it. */
   const [pendingMessage, setPendingMessage] = useState<string | null>(null);
   /** The claim on it, so one click can only ever be said once. */
@@ -861,6 +867,51 @@ const App = (): JSX.Element => {
    */
   const [justAdded, setJustAdded] = useState<string | null>(null);
 
+  /*
+   * Anything that needs the page under the chat docks it.
+   *
+   * A full-screen chat hides the page, and every sheet and panel here renders
+   * inside it — so opening one from the nav's menu, or the chat asking for
+   * one, would otherwise open it invisibly. Docking shows both.
+   */
+  const needsPage =
+    connectionsOpen || reportsOpen || arranging || editingLayout || Boolean(framing) || Boolean(customising) || Boolean(change);
+  const { mode: chatMode, exitFull } = chat;
+  useEffect(() => {
+    if (needsPage && chatMode === "full") exitFull();
+  }, [needsPage, chatMode, exitFull]);
+
+  /*
+   * Full screen starts under the nav, and the nav wraps on a narrow window, so
+   * its height is measured rather than assumed. Only while full: nothing else
+   * reads it.
+   */
+  useEffect(() => {
+    if (chatMode !== "full") return;
+    const nav = document.querySelector<HTMLElement>(".dash-nav");
+    if (!nav || typeof ResizeObserver === "undefined") return;
+    const root = document.documentElement;
+    /*
+     * Written only when it moves. The nav resizes on every frame of the
+     * animation into full screen, and a custom property set on the root
+     * restyles the whole document each time it is set.
+     */
+    let last = "";
+    const measure = (): void => {
+      const height = `${nav.getBoundingClientRect().bottom}px`;
+      if (height === last) return;
+      last = height;
+      root.style.setProperty("--dash-nav-height", height);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(nav);
+    return () => {
+      observer.disconnect();
+      root.style.removeProperty("--dash-nav-height");
+    };
+  }, [chatMode]);
+
   // Switching boards leaves edit mode: the arrangement being worked on is not
   // the one now on screen.
   useEffect(() => setArranging(false), [live.dashboard?.id]);
@@ -1081,9 +1132,15 @@ const App = (): JSX.Element => {
   const toggleTheme = (): void => {
     const next = theme === "dark" ? "light" : "dark";
     document.documentElement.dataset.theme = next;
-    // Matches `--dash-plane` in each mode, so the page behind the shell is the
-    // same colour as the shell's own background rather than a seam.
-    document.body.style.background = next === "dark" ? "#0c100e" : "#f6f7f6";
+    /*
+     * The page behind the shell takes `--dash-plane` itself, read back from
+     * the sheet after the switch, so it can never drift from the token (it
+     * had: two hard-coded colours, neither the plane) and follows a
+     * workspace's own theme tokens too.
+     */
+    const shell = document.querySelector<HTMLElement>(".dash-root");
+    const plane = shell ? getComputedStyle(shell).getPropertyValue("--dash-plane").trim() : "";
+    document.body.style.background = plane || (next === "dark" ? "#0e1013" : "#f4f3f0");
     setTheme(next);
   };
 
@@ -1122,6 +1179,10 @@ const App = (): JSX.Element => {
       <ChatColumn
         open={chatOpen}
         onToggle={setChatOpen}
+        full={chat.mode === "full"}
+        onFullScreen={chat.enterFull}
+        onExitFullScreen={chat.exitFull}
+        onResize={chat.setWidth}
         dashboardId={live.dashboard?.id ?? null}
         pending={pendingMessage}
         takePending={pendingSlot.take}
@@ -1266,7 +1327,8 @@ const App = (): JSX.Element => {
     return (
       <div
         className="dash-shell"
-        data-chat={chatOpen ? "open" : "closed"}
+        data-chat={chatShell}
+        style={chatWidthStyle}
         data-building={building ? "true" : "false"}
       >
         <div className="dash-root">
@@ -1283,7 +1345,8 @@ const App = (): JSX.Element => {
     return (
       <div
         className="dash-shell"
-        data-chat={chatOpen ? "open" : "closed"}
+        data-chat={chatShell}
+        style={chatWidthStyle}
         data-building={building ? "true" : "false"}
       >
         <div className="dash-root">
@@ -1307,7 +1370,8 @@ const App = (): JSX.Element => {
     return (
       <div
       className="dash-shell"
-      data-chat={chatOpen ? "open" : "closed"}
+      data-chat={chatShell}
+        style={chatWidthStyle}
       data-building={building ? "true" : "false"}
     >
         <div className="dash-root">
@@ -1315,7 +1379,7 @@ const App = (): JSX.Element => {
           <div className="dash-page">
             <div className="dash-empty" data-testid="empty-state">
               <span className="dash-empty__mark" aria-hidden="true">
-                ⚯
+                <Icon name="plug" size={28} />
               </span>
               <h2 className="dash-empty__title">Connect an API to get started</h2>
               <p className="dash-empty__body">
@@ -1329,14 +1393,16 @@ const App = (): JSX.Element => {
                   onClick={() => setConnectionsOpen(true)}
                   data-testid="empty-connect"
                 >
-                  ⚯ Connect an API
+                  <Icon name="plug" size={14} />
+                  Connect an API
                 </button>
                 <button
                   className="dash-control"
                   onClick={() => setChatOpen(true)}
                   data-testid="empty-ask"
                 >
-                  ✦ Ask the assistant
+                  <Icon name="sparkle" size={14} />
+                  Ask the assistant
                 </button>
               </div>
             </div>
@@ -1351,7 +1417,8 @@ const App = (): JSX.Element => {
     return (
       <div
       className="dash-shell"
-      data-chat={chatOpen ? "open" : "closed"}
+      data-chat={chatShell}
+        style={chatWidthStyle}
       data-building={building ? "true" : "false"}
     >
         <div className="dash-root">
@@ -1371,7 +1438,8 @@ const App = (): JSX.Element => {
     return (
       <div
       className="dash-shell"
-      data-chat={chatOpen ? "open" : "closed"}
+      data-chat={chatShell}
+        style={chatWidthStyle}
       data-building={building ? "true" : "false"}
     >
         <div className="dash-root">
@@ -1401,7 +1469,8 @@ const App = (): JSX.Element => {
   return (
     <div
       className="dash-shell"
-      data-chat={chatOpen ? "open" : "closed"}
+      data-chat={chatShell}
+        style={chatWidthStyle}
       data-building={building ? "true" : "false"}
     >
       <div className="dash-root">

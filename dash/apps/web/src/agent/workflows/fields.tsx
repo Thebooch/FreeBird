@@ -1,4 +1,4 @@
-import { Button } from "@freebirdai/dash-components";
+import { Button, Icon } from "@freebirdai/dash-components";
 import { BOOKING_EVENTS, BOOKING_EVENT_WORDS, WORKFLOW_EVERY, describeCron, type MailboxView, type WorkflowInputDef, type WorkflowTrigger } from "@freebirdai/dash-spec";
 import { useEffect, useState } from "react";
 import { api, type ConnectionSummary } from "../../api";
@@ -99,7 +99,7 @@ export const InputsEditor = ({ inputs, onChange }: { inputs: readonly WorkflowIn
           Required
         </label>
         <button type="button" className="dash-reach__remove" aria-label="Remove this input" onClick={() => onChange(inputs.filter((_, at) => at !== index))}>
-          ✕
+          <Icon name="x" size={14} />
         </button>
       </div>
     ))}
@@ -337,7 +337,7 @@ export const ValuesEditor = ({ values, onChange }: { values: Record<string, stri
             onChange={(event) => onChange(Object.fromEntries(pairs.map(([f, v], at) => (at === index ? [f, event.target.value] : [f, v]))))}
           />
           <button type="button" className="dash-reach__remove" aria-label="Remove this field" onClick={() => onChange(Object.fromEntries(pairs.filter((_, at) => at !== index)))}>
-            ✕
+            <Icon name="x" size={14} />
           </button>
         </div>
       ))}

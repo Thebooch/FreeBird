@@ -1,4 +1,4 @@
-import { Badge, Button, EmptyState, ErrorState } from "@freebirdai/dash-components";
+import { Badge, Button, EmptyState, ErrorState, Icon } from "@freebirdai/dash-components";
 import { itemAttrs, screenAttrs, useChatFocus, useScreenChanged } from "../chatScreen.js";
 import type { Contact, ContactFieldDef } from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -80,10 +80,7 @@ export const ContactsTab = ({ canManage, onSetUpFields }: { readonly canManage: 
     <div className="dash-sched-tab" data-testid="contacts-list" {...screenAttrs("contacts")}>
       <div className="dash-contacts-toolbar">
         <label className="dash-contacts-search">
-          <svg viewBox="0 0 16 16" aria-hidden="true" className="dash-contacts-search__icon">
-            <circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
-            <path d="M10.5 10.5 14 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-          </svg>
+          <Icon name="search" className="dash-contacts-search__icon" />
           <input
             type="search"
             className="dash-contacts-search__input"
@@ -109,7 +106,7 @@ export const ContactsTab = ({ canManage, onSetUpFields }: { readonly canManage: 
       ) : contacts.length === 0 ? (
         <div className="dash-contacts-empty">
           <EmptyState
-            glyph="◍"
+            icon="contact"
             title={search ? "Nobody matches that" : "No contacts yet"}
             body={
               search

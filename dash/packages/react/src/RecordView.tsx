@@ -1,6 +1,7 @@
 import {
   EmptyState,
   ErrorState,
+  Icon,
   Message,
   type RowAction,
   Skeleton,
@@ -339,7 +340,7 @@ const PaneRenderer = ({
     if (partial) {
       return (
         <EmptyState
-          glyph="◐"
+          icon="circle-dashed"
           title={narrowed ? "Nothing found for this record yet." : "Nothing here yet."}
           body={
             narrowed
@@ -349,7 +350,7 @@ const PaneRenderer = ({
         />
       );
     }
-    return <EmptyState glyph="○" title="Nothing here." />;
+    return <EmptyState icon="inbox" title="Nothing here." />;
   }
 
   const registered = getComponent(spec.component);
@@ -376,7 +377,7 @@ const PaneRenderer = ({
     <>
       {staleReason && (
         <p className="dash-widget__stale" role="status">
-          <span aria-hidden="true">⚠</span>
+          <Icon name="warning" size={14} />
           <span>{staleReason}</span>
         </p>
       )}

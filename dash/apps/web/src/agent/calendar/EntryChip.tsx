@@ -1,3 +1,4 @@
+import { Icon } from "@freebirdai/dash-components";
 import type { CalendarEvent } from "@freebirdai/dash-spec";
 import { KIND_LABELS, STATUS_LABELS, colorVar, isAllDay, shortTime, timeLabel, type OwnerInfo } from "./model.js";
 import { itemAttrs } from "../chatScreen.js";
@@ -37,9 +38,7 @@ export const EntryChip = ({
       {...itemAttrs(entry.booking ?? entry.id)}
     >
       {entry.kind === "deadline" && (
-        <span className="dash-cal-chip__flag" aria-hidden="true">
-          ⚑
-        </span>
+        <Icon name="flag" size={12} className="dash-cal-chip__flag" />
       )}
       {!isAllDay(entry) && <span className="dash-cal-chip__time">{shortTime(entry)}</span>}
       <span className="dash-cal-chip__title">{entry.title}</span>

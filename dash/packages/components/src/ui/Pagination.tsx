@@ -1,4 +1,5 @@
 import { IconButton } from "./Button.jsx";
+import { Icon } from "./Icon.jsx";
 
 /**
  * Which slice of the rows is on screen.
@@ -38,7 +39,7 @@ export const Pagination = ({
       {pageCount > 1 && (
         <span className="dash-pager__controls">
           <IconButton label="Previous page" disabled={page <= 1} onClick={() => onChange(page - 1)}>
-            ‹
+            <Icon name="chevron-left" />
           </IconButton>
           <span className="dash-pager__page">
             {format(page)} / {format(pageCount)}
@@ -48,7 +49,7 @@ export const Pagination = ({
             disabled={page >= pageCount}
             onClick={() => onChange(page + 1)}
           >
-            ›
+            <Icon name="chevron-right" />
           </IconButton>
         </span>
       )}

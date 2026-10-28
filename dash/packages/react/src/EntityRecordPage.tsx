@@ -1,4 +1,4 @@
-import { Button, Menu, type MenuItem, Message, type RowAction } from "@freebirdai/dash-components";
+import { Button, Icon, Menu, type MenuItem, Message, type RowAction } from "@freebirdai/dash-components";
 import type { EntityPageSection, EntityPageView, RecordOverride } from "@freebirdai/dash-spec";
 import { humanLabel, parentsFrom } from "@freebirdai/dash-spec";
 import type { Row } from "@freebirdai/dash-runtime";
@@ -241,9 +241,10 @@ export const EntityRecordPage = ({
           onClick={onBack}
           data-testid="record-back"
         >
-          ‹ {backLabel ?? "Back"}
+          <Icon name="chevron-left" size={14} />
+          {backLabel ?? "Back"}
         </button>
-        <span className="dash-sheet__crumb-sep"> › </span>
+        <Icon name="chevron-right" size={14} className="dash-sheet__crumb-sep" />
         <span className="dash-record-page__here">{page.name.one}</span>
         {onEditLayout && panes.length > 0 && (
           <button

@@ -18,7 +18,10 @@ export type { BadgeTone } from "./Badge.jsx";
 export { Checkbox, Field, SearchInput, Select } from "./Field.jsx";
 export type { SelectOption } from "./Field.jsx";
 
-export { FilterGlyph, Menu, MenuOrSingle } from "./Menu.jsx";
+export { Icon } from "./Icon.jsx";
+export type { IconName } from "./Icon.jsx";
+
+export { Menu, MenuOrSingle } from "./Menu.jsx";
 export type { MenuItem } from "./Menu.jsx";
 
 export { Pagination, pageSlice } from "./Pagination.jsx";

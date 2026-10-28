@@ -1,3 +1,5 @@
+import { Icon } from "@freebirdai/dash-components";
+
 import { useDashboard } from "./context.jsx";
 
 /**
@@ -55,7 +57,8 @@ export const ParamBar = (): JSX.Element => {
       ))}
 
       <button className="dash-control" style={{ marginLeft: "auto" }} onClick={refreshAll}>
-        ↻ Refresh all
+        <Icon name="refresh" size={14} />
+        Refresh all
       </button>
     </div>
   );

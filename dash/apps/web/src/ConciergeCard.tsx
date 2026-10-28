@@ -1,3 +1,4 @@
+import { Icon } from "@freebirdai/dash-components";
 import { WidgetShell, useWidgetData } from "@freebirdai/dash-react";
 import type { WidgetSpec } from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -366,7 +367,7 @@ export const Question = ({
               data-testid="concierge-suggestions"
               onClick={() => setShowSuggestions((open) => !open)}
             >
-              ▾
+              <Icon name="chevron-down" />
             </button>
           )}
         </div>
@@ -525,9 +526,7 @@ export const SettingsPanel = ({
         onClick={onToggle}
         data-testid="concierge-settings"
       >
-        <span className="dash-settings__chevron" aria-hidden="true">
-          ▸
-        </span>
+        <Icon name="chevron-right" size={14} className="dash-settings__chevron" />
         <span className="dash-settings__label">Settings</span>
         <span className="dash-settings__summary">
           {missing.length > 0 ? `${missing.length} still needed` : `${controls.length} adjustable`}
@@ -549,9 +548,7 @@ export const SettingsPanel = ({
               >
                 <span className="dash-settings__name">{controlLabel(control)}</span>
                 <span className="dash-settings__value">{controlValue(control)}</span>
-                <span className="dash-settings__go" aria-hidden="true">
-                  ›
-                </span>
+                <Icon name="chevron-right" size={14} className="dash-settings__go" />
               </button>
             </li>
           ))}
@@ -652,9 +649,7 @@ export const ProminentSettings = ({
           >
             <span className="dash-primary__name">{controlLabel(control)}</span>
             <span className="dash-primary__value">{controlValue(control)}</span>
-            <span className="dash-primary__go" aria-hidden="true">
-              ›
-            </span>
+            <Icon name="chevron-right" size={14} className="dash-primary__go" />
           </button>
         </li>
       ))}
@@ -1172,9 +1167,7 @@ export const ConciergeCard = ({
       data-testid="concierge-adjust"
       onClick={() => setAdjusting((value) => !value)}
     >
-      <span className="dash-settings__chevron" aria-hidden="true">
-        ▸
-      </span>
+      <Icon name="chevron-right" size={14} className="dash-settings__chevron" />
       <span className="dash-settings__label">Adjust it yourself</span>
       <span className="dash-settings__summary">optional</span>
     </button>

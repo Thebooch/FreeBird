@@ -1,3 +1,4 @@
+import { Icon } from "@freebirdai/dash-components";
 import { ChangesPanel } from "./ChangesPanel.jsx";
 import type { CatalogEntry, WidgetSpec } from "@freebirdai/dash-spec";
 import {
@@ -93,7 +94,7 @@ const StepRail = ({ current }: { current: View }): JSX.Element => {
             className="dash-steps-rail__step"
             data-state={i === index ? "active" : i < index ? "done" : "todo"}
           >
-            <span className="dash-steps-rail__dot">{i < index ? "✓" : i + 1}</span>
+            <span className="dash-steps-rail__dot">{i < index ? <Icon name="check" size={12} /> : i + 1}</span>
             {step.label}
           </span>
           {i < STEPS.length - 1 && <span className="dash-steps-rail__sep"> — </span>}
@@ -1298,7 +1299,8 @@ export const ConnectionManager = ({
                   setView("choose");
                 }}
               >
-                ✚ Add a connection
+                <Icon name="plus" size={14} />
+                Add a connection
               </button>
             </div>
           </>
@@ -3063,7 +3065,7 @@ export const ConnectionManager = ({
             onClick={onClose}
             aria-label="Close"
           >
-            ✕
+            <Icon name="x" />
           </button>
         </div>
         <div className="dash-inspector__body">

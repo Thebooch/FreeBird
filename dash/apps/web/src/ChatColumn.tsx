@@ -7,12 +7,14 @@ import {
   useSession,
 } from "@freebirdai/react";
 import { transientOf, type ChatMessage } from "@freebirdai/core";
-import { Tabs } from "@freebirdai/dash-components";
+import { Icon, Tabs } from "@freebirdai/dash-components";
 import { useCallback, useLayoutEffect, useMemo } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { api } from "./api.js";
+import { clampChatWidth } from "./chatMode.js";
 import { buildStream, dayLabel, mergeLive, reachesLatest, withDay, type StreamDay } from "./chat/stream.js";
 import { ChatTimeline } from "./chat/Timeline.jsx";
+import { ReplyMarkdown } from "./chat/ReplyMarkdown.jsx";
 import { ConciergeCard } from "./ConciergeCard";
 import { CHANGE_ACTIONS, ChatChangeCard } from "./ChatChangeCard.jsx";
 import { ChatActionCard, OnceCard } from "./ChatActionCard.jsx";
@@ -37,6 +39,12 @@ import { Citations, DigDeeper, OfferWidget, goToCitation } from "./MessageExtras
 export interface ChatColumnProps {
   readonly open: boolean;
   readonly onToggle: (open: boolean) => void;
+  /** In place of the page rather than beside it (`chatMode.ts`). */
+  readonly full?: boolean;
+  readonly onFullScreen?: () => void;
+  readonly onExitFullScreen?: () => void;
+  /** The docked column's edge was dragged to this width, in pixels. */
+  readonly onResize?: (width: number) => void;
   /** Which board the conversation is about. Sent with every request. */
   readonly dashboardId: string | null;
   /** Called after anything stored changes, so the shell reloads. */
@@ -174,8 +182,24 @@ const SPEC_ACTIONS = new Set([
   "delete_dashboard",
 ]);
 
+/** Whether a media query matches, following it as the window changes. */
+const useMediaQuery = (query: string): boolean => {
+  const [matches, setMatches] = useState(() => typeof window !== "undefined" && window.matchMedia(query).matches);
+  useEffect(() => {
+    const list = window.matchMedia(query);
+    const update = (): void => setMatches(list.matches);
+    update();
+    list.addEventListener("change", update);
+    return () => list.removeEventListener("change", update);
+  }, [query]);
+  return matches;
+};
+
 const ChatBody = ({
   onToggle,
+  full = false,
+  onFullScreen,
+  onExitFullScreen,
   dashboardId,
   onDashboardChanged,
   onWidgetAdded,
@@ -184,7 +208,7 @@ const ChatBody = ({
   pending,
   takePending,
   onRecordChanged,
-}: Omit<ChatColumnProps, "open">): JSX.Element => {
+}: Omit<ChatColumnProps, "open" | "onResize">): JSX.Element => {
   /*
    * No session is made up front any more. A topic is a session, and which
    * topic a message goes in is decided when it is sent (`sendRouted`), so the
@@ -350,17 +374,18 @@ const ChatBody = ({
     }
   }, [days, today, loadDay]);
 
-  /** A topic from the timeline: its whole day, scrolled to where it started. */
+  /** A topic from the timeline: its whole day, full screen, scrolled to where it started. */
   const openTopic = useCallback(
     async (day: string, topicId: string) => {
       setTab("chat");
+      onFullScreen?.();
       const loaded = await loadDay(day);
       if (!loaded) return;
       setViewing(topicId);
       scrollTarget.current = { kind: "topic", id: topicId };
       setDays([loaded]);
     },
-    [loadDay],
+    [loadDay, onFullScreen],
   );
 
   /** Past the top border: the day before. Past the bottom one, while on an earlier day: the day after. */
@@ -507,6 +532,15 @@ const ChatBody = ({
   );
 
   /*
+   * Full screen on a wide window has room for both views at once, so the
+   * Timeline leaves its tab for a list beside the conversation — topics one
+   * click away, the way a chat app keeps its history.
+   */
+  const wide = useMediaQuery("(min-width: 1100px)");
+  const sideTimeline = full && wide;
+  const view = sideTimeline ? "chat" : tab;
+
+  /*
    * Where the log should sit after it changes: at the bottom (today, or a
    * reply streaming in while the reader is there), at a topic's first message
    * (a jump from the timeline), or where it was (a day loaded above).
@@ -538,7 +572,7 @@ const ChatBody = ({
     }
     // A reply streaming in follows only a reader who is already at the bottom.
     if (atLatest && !awayFromBottom) log.scrollTop = log.scrollHeight;
-  }, [stream, chat.streamingText, chat.streaming, atLatest, awayFromBottom, tab]);
+  }, [stream, chat.streamingText, chat.streaming, atLatest, awayFromBottom, view]);
 
   /*
    * Executed actions are the assistant's hands.
@@ -635,44 +669,65 @@ const ChatBody = ({
   };
   const send = (text: string): void => void sendRouted(text);
 
+  const topicName = topicNames[viewing ?? freeBird.sessionId ?? ""];
+  const timeline = <ChatTimeline onOpenTopic={(day, topicId) => void openTopic(day, topicId)} />;
+
   return (
     <>
       <div className="dash-chat__head">
-        <h3 className="dash-chat__title">Assistant</h3>
+        <h3 className="dash-chat__title">{full && topicName ? topicName : "Assistant"}</h3>
         {/*
          * No "new chat" button: the chat is one stream, divided by topic, and
          * the Timeline tab is how somebody goes back to a day.
          */}
-        <div className="dash-chat__tabs">
-          <Tabs
-            tabs={[
-              { id: "chat", label: "Chat" },
-              { id: "timeline", label: "Timeline" },
-            ]}
-            activeId={tab}
-            onSelect={(id) => setTab(id === "timeline" ? "timeline" : "chat")}
-            label="Assistant view"
-          />
-        </div>
+        {!sideTimeline && (
+          <div className="dash-chat__tabs">
+            <Tabs
+              tabs={[
+                { id: "chat", label: "Chat" },
+                { id: "timeline", label: "Timeline" },
+              ]}
+              activeId={tab}
+              onSelect={(id) => setTab(id === "timeline" ? "timeline" : "chat")}
+              label="Assistant view"
+            />
+          </div>
+        )}
         <button
+          type="button"
           className="dash-iconbtn"
           style={{ marginLeft: "auto" }}
+          onClick={() => (full ? onExitFullScreen?.() : onFullScreen?.())}
+          aria-label={full ? "Exit full screen" : "Full screen"}
+          title={full ? "Exit full screen" : "Full screen"}
+          data-testid="chat-full-screen"
+        >
+          {/* Arrows out to grow, in to shrink: the glyph says which way it goes. */}
+          <Icon name={full ? "minimize" : "maximize"} />
+        </button>
+        <button
+          type="button"
+          className="dash-iconbtn"
           onClick={() => onToggle(false)}
           aria-label="Close the assistant"
           data-testid="chat-close"
         >
-          ✕
+          <Icon name="x" />
         </button>
       </div>
 
-      {tab === "timeline" && <ChatTimeline onOpenTopic={(day, topicId) => void openTopic(day, topicId)} />}
+      <div className="dash-chat__body">
+      {sideTimeline && <div className="dash-chat__side">{timeline}</div>}
+      <div className="dash-chat__main">
+
+      {view === "timeline" && timeline}
 
       <div
         className="dash-chat__log"
         ref={logRef}
         data-testid="chat-log"
         onScroll={onLogScroll}
-        hidden={tab !== "chat"}
+        hidden={view !== "chat"}
       >
         {days[0]?.prev && (
           <button type="button" className="dash-chat__earlier" onClick={() => void loadNeighbour("prev")} data-testid="chat-earlier">
@@ -705,7 +760,20 @@ const ChatBody = ({
               role="separator"
               data-viewing={viewing === item.topicId ? "true" : undefined}
             >
-              <span>{item.name}</span>
+              {/* Docked, a topic's name opens it full screen; full screen, it is just its name. */}
+              {full || !onFullScreen ? (
+                <span>{item.name}</span>
+              ) : (
+                <button
+                  type="button"
+                  className="dash-chat__topic-open"
+                  onClick={onFullScreen}
+                  title="Open full screen"
+                  data-testid={`chat-topic-open-${item.topicId}`}
+                >
+                  {item.name}
+                </button>
+              )}
             </div>
           ) : (
             <div
@@ -714,7 +782,8 @@ const ChatBody = ({
               data-role={item.message.role}
               data-topic-start={item.topicStart}
             >
-              {item.message.content}
+              {/* A reply reads as a document; what you typed stays exactly as typed. */}
+              {item.message.role === "assistant" ? <ReplyMarkdown text={item.message.content} /> : item.message.content}
               {/*
                * Where the answer came from, and how far it looked. Both sit
                * under the text rather than in it — a footnote, not a hedge.
@@ -734,7 +803,7 @@ const ChatBody = ({
 
         {chat.streamingText && atLatest && (
           <div className="dash-chat__msg" data-role="assistant" data-streaming="true">
-            {chat.streamingText}
+            <ReplyMarkdown text={chat.streamingText} />
           </div>
         )}
 
@@ -756,7 +825,7 @@ const ChatBody = ({
          */}
         {chat.pendingQuestion && !chat.streaming && (
           <div className="dash-chat__msg" data-role="assistant" data-testid="chat-question">
-            {chat.pendingQuestion.question}
+            <ReplyMarkdown text={chat.pendingQuestion.question} />
             <div className="dash-row" style={{ flexWrap: "wrap", marginTop: 8 }}>
               {chat.pendingQuestion.options.map((option) => (
                 <button
@@ -873,7 +942,7 @@ const ChatBody = ({
         )}
       </div>
 
-      {tab === "chat" && (awayFromBottom || !atLatest) && (
+      {view === "chat" && (awayFromBottom || !atLatest) && (
         <button
           type="button"
           className="dash-chat__latest"
@@ -881,15 +950,13 @@ const ChatBody = ({
           aria-label="Back to the latest message"
           data-testid="chat-latest"
         >
-          <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.75">
-            <path d="M8 2.5v11M3.5 9 8 13.5 12.5 9" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
+          <Icon name="arrow-down" size={12} />
           Latest
         </button>
       )}
 
       <form
-        hidden={tab !== "chat"}
+        hidden={view !== "chat"}
         className="dash-chat__form"
         onSubmit={(event) => {
           event.preventDefault();
@@ -927,7 +994,59 @@ const ChatBody = ({
           {chat.streaming ? "…" : "Send"}
         </button>
       </form>
+      </div>
+      </div>
     </>
+  );
+};
+
+/**
+ * The docked column's left edge, dragged to set its width.
+ *
+ * Pointer capture keeps the drag going when the pointer outruns the edge, and
+ * the width is reported only on release: the shell reflows the board to it,
+ * and reflowing a board of live widgets on every pointer move is the jank this
+ * avoids. While dragging, the column alone follows the pointer.
+ */
+const ResizeEdge = ({ onResize }: { readonly onResize: (width: number) => void }): JSX.Element => {
+  const dragging = useRef(false);
+  const widthAt = (event: ReactPointerEvent): number => window.innerWidth - event.clientX;
+  const column = (event: ReactPointerEvent): HTMLElement | null =>
+    (event.currentTarget as HTMLElement).closest<HTMLElement>(".dash-chat");
+  return (
+    <div
+      className="dash-chat__resize"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize the assistant"
+      data-testid="chat-resize"
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        dragging.current = true;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        column(event)?.setAttribute("data-resizing", "true");
+      }}
+      onPointerMove={(event) => {
+        if (!dragging.current) return;
+        const target = column(event);
+        if (target) target.style.width = `${clampChatWidth(widthAt(event))}px`;
+      }}
+      onPointerUp={(event) => {
+        if (!dragging.current) return;
+        dragging.current = false;
+        const target = column(event);
+        target?.removeAttribute("data-resizing");
+        // Hand the width back to the shell's variable, which now carries it.
+        if (target) target.style.width = "";
+        onResize(widthAt(event));
+      }}
+      onPointerCancel={(event) => {
+        dragging.current = false;
+        const target = column(event);
+        target?.removeAttribute("data-resizing");
+        if (target) target.style.width = "";
+      }}
+    />
   );
 };
 
@@ -935,6 +1054,7 @@ export const ChatColumn = ({
   open,
   onToggle,
   dashboardId,
+  onResize,
   ...handlers
 }: ChatColumnProps): JSX.Element => {
   /*
@@ -947,10 +1067,12 @@ export const ChatColumn = ({
       <aside
         className="dash-chat"
         data-open={open ? "true" : "false"}
+        data-mode={handlers.full ? "full" : "docked"}
         aria-hidden={!open}
         aria-label="Assistant"
         data-testid="chat-column"
       >
+        {open && !handlers.full && onResize && <ResizeEdge onResize={onResize} />}
         {/*
          * The body mounts only while open, so a closed column still costs
          * nothing: `useSession` lives in here, so no session is created and no

@@ -1,4 +1,4 @@
-import { Button } from "@freebirdai/dash-components";
+import { Button, Icon } from "@freebirdai/dash-components";
 import {
   AGENT_TOOL_INFO,
   AGENT_TOOL_KINDS,
@@ -161,7 +161,7 @@ const ToolRow = ({
           ))}
         </span>
         <button type="button" className="dash-reach__remove" aria-label="Remove this tool" onClick={onRemove}>
-          ✕
+          <Icon name="x" size={14} />
         </button>
       </div>
 
@@ -299,7 +299,7 @@ const HighlightRow = ({
         <span className="dash-tool__name">Highlight</span>
       </label>
       <button type="button" className="dash-reach__remove" aria-label="Remove this tool" onClick={onRemove}>
-        ✕
+        <Icon name="x" size={14} />
       </button>
     </div>
     <div className="dash-tool__body">

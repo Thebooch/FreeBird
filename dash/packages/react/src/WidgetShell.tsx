@@ -3,7 +3,7 @@ import {
   ErrorState,
   type FacetSelection,
   type FacetView,
-  FilterGlyph,
+  Icon,
   Menu,
   type MenuItem,
   Message,
@@ -299,25 +299,25 @@ export const WidgetShell = ({
     ...cautions.map((said, index) => ({
       id: `caution-${index}`,
       label: said.length > 90 ? `${said.slice(0, 89)}…` : said,
-      icon: "⚠",
+      icon: <Icon name="warning" />,
       section: "About this number",
       onSelect: () => setInspecting(true),
     })),
-    { id: "refresh", label: "Refresh", icon: "↻", onSelect: data.refetch },
+    { id: "refresh", label: "Refresh", icon: <Icon name="refresh" />, onSelect: data.refetch },
     {
       id: "inspect",
       label: "Where did this come from?",
-      icon: "ⓘ",
+      icon: <Icon name="info" />,
       onSelect: () => setInspecting(true),
     },
     ...(createLabel && onCreateRecord
-      ? [{ id: "create-record", label: createLabel, icon: "＋", onSelect: () => onCreateRecord.open(widget.id) }]
+      ? [{ id: "create-record", label: createLabel, icon: <Icon name="plus" />, onSelect: () => onCreateRecord.open(widget.id) }]
       : []),
     ...(onCustomise
-      ? [{ id: "customise", label: "Customise", icon: "◫", onSelect: () => onCustomise(widget.id) }]
+      ? [{ id: "customise", label: "Customise", icon: <Icon name="sliders" />, onSelect: () => onCustomise(widget.id) }]
       : []),
     ...(onFrame
-      ? [{ id: "frame", label: "Shown with…", icon: "▤", onSelect: () => onFrame(widget.id) }]
+      ? [{ id: "frame", label: "Shown with…", icon: <Icon name="panels" />, onSelect: () => onFrame(widget.id) }]
       : []),
     /*
      * Removal lives behind the menu rather than beside Refresh.
@@ -332,7 +332,7 @@ export const WidgetShell = ({
           {
             id: "remove",
             label: "Remove from dashboard",
-            icon: "✕",
+            icon: <Icon name="trash" />,
             tone: "danger" as const,
             separated: true,
             onSelect: () => onRemove(widget.id),
@@ -388,7 +388,7 @@ export const WidgetShell = ({
         {filterItems.length > 0 && (
           <Menu
             items={filterItems}
-            glyph={<FilterGlyph />}
+            glyph={<Icon name="list-filter" />}
             badge={filterCount}
             label={
               filterCount > 0
@@ -462,7 +462,7 @@ export const WidgetShell = ({
       {(data.state === "ok" || data.state === "empty" || data.state === "invalid") &&
         data.fetchMeta?.staleReason && (
           <p className="dash-widget__stale" role="status">
-            <span aria-hidden="true">⚠</span>
+            <Icon name="warning" size={14} />
             <span>
               {data.fetchMeta.staleReason} Showing data from{" "}
               {formatValue(data.lastFetchedAt, { semantic: "relative_time" }, { now: Math.max(now, data.lastFetchedAt) })}.
@@ -483,7 +483,7 @@ export const WidgetShell = ({
           data-testid={`incomplete-${widget.id}`}
           title={data.incomplete.join("\n")}
         >
-          <span aria-hidden="true">◐</span>
+          <Icon name="circle-dashed" size={14} />
           <span>
             {data.incomplete[0]}
             {data.incomplete.length > 1 ? ` (${data.incomplete.length - 1} more reason${data.incomplete.length === 2 ? "" : "s"})` : ""}
@@ -856,7 +856,7 @@ const WidgetBody = ({
     case "empty":
       return (
         <EmptyState
-          glyph="○"
+          icon="inbox"
           title={data.widget.states.empty ?? "Nothing to show for this time range."}
         />
       );
@@ -870,7 +870,7 @@ const WidgetBody = ({
        */
       return (
         <EmptyState
-          glyph="⏸"
+          icon="pause"
           title={
             data.approval === "absent"
               ? "This widget is waiting for approval."
@@ -893,7 +893,7 @@ const WidgetBody = ({
       if (rows.length === 0 && filteredBy && filteredBy.length > 0) {
         return (
           <EmptyState
-            glyph="○"
+            icon="inbox"
             title="Nothing matches this filter."
             body={filteredBy.join(" · ")}
             {...(onClearFilter ? { action: { label: "Clear filter", onClick: onClearFilter } } : {})}

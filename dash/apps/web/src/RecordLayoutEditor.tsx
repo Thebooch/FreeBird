@@ -1,4 +1,4 @@
-import { Button, Checkbox, Field, Toolbar } from "@freebirdai/dash-components";
+import { Button, Checkbox, Field, Icon, Toolbar } from "@freebirdai/dash-components";
 import type { DashboardSpec, EntityPageView, RecordOverride } from "@freebirdai/dash-spec";
 import { useState } from "react";
 import { api } from "./api.js";
@@ -181,7 +181,7 @@ export const RecordLayoutEditor = ({
             onClick={onClose}
             aria-label="Close"
           >
-            ✕
+            <Icon name="x" />
           </button>
         </div>
 
@@ -374,7 +374,7 @@ export const RecordLayoutEditor = ({
                           disabled={at === 0}
                           onClick={() => move(section.id, -1)}
                         >
-                          ↑
+                          <Icon name="arrow-up" size={14} />
                         </button>
                         <button
                           className="dash-iconbtn"
@@ -382,7 +382,7 @@ export const RecordLayoutEditor = ({
                           disabled={at === sections.length - 1}
                           onClick={() => move(section.id, 1)}
                         >
-                          ↓
+                          <Icon name="arrow-down" size={14} />
                         </button>
                       </>
                     )}

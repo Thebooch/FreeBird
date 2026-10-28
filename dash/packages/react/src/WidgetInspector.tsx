@@ -1,3 +1,4 @@
+import { Icon } from "@freebirdai/dash-components";
 import { formatValue, widgetSources } from "@freebirdai/dash-spec";
 import { Fragment, useEffect, useMemo } from "react";
 import type { FetchMeta } from "@freebirdai/connect/adapters";
@@ -60,7 +61,7 @@ export const WidgetInspector = ({
         <div className="dash-inspector__head">
           <h3 className="dash-inspector__title">{widget.title}</h3>
           <button className="dash-iconbtn" style={{ marginLeft: "auto" }} onClick={onClose} aria-label="Close">
-            ✕
+            <Icon name="x" />
           </button>
         </div>
 

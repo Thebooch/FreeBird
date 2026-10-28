@@ -53,7 +53,7 @@ export const PeopleTab = (): JSX.Element => {
             )}
           </header>
           {setup.profiles.length === 0 && notSetUp.length === 0 ? (
-            <EmptyState glyph="◎" title="Nobody yet" body="Add a team member, or set up a workspace member, to start taking bookings." />
+            <EmptyState icon="users" title="Nobody yet" body="Add a team member, or set up a workspace member, to start taking bookings." />
           ) : (
             <ul className="dash-sched-list">
               {setup.profiles.map((profile) => (

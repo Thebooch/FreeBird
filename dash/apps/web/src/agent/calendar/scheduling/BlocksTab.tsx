@@ -1,5 +1,5 @@
 import { BLOCK_KIND_WORDS, LAYER_KEYS, resolveSettings, type Block, type Placement, type Recurrence } from "@freebirdai/dash-spec";
-import { Badge, Button, EmptyState, ErrorState } from "@freebirdai/dash-components";
+import { Badge, Button, EmptyState, ErrorState, Icon } from "@freebirdai/dash-components";
 import { useState } from "react";
 import { api, type SchedulingOverview } from "../../../api.js";
 import { Segmented, Switch } from "../controls.jsx";
@@ -49,7 +49,7 @@ export const BlocksTab = (): JSX.Element => {
         )}
       </header>
       {setup.blocks.length === 0 ? (
-        <EmptyState glyph="▤" title="No blocks yet" body="A block says who may book in it: addresses, contact categories, any field. Place it on a calendar to apply it." />
+        <EmptyState icon="layout-list" title="No blocks yet" body="A block says who may book in it: addresses, contact categories, any field. Place it on a calendar to apply it." />
       ) : (
         <div className="dash-sched-blocks">
           {setup.blocks.map((block) => {
@@ -204,7 +204,7 @@ const BlockSheet = ({
                     Up
                   </button>
                   <button type="button" className="dash-sched-rule__remove" aria-label="Remove" onClick={() => set("becomes", draft.becomes.filter((one) => one !== into))}>
-                    ✕
+                    <Icon name="x" size={14} />
                   </button>
                 </li>
               ))}
@@ -553,7 +553,7 @@ const SkipList = ({ except, onChange, onSkip }: { readonly except: readonly stri
           <span key={day} className="dash-sched-chip">
             {day}
             <button type="button" className="dash-sched-chip__remove" aria-label={`Put ${day} back`} onClick={() => onChange(except.filter((one) => one !== day))}>
-              ✕
+              <Icon name="x" size={12} />
             </button>
           </span>
         ))}

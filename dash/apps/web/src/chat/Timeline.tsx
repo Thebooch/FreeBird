@@ -1,4 +1,4 @@
-import { AgentChip, ErrorState } from "@freebirdai/dash-components";
+import { AgentChip, ErrorState, Icon } from "@freebirdai/dash-components";
 import type { AgentSpec } from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { api, type ChatDaySummary, type ChatTimelineTask, type ChatTopic } from "../api.js";
@@ -215,10 +215,7 @@ const LaterPicker = ({
         onClick={() => setOpen((now) => !now)}
         data-testid="timeline-later"
       >
-        <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5">
-          <rect x="2" y="3" width="12" height="11" rx="2" />
-          <path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3" strokeLinecap="round" />
-        </svg>
+        <Icon name="calendar" size={14} />
         {selected ? fromDay(selected).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "Later"}
       </button>
       {open && (
@@ -329,9 +326,7 @@ const DatePicker = ({
     >
       <div className="dash-later__head">
         <button type="button" className="dash-later__nav" onClick={() => shiftMonth(-1)} aria-label="Previous month">
-          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.75">
-            <path d="M10 3.5 5.5 8l4.5 4.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
+          <Icon name="chevron-left" size={14} />
         </button>
         <span className="dash-later__title" aria-live="polite">
           {title}
@@ -343,9 +338,7 @@ const DatePicker = ({
           disabled={atLatest}
           aria-label="Next month"
         >
-          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.75">
-            <path d="M6 3.5 10.5 8 6 12.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
+          <Icon name="chevron-right" size={14} />
         </button>
       </div>
       <div className="dash-later__grid" role="grid" aria-label={title} ref={grid} onKeyDown={onKey}>

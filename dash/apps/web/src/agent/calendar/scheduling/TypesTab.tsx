@@ -1,5 +1,5 @@
 import { LAYER_KEYS, LOCATION_KINDS, LOCATION_WORDS, resolveSettings, type AgentSpec, type AppointmentType, type Contact, type WeeklyHours, type WorkflowSpec } from "@freebirdai/dash-spec";
-import { Badge, Button, EmptyState, ErrorState } from "@freebirdai/dash-components";
+import { Badge, Button, EmptyState, ErrorState, Icon } from "@freebirdai/dash-components";
 import { useEffect, useMemo, useState } from "react";
 import { api, type SchedulingOverview, type SlotPreview } from "../../../api.js";
 import { navigate } from "../../../route.js";
@@ -47,7 +47,7 @@ export const TypesTab = (): JSX.Element => {
       </header>
       {setup.types.length === 0 ? (
         <EmptyState
-          glyph="◷"
+          icon="clock"
           title="No appointment types yet"
           body={setup.profiles.length === 0 ? "Set up the people who take bookings first, under People and pools." : "An appointment type says how long something takes and who hosts it."}
         />
@@ -332,7 +332,7 @@ const TypeSheet = ({
               <TextInput value={question.field} placeholder="request.notes" onChange={(field) => set("intake", draft.intake.map((one, at) => (at === index ? { ...one, field: field.trim() } : one)))} />
               <Switch checked={question.required} onChange={(required) => set("intake", draft.intake.map((one, at) => (at === index ? { ...one, required } : one)))} label="Required" />
               <button type="button" className="dash-sched-rule__remove" aria-label="Remove this question" onClick={() => set("intake", draft.intake.filter((_, at) => at !== index))}>
-                ✕
+                <Icon name="x" size={14} />
               </button>
             </div>
           ))
@@ -608,7 +608,7 @@ const TypePreview = ({ setup, type }: { readonly setup: SchedulingOverview; read
               <TextInput value={fact.path} placeholder="contact.category" onChange={(path) => setFacts(facts.map((one, at) => (at === index ? { ...one, path: path.trim() } : one)))} />
               <TextInput value={fact.value} placeholder="Value" onChange={(value) => setFacts(facts.map((one, at) => (at === index ? { ...one, value } : one)))} testId="preview-value" />
               <button type="button" className="dash-sched-rule__remove" aria-label="Remove" onClick={() => setFacts(facts.filter((_, at) => at !== index))}>
-                ✕
+                <Icon name="x" size={14} />
               </button>
             </div>
           ))}

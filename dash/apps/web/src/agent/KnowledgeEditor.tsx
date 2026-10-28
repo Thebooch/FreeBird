@@ -1,4 +1,4 @@
-import { Button } from "@freebirdai/dash-components";
+import { Button, Icon } from "@freebirdai/dash-components";
 import type { AgentKnowledge, ContextRule } from "@freebirdai/dash-spec";
 import { useState } from "react";
 import type { ConnectionSummary } from "../api";
@@ -50,7 +50,7 @@ const RuleRow = ({
           onChange={(event) => onChange({ ...rule, trigger: event.target.value })}
         />
         <button type="button" className="dash-reach__remove" aria-label="Remove this rule" onClick={onRemove}>
-          ✕
+          <Icon name="x" size={14} />
         </button>
       </div>
       <div className="dash-rule__sources">
@@ -66,7 +66,7 @@ const RuleRow = ({
                 onChange({ ...rule, sources: rule.sources.filter((one) => one.connection !== source.connection || one.op !== source.op) })
               }
             >
-              ✕
+              <Icon name="x" />
             </button>
           </span>
         ))}
@@ -159,7 +159,8 @@ export const KnowledgeEditor = ({
           }
           testId="agent-rule-add"
         >
-          ＋ Add a trigger
+          <Icon name="plus" size={14} />
+          Add a trigger
         </Button>
       </div>
     </div>

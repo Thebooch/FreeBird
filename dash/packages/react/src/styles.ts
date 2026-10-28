@@ -23,6 +23,24 @@ export const DASH_REACT_STYLES = `
 .dash-params__group { display: inline-flex; align-items: center; gap: 6px; }
 .dash-params__label { font-size: var(--dash-text-xs); color: var(--dash-muted); }
 
+/*
+ * The board's own toolbars run a size down from the 34px app controls: the
+ * row above the widgets, and the search and column bar inside a widget. They
+ * sit over data rather than beside the nav, so lining up with the nav icons
+ * matters less than leaving the board the room. The edit banner and a
+ * record's changes already use the small button, which is the same 28px.
+ */
+.dash-params .dash-control,
+.dash-widget .dash-toolbar .dash-btn,
+.dash-widget .dash-toolbar .dash-search__input {
+  min-height: 28px; font-size: var(--dash-text-xs);
+  padding-top: 3px; padding-bottom: 3px;
+}
+.dash-params .dash-control,
+.dash-widget .dash-toolbar .dash-btn { padding-left: var(--dash-space-2); padding-right: var(--dash-space-2); }
+/* Square, so its hover lands the same height as the search beside it. */
+.dash-widget .dash-toolbar .dash-iconbtn { min-width: 28px; min-height: 28px; }
+
 /* == grid ===============================================================
  * The library positions items with transforms and inline sizes; everything
  * here is the chrome around that. Its stylesheet is inlined rather than
@@ -275,13 +293,14 @@ export const DASH_REACT_STYLES = `
 }
 /* An earlier step of the trail. A control, so it looks and behaves like one. */
 .dash-sheet__crumb {
+  display: inline-flex; align-items: center; gap: 2px;
   background: none; border: none; padding: 0;
   font: inherit; font-size: var(--dash-text-2xs);
   color: var(--dash-muted); cursor: pointer; border-radius: var(--dash-radius-sm);
 }
 .dash-sheet__crumb:hover { color: var(--dash-accent); text-decoration: underline; }
 .dash-sheet__crumb:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 2px; }
-.dash-sheet__crumb-sep { color: var(--dash-axis); }
+.dash-sheet__crumb-sep { color: var(--dash-axis); margin: 0 4px; }
 
 @keyframes dash-fade-in { from { opacity: 0 } to { opacity: 1 } }
 @keyframes dash-slide-in {
@@ -431,8 +450,8 @@ export const DASH_REACT_STYLES = `
 }
 .dash-nav__scroll {
   flex: none; width: 24px; height: 32px; border: 0; border-radius: var(--dash-radius-sm);
+  display: inline-flex; align-items: center; justify-content: center;
   background: transparent; color: var(--nav-ink-dim); cursor: pointer;
-  font: inherit; font-size: var(--dash-text-lg); line-height: 1;
 }
 .dash-nav__scroll:hover { color: var(--nav-ink); background: var(--nav-fill-hover); }
 .dash-nav__scroll:focus-visible { outline: 2px solid var(--nav-mint); outline-offset: 1px; }
@@ -453,7 +472,6 @@ export const DASH_REACT_STYLES = `
   background: transparent; color: var(--nav-ink-faint); cursor: pointer;
   transition: color var(--dash-dur-fast) var(--dash-ease), background var(--dash-dur-fast) var(--dash-ease);
 }
-.dash-nav__barstep svg { width: 10px; height: 7px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .dash-nav__barstep:hover:not(:disabled) { color: var(--nav-ink); background: var(--nav-fill-hover); }
 .dash-nav__barstep:disabled { opacity: 0.3; cursor: default; }
 .dash-nav__barstep:focus-visible { outline: 2px solid var(--nav-mint); outline-offset: 1px; }
@@ -509,6 +527,7 @@ export const DASH_REACT_STYLES = `
 }
 
 .dash-nav__add {
+  display: inline-flex; align-items: center; gap: var(--dash-space-1);
   font: inherit; font-size: var(--dash-text-sm); white-space: nowrap; flex: none;
   border: 1px dashed rgba(255, 255, 255, 0.16); border-radius: var(--dash-radius-pill);
   padding: var(--dash-space-1) var(--dash-space-3); min-height: 32px;
@@ -695,7 +714,39 @@ export const DASH_REACT_STYLES = `
   margin-right: 0;
   transition: margin-right var(--dash-dur-slow) var(--dash-ease);
 }
-.dash-shell[data-chat="open"] { margin-right: var(--dash-chat-width, 380px); }
+/*
+ * A dragged width ("--dash-chat-user-width", set on the shell) is the
+ * default; building still overrides it with "--dash-chat-width".
+ */
+.dash-shell[data-chat="open"] { margin-right: var(--dash-chat-width, var(--dash-chat-user-width, 380px)); }
+
+/*
+ * Full screen: the chat in place of the page, under the nav.
+ *
+ * The page stays mounted, only hidden, so the chat's own state survives (it
+ * renders inside the page's tree). Hidden with "visibility", which takes the
+ * page out of the tab order and the accessibility tree while letting the chat
+ * inside it opt back in. No right margin on the shell: the nav spans the
+ * window. The shell stops scrolling, so the wheel moves the conversation, not
+ * the page behind it.
+ */
+.dash-shell[data-chat="full"] { height: 100vh; overflow: hidden; }
+.dash-shell[data-chat="full"] .dash-root > :not(.dash-nav) { visibility: hidden; }
+.dash-shell[data-chat="full"] aside.dash-chat[data-mode="full"] { visibility: visible; }
+
+/*
+ * The board keeps its docked width under the full-screen chat.
+ *
+ * The margin the shell gives up moves to the page in the same frame (the
+ * shell's own margin does not animate: its duration token is scoped to
+ * ".dash-root", inside it). Without this the board widened as the chat opened
+ * and narrowed again as it docked, and each change re-measured and redrew
+ * every widget on it in the animation's first frames; a busy board stalled
+ * the chat's growth for as long as that took.
+ */
+.dash-shell[data-chat="full"] > .dash-root > .dash-page {
+  margin-right: var(--dash-chat-width, var(--dash-chat-user-width, 380px));
+}
 
 /*
  * Building a widget needs room to show it.
@@ -712,7 +763,7 @@ export const DASH_REACT_STYLES = `
 
 .dash-chat {
   position: fixed; top: 0; right: 0; height: 100%; z-index: 40;
-  width: var(--dash-chat-width, 380px); max-width: 90vw;
+  width: var(--dash-chat-width, var(--dash-chat-user-width, 380px)); max-width: 90vw;
   display: flex; flex-direction: column;
   background: var(--dash-surface);
   border-left: 1px solid var(--dash-border);
@@ -721,6 +772,74 @@ export const DASH_REACT_STYLES = `
   transition: transform var(--dash-dur-slow) var(--dash-ease);
 }
 .dash-chat[data-open="true"] { transform: translateX(0); }
+
+/*
+ * Growing to full screen is the one width change that animates: it happens
+ * once, on a click, and the page under it is hidden, so nothing reflows with
+ * it. "--dash-nav-height" is measured by the shell; 56px is the nav's own
+ * minimum, right whenever it has not wrapped.
+ */
+.dash-chat[data-mode="full"] {
+  top: var(--dash-nav-height, 56px); height: auto; bottom: 0;
+  width: 100%; max-width: none;
+  border-left: 0;
+  background:
+    radial-gradient(80% 22% at 40% 0%, var(--dash-accent-wash), transparent 100%),
+    var(--dash-surface);
+}
+.dash-chat[data-open="true"][data-mode] {
+  transition: transform var(--dash-dur-slow) var(--dash-ease), width var(--dash-dur-slow) var(--dash-ease);
+}
+.dash-chat[data-resizing="true"] { transition: none; user-select: none; }
+
+/* The docked column's draggable left edge: an 8px target over a 1px line. */
+.dash-chat__resize {
+  position: absolute; top: 0; bottom: 0; left: -4px; width: 8px; z-index: 2;
+  cursor: col-resize; touch-action: none;
+}
+.dash-chat__resize::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px;
+  background: transparent;
+  transition: background var(--dash-dur-fast) var(--dash-ease);
+}
+.dash-chat__resize:hover::after,
+.dash-chat[data-resizing="true"] .dash-chat__resize::after { background: var(--dash-accent-line); }
+
+/*
+ * The column's body: the conversation, and in full screen on a wide window
+ * the Timeline beside it. "position: relative" anchors "↓ Latest" to the
+ * conversation rather than the whole column.
+ */
+.dash-chat__body { flex: 1; min-height: 0; display: flex; }
+.dash-chat__main {
+  flex: 1; min-width: 0; position: relative;
+  display: flex; flex-direction: column;
+}
+.dash-chat__side {
+  flex: none; width: 300px; min-height: 0;
+  display: flex; flex-direction: column;
+  border-right: 1px solid var(--dash-border);
+}
+
+/* Full screen reads as a page: one centred column, the composer under it at the same width. */
+.dash-chat[data-mode="full"] .dash-chat__log,
+.dash-chat[data-mode="full"] .dash-chat__form {
+  padding-left: max(var(--dash-space-4), calc((100% - 720px) / 2));
+  padding-right: max(var(--dash-space-4), calc((100% - 720px) / 2));
+}
+.dash-chat[data-mode="full"] .dash-chat__log,
+.dash-chat[data-mode="full"] .dash-chat__head,
+.dash-chat[data-mode="full"] .dash-chat__form { background: transparent; }
+.dash-chat[data-mode="full"] .dash-chat__form { border-top: 0; }
+
+/* A topic's name, docked, is a way into it full screen. */
+.dash-chat__topic-open {
+  min-width: 0; padding: 0; border: 0; background: none;
+  font: inherit; color: inherit; cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dash-chat__topic-open:hover { color: var(--dash-accent); text-decoration: underline; text-underline-offset: 2px; }
+.dash-chat__topic-open:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 2px; border-radius: 2px; }
 
 .dash-chat__head {
   display: flex; align-items: center; gap: var(--dash-space-3);
@@ -734,18 +853,23 @@ export const DASH_REACT_STYLES = `
   letter-spacing: -0.015em; margin: 0; color: var(--dash-ink);
 }
 
+/*
+ * Replies are read, not glanced at, so the log is the page itself: white,
+ * with the assistant's text set on it like a document and only what you
+ * typed in a box.
+ */
 .dash-chat__log {
   flex: 1; overflow-y: auto;
   padding: var(--dash-space-4) var(--dash-space-4) var(--dash-space-6);
   display: flex; flex-direction: column; gap: var(--dash-space-2);
-  background: var(--dash-surface-sunken);
+  background: var(--dash-surface);
 }
 
 .dash-chat__msg {
-  font-size: var(--dash-text-sm); line-height: var(--dash-leading-normal);
+  font-size: var(--dash-text-md); line-height: 1.55;
   white-space: pre-wrap; word-break: break-word;
-  padding: 9px 13px;
-  border-radius: 12px;
+  padding: 10px 14px;
+  border-radius: var(--dash-radius-sm);
   max-width: 86%;
   animation: dash-msg-in var(--dash-dur-base) var(--dash-ease-out) both;
 }
@@ -753,22 +877,60 @@ export const DASH_REACT_STYLES = `
   from { opacity: 0; transform: translateY(4px) }
   to { opacity: 1; transform: none }
 }
+/* Yours: a tinted box on your side, in ink — the teal is the tint, not the text. */
 .dash-chat__msg[data-role="user"] {
   align-self: flex-end;
-  background: var(--dash-accent); color: var(--dash-accent-ink);
-  /* One squared corner points the bubble at its own side of the column. */
-  border-bottom-right-radius: 4px;
+  background: var(--dash-accent-wash); color: var(--dash-ink);
 }
+/* Its reply: no box at all, the full width of the column. */
 .dash-chat__msg[data-role="assistant"] {
-  align-self: flex-start;
-  background: var(--dash-surface-raised); color: var(--dash-ink);
-  border: 1px solid var(--dash-border);
-  border-bottom-left-radius: 4px;
-  box-shadow: var(--dash-shadow-sm);
+  align-self: stretch; max-width: 100%;
+  padding: 0;
+  color: var(--dash-ink);
+  white-space: normal;
 }
 /* A change of speaker gets a little more air than a run from one side. */
 .dash-chat__msg[data-role="user"] + .dash-chat__msg[data-role="assistant"],
-.dash-chat__msg[data-role="assistant"] + .dash-chat__msg[data-role="user"] { margin-top: var(--dash-space-2); }
+.dash-chat__msg[data-role="assistant"] + .dash-chat__msg[data-role="user"] { margin-top: var(--dash-space-3); }
+
+/*
+ * Full screen is for reading at length: a size up. Your messages still fit
+ * their text, on the right of the reading column — a "yes" in a full-width
+ * band reads as a banner, not a reply.
+ */
+.dash-chat[data-mode="full"] .dash-chat__msg { font-size: 16px; line-height: 1.6; }
+
+/*
+ * A reply's markdown (apps/web chat/ReplyMarkdown). Spacing comes from the
+ * blocks, not the text: first and last sit flush, so the reply lines up with
+ * the citations and buttons under it.
+ */
+.dash-md > * { margin: 0; }
+.dash-md > * + * { margin-top: 0.7em; }
+.dash-md__h {
+  font-size: var(--dash-text-lg); font-weight: var(--dash-weight-semi);
+  line-height: var(--dash-leading-tight); letter-spacing: -0.01em;
+  color: var(--dash-ink);
+}
+.dash-md > * + .dash-md__h { margin-top: 1.1em; }
+.dash-md__h[data-level="2"] { font-size: 1em; }
+.dash-md__list { padding-left: 1.4em; }
+.dash-md__list li + li { margin-top: 0.3em; }
+.dash-md__list li::marker { color: var(--dash-muted); }
+.dash-md__code {
+  font-family: var(--dash-font-mono); font-size: 0.88em;
+  padding: 1px 5px; border-radius: 4px;
+  background: var(--dash-wash);
+}
+.dash-md__pre {
+  font-family: var(--dash-font-mono); font-size: var(--dash-text-xs); line-height: var(--dash-leading-normal);
+  padding: var(--dash-space-3); border-radius: var(--dash-radius-sm);
+  background: var(--dash-surface-sunken); border: 1px solid var(--dash-border);
+  overflow-x: auto; white-space: pre;
+}
+.dash-md__link { color: var(--dash-accent); text-decoration: underline; text-underline-offset: 2px; }
+.dash-md__link:hover { color: var(--dash-accent-strong); }
+.dash-md__rule { border: 0; border-top: 1px solid var(--dash-border); }
 .dash-chat__msg[data-role="tool"] {
   align-self: stretch; max-width: 100%;
   background: transparent; border: 1px dashed var(--dash-border-strong);
@@ -796,7 +958,7 @@ export const DASH_REACT_STYLES = `
   transition: color var(--dash-dur-fast) var(--dash-ease),
               border-color var(--dash-dur-fast) var(--dash-ease);
 }
-.dash-chat__cite::before { content: "↗ "; opacity: 0.7; }
+.dash-chat__cite .dash-icon { margin-right: 3px; opacity: 0.7; }
 .dash-chat__cite:hover { color: var(--dash-accent); border-color: var(--dash-accent); }
 .dash-chat__cite:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 1px; }
 
@@ -853,7 +1015,7 @@ export const DASH_REACT_STYLES = `
 .dash-chat__input {
   flex: 1; font: inherit; font-size: var(--dash-text-sm); resize: none;
   color: var(--dash-ink); background: var(--dash-surface-raised);
-  border: 1px solid var(--dash-border-strong); border-radius: 10px;
+  border: 1px solid var(--dash-border-strong); border-radius: var(--dash-radius-sm);
   padding: 9px var(--dash-space-3);
   min-height: 40px; max-height: 140px;
   line-height: var(--dash-leading-normal);
@@ -866,7 +1028,7 @@ export const DASH_REACT_STYLES = `
 }
 .dash-chat__input:disabled { opacity: 0.6; cursor: not-allowed; }
 .dash-chat__send {
-  height: 40px; padding: 0 var(--dash-space-4); border-radius: 10px;
+  height: 40px; padding: 0 var(--dash-space-4); border-radius: var(--dash-radius-sm);
   font-weight: var(--dash-weight-semi);
   background: var(--dash-accent); color: var(--dash-accent-ink); border-color: transparent;
 }
@@ -990,7 +1152,7 @@ export const DASH_REACT_STYLES = `
   padding: var(--dash-space-2) 2px 9px;
   font: inherit; color: var(--dash-ink); cursor: pointer;
   background: var(--dash-surface-raised);
-  border: 1px solid var(--dash-border-strong); border-radius: 10px;
+  border: 1px solid var(--dash-border-strong); border-radius: var(--dash-radius);
   box-shadow: var(--dash-shadow-sm);
   transition: border-color var(--dash-dur-fast) var(--dash-ease), background var(--dash-dur-fast) var(--dash-ease),
               box-shadow var(--dash-dur-fast) var(--dash-ease);
@@ -1040,7 +1202,7 @@ export const DASH_REACT_STYLES = `
   position: absolute; top: calc(100% + 6px); right: 0; z-index: 5;
   width: 272px; padding: var(--dash-space-3);
   background: var(--dash-surface-raised);
-  border: 1px solid var(--dash-border-strong); border-radius: 12px;
+  border: 1px solid var(--dash-border-strong); border-radius: var(--dash-radius-lg);
   box-shadow: var(--dash-shadow-lg);
   animation: dash-msg-in var(--dash-dur-fast) var(--dash-ease-out) both;
 }
@@ -1133,7 +1295,7 @@ export const DASH_REACT_STYLES = `
   display: flex; flex-direction: column; gap: 2px; min-width: 0;
   padding: var(--dash-space-2) var(--dash-space-3);
   font: inherit; font-size: var(--dash-text-sm); text-align: left;
-  border: 1px solid var(--dash-border); border-radius: 10px;
+  border: 1px solid var(--dash-border); border-radius: var(--dash-radius);
   background: var(--dash-surface-raised); color: var(--dash-ink);
   box-shadow: var(--dash-shadow-sm);
   cursor: pointer; text-decoration: none;
@@ -1153,12 +1315,13 @@ export const DASH_REACT_STYLES = `
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dash-shell, .dash-chat { transition: none; }
+  .dash-shell, .dash-chat, .dash-chat[data-open="true"][data-mode] { transition: none; }
 }
 
 /* Narrow screens: the column covers rather than squeezes the board. */
 @media (max-width: 860px) {
   .dash-shell[data-chat="open"] { margin-right: 0; }
+  .dash-shell[data-chat="full"] > .dash-root > .dash-page { margin-right: 0; }
 }
 
 /* == record page ========================================================

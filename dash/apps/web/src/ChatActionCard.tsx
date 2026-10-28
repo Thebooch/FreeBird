@@ -1,5 +1,5 @@
 import type { PendingAction } from "@freebirdai/core";
-import { Button } from "@freebirdai/dash-components";
+import { Button, Icon } from "@freebirdai/dash-components";
 import { DASH_SCREENS, type DashScreen } from "@freebirdai/dash-spec";
 import { useState } from "react";
 
@@ -79,7 +79,7 @@ export const ChatActionCard = ({
                     <>
                       <span className="dash-action-card__before">{sides.before}</span>
                       <span className="dash-action-card__arrow" aria-label="becomes">
-                        →
+                        <Icon name="arrow-right" size={14} />
                       </span>
                       <span className="dash-action-card__after">{sides.after}</span>
                     </>

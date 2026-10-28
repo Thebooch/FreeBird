@@ -1,4 +1,4 @@
-import { Badge, Button, EmptyState, ErrorState } from "@freebirdai/dash-components";
+import { Badge, Button, EmptyState, ErrorState, Icon } from "@freebirdai/dash-components";
 import { describeTrigger, type AgentSpec, type Task, type WorkflowCase, type WorkflowSpec, type WorkflowTemplate } from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type ConnectionSummary } from "../../api";
@@ -230,7 +230,8 @@ export const WorkflowsSection = ({ selected, onNavigate }: { readonly selected: 
       <div className="dash-workflow-page" data-testid="workflows-section" {...screenAttrs("workflows")}>
         <div className="dash-agents__subhead" {...(current ? itemAttrs(current.id) : {})}>
           <button type="button" className="dash-overview__link" onClick={() => go()}>
-            ← Workflows
+            <Icon name="arrow-left" size={14} />
+            Workflows
           </button>
           {current && (
             <span className="dash-row">
@@ -291,7 +292,8 @@ export const WorkflowsSection = ({ selected, onNavigate }: { readonly selected: 
         <div className="dash-agents__head">
           <h2 className="dash-agents__title">Workflows</h2>
           <Button size="sm" tone="primary" onClick={() => go(NEW)} testId="workflow-new">
-            ＋ New workflow
+            <Icon name="plus" size={14} />
+            New workflow
           </Button>
         </div>
         {loaded && workflows.length === 0 ? (
@@ -358,7 +360,7 @@ export const WorkflowsSection = ({ selected, onNavigate }: { readonly selected: 
             ))}
           </ul>
         )}
-        {selected && !current && loaded && <EmptyState glyph="⇄" title="That workflow is not here" body="It may have been deleted." action={{ label: "Back to workflows", onClick: () => go() }} />}
+        {selected && !current && loaded && <EmptyState icon="workflow" title="That workflow is not here" body="It may have been deleted." action={{ label: "Back to workflows", onClick: () => go() }} />}
       </section>
     </div>
   );

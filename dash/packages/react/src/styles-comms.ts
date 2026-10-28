@@ -44,7 +44,7 @@ export const DASH_COMMS_STYLES = `
 .dash-comms-box__pick input { accent-color: var(--dash-accent); margin: 0; }
 .dash-comms-box__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dash-comms-box[data-status="needs_sign_in"] .dash-comms-box__name, .dash-comms-box[data-status="needs_app"] .dash-comms-box__name { color: var(--dash-muted); }
-.dash-comms-box__more { font: inherit; border: 0; background: transparent; color: var(--dash-muted); cursor: pointer; padding: 2px 6px; border-radius: var(--dash-radius-sm); }
+.dash-comms-box__more { display: inline-flex; align-items: center; font: inherit; border: 0; background: transparent; color: var(--dash-muted); cursor: pointer; padding: 2px 6px; border-radius: var(--dash-radius-sm); }
 .dash-comms-box__more:hover { background: var(--dash-wash); color: var(--dash-ink); }
 
 /* == mail ================================================================ */

@@ -193,11 +193,15 @@ ${seriesVars(SERIES_LIGHT)}
   --dash-space-7: 32px;
   --dash-space-8: 40px;
 
-  /* Chips, badges and swatches — the step below a control. */
+  /*
+   * Chips, badges and swatches — the step below a control. Cards at 8px and
+   * sheets at 12px: tight enough that a board reads as a working surface
+   * rather than a stack of pebbles, with each step still visibly larger.
+   */
   --dash-radius-xs: 4px;
   --dash-radius-sm: 6px;
-  --dash-radius: 10px;
-  --dash-radius-lg: 14px;
+  --dash-radius: 8px;
+  --dash-radius-lg: 12px;
   --dash-radius-pill: 999px;
   --dash-gap: 12px;
 
@@ -481,6 +485,8 @@ ${seriesVars(SERIES_LIGHT)}
   transition: background var(--dash-dur-fast) var(--dash-ease),
               border-color var(--dash-dur-fast) var(--dash-ease);
 }
+/* A button may lead with an icon; a select or input never holds one. */
+button.dash-control { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
 .dash-control:hover { background: var(--dash-wash); }
 .dash-control:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 1px; }
 
@@ -529,7 +535,17 @@ ${seriesVars(SERIES_LIGHT)}
   @keyframes dash-spin { to { transform: rotate(360deg); } }
 }
 
+/*
+ * An icon from \`Icon\`: never shrunk by the row it sits in, and sat on the
+ * text's middle when it shares a line with words rather than a flex row.
+ */
+.dash-icon { flex: none; vertical-align: -0.2em; }
+/* Alone in a button, it is the button's content box: centred by the padding
+   rather than sitting on a text baseline that is not there. */
+button > .dash-icon:only-child { display: block; }
+
 .dash-iconbtn {
+  display: inline-flex; align-items: center; justify-content: center;
   border: none; background: transparent; color: var(--dash-muted);
   cursor: pointer; font-size: var(--dash-text-sm); line-height: 1; padding: 5px 6px; border-radius: var(--dash-radius-sm);
   transition: background var(--dash-dur-fast) var(--dash-ease), color var(--dash-dur-fast) var(--dash-ease), opacity var(--dash-dur-fast) var(--dash-ease);
@@ -636,7 +652,7 @@ ${seriesVars(SERIES_LIGHT)}
   margin-top: 4px; padding-top: 9px; border-top: 1px solid var(--dash-border);
   border-radius: 0 0 7px 7px;
 }
-.dash-menu__icon { width: 13px; text-align: center; color: var(--dash-muted); flex: none; }
+.dash-menu__icon { width: 16px; display: inline-flex; justify-content: center; color: var(--dash-muted); flex: none; }
 /* The label takes the slack so a trailing figure sits on the right edge, and
    a long value is cut rather than widening the whole menu to fit it. */
 .dash-menu__label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -666,7 +682,7 @@ ${seriesVars(SERIES_LIGHT)}
 .dash-menu__list[data-align="start"] { right: auto; left: 0; }
 /* A menu opened from a word rather than a glyph: a button, with a caret saying it opens. */
 .dash-menu__text { gap: 6px; }
-.dash-menu__caret { font-size: 0.8em; color: var(--dash-muted); }
+.dash-menu__caret { color: var(--dash-muted); }
 /* Placed against the window by the menu itself; above the widget that holds its row. */
 .dash-menu__list[data-floating="true"] { z-index: 60; }
 
@@ -1442,6 +1458,15 @@ ${seriesVars(SERIES_LIGHT)}
    a highlight's left rule instead of covering it. */
 .dash-table[data-zebra="on"] tbody tr:nth-child(even) td { background: var(--dash-wash); }
 
+/* The end of the rows drawn so far in a long unpaged table. Not a record, so
+   it neither lights up under the pointer nor takes a stripe: "[data-zebra]"
+   is there to outrank both. */
+.dash-table[data-zebra] tbody tr.dash-table__more td {
+  background: none; color: var(--dash-muted); font-size: var(--dash-text-xs);
+  text-align: center; max-width: none;
+}
+.dash-table tbody tr.dash-table__more .dash-btn { margin-left: var(--dash-space-2); }
+
 /*
  * A frozen first column needs its own background or the scrolled cells show
  * through it, and a right edge or there is nothing to say it is pinned.
@@ -1567,8 +1592,8 @@ ${seriesVars(SERIES_LIGHT)}
   font-size: var(--dash-text-xs); font-weight: var(--dash-weight-medium); color: var(--dash-muted);
 }
 .dash-record__more-summary::-webkit-details-marker { display: none; }
-.dash-record__more-summary::before { content: "▸"; display: inline-block; width: 1em; transition: transform 120ms ease; }
-.dash-record__more[open] > .dash-record__more-summary::before { transform: rotate(90deg); }
+.dash-record__more-chevron { margin-right: 4px; transition: transform 120ms ease; }
+.dash-record__more[open] > .dash-record__more-summary .dash-record__more-chevron { transform: rotate(90deg); }
 .dash-record__more-summary:hover { color: var(--dash-ink); }
 .dash-record__more-summary:focus-visible { outline: 2px solid var(--dash-accent); outline-offset: 2px; border-radius: var(--dash-radius-sm); }
 .dash-record--compact .dash-record__pair { padding: 6px 0; grid-template-columns: minmax(96px, 40%) 1fr; gap: var(--dash-space-3); }

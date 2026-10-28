@@ -1,4 +1,5 @@
 import { useId, type ReactNode } from "react";
+import { Icon } from "./Icon.jsx";
 
 /**
  * Form units.
@@ -43,9 +44,7 @@ export const SearchInput = ({
   readonly testId?: string;
 }): JSX.Element => (
   <span className="dash-search">
-    <span className="dash-search__icon" aria-hidden="true">
-      ⌕
-    </span>
+    <Icon name="search" size={14} className="dash-search__icon" />
     <input
       type="search"
       className="dash-search__input"
@@ -62,7 +61,7 @@ export const SearchInput = ({
         aria-label="Clear search"
         onClick={() => onChange("")}
       >
-        <span aria-hidden="true">✕</span>
+        <Icon name="x" size={14} />
       </button>
     )}
   </span>

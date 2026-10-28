@@ -243,6 +243,73 @@ export const DashboardGrid = ({
     [onLayoutChange, placed, parked],
   );
 
+  /**
+   * What each cell draws, built only when the board or its handlers change.
+   *
+   * The grid re-renders on every width it is given, and a width animates: the
+   * chat docking, the window being dragged. Rebuilding these on each of those
+   * frames re-rendered every widget in full — a 600-row table drawn again sixty
+   * times a second — for a change none of them reads. The same elements handed
+   * back let React skip the subtree; a chart that does care about its size
+   * measures itself and redraws on its own.
+   */
+  const bodies = useMemo(
+    () =>
+      new Map(
+        placed.map(({ cell, unit }) => {
+          const rows = cell.h;
+          return [
+            unit.key,
+            /*
+             * Two wrappers, each with one job: hold the space until the tile
+             * is worth fetching, and keep a render crash inside this cell
+             * rather than letting it take the board down.
+             */
+            <LazyWidget minHeight={rows * ROW_HEIGHT + (rows - 1) * MARGIN[1]}>
+              {unit.kind === "group" ? (
+                <WidgetGroup
+                  group={unit.group}
+                  members={unit.members}
+                  {...(onRemoveWidget ? { onRemoveWidget } : {})}
+                  {...(onCustomiseWidget ? { onCustomiseWidget } : {})}
+                  {...(onFrameWidget ? { onFrameWidget } : {})}
+                  {...(onOpenRecordPage ? { onOpenRecordPage } : {})}
+                  {...(onOpenReference ? { onOpenReference } : {})}
+                  {...(onCreateRecord ? { onCreateRecord } : {})}
+                  {...(onRowActions ? { onRowActions } : {})}
+                />
+              ) : (
+                <WidgetErrorBoundary widgetTitle={unit.widget.title}>
+                  <WidgetShell
+                    widget={unit.widget}
+                    hero={unit.widget.id === heroWidgetId}
+                    {...(onRemoveWidget ? { onRemove: onRemoveWidget } : {})}
+                    {...(onCustomiseWidget ? { onCustomise: onCustomiseWidget } : {})}
+                    {...(onFrameWidget ? { onFrame: onFrameWidget } : {})}
+                    {...(onOpenRecordPage ? { onOpenPage: onOpenRecordPage } : {})}
+                    {...(onOpenReference ? { onOpenReference } : {})}
+                    {...(onCreateRecord ? { onCreateRecord } : {})}
+                    {...(onRowActions ? { onRowActions } : {})}
+                  />
+                </WidgetErrorBoundary>
+              )}
+            </LazyWidget>,
+          ] as const;
+        }),
+      ),
+    [
+      placed,
+      heroWidgetId,
+      onRemoveWidget,
+      onCustomiseWidget,
+      onFrameWidget,
+      onOpenRecordPage,
+      onOpenReference,
+      onCreateRecord,
+      onRowActions,
+    ],
+  );
+
   return (
     <div
       className="dash-grid-host"
@@ -279,63 +346,27 @@ export const DashboardGrid = ({
           onDragStop={(layout: Layout) => persist(layout)}
           onResizeStop={(layout: Layout) => persist(layout)}
         >
-          {placed.map(({ cell, unit }) => {
-            const rows = cell.h;
-            return (
-              <div
-                className="dash-grid__cell"
-                key={unit.key}
-                {...(unit.kind === "widget"
-                  ? { "data-widget-id": unit.widget.id }
-                  : { "data-group-id": unit.group.id })}
-              >
-                {/*
-                 * Two wrappers, each with one job: hold the space until the
-                 * tile is worth fetching, and keep a render crash inside this
-                 * cell rather than letting it take the board down.
-                 */}
-                <LazyWidget minHeight={rows * ROW_HEIGHT + (rows - 1) * MARGIN[1]}>
-                  {unit.kind === "group" ? (
-                    <WidgetGroup
-                      group={unit.group}
-                      members={unit.members}
-                      {...(onRemoveWidget ? { onRemoveWidget } : {})}
-                      {...(onCustomiseWidget ? { onCustomiseWidget } : {})}
-                      {...(onFrameWidget ? { onFrameWidget } : {})}
-                      {...(onOpenRecordPage ? { onOpenRecordPage } : {})}
-                      {...(onOpenReference ? { onOpenReference } : {})}
-                      {...(onCreateRecord ? { onCreateRecord } : {})}
-                      {...(onRowActions ? { onRowActions } : {})}
-                    />
-                  ) : (
-                    <WidgetErrorBoundary widgetTitle={unit.widget.title}>
-                      <WidgetShell
-                        widget={unit.widget}
-                        hero={unit.widget.id === heroWidgetId}
-                        {...(onRemoveWidget ? { onRemove: onRemoveWidget } : {})}
-                        {...(onCustomiseWidget ? { onCustomise: onCustomiseWidget } : {})}
-                        {...(onFrameWidget ? { onFrame: onFrameWidget } : {})}
-                        {...(onOpenRecordPage ? { onOpenPage: onOpenRecordPage } : {})}
-                        {...(onOpenReference ? { onOpenReference } : {})}
-                        {...(onCreateRecord ? { onCreateRecord } : {})}
-                        {...(onRowActions ? { onRowActions } : {})}
-                      />
-                    </WidgetErrorBoundary>
-                  )}
-                </LazyWidget>
+          {placed.map(({ unit }) => (
+            <div
+              className="dash-grid__cell"
+              key={unit.key}
+              {...(unit.kind === "widget"
+                ? { "data-widget-id": unit.widget.id }
+                : { "data-group-id": unit.group.id })}
+            >
+              {bodies.get(unit.key)}
 
-                {/*
-                 * A transparent sheet over the whole tile while editing.
-                 *
-                 * Without it a mousedown meant as the start of a drag lands on
-                 * whatever is underneath — a sort header, a row that opens a
-                 * record, a link — so rearranging the board keeps triggering
-                 * the things on it.
-                 */}
-                {editing && <div className="dash-edit-guard" aria-hidden="true" />}
-              </div>
-            );
-          })}
+              {/*
+               * A transparent sheet over the whole tile while editing.
+               *
+               * Without it a mousedown meant as the start of a drag lands on
+               * whatever is underneath — a sort header, a row that opens a
+               * record, a link — so rearranging the board keeps triggering
+               * the things on it.
+               */}
+              {editing && <div className="dash-edit-guard" aria-hidden="true" />}
+            </div>
+          ))}
         </ResponsiveGridLayout>
       )}
     </div>

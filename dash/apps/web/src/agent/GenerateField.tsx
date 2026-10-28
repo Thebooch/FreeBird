@@ -1,4 +1,4 @@
-import { Button } from "@freebirdai/dash-components";
+import { Button, Icon } from "@freebirdai/dash-components";
 import { useState } from "react";
 import { api } from "../api";
 
@@ -76,7 +76,8 @@ export const GenerateField = ({
             title="Structure what you typed into a prompt the model follows well"
             testId={`agent-generate-${field}`}
           >
-            ✦ Generate
+            <Icon name="sparkle" size={14} />
+            Generate
           </Button>
         </span>
       </div>

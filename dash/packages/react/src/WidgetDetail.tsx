@@ -1,4 +1,4 @@
-import { Button } from "@freebirdai/dash-components";
+import { Button, Icon } from "@freebirdai/dash-components";
 import type { Row } from "@freebirdai/dash-runtime";
 import type { WidgetSpec } from "@freebirdai/dash-spec";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -112,7 +112,7 @@ export const WidgetDetail = ({
             <nav className="dash-sheet__trail" aria-label="Record trail">
               {trail.slice(0, -1).map((entry, index) => (
                 <span key={index}>
-                  {index > 0 && <span className="dash-sheet__crumb-sep">›</span>}
+                  {index > 0 && <Icon name="chevron-right" size={14} className="dash-sheet__crumb-sep" />}
                   <button
                     type="button"
                     className="dash-sheet__crumb"
@@ -147,7 +147,7 @@ export const WidgetDetail = ({
               data-testid="detail-close"
               aria-label="Close"
             >
-              ✕
+              <Icon name="x" />
             </button>
           </div>
         </header>

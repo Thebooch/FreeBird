@@ -1,4 +1,4 @@
-import { AgentChip, Button, EmptyState } from "@freebirdai/dash-components";
+import { AgentChip, Button, EmptyState, Icon } from "@freebirdai/dash-components";
 import type { AgentSpec, MailDraft, MailThreadMessage, WriteReviewView } from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useState } from "react";
 import { api, type CommsContactCard } from "../api.js";
@@ -197,7 +197,8 @@ export const ThreadView = ({
     <div className="dash-comms-thread" data-testid="comms-thread">
       <header className="dash-comms-thread__head">
         <Button tone="ghost" size="sm" onClick={onBack}>
-          ← Back
+          <Icon name="arrow-left" size={14} />
+          Back
         </Button>
         <h2 className="dash-comms-thread__subject">{messages?.[0]?.subject || "(no subject)"}</h2>
         {latestIn && (
@@ -245,7 +246,7 @@ export const ThreadView = ({
       )}
       {error && <p className="dash-sched-error">{error}</p>}
       {messages === null && !error && <p className="dash-hint">Reading the conversation…</p>}
-      {messages?.length === 0 && <EmptyState glyph="✉" title="Nothing here" body="This conversation has no messages Dash can read." />}
+      {messages?.length === 0 && <EmptyState icon="mail" title="Nothing here" body="This conversation has no messages Dash can read." />}
       {messages?.map((one) => (
         <article key={one.id} className="dash-comms-message" data-sent={one.sent ? "true" : undefined}>
           <header className="dash-comms-message__head">
