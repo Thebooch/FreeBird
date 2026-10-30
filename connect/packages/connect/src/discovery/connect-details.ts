@@ -2,6 +2,7 @@ import type { CatalogEntry } from "@freebirdai/connect-spec";
 import { IMPORT_VERSION } from "@freebirdai/connect-spec";
 import { extractInlineSpec } from "./inline-spec.js";
 import { looksLikeOpenApi, parseOpenApi, parseSpecDocument, type OpenApiResult } from "./openapi.js";
+import { gatherSpecDirectory } from "./spec-directory.js";
 
 /**
  * Keeping what an import says about *getting in* current, without touching
@@ -38,7 +39,7 @@ export const importIsOutdated = (entry: CatalogEntry): boolean =>
 export const rereadSpec = async (url: string, fetchDocument: FetchDocument): Promise<OpenApiResult> => {
   const fetched = await fetchDocument(url);
   if (fetched.status >= 400) throw new Error(`${url} answered ${fetched.status}`);
-  const direct = parseSpecDocument(fetched.text);
+  const direct = await gatherSpecDirectory(parseSpecDocument(fetched.text), fetched.url, fetchDocument);
   const inline = looksLikeOpenApi(direct) ? null : extractInlineSpec(fetched.text, looksLikeOpenApi);
   const doc = inline ? inline.spec : direct;
   if (!looksLikeOpenApi(doc)) {

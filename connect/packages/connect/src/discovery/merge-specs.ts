@@ -49,6 +49,16 @@ const shortName = (url: string): string => {
   }
 };
 
+/** The spec's own name, safe inside a component name: `.../openapi/run-templates` is `run-templates`. */
+const specSlug = (url: string): string => {
+  try {
+    const last = new URL(url).pathname.split("/").filter(Boolean).pop() ?? "spec";
+    return last.replace(/\.[a-z]+$/i, "").replace(/[^A-Za-z0-9_-]/g, "_") || "spec";
+  } catch {
+    return "spec";
+  }
+};
+
 const hostOf = (url: string): string | null => {
   try {
     return new URL(url).hostname.toLowerCase();
@@ -92,6 +102,7 @@ const mergeNamed = (
   label: string,
   source: string,
   warnings: string[],
+  reported: Set<string>,
 ): void => {
   if (!isObject(from)) return;
   for (const [name, definition] of Object.entries(from)) {
@@ -101,6 +112,8 @@ const mergeNamed = (
       continue;
     }
     if (sameShape(existing, definition)) continue;
+    if (reported.has(`${label}/${name}`)) continue;
+    reported.add(`${label}/${name}`);
     /*
      * A real collision. Both fragments `$ref` this name from their own
      * operations, so keeping the first silently repoints the second's
@@ -170,8 +183,72 @@ const rewriteRefs = (value: unknown, from: Version, to: Version): unknown => {
   return out;
 };
 
-export const mergeSpecDocuments = (fragments: readonly SpecFragment[]): MergedSpec => {
+/** Every reusable kind but `securitySchemes`: a scheme is named by `security`, and an API signs in one way. */
+const RENAMEABLE = ["schemas", "parameters", "responses", "requestBodies"] as const;
+
+/**
+ * Give a document's components a name of their own where the name is taken.
+ *
+ * Pages of one reference repeat one set of definitions, so first-wins is right
+ * for them. Separately written specifications do not: two services each with
+ * their own `Error` mean two things, and keeping the first would point the
+ * second service's responses at a shape it never sends.
+ */
+const keepApart = (doc: Json, held: Map<string, Json>, source: string): Json => {
+  const components = doc.components;
+  if (!isObject(components)) return doc;
+  const renames = new Map<string, string>();
+  const repoint = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(repoint);
+    if (!isObject(value)) return value;
+    return Object.fromEntries(
+      Object.entries(value).map(([key, child]) => [
+        key,
+        key === "$ref" && typeof child === "string" ? (renames.get(child) ?? child) : repoint(child),
+      ]),
+    );
+  };
+  /*
+   * Until nothing changes: a definition worded the same as the one held still
+   * differs when something it refers to was renamed.
+   */
+  for (let before = -1; before !== renames.size; ) {
+    before = renames.size;
+    for (const kind of RENAMEABLE) {
+      const own = components[kind];
+      if (!isObject(own)) continue;
+      for (const [name, definition] of Object.entries(own)) {
+        const existing = held.get(kind)![name];
+        if (existing !== undefined && !sameShape(existing, repoint(definition))) {
+          renames.set(`#/components/${kind}/${name}`, `#/components/${kind}/${name}_${specSlug(source)}`);
+        }
+      }
+    }
+  }
+  if (renames.size === 0) return doc;
+
+  const repointed = repoint(doc) as Json;
+  const renamed = { ...(repointed.components as Json) };
+  for (const kind of RENAMEABLE) {
+    const own = renamed[kind];
+    if (!isObject(own)) continue;
+    renamed[kind] = Object.fromEntries(
+      Object.entries(own).map(([name, definition]) => [
+        renames.get(`#/components/${kind}/${name}`)?.split("/").pop() ?? name,
+        definition,
+      ]),
+    );
+  }
+  return { ...repointed, components: renamed };
+};
+
+export const mergeSpecDocuments = (
+  fragments: readonly SpecFragment[],
+  options: { readonly keepApart?: boolean } = {},
+): MergedSpec => {
   const warnings: string[] = [];
+  /* A collision is said once: fifty pages disagreeing with the first is one fact. */
+  const reported = new Set<string>();
   const usable = fragments.filter((fragment) => isObject(fragment.spec));
   if (usable.length === 0) return { merged: null, warnings, operations: 0 };
 
@@ -209,7 +286,8 @@ export const mergeSpecDocuments = (fragments: readonly SpecFragment[]): MergedSp
     const raw = spec as Json;
     const from = versionOf(raw);
     /* A fragment of the other version has its references repointed first. */
-    const doc = rewriteRefs(raw, from, target) as Json;
+    const repointed = rewriteRefs(raw, from, target) as Json;
+    const doc = options.keepApart ? keepApart(repointed, named, sourceUrl) : repointed;
 
     // ── info: the first page to state something wins ──────────────────────
     const info = isObject(doc.info) ? doc.info : {};
@@ -268,9 +346,9 @@ export const mergeSpecDocuments = (fragments: readonly SpecFragment[]): MergedSp
     const components = isObject(doc.components) ? doc.components : {};
     for (const kind of KINDS) {
       const into = named.get(kind.v3)!;
-      if (from === 3) mergeNamed(into, components[kind.v3], kind.v3, sourceUrl, warnings);
+      if (from === 3) mergeNamed(into, components[kind.v3], kind.v3, sourceUrl, warnings, reported);
       // Swagger 2 keeps them at the root.
-      else if (kind.v2) mergeNamed(into, doc[kind.v2], kind.v2, sourceUrl, warnings);
+      else if (kind.v2) mergeNamed(into, doc[kind.v2], kind.v2, sourceUrl, warnings, reported);
     }
 
     // ── security: the union feeds authFrom's declared-scheme bonus ────────
