@@ -30,6 +30,7 @@ export type { ConnectorSandbox, SandboxHost, SandboxLimits, SandboxSession } fro
 export { AUTO_INDEX_PAGES, RENDERER_DOWNLOAD_MB, discover, readIndex } from "./discovery/index.js";
 export type { DocsRenderer, RendererSetup, RendererStatus } from "./discovery/index.js";
 export { refreshOutdatedConnectDetails, withConnectDetails } from "./discovery/connect-details.js";
+export { gatherSpecDirectory } from "./discovery/spec-directory.js";
 export { analysePage, endpointsNamed } from "./discovery/docs.js";
 export { extractInlineSpec } from "./discovery/inline-spec.js";
 export { looksLikeOpenApi, parseOpenApi, parseSpecDocument } from "./discovery/openapi.js";

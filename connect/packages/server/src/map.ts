@@ -6,6 +6,7 @@ import {
   describeCatalogRecords,
   entityState,
   extractInlineSpec,
+  gatherSpecDirectory,
   looksLikeOpenApi,
   mapState,
   mergeRefreshedOps,
@@ -121,7 +122,7 @@ export const mapRoutes =
          * renderer draws, and "go and find the .json" is not an instruction
          * anybody can follow when there is not one.
          */
-        const direct = parseSpecDocument(fetched.text);
+        const direct = await gatherSpecDirectory(parseSpecDocument(fetched.text), fetched.url, deps.fetchDocument);
         const inline = looksLikeOpenApi(direct)
           ? null
           : extractInlineSpec(fetched.text, looksLikeOpenApi);

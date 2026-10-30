@@ -1958,6 +1958,8 @@ export const specLinksIn = (html: string, pageUrl: string): string[] => {
     // Unquoted, e.g. a Markdown link target or a URL sitting in a sentence.
     // Trailing punctuation is trimmed below rather than matched here.
     /\bhttps?:\/\/[^\s"'`<>()[\]]*(?:openapi|swagger)[^\s"'`<>()[\]]*\.(?:json|ya?ml)/gi,
+    // No extension at all: an API serving its own description at `/v1/openapi`.
+    /\bhttps?:\/\/[^\s"'`<>()[\]]*\/(?:openapi|swagger)(?=[).,;:\]]*(?:[\s"'`<>()[\]]|$))/gi,
   ];
   for (const pattern of patterns) {
     for (const match of html.matchAll(pattern)) {

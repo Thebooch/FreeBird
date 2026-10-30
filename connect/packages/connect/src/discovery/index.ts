@@ -21,6 +21,7 @@ import {
 } from "./openapi.js";
 import { paceGapMs } from "../capabilities.js";
 import { type SpecFragment, mergeSpecDocuments } from "./merge-specs.js";
+import { gatherSpecDirectory } from "./spec-directory.js";
 import { proposeDialect } from "./propose-dialect.js";
 import { type SearchProvider, buildSearchQueries, rankSearchResults } from "./search.js";
 
@@ -366,7 +367,7 @@ const specificationIn = async (
     try {
       const response = await deps.fetchDocument(candidate);
       if (response.status >= 400) continue;
-      const doc = parseSpecDocument(response.text);
+      const doc = await gatherSpecDirectory(parseSpecDocument(response.text), response.url, deps.fetchDocument, ctx);
       if (!looksLikeOpenApi(doc)) continue;
       const parsed = parseOpenApi(await wholeSpec(doc, response.url, deps, ctx.warnings), response.url);
       if (!parsed) continue;
@@ -406,7 +407,7 @@ const attemptUrl = async (
       // The faster of the samples, because a single slow fetch is noise
       // rather than the site's real cost.
       ctx.msPerPage = Math.min(ctx.msPerPage ?? Infinity, Date.now() - startedAt);
-      const asJson = parseSpecDocument(response.text);
+      const asJson = await gatherSpecDirectory(parseSpecDocument(response.text), response.url, deps.fetchDocument, ctx);
 
       /* A SOAP service describes itself in a WSDL: each operation named for reading is an endpoint. */
       if (response.status < 400 && looksLikeWsdl(response.text)) {
@@ -547,7 +548,7 @@ const attemptUrl = async (
     try {
       const response = await deps.fetchDocument(candidate);
       if (response.status >= 400) continue;
-      const doc = parseSpecDocument(response.text);
+      const doc = await gatherSpecDirectory(parseSpecDocument(response.text), response.url, deps.fetchDocument, ctx);
       if (!looksLikeOpenApi(doc)) continue;
       const parsed = parseOpenApi(await wholeSpec(doc, response.url, deps, ctx.warnings), response.url);
       if (!parsed) continue;
@@ -676,7 +677,8 @@ const withOidcSignIn = async (found: DiscoveryResult, deps: DiscoveryDeps): Prom
   if (!entry?.specUrl || !found.warnings.some((warning) => /OpenID Connect/i.test(warning))) return found;
   const spec = await deps.fetchDocument(entry.specUrl).catch(() => null);
   if (!spec || spec.status < 200 || spec.status >= 300) return found;
-  const signed = await withOidc(entry, parseSpecDocument(spec.text), spec.url || entry.specUrl, deps.fetchDocument);
+  const whole = await gatherSpecDirectory(parseSpecDocument(spec.text), spec.url || entry.specUrl, deps.fetchDocument);
+  const signed = await withOidc(entry, whole, spec.url || entry.specUrl, deps.fetchDocument);
   if (!signed) return found;
   return {
     ...found,
