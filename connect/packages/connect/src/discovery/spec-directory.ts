@@ -43,8 +43,8 @@ export const specDirectoryIn = (doc: unknown, url: string): string[] => {
 };
 
 /**
- * The API's name, from its services': "Coval Agents API" and "Coval Runs API"
- * are the "Coval API". Many titles open with it rather than all, because some
+ * The API's name, from its services': "Acme Agents API" and "Acme Runs API"
+ * are the "Acme API". Many titles open with it rather than all, because some
  * services are only "Test Sets API".
  */
 const sharedTitle = (titles: readonly string[]): string | null => {
