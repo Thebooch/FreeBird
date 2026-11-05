@@ -182,14 +182,15 @@ export const workflowRoutes = (deps: {
     /** Open a task waiting for approval: a change is prepared now, as you. */
     app.post<{ Params: { id: string } }>("/api/tasks/:id/review", guarded(async (principal, request) => tasks.review(principal, request.params["id"]!)));
 
-    /** `{ pendingId, digest }` from the review, for a change; `{ always: true }` also makes the step automatic. */
-    app.post<{ Params: { id: string }; Body: { pendingId?: string; digest?: string; always?: boolean } }>(
+    /** `{ pendingId, digest }` from the review, for a change; `{ always: true }` also makes the step automatic; `{ edits }` changes what was proposed first. */
+    app.post<{ Params: { id: string }; Body: { pendingId?: string; digest?: string; always?: boolean; edits?: Record<string, unknown> } }>(
       "/api/tasks/:id/approve",
-      guarded<{ pendingId?: string; digest?: string; always?: boolean } | undefined>(async (principal, request) =>
+      guarded<{ pendingId?: string; digest?: string; always?: boolean; edits?: Record<string, unknown> } | undefined>(async (principal, request) =>
         tasks.approve(principal, request.params["id"]!, {
           ...(typeof request.body?.pendingId === "string" ? { pendingId: request.body.pendingId } : {}),
           ...(typeof request.body?.digest === "string" ? { digest: request.body.digest } : {}),
           ...(request.body?.always === true ? { always: true } : {}),
+          ...(request.body?.edits && typeof request.body.edits === "object" && !Array.isArray(request.body.edits) ? { edits: request.body.edits } : {}),
         }),
       ),
     );

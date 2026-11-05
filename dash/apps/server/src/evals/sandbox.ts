@@ -3,7 +3,8 @@ import type { LlmAdapter } from "@freebirdai/dash-agent";
 import type { SandboxSession, SandboxStatus, ScriptedReply, Task, Turn, WorkflowSpec, WorldRef } from "@freebirdai/dash-spec";
 import type { WorkflowEvent } from "../workflows/env.js";
 import { WorkflowRunner } from "../workflows/runner.js";
-import { fake, type Fake } from "../workflows/testing.js";
+import { startWorkflow } from "../workflows/start.js";
+import { fake, owner, type Fake } from "../workflows/testing.js";
 import { worldSeed } from "./worlds.js";
 
 /**
@@ -189,6 +190,16 @@ export class Sandbox {
         for (const one of update) {
           const row = this.f.rows.find((candidate) => String(candidate["id"]) === String(one.id));
           if (row) Object.assign(row, one.values);
+        }
+        break;
+      }
+      case "start": {
+        const inputs = (payload["inputs"] as Record<string, unknown> | undefined) ?? {};
+        const named = typeof payload["workflow"] === "string" ? payload["workflow"] : undefined;
+        const started = [...(await this.listening("manual")), ...(await this.listening("agent"))].filter((one) => named === undefined || one.id === named);
+        for (const workflow of started) {
+          const agentId = workflow.trigger.kind === "agent" ? (typeof payload["agent"] === "string" ? payload["agent"] : [...this.f.agents.keys()][0]) : undefined;
+          await startWorkflow(this.f.starter, workflow, agentId ? { kind: "agent", agentId } : { kind: "manual" }, { inputs, actor: owner });
         }
         break;
       }

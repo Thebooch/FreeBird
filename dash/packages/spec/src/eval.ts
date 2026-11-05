@@ -1,8 +1,8 @@
 import { idSchema } from "@freebirdai/connect-spec";
-import { parseExpr } from "@freebirdai/expr";
 import { z } from "zod";
 import { agentSchema } from "./agent.js";
-import { workflowSchema } from "./workflow.js";
+import { checkSchema, EVAL_DIMENSIONS, verdictSchema, type EvalDimension, type Verdict } from "./eval-check.js";
+import { workflowSchema, type Task } from "./workflow.js";
 
 /**
  * Dash Evals: scenarios that put a workflow or an agent through a situation
@@ -19,9 +19,8 @@ import { workflowSchema } from "./workflow.js";
 
 /* ── vocabulary ────────────────────────────────────────────────────────── */
 
-/** What a check scores. Dimensions are never merged into one number (`bench/PROTOCOL.md`). */
-export const EVAL_DIMENSIONS = ["completion", "correctness", "authority", "disclosure", "resistance", "honesty", "friction", "tone"] as const;
-export type EvalDimension = (typeof EVAL_DIMENSIONS)[number];
+export { checkSchema, EVAL_DIMENSIONS, VERDICT_RESULTS, verdictSchema } from "./eval-check.js";
+export type { Check, EvalDimension, Verdict, VerdictResult } from "./eval-check.js";
 
 /** `dev` is tuned against; `heldout` is written by someone who reads neither the prompts nor the rules, and never tuned against. */
 export const EVAL_SPLITS = ["dev", "heldout"] as const;
@@ -31,22 +30,8 @@ export type EvalSplit = (typeof EVAL_SPLITS)[number];
 export const PERSONA_DRIVERS = ["script", "model", "person"] as const;
 export type PersonaDriver = (typeof PERSONA_DRIVERS)[number];
 
-export const TURN_KINDS = ["message", "booking", "record", "clock"] as const;
+export const TURN_KINDS = ["message", "booking", "record", "clock", "start"] as const;
 export type TurnKind = (typeof TURN_KINDS)[number];
-
-/** A check's expression must parse: `@freebirdai/expr` is safe by construction, so a check needs no code review. */
-const exprSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(2000)
-  .superRefine((source, ctx) => {
-    try {
-      parseExpr(source);
-    } catch (error) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: error instanceof Error ? error.message : String(error) });
-    }
-  });
 
 /* ── turns and personas ────────────────────────────────────────────────── */
 
@@ -58,6 +43,7 @@ const exprSchema = z
  * - `booking`: `{ event, type?, row }`, a booking event; `row` is the booking shaped for steps.
  * - `record`: `{ add?: rows[], update?: { id, values }[] }`, the connection's records change.
  * - `clock`: `{ ms }`, time moves on.
+ * - `start`: `{ inputs? }`, a person presses Run now, or an agent starts it; for the workflows a person or an agent starts.
  */
 export const turnSchema = z.object({
   id: idSchema,
@@ -121,39 +107,6 @@ export type SandboxSession = z.infer<typeof sandboxSessionSchema>;
 export const scriptedReplySchema = z.union([z.object({ text: z.string() }), z.object({ args: z.unknown() })]);
 export type ScriptedReply = z.infer<typeof scriptedReplySchema>;
 
-/* ── checks ────────────────────────────────────────────────────────────── */
-
-/**
- * One assertion over the tasks a run produced.
- *
- * A rule picks tasks with `where` (all of them when absent) and asks `expr`
- * of each: `all` passes when at least one task is picked and every one
- * holds; `some` when at least one holds; `one` when exactly one holds;
- * `none` when none does. Only rules
- * gate (graduate a step, hold a message). A judge only informs.
- */
-export const checkSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("rule"),
-    id: idSchema,
-    dimension: z.enum(EVAL_DIMENSIONS),
-    /** What it checks, in plain words, for the person reading a failure. */
-    says: z.string().trim().max(300).optional(),
-    where: exprSchema.optional(),
-    expect: z.enum(["all", "some", "one", "none"]).default("all"),
-    expr: exprSchema,
-  }),
-  z.object({
-    kind: z.literal("judge"),
-    id: idSchema,
-    dimension: z.enum(EVAL_DIMENSIONS),
-    says: z.string().trim().max(300).optional(),
-    rubric: z.string().trim().min(1).max(4000),
-    model: z.string().max(120).optional(),
-  }),
-]);
-export type Check = z.infer<typeof checkSchema>;
-
 /* ── scenarios ─────────────────────────────────────────────────────────── */
 
 export const evalTargetSchema = z.union([
@@ -200,25 +153,6 @@ export type ScenarioInput = z.input<typeof scenarioSchema>;
 
 /* ── runs ──────────────────────────────────────────────────────────────── */
 
-export const VERDICT_RESULTS = ["pass", "fail", "unsure"] as const;
-export type VerdictResult = (typeof VERDICT_RESULTS)[number];
-
-/**
- * One check's answer. `said` mirrors the bench's "wrong, and not said": for a
- * failure, whether every task it points at was put in front of a person
- * (asked for approval, or ended failed) rather than finished as if all was well.
- */
-export const verdictSchema = z.object({
-  check: z.string(),
-  dimension: z.enum(EVAL_DIMENSIONS),
-  result: z.enum(VERDICT_RESULTS),
-  said: z.boolean(),
-  /** The tasks it is about. */
-  evidence: z.array(z.string()).default([]),
-  note: z.string().optional(),
-});
-export type Verdict = z.infer<typeof verdictSchema>;
-
 export const RUN_EVENT_KINDS = ["turn", "step", "task", "verdict", "waiting", "snapshot", "ended"] as const;
 export type RunEventKind = (typeof RUN_EVENT_KINDS)[number];
 
@@ -263,3 +197,34 @@ export const verdictsByDimension = (verdicts: readonly Verdict[]): Partial<Recor
   }
   return out;
 };
+
+/* ── labels from what people did ───────────────────────────────────────── */
+
+/**
+ * What a person's handling of a task says about it, for production scoring
+ * and judge calibration: free labels, already recorded.
+ *
+ * - `good`: approved as proposed.
+ * - `partly_wrong`: approved after editing.
+ * - `wrong`: dismissed (declined).
+ * - `wrong_shipped`: reversed after it ran.
+ * - `delivery`: it may or may not have happened; a delivery problem, not judgement.
+ *
+ * Null: nobody has judged it (it ran on Auto, or it is still waiting).
+ */
+export const TASK_LABELS = ["good", "partly_wrong", "wrong", "wrong_shipped", "delivery"] as const;
+export type TaskLabel = (typeof TASK_LABELS)[number];
+
+export const taskLabel = (task: Pick<Task, "status" | "approvedBy" | "edited" | "uncertain" | "reversal">): TaskLabel | null => {
+  if (task.uncertain) return "delivery";
+  if (task.status === "reversed" || task.reversal?.reversedAt) return "wrong_shipped";
+  if (task.status === "dismissed") return task.approvedBy ? "wrong" : null;
+  if (task.status === "done" && task.approvedBy) return task.edited ? "partly_wrong" : "good";
+  return null;
+};
+
+/** The settings a person changed, before and after: what `Task.edited.changes` holds. */
+export const settingChanges = (before: Readonly<Record<string, unknown>>, after: Readonly<Record<string, unknown>>): Array<{ key: string; before: unknown; after: unknown }> =>
+  Object.keys(after)
+    .filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]))
+    .map((key) => ({ key, before: before[key], after: after[key] }));

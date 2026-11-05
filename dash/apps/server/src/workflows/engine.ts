@@ -25,7 +25,9 @@ import {
   type WorkflowStart,
 } from "@freebirdai/dash-spec";
 import { EXECUTORS, RECORD_CHANGE_VARIANTS, intentFor, renderSettings, type ActionContext, type ActionResult, type Approval, type Resume } from "./actions.js";
+import { scoreTask } from "../evals/checks.js";
 import { ParkWorkflow, type WorkflowEnv } from "./env.js";
+import { demote } from "./graduation.js";
 import { agentNamed, readRecordAs } from "./reads.js";
 import { RevisionConflict } from "./store.js";
 
@@ -612,7 +614,7 @@ export class WorkflowEngine {
    */
   private async announce(ended: WorkflowCase): Promise<WorkflowCase> {
     const one = ended;
-    if (one.trial) {
+    if (one.trial && !this.env.graduation) {
       const workflow = await this.env.store.get(one.workflow);
       if (workflow && workflow.trial > 0 && !workflow.trialCases.includes(one.id)) {
         await this.env.store.put({ ...workflow, trial: workflow.trial - 1, trialCases: [...workflow.trialCases, one.id].slice(-TRIAL_LEDGER) });
@@ -692,8 +694,17 @@ export class WorkflowEngine {
     } as Task;
   }
 
+  /** Writes a task. One that just finished is scored by its workflow's standing checks, and a failure puts a graduated step back on Approve. */
   private async writeTask(task: Task): Promise<void> {
-    await this.env.tasks.put(task);
+    if (!FINAL_TASK_STATUSES.includes(task.status) || !task.workflow || task.eval) {
+      await this.env.tasks.put(task);
+      return;
+    }
+    const workflow = await this.env.store.get(task.workflow);
+    const verdicts = workflow && workflow.checks.length > 0 ? scoreTask(workflow.checks, task, this.env.now()) : [];
+    await this.env.tasks.put(verdicts.length > 0 ? { ...task, eval: verdicts } : task);
+    const failed = verdicts.find((verdict) => verdict.result === "fail");
+    if (failed) await demote(this.env, task.workflow, task.node, `check "${failed.check}" failed${failed.note ? `: ${failed.note}` : ""}.`);
   }
 
   private async dismissStale(id: string, why: string): Promise<void> {

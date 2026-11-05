@@ -127,6 +127,17 @@ CREATE TABLE IF NOT EXISTS dash_tasks (
 CREATE INDEX IF NOT EXISTS dash_tasks_status ON dash_tasks (workspace, status, at);
 CREATE INDEX IF NOT EXISTS dash_tasks_case ON dash_tasks (workspace, case_id);
 
+CREATE TABLE IF NOT EXISTS dash_eval_runs (
+  workspace TEXT NOT NULL,
+  id        TEXT NOT NULL,
+  workflow  TEXT,
+  at        TEXT NOT NULL,
+  record    JSONB NOT NULL,
+  PRIMARY KEY (workspace, id)
+);
+
+CREATE INDEX IF NOT EXISTS dash_eval_runs_workflow ON dash_eval_runs (workspace, workflow, at);
+
 CREATE TABLE IF NOT EXISTS dash_workflow_templates (
   workspace TEXT NOT NULL,
   id        TEXT NOT NULL,

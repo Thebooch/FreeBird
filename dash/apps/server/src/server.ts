@@ -142,6 +142,9 @@ import { agentRoutes } from "./routes/agents.js";
 import { buildScreens } from "./chat/screens/index.js";
 import { describeTurn, periodParams } from "./context/period.js";
 import { workflowRoutes } from "./routes/workflows.js";
+import { evalRoutes } from "./routes/evals.js";
+import { EvalService } from "./evals/service.js";
+import { MemoryEvalRunStore, type EvalRunStore } from "./evals/store.js";
 import { calendarRoutes } from "./routes/calendar.js";
 import { CalendarService } from "./calendar/service.js";
 import type { EmailAdapter } from "@freebirdai/core";
@@ -458,6 +461,8 @@ export interface BuildServerOptions {
   readonly workflows?: WorkflowStore;
   readonly cases?: CaseStore;
   readonly tasks?: TaskStore;
+  /** Scenario runs the Test button keeps (`evals/store.ts`). Absent means in this process only. */
+  readonly evalRuns?: EvalRunStore;
   readonly calendar?: CalendarStore;
   readonly templates?: TemplateStore;
   /** Scheduling's setup: hosts, pools, appointment types, blocks and placements (`scheduling/store.ts`). Memory unless supplied. */
@@ -1080,6 +1085,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     cases: options.cases ?? new MemoryCaseStore(),
     tasks: options.tasks ?? new MemoryTaskStore(),
     calendar: options.calendar ?? new MemoryCalendarStore(),
+    /* Dash Evals: trial ends on evidence, step by step, rather than a count. */
+    graduation: process.env.DASH_EVAL_GRADUATION === "on",
     templates: options.templates ?? new MemoryTemplateStore(),
     signals: options.signals ?? new MemorySignalStore(),
     agents: agentStore,
@@ -1181,6 +1188,9 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       connectionTitle: (id) => store.getConnection(id)?.title ?? id,
     }),
   );
+  /* Dash Evals (`evals/`): the Test button's sandbox sessions, kept runs, and leaving trial on evidence. */
+  const evalService = new EvalService({ env: workflowEnv, runs: options.evalRuns ?? new MemoryEvalRunStore() });
+  void app.register(evalRoutes({ evals: evalService, policy }));
   /* The calendar: what agents, workflows, bookings and people put on it (`calendar/`). */
   const calendar = new CalendarService({ store: workflowEnv.calendar, now: () => Date.now(), newId: () => randomUUID() });
   void app.register(calendarRoutes({ calendar, policy }));
