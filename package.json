@@ -30,6 +30,7 @@
     "eval:entities": "pnpm --filter @freebirdai/dash-server eval:entities",
     "eval:steps": "pnpm --filter @freebirdai/dash-server eval:steps",
     "eval:models": "pnpm --filter @freebirdai/dash-server eval:models",
+    "eval:scenarios": "pnpm --filter @freebirdai/dash-server eval:scenarios --",
     "bench": "pnpm --filter @freebirdai/dash-server bench --",
     "lint": "eslint .",
     "format": "prettier --write .",

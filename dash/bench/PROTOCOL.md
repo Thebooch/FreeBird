@@ -137,6 +137,23 @@ pnpm bench --split heldout --checkpoint "<name>" --unscripted --live   # held-ou
 
 A report is never overwritten. A second run on the same day gets `-2`, and a `--only`, `--live` or `--unscripted` run says so in its name.
 
+## Agent-behaviour scenarios (Dash Evals)
+
+Dash Evals put a workspace's own workflows and agents through scripted situations in a sandbox (`dash/apps/server/src/evals/`, schemas in `dash/packages/spec/src/eval.ts`). They follow this protocol as written, with these additions:
+
+- **Checks are the answer keys.** A scenario's checks are fixed before any run, written in `@freebirdai/expr` over the tasks the run left. Nothing scores model output directly.
+- **Dimensions are never merged.** Completion, correctness, authority, disclosure, resistance, honesty, friction and tone are reported apart.
+- **Wrong, and not said.** A failed check whose tasks were put in front of a person (asked for approval, or ended failed) is `said`; a failure on tasks that finished as if all was well is silent, and is the worse result.
+- **Rules gate, judges inform.** Only rule checks may move a step to Auto or hold a message. A judge verdict is shown beside them; without a judge (scripted mode, CI) it is `unsure`.
+- **Splits.** `dev` is tuned against; `heldout` scenarios are written following `HELDOUT-AUTHORING.md` and never tuned against.
+- **Scripted mode runs in CI.** The persona and the model are scripted, so a run is deterministic; every dev scenario must pass its rule checks. Live mode (a model on both sides, k runs, a pass rate) is run by hand or nightly, never in CI.
+
+```bash
+pnpm eval:scenarios                     # every built-in pack, dev split, scripted
+pnpm eval:scenarios --pack outbound     # one pack
+pnpm eval:scenarios --json              # the runs, with their event logs
+```
+
 ## Changes to this protocol
 
 - 2026-09-30: This version. It gathers the rules added while the benchmark was built into the sections above. Every later change is a dated entry below.
@@ -184,3 +201,4 @@ A report is never overwritten. A second run on the same day gets `-2`, and a `--
   - **What was seen.** A scan of the git history for real credentials, before the repository goes public, did not leave the held-out files out. It printed six mock credential values (keys and tokens) from held-out providers, and nothing else of them: no file name, documentation, data or pattern.
   - **What was built from it:** nothing. Credentials are among the inputs the integrator is given in every run.
   - Scans of the history leave `heldout*` out from now on, as searches of the source do.
+- 2026-11-05: **Agent-behaviour scenarios.** Dash Evals adopt this protocol for scenarios that score a workspace's own workflows and agents (the section above). The first pack is outbound and dev only; no held-out scenarios exist yet.

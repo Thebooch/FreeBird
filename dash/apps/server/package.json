@@ -14,6 +14,7 @@
     "eval:context": "tsx src/eval/context.mts",
     "eval:prompt": "tsx src/eval/prompt.mts",
     "eval:reply": "tsx src/eval/reply.mts",
+    "eval:scenarios": "tsx src/eval/scenarios.mts",
     "eval:related": "tsx src/eval/related.mts",
     "bench": "tsx src/bench/cli.mts"
   },

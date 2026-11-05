@@ -49,6 +49,14 @@ apps/
 - **Workflows never call `composeResponsePrompt`.** Only an `outreach` step's conversation uses an agent's reply prompt, and that arrives with Comms.
 - Web: `apps/web/src/agent/workflows/` (`WorkflowsSection`, `WorkflowEditor`, `Canvas`, `StepPanel`, `TaskCard`, `fields.tsx`, `draft.ts`). The agent Tools tab's "Run a workflow" lists workflows whose trigger is `agent`.
 
+## Evals (scenarios, sandbox, checks)
+
+- Spec: `packages/spec/src/eval.ts` (`scenarioSchema` with `turns`, `persona`, `world`, `checks`, `scriptedModel`; `checkSchema` rule | judge; `evalRunSchema` whose `events` are an append-only `RunEvent` log; `verdictSchema` with `said`). Rule checks are `@freebirdai/expr` over the tasks a run left: `where` picks tasks, `expect` all | some | one | none.
+- Server: `apps/server/src/evals/`. `Sandbox` (`sandbox.ts`) is a session over `fake()` (`workflows/testing.ts`): start, `step(turn)`, `runUntilWaiting`, `snapshot`, `restore`, `stop`; its own clock and a scripted model, a recording sender and write service, nothing real. Turns are `message` (starts `message_received` workflows), `booking` (starts `booking` workflows with the payload's row), `record` (changes the connection's rows), `clock` (moves time); each is followed by runner passes until nothing changes. Worlds by name in `worlds.ts`. `runScenario` (`runner.ts`) logs turn → step/task → snapshot → verdict after every turn; `checks.ts` scores tasks (the same code will score live tasks). Packs in `evals/packs/`.
+- `pnpm eval:scenarios` (`src/eval/scenarios.mts`) runs the packs scripted and exits 1 on a failed rule check; CI runs it, and `evals.test.ts` runs every pack too. Protocol: `bench/PROTOCOL.md`, "Agent-behaviour scenarios".
+- **Inputs arrive only as turns.** A workflow step never reads the wall clock, randomness or a global model: `env.now`, `env.newId` and `env.llm` only, or a replay stops matching. **A sandbox cannot reach the world**: never give `Sandbox` a real `OutreachSender`, write service or secrets.
+- **Rules gate, judges inform.** Without a judge a judge check is `unsure`.
+
 ## Calendar, scheduling, contacts and bookings
 
 - Calendar spec: `packages/spec/src/calendar.ts` (`calendarEventSchema`: `kind` event | deadline | appointment, `status`, `source`, `dedupeKey`, `pinned`; old `deadline: true` rows read as `kind: "deadline"`). Server: `apps/server/src/calendar/` (`CalendarStore` with `upsertByKey`, `CalendarService`), `routes/calendar.ts`; the chat reaches it through the screens below. A workflow's entries are keyed `workflow:rowKey:node` and follow their records each run (`workflows/calendar-sync.ts`); an entry a person changed is `pinned` and left alone. Appointments change only through their booking. Permission `calendar.manage` (owner, admin, editor).
