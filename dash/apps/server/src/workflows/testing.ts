@@ -1,7 +1,7 @@
 import type { WriteIntent, WriteReview } from "@freebirdai/connect";
 import type { ReadRequest, ReadResult } from "@freebirdai/connect/host";
 import { MemoryLeaseLock } from "@freebirdai/connect/host";
-import type { fakeLlm } from "@freebirdai/dash-agent";
+import type { LlmAdapter } from "@freebirdai/dash-agent";
 import { agentSchema, chainEdges, workflowSchema, type AgentSpec, type Principal, type WorkflowNode, type WorkflowSpec } from "@freebirdai/dash-spec";
 import type { Policy } from "../identity/policy.js";
 import { WorkflowEngine } from "./engine.js";
@@ -39,13 +39,26 @@ export interface Fake {
   posts: Array<{ url: string; body: unknown; key?: string }>;
   /** What a webhook answers: a status, or an error thrown. */
   postAnswer: number | Error;
+  /** The last id handed out, and the prepared changes by pending id: kept in the state so a snapshot of it restores them. */
+  ids: number;
+  intents: Map<string, WriteIntent>;
 }
 
-export const fake = (options: { policy?: Policy; llm?: ReturnType<typeof fakeLlm>; sender?: boolean; leases?: boolean } = {}): Fake => {
-  let id = 0;
-  const intents = new Map<string, WriteIntent>();
+export const fake = (
+  options: {
+    policy?: Policy;
+    llm?: LlmAdapter;
+    sender?: boolean;
+    leases?: boolean;
+    /** Where the clock starts. Default `T0`. */
+    now?: number;
+    onEvent?: WorkflowEnv["onEvent"];
+  } = {},
+): Fake => {
   const state = {
-    clock: { now: T0 },
+    ids: 0,
+    intents: new Map<string, WriteIntent>(),
+    clock: { now: options.now ?? T0 },
     rows: [] as Record<string, unknown>[],
     prepared: [] as Fake["prepared"],
     committed: [] as string[],
@@ -102,7 +115,7 @@ export const fake = (options: { policy?: Policy; llm?: ReturnType<typeof fakeLlm
       prepare: async (principal, intent, how) => {
         state.prepared.push({ principal, intent, via: how.via, ...(how.onBehalfOf ? { onBehalfOf: how.onBehalfOf } : {}) });
         const pendingId = `p${state.prepared.length}`;
-        intents.set(pendingId, intent);
+        state.intents.set(pendingId, intent);
         return review(intent, pendingId);
       },
       commit: async (_principal, pendingId) => {
@@ -112,7 +125,7 @@ export const fake = (options: { policy?: Policy; llm?: ReturnType<typeof fakeLlm
           throw error;
         }
         state.committed.push(pendingId);
-        const intent = intents.get(pendingId)!;
+        const intent = state.intents.get(pendingId)!;
         return {
           status: "succeeded",
           connection: intent.connection,
@@ -137,7 +150,8 @@ export const fake = (options: { policy?: Policy; llm?: ReturnType<typeof fakeLlm
     connectionTitle: (connection) => (connection === "pms" ? "Property system" : connection),
     ...(options.llm ? { llm: () => options.llm! } : {}),
     now: () => state.clock.now,
-    newId: () => `id${++id}`,
+    newId: () => `id${++state.ids}`,
+    ...(options.onEvent ? { onEvent: options.onEvent } : {}),
   };
   const leases = options.leases ? new MemoryLeaseLock(() => state.clock.now) : undefined;
   const engine = new WorkflowEngine({ env, holder: "me", ...(leases ? { leases } : {}) });

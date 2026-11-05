@@ -38,5 +38,9 @@ jobs:
       - name: Test
         run: pnpm test
 
+      # Dash Evals in scripted mode: offline, free, deterministic.
+      - name: Scenario evals
+        run: pnpm eval:scenarios
+
       - name: Build docs site
         run: pnpm --filter freebird-docs build
