@@ -47,6 +47,18 @@ export const inboundRoutes = (deps: { readonly inbound: InboundService; readonly
   app.post("/api/inbound/screens/:id/block", guarded<{ scope?: unknown }>(async (principal, request) => inbound.block(principal, request.params["id"]!, scopeOf(request.body))));
   app.post("/api/inbound/screens/:id/trust", guarded<{ scope?: unknown }>(async (principal, request) => inbound.trust(principal, request.params["id"]!, scopeOf(request.body))));
 
+  /* Watching: flags nobody has looked at, a person's word on one, and whether holding has been earned. */
+  app.get("/api/inbound/review", guarded(async () => inbound.toReview()));
+  app.post(
+    "/api/inbound/screens/:id/review",
+    guarded<{ verdict?: unknown }>(async (principal, request) => {
+      const verdict = request.body.verdict;
+      if (verdict !== "good_catch" && verdict !== "fine") throw new InboundError('Say "good_catch" or "fine".', 400);
+      return inbound.review(principal, request.params["id"]!, verdict);
+    }),
+  );
+  app.get("/api/inbound/readiness", guarded(async () => inbound.readiness()));
+
   app.get("/api/inbound/settings", guarded(async () => inbound.settings()));
   app.put("/api/inbound/settings", guarded(async (_principal, request) => inbound.putSettings(request.body)));
 

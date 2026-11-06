@@ -1,7 +1,7 @@
 import { Badge, Button } from "@freebirdai/dash-components";
 import { TRUST_WORDS, type InboundSettings, type RequesterRule, type ScreenRecord } from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useState } from "react";
-import { api } from "../../api";
+import { api, type InboundReadiness } from "../../api";
 import { when } from "./TaskCard.jsx";
 
 /**
@@ -67,6 +67,83 @@ export const HeldEmails = ({ compact = false, onChanged }: { compact?: boolean; 
   );
 };
 
+/**
+ * While the screen only watches: the emails it would have held, each to mark
+ * "Good catch" or "This was fine", and whether it has earned holding by the
+ * thresholds here. Dash suggests the switch; a person makes it.
+ */
+const ScreenReview = ({ settings, onSave }: { settings: InboundSettings; onSave: (next: InboundSettings) => void }): JSX.Element => {
+  const [flags, setFlags] = useState<ScreenRecord[]>([]);
+  const [readiness, setReadiness] = useState<InboundReadiness | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(() => {
+    void Promise.all([api.inboundToReview(), api.inboundReadiness()]).then(
+      ([listed, ready]) => {
+        setFlags(listed);
+        setReadiness(ready);
+      },
+      (cause: unknown) => setError(errorText(cause)),
+    );
+  }, []);
+  useEffect(load, [load, settings.holdWhen]);
+  const review = (id: string, verdict: "good_catch" | "fine") => void api.reviewInbound(id, verdict).then(load, (cause: unknown) => setError(errorText(cause)));
+  const holdWhen = settings.holdWhen;
+  const number = (key: keyof InboundSettings["holdWhen"], value: string, scale = 1) => onSave({ ...settings, holdWhen: { ...holdWhen, [key]: Math.max(0, Number(value) || 0) / scale } });
+  return (
+    <div data-testid="inbound-review">
+      {readiness && (
+        <p className={readiness.ready ? "dash-callout" : "dash-hint"} data-testid="inbound-readiness">
+          {readiness.ready ? (
+            <>
+              The screen has earned holding: {readiness.screened} emails over {readiness.days} days, {readiness.falseFlags === null ? "no flags raised" : `${Math.round(readiness.falseFlags * 100)}% of its flags marked fine`}.{" "}
+              <Button size="sm" tone="primary" onClick={() => onSave({ ...settings, observeOnly: false })} testId="inbound-start-holding">
+                Start holding
+              </Button>
+            </>
+          ) : (
+            <>Before it holds anything: {readiness.blockers.join(" ")}</>
+          )}
+        </p>
+      )}
+      <label className="dash-hint">
+        Suggest holding after{" "}
+        <input className="dash-tool__when dash-workflow__tiny" type="number" min={1} aria-label="Emails screened" value={holdWhen.minScreened} onChange={(event) => number("minScreened", event.target.value)} /> emails, over{" "}
+        <input className="dash-tool__when dash-workflow__tiny" type="number" min={1} aria-label="Days watched" value={holdWhen.minDays} onChange={(event) => number("minDays", event.target.value)} /> days, with at most{" "}
+        <input
+          className="dash-tool__when dash-workflow__tiny"
+          type="number"
+          min={0}
+          max={100}
+          aria-label="Flags marked fine, percent"
+          value={Math.round(holdWhen.maxFalseFlags * 100)}
+          onChange={(event) => number("maxFalseFlags", event.target.value, 100)}
+        />
+        % of flags marked fine
+      </label>
+      {flags.length > 0 && (
+        <ul className="dash-proposals">
+          {flags.map((one) => (
+            <li key={one.id} className="dash-task" data-testid={`flag-${one.id}`}>
+              <span>
+                <strong>{one.from}</strong> <span className="dash-hint">{when(one.at)} · would have been held: {one.signals.filter((signal) => signal.hold).map((signal) => signal.detail).join("; ")}</span>
+              </span>
+              <div className="dash-row">
+                <Button size="sm" onClick={() => review(one.id, "good_catch")} testId={`flag-good-${one.id}`}>
+                  Good catch
+                </Button>
+                <Button size="sm" tone="ghost" onClick={() => review(one.id, "fine")} testId={`flag-fine-${one.id}`}>
+                  This was fine
+                </Button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {error && <p className="dash-callout dash-callout--bad">{error}</p>}
+    </div>
+  );
+};
+
 /** The screen's own settings: observe-only, the per-sender limits, what it has seen, and who is trusted or blocked. */
 export const InboundScreenSettings = (): JSX.Element | null => {
   const [settings, setSettings] = useState<InboundSettings | null>(null);
@@ -109,6 +186,7 @@ export const InboundScreenSettings = (): JSX.Element | null => {
           Last 7 days: {summary.screened} screened, {summary.wouldHold} a rule would hold, {summary.held} held.
         </span>
       )}
+      {settings.observeOnly && <ScreenReview settings={settings} onSave={save} />}
       <label className="dash-hint">
         Emails a day from one sender{" "}
         <input

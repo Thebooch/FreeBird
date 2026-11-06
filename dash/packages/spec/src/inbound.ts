@@ -55,6 +55,19 @@ export const inboundSettingsSchema = z.object({
   /** Score and log only: nothing is held but a blocked sender. On until a person turns holding on. */
   observeOnly: z.boolean().default(true),
   limits: requesterLimitsSchema.default({}),
+  /**
+   * When Dash suggests turning holding on: enough emails screened, over
+   * enough days, and few enough of the flagged ones that people marked fine.
+   * A person turns it on; it never switches by itself.
+   */
+  holdWhen: z
+    .object({
+      minScreened: z.number().int().min(1).max(100_000).default(100),
+      minDays: z.number().int().min(1).max(365).default(14),
+      /** The most of the flagged emails people may have marked "This was fine", as a share: 0.1 is one in ten. */
+      maxFalseFlags: z.number().min(0).max(1).default(0.1),
+    })
+    .default({}),
   /** Outside agents may connect over MCP (`/api/public/<workspace>/mcp`): book as a stranger may on the public link, and write to the team. */
   outsideAgents: z.boolean().default(false),
 });
@@ -92,6 +105,8 @@ export const screenRecordSchema = z.object({
   wouldHold: z.boolean(),
   observeOnly: z.boolean(),
   status: z.enum(SCREEN_STATUSES),
+  /** A person's word on a flag the screen raised while it only watched: right to flag it, or not. */
+  review: z.object({ verdict: z.enum(["good_catch", "fine"]), by: z.string(), at: z.string() }).optional(),
   /** Who released or dropped it, and when. */
   decidedBy: z.string().optional(),
   decidedAt: z.string().optional(),
