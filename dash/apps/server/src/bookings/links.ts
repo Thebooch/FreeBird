@@ -77,7 +77,7 @@ const timeWords = (at: number | string, zone: string): string => {
   }
 };
 
-const SOURCE_WORDS: Readonly<Record<FieldSource, string>> = { member: "set by the team", record: "from their record", person: "they said" };
+const SOURCE_WORDS: Readonly<Record<FieldSource, string>> = { member: "set by the team", record: "from their record", person: "they said", inbound: "read from their email" };
 
 /** A field's value as words: an address on one line. */
 const valueWords = (value: unknown): string => {

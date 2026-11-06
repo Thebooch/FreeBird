@@ -138,6 +138,31 @@ CREATE TABLE IF NOT EXISTS dash_eval_runs (
 
 CREATE INDEX IF NOT EXISTS dash_eval_runs_workflow ON dash_eval_runs (workspace, workflow, at);
 
+CREATE TABLE IF NOT EXISTS dash_inbound_screens (
+  workspace TEXT NOT NULL,
+  id        TEXT NOT NULL,
+  sender    TEXT NOT NULL,
+  status    TEXT NOT NULL,
+  at        TEXT NOT NULL,
+  record    JSONB NOT NULL,
+  PRIMARY KEY (workspace, id)
+);
+
+CREATE INDEX IF NOT EXISTS dash_inbound_screens_sender ON dash_inbound_screens (workspace, sender, at);
+CREATE INDEX IF NOT EXISTS dash_inbound_screens_status ON dash_inbound_screens (workspace, status, at);
+
+CREATE TABLE IF NOT EXISTS dash_inbound_rules (
+  workspace TEXT NOT NULL,
+  key       TEXT NOT NULL,
+  record    JSONB NOT NULL,
+  PRIMARY KEY (workspace, key)
+);
+
+CREATE TABLE IF NOT EXISTS dash_inbound_settings (
+  workspace TEXT NOT NULL PRIMARY KEY,
+  record    JSONB NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS dash_workflow_templates (
   workspace TEXT NOT NULL,
   id        TEXT NOT NULL,

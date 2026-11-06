@@ -29,7 +29,7 @@ export interface ContactDirectory {
   /** `contact.*` and `contact.stats.*`, for block rules. */
   facts(id: string): Promise<Facts>;
   /** A value the person gave, or a member set. */
-  record(id: string, field: string, value: unknown, from: "person" | "member", by?: string): Promise<void>;
+  record(id: string, field: string, value: unknown, from: "inbound" | "person" | "member", by?: string): Promise<void>;
   /** Tries the workspace's match rules once: exactly one record links it. */
   match(id: string): Promise<MatchOutcome>;
   /** Copies its linked records' values again. */

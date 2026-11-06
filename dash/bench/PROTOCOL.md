@@ -202,3 +202,4 @@ pnpm eval:scenarios --json              # the runs, with their event logs
   - **What was built from it:** nothing. Credentials are among the inputs the integrator is given in every run.
   - Scans of the history leave `heldout*` out from now on, as searches of the source do.
 - 2026-11-05: **Agent-behaviour scenarios.** Dash Evals adopt this protocol for scenarios that score a workspace's own workflows and agents (the section above). The first pack is outbound and dev only; no held-out scenarios exist yet.
+- 2026-11-06: **Inbound personas.** The inbound pack adds six personas (ordinary, pushy, injector, impersonator, overreacher, swarm), dev only, written by the author of the inbound screen. Held-out personas are still to be written by someone who has read neither the screen's rules nor the agents' prompts.

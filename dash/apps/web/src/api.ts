@@ -36,6 +36,9 @@ import type {
   SchedulingProfile,
   EvalDimension,
   EvalRun,
+  InboundSettings,
+  RequesterRule,
+  ScreenRecord,
   RunEvent,
   Task,
   TaskStatus,
@@ -1504,6 +1507,18 @@ export const api = {
 
   approveTask: (id: string, approval: { pendingId?: string; digest?: string; always?: boolean; edits?: Record<string, unknown> } = {}): Promise<{ task: Task; case?: WorkflowCase }> =>
     request(`/api/tasks/${encodeURIComponent(id)}/approve`, json(approval)),
+
+  /* ── the inbound screen: held emails, who is trusted or blocked ── */
+
+  inboundScreens: (status?: ScreenRecord["status"]): Promise<ScreenRecord[]> => request(`/api/inbound/screens${status ? `?status=${status}` : ""}`),
+  releaseInbound: (id: string): Promise<ScreenRecord> => request(`/api/inbound/screens/${encodeURIComponent(id)}/release`, json({})),
+  blockInbound: (id: string, scope: "address" | "domain" = "address"): Promise<ScreenRecord> => request(`/api/inbound/screens/${encodeURIComponent(id)}/block`, json({ scope })),
+  trustInbound: (id: string, scope: "address" | "domain" = "address"): Promise<ScreenRecord> => request(`/api/inbound/screens/${encodeURIComponent(id)}/trust`, json({ scope })),
+  inboundSettings: (): Promise<InboundSettings> => request("/api/inbound/settings"),
+  putInboundSettings: (settings: InboundSettings): Promise<InboundSettings> => request("/api/inbound/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(settings) }),
+  inboundRules: (): Promise<RequesterRule[]> => request("/api/inbound/rules"),
+  removeInboundRule: (key: string): Promise<unknown> => request(`/api/inbound/rules/${encodeURIComponent(key)}`, { method: "DELETE" }),
+  inboundSummary: (): Promise<{ screened: number; wouldHold: number; held: number; bySignal: Record<string, number> }> => request("/api/inbound/summary"),
 
   /* ── Dash Evals: testing a workflow in a sandbox, kept runs, leaving trial on evidence ── */
 

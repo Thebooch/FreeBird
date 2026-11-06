@@ -1,0 +1,135 @@
+import { Badge, Button } from "@freebirdai/dash-components";
+import { TRUST_WORDS, type InboundSettings, type RequesterRule, type ScreenRecord } from "@freebirdai/dash-spec";
+import { useCallback, useEffect, useState } from "react";
+import { api } from "../../api";
+import { when } from "./TaskCard.jsx";
+
+/**
+ * Emails the inbound screen held: each with why, and Release (it goes on as
+ * if it had just arrived), Block sender and Trust sender. Shown in "Waiting
+ * for you" and in Communications. The message itself is read in Comms.
+ */
+
+const errorText = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));
+
+export const HeldEmails = ({ compact = false, onChanged }: { compact?: boolean; onChanged?: () => void }): JSX.Element | null => {
+  const [held, setHeld] = useState<ScreenRecord[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(() => {
+    void api.inboundScreens("held").then(setHeld, () => setHeld([]));
+  }, []);
+  useEffect(load, [load]);
+
+  if (!held || held.length === 0) return null;
+  const act = (id: string, work: () => Promise<unknown>) => {
+    setBusy(id);
+    setError(null);
+    void work()
+      .then(() => {
+        load();
+        onChanged?.();
+      }, (cause: unknown) => setError(errorText(cause)))
+      .finally(() => setBusy(null));
+  };
+  return (
+    <div className="dash-evals" data-testid="held-emails">
+      <strong>
+        Held emails <span className="dash-hint">{held.length}</span>
+      </strong>
+      {!compact && <span className="dash-hint">The inbound screen held these before any agent or workflow read them.</span>}
+      <ul className="dash-proposals">
+        {held.map((one) => (
+          <li key={one.id} className="dash-task" data-testid={`held-${one.id}`}>
+            <div className="dash-task__head">
+              <strong className="dash-task__title">{one.from}</strong>
+              <Badge tone={one.requester.trust === "blocked" ? "danger" : "warn"}>{TRUST_WORDS[one.requester.trust]}</Badge>
+            </div>
+            <span className="dash-hint">
+              {when(one.at)} · {one.signals.map((signal) => signal.detail).join("; ") || "the sender is blocked"}
+            </span>
+            <div className="dash-row">
+              <Button size="sm" tone="primary" busy={busy === one.id} onClick={() => act(one.id, () => api.releaseInbound(one.id))} testId={`held-release-${one.id}`}>
+                Release
+              </Button>
+              <Button size="sm" busy={busy === one.id} onClick={() => act(one.id, () => api.trustInbound(one.id))} testId={`held-trust-${one.id}`}>
+                Trust sender
+              </Button>
+              <Button size="sm" tone="ghost" busy={busy === one.id} onClick={() => act(one.id, () => api.blockInbound(one.id))} testId={`held-block-${one.id}`}>
+                Block sender
+              </Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+      {error && <p className="dash-callout dash-callout--bad">{error}</p>}
+    </div>
+  );
+};
+
+/** The screen's own settings: observe-only, the per-sender limits, what it has seen, and who is trusted or blocked. */
+export const InboundScreenSettings = (): JSX.Element | null => {
+  const [settings, setSettings] = useState<InboundSettings | null>(null);
+  const [rules, setRules] = useState<RequesterRule[]>([]);
+  const [summary, setSummary] = useState<{ screened: number; wouldHold: number; held: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(() => {
+    void Promise.all([api.inboundSettings(), api.inboundRules(), api.inboundSummary()]).then(
+      ([held, listed, seen]) => {
+        setSettings(held);
+        setRules(listed);
+        setSummary(seen);
+      },
+      (cause: unknown) => setError(errorText(cause)),
+    );
+  }, []);
+  useEffect(load, [load]);
+  if (error) return <p className="dash-callout dash-callout--bad">{error}</p>;
+  if (!settings) return null;
+  const save = (next: InboundSettings) => void api.putInboundSettings(next).then(setSettings, (cause: unknown) => setError(errorText(cause)));
+  return (
+    <div className="dash-evals" data-testid="inbound-settings">
+      <strong>Inbound screen</strong>
+      <span className="dash-hint">Checks each new email before an agent or workflow reads it. Values an email chose never drive an outside step on Auto.</span>
+      <label className="dash-reach__check">
+        <input type="checkbox" checked={!settings.observeOnly} onChange={(event) => save({ ...settings, observeOnly: !event.target.checked })} data-testid="inbound-hold" /> Hold emails a rule flags (off:
+        watch and count only)
+      </label>
+      {summary && (
+        <span className="dash-hint" data-testid="inbound-summary">
+          Last 7 days: {summary.screened} screened, {summary.wouldHold} a rule would hold, {summary.held} held.
+        </span>
+      )}
+      <label className="dash-hint">
+        Emails a day from one sender{" "}
+        <input
+          className="dash-tool__when dash-workflow__tiny"
+          type="number"
+          min={1}
+          value={settings.limits.messagesPerDay}
+          onChange={(event) => save({ ...settings, limits: { ...settings.limits, messagesPerDay: Math.max(1, Number(event.target.value) || 1) } })}
+        />{" "}
+        from one domain{" "}
+        <input
+          className="dash-tool__when dash-workflow__tiny"
+          type="number"
+          min={1}
+          value={settings.limits.domainMessagesPerDay}
+          onChange={(event) => save({ ...settings, limits: { ...settings.limits, domainMessagesPerDay: Math.max(1, Number(event.target.value) || 1) } })}
+        />
+      </label>
+      {rules.length > 0 && (
+        <ul className="dash-evals__events">
+          {rules.map((rule) => (
+            <li key={rule.key}>
+              {rule.key.replace(/^(address|domain):/, "")} · {TRUST_WORDS[rule.trust]}{" "}
+              <Button size="sm" tone="ghost" onClick={() => void api.removeInboundRule(rule.key).then(load, (cause: unknown) => setError(errorText(cause)))}>
+                Remove
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};

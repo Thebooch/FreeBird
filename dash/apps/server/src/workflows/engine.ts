@@ -28,6 +28,7 @@ import { EXECUTORS, RECORD_CHANGE_VARIANTS, intentFor, renderSettings, type Acti
 import { scoreTask } from "../evals/checks.js";
 import { ParkWorkflow, type WorkflowEnv } from "./env.js";
 import { demote } from "./graduation.js";
+import { markedSettings } from "./inbound-mark.js";
 import { agentNamed, readRecordAs } from "./reads.js";
 import { RevisionConflict } from "./store.js";
 
@@ -428,7 +429,9 @@ export class WorkflowEngine {
 
       /* Approve: the step waits for a person, with its settings frozen as they will run. */
       const approval: Approval | undefined = wake?.approved ?? (attempt.approvedBy && (wake?.retry || attempt.executing) ? { by: attempt.approvedBy } : undefined);
-      const mode = nodeMode(node, one.trial);
+      /* Values an email chose never drive an outside step on Auto (`inbound-mark.ts`). */
+      const fromEmail = !approval && variant.leavesDash && nodeMode(node, one.trial) === "auto" ? markedSettings(one, node) : [];
+      const mode = fromEmail.length > 0 ? "approve" : nodeMode(node, one.trial);
       if (mode === "approve" && !approval) {
         const wait: CaseWait = { node: node.id, kind: "approval", key: `task:${base.id}`, task: base.id };
         const proposed: Task = {
@@ -437,7 +440,12 @@ export class WorkflowEngine {
           title: this.proposalTitle(node, settings, workflow, one.data.row),
           pending: settings,
           wait,
-          reason: one.trial && node.mode === "auto" ? `In trial: "${workflow.name}" asks before every outside step for its first cases.` : `From "${workflow.name}"${one.rowKey ? ` for ${rowLabel(one)}` : ""}.`,
+          reason:
+            fromEmail.length > 0
+              ? `Held for a person: its ${fromEmail.join(", ")} came from the email that started it, so the sender chose ${fromEmail.length === 1 ? "it" : "them"}.`
+              : one.trial && node.mode === "auto" && !node.graduated
+                ? `In trial: "${workflow.name}" asks before every outside step for its first cases.`
+                : `From "${workflow.name}"${one.rowKey ? ` for ${rowLabel(one)}` : ""}.`,
         };
         await this.writeTask(proposed);
         this.env.onEvent?.({ type: "task.waiting", task: proposed.id, workflow: workflow.id, agent: proposed.agent });
