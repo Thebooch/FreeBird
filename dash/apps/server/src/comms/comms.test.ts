@@ -392,7 +392,7 @@ describe("Contact fields from email", () => {
     await app.inject({ method: "GET", url: "/api/comms?area=team" });
     mail.gmail.push({ id: "g5", threadId: "gt5", from: "Lee <lee@example.com>", to: "team@example.com", subject: "Apartment", snippet: "We'd like to move in Nov 1", at: at(50), text: "We'd like to move in on November 1." });
     await app.inject({ method: "POST", url: "/api/comms/mailboxes/gmail/refresh" });
-    const contacts = (await app.inject({ method: "GET", url: "/api/contacts" })).json() as { contacts: { emails: string[]; fields: Record<string, { person?: { value: unknown } }> }[] };
+    const contacts = (await app.inject({ method: "GET", url: "/api/contacts" })).json() as { contacts: { emails: string[]; fields: Record<string, { inbound?: { value: unknown } }> }[] };
     const lee = contacts.contacts.find((one) => one.emails.includes("lee@example.com"));
     expect(lee?.fields["moveIn"]?.inbound?.value).toBe("2026-11-01");
     await app.close();

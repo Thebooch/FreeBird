@@ -6,6 +6,7 @@ import { AddMailboxSheet, MailboxSheet, signInTo } from "./MailboxSheet.jsx";
 import { areaGroups, filterShown, loadSelection, saveSelection, ticked, toggle, when, type AreaGroup } from "./model.js";
 import { ThreadView } from "./ThreadView.jsx";
 import { CommsSettingsSheet } from "./CommsSettingsSheet.jsx";
+import { HeldEmails } from "../agent/workflows/HeldEmails.jsx";
 
 /**
  * Comms: calls, texts and email, in a section of their own (`#/comms`).
@@ -191,6 +192,7 @@ export const CommsShell = (): JSX.Element => {
             <ul className="dash-comms__list">{one.mailboxes.map((box) => mailboxRow(box, one))}</ul>
           </div>
         ))}
+        <HeldEmails compact />
         <div className="dash-comms__foot">
           <Button size="sm" tone="ghost" onClick={() => setSettingUp(true)} testId="comms-settings-open">
             Settings

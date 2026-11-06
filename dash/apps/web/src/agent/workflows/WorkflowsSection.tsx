@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type ConnectionSummary } from "../../api";
 import type { Route } from "../../route.js";
 import { workflowState } from "./draft.js";
+import { HeldEmails, InboundScreenSettings } from "./HeldEmails.jsx";
 import { TaskCard, when } from "./TaskCard.jsx";
 import { WorkflowEditor } from "./WorkflowEditor.jsx";
 import { itemAttrs, screenAttrs, useChatFocus, useChatScreen, useScreenChanged } from "../chatScreen.js";
@@ -349,6 +350,7 @@ export const WorkflowsSection = ({ selected, onNavigate }: { readonly selected: 
           </p>
         )}
         <h3 className="dash-agents__subtitle">Waiting for you</h3>
+        <HeldEmails onChanged={reload} />
         {waiting.length === 0 ? (
           <p className="dash-hint" data-testid="waiting-empty">
             Nothing is waiting. Steps set to Approve, questions for the team, and agents' requests to start a workflow appear here.
@@ -360,6 +362,7 @@ export const WorkflowsSection = ({ selected, onNavigate }: { readonly selected: 
             ))}
           </ul>
         )}
+        {!selected && <InboundScreenSettings />}
         {selected && !current && loaded && <EmptyState icon="workflow" title="That workflow is not here" body="It may have been deleted." action={{ label: "Back to workflows", onClick: () => go() }} />}
       </section>
     </div>
