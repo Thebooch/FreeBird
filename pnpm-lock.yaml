@@ -296,12 +296,18 @@ importers:
       '@freebirdai/expr':
         specifier: workspace:*
         version: link:../../../shared/packages/expr
+      '@freebirdai/mcp':
+        specifier: workspace:*
+        version: link:../../../guide/packages/mcp
       '@freebirdai/server':
         specifier: workspace:*
         version: link:../../../guide/packages/server
       '@jitl/quickjs-wasmfile-release-sync':
         specifier: 0.32.0
         version: 0.32.0
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.12.1
+        version: 1.29.0(zod@3.25.76)
       fastify:
         specifier: ^5.2.0
         version: 5.8.5

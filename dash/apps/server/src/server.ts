@@ -144,6 +144,8 @@ import { describeTurn, periodParams } from "./context/period.js";
 import { workflowRoutes } from "./routes/workflows.js";
 import { evalRoutes } from "./routes/evals.js";
 import { inboundRoutes } from "./routes/inbound.js";
+import { outsideMcpRoutes } from "./routes/outside-mcp.js";
+import { outsideRegistry } from "./outside/registry.js";
 import { InboundService } from "./inbound/service.js";
 import { MemoryInboundStore, type InboundStore } from "./inbound/store.js";
 import { EvalService } from "./evals/service.js";
@@ -1388,7 +1390,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     log: { warn: (line) => app.log.warn(line) },
   });
   /** An email the screen let through, or a person released: its contact's fields, highlights, then workflows. */
-  async function proceedArrival(message: MailMessage, arrived: Contact | undefined, screen: ScreenRecord): Promise<void> {
+  async function proceedArrival(message: MailMessage, arrived: Contact | undefined, screen: ScreenRecord, given?: string): Promise<void> {
     const listening = (await workflowStore.list()).filter(
       (one): one is MailWorkflow & { trigger: Extract<MailWorkflow["trigger"], { kind: "message_received" }> } =>
         one.trigger.kind === "message_received" && one.enabled && !one.parked && one.trigger.channels.includes("email"),
@@ -1404,7 +1406,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     const extractor = toFill.length > 0 ? resolveLlm("extract") : null;
     if (contact && extractor) {
       try {
-        const words = (await comms.conversationText(message.mailbox, message.id, message.threadId)).text.split("\n\n---\n\n").at(-1) ?? message.snippet;
+        const words = given ?? (await comms.conversationText(message.mailbox, message.id, message.threadId)).text.split("\n\n---\n\n").at(-1) ?? message.snippet;
         const found = await extractFields(extractor, toFill, `Subject: ${message.subject}\n\n${words}`);
         for (const [key, value] of Object.entries(found)) await contacts.record(contact.id, key, value, "inbound").catch(() => undefined);
         if (Object.keys(found).length > 0) contact = (await contacts.get(contact.id)) ?? contact;
@@ -1431,6 +1433,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       ...message,
       channel: "email",
       ...(contact ? { contact: await contactRowOf(contact) } : {}),
+      /* Sent over MCP rather than read from a mailbox: the words come with it. */
+      ...(given !== undefined ? { text: given } : {}),
       /* Who asked and how far they are trusted: a case it starts carries the mark (`workflows/inbound-mark.ts`). */
       inbound: { screen: screen.id, requester: screen.requester.key, trust: screen.requester.trust, signals: screen.signals.map((one) => one.kind) },
     };
@@ -1591,6 +1595,33 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       limiter: options.rateLimiter ?? new MemoryRateLimiter(),
       requesters: inbound,
       now: () => Date.now(),
+    }),
+  );
+  /*
+   * Outside agents over MCP (`outside/`, `routes/outside-mcp.ts`): what a
+   * stranger may do on the public booking page, and writing to the team,
+   * through the requester policy and the inbound screen. Off until the team
+   * turns it on (`inbound` settings, `outsideAgents`).
+   */
+  void app.register(
+    outsideMcpRoutes({
+      workspace: options.workspace?.id ?? LOCAL_WORKSPACE_ID,
+      limiter: options.rateLimiter ?? new MemoryRateLimiter(),
+      now: () => Date.now(),
+      registry: () =>
+        outsideRegistry({
+          scheduling,
+          bookings,
+          contacts,
+          inbound,
+          enabled: async () => (await inbound.settings()).outsideAgents,
+          proceed: async (message, text, screen) => {
+            const contact = message.from?.address ? await contacts.findOrCreate({ email: message.from.address, ...(message.from.name ? { name: message.from.name } : {}), origin: "public_link", unverified: true }) : undefined;
+            await proceedArrival(message, contact, screen, text);
+          },
+          now: () => Date.now(),
+          newId: () => randomUUID(),
+        }),
     }),
   );
   void app.register(schedulingRoutes({ scheduling, policy }));

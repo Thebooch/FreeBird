@@ -55,6 +55,8 @@ export const inboundSettingsSchema = z.object({
   /** Score and log only: nothing is held but a blocked sender. On until a person turns holding on. */
   observeOnly: z.boolean().default(true),
   limits: requesterLimitsSchema.default({}),
+  /** Outside agents may connect over MCP (`/api/public/<workspace>/mcp`): book as a stranger may on the public link, and write to the team. */
+  outsideAgents: z.boolean().default(false),
 });
 export type InboundSettings = z.infer<typeof inboundSettingsSchema>;
 
