@@ -95,6 +95,15 @@ export const InboundScreenSettings = (): JSX.Element | null => {
         <input type="checkbox" checked={!settings.observeOnly} onChange={(event) => save({ ...settings, observeOnly: !event.target.checked })} data-testid="inbound-hold" /> Hold emails a rule flags (off:
         watch and count only)
       </label>
+      <label className="dash-reach__check">
+        <input type="checkbox" checked={settings.outsideAgents} onChange={(event) => save({ ...settings, outsideAgents: event.target.checked })} data-testid="inbound-outside-agents" /> Let outside agents book and
+        write to the team over MCP, as a stranger may on your public booking pages
+      </label>
+      {settings.outsideAgents && (
+        <span className="dash-hint" data-testid="inbound-mcp-address">
+          Their address: {window.location.origin}/api/public/&lt;workspace&gt;/mcp. Each request names the person it is for, and goes through the limits and sender rules here.
+        </span>
+      )}
       {summary && (
         <span className="dash-hint" data-testid="inbound-summary">
           Last 7 days: {summary.screened} screened, {summary.wouldHold} a rule would hold, {summary.held} held.

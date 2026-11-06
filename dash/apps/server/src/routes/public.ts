@@ -60,6 +60,10 @@ export const PUBLIC_ROUTES = [
   "POST /api/public/:workspace/reports/unsubscribe/:token",
   "POST /api/public/:workspace/types/:slug/start",
   "POST /api/workflow-hooks/:workspace/:token",
+  /* Outside agents over MCP: off until the team turns it on, and then only the public booking page's reach (`routes/outside-mcp.ts`). */
+  "POST /api/public/:workspace/mcp",
+  "GET /api/public/:workspace/mcp",
+  "DELETE /api/public/:workspace/mcp",
 ] as const;
 
 const DAY_MS = 86_400_000;
