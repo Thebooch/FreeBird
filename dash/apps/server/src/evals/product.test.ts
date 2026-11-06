@@ -96,7 +96,7 @@ describe("test sessions", () => {
     const last = await evals.step(started.id);
     stop();
     expect(last.run?.verdicts.filter((verdict) => verdict.result === "fail")).toEqual([]);
-    expect(last.run?.verdicts.map((verdict) => verdict.check)).toEqual(["did-something", "no-failed-step", "asks-in-trial"]);
+    expect(last.run?.verdicts.map((verdict) => verdict.check)).toEqual(["did-something", "no-failed-step", "asks-in-trial", "tone"]);
     expect(seen.at(-1)?.kind).toBe("ended");
     expect(await runs.list({ workflow: "wf" })).toHaveLength(1);
     /* Nothing in the workspace moved: the test played in its own sandbox. */

@@ -1194,7 +1194,18 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     }),
   );
   /* Dash Evals (`evals/`): the Test button's sandbox sessions, kept runs, and leaving trial on evidence. */
-  const evalService = new EvalService({ env: workflowEnv, runs: options.evalRuns ?? new MemoryEvalRunStore() });
+  const evalService = new EvalService({
+    env: workflowEnv,
+    runs: options.evalRuns ?? new MemoryEvalRunStore(),
+    /* Judges and their calibration think like a Think step does. */
+    llm: () => resolveLlm("think"),
+    report: {
+      email: () => options.email ?? null,
+      team: async () => (await workspaceMembers()).map((one) => one.email),
+      inbound: () => inbound.summary(7),
+      ...(options.publicOrigin ? { origin: options.publicOrigin } : {}),
+    },
+  });
   void app.register(evalRoutes({ evals: evalService, policy }));
   /* The calendar: what agents, workflows, bookings and people put on it (`calendar/`). */
   const calendar = new CalendarService({ store: workflowEnv.calendar, now: () => Date.now(), newId: () => randomUUID() });
@@ -1578,6 +1589,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       calendar: workflowEnv.calendar,
       brand,
       limiter: options.rateLimiter ?? new MemoryRateLimiter(),
+      requesters: inbound,
       now: () => Date.now(),
     }),
   );
@@ -1630,6 +1642,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       { name: "mail", run: () => comms.refreshDue(COMMS_EVERY_MS) },
       /* Appointments into the calendars of members whose mailbox calendar is set to take them. */
       { name: "calendars", run: () => comms.pushCalendars() },
+      /* The weekly eval summary, when a workspace turned it on. */
+      { name: "eval summary", run: () => evalService.sendWeekly() },
     ],
   });
   if (options.workflowRunner === true) workflowRunner.start();

@@ -1,4 +1,4 @@
-import { inboundSettingsSchema, requesterKeys, type InboundSettings, type MailMessage, type Principal, type RequesterRule, type ScreenRecord } from "@freebirdai/dash-spec";
+import { inboundSettingsSchema, requesterKeys, type InboundSettings, type MailMessage, type Principal, type RequesterRule, type ScreenRecord, type ScreenSignal } from "@freebirdai/dash-spec";
 import { screenEmail } from "./screen.js";
 import type { InboundStore } from "./store.js";
 
@@ -93,6 +93,7 @@ export class InboundService {
     const record: ScreenRecord = {
       id: `screen-${this.deps.newId()}`,
       at,
+      channel: "email",
       mailbox: message.mailbox,
       message: message.id,
       from: address,
@@ -105,6 +106,52 @@ export class InboundService {
     };
     await this.deps.store.putScreen(record);
     return record;
+  }
+
+  /**
+   * A request on a booking page, from the email it is made with: a blocked
+   * sender is refused always; past a limit it is refused once holding is on,
+   * and only counted while the screen watches. A trusted one is never
+   * limited. Kept like a screened email, so the summary counts it too.
+   */
+  async gate(input: {
+    readonly email: string;
+    readonly action: "start" | "book" | "cancel";
+    readonly bookingsToday?: number;
+    readonly openHolds?: number;
+    readonly cancellationsThisWeek?: number;
+  }): Promise<{ readonly allowed: boolean; readonly reason?: string; readonly record: ScreenRecord }> {
+    const keys = requesterKeys(input.email);
+    const [settings, rules] = await Promise.all([this.deps.store.settings(), this.deps.store.rules()]);
+    const rule = rules.find((one) => one.key === keys.address) ?? rules.find((one) => one.key === keys.domain);
+    const trust = rule?.trust ?? "unknown";
+    const signals: ScreenSignal[] = [];
+    if (trust === "blocked") signals.push({ kind: "blocked", detail: "the sender is blocked", hold: true });
+    if (trust !== "trusted" && trust !== "blocked") {
+      const { limits } = settings;
+      if (input.action === "book" && (input.bookingsToday ?? 0) >= limits.bookingsPerDay) signals.push({ kind: "over_limit", detail: `${input.bookingsToday} booking requests today, over the limit of ${limits.bookingsPerDay}`, hold: true });
+      if (input.action === "book" && (input.openHolds ?? 0) >= limits.openHolds) signals.push({ kind: "over_limit", detail: `${input.openHolds} bookings already waiting on the team, the most one person may have`, hold: true });
+      if (input.action === "cancel" && (input.cancellationsThisWeek ?? 0) >= limits.cancellationsPerWeek) signals.push({ kind: "over_limit", detail: `${input.cancellationsThisWeek} cancellations this week, over the limit of ${limits.cancellationsPerWeek}`, hold: true });
+    }
+    const wouldHold = signals.some((one) => one.hold);
+    const refused = trust === "blocked" || (!settings.observeOnly && wouldHold);
+    const record: ScreenRecord = {
+      id: `screen-${this.deps.newId()}`,
+      at: new Date(this.deps.now()).toISOString(),
+      channel: "booking",
+      mailbox: "booking",
+      message: input.action,
+      from: input.email.trim().toLowerCase(),
+      requester: { key: rule?.key ?? keys.address, trust },
+      signals,
+      wouldHold,
+      observeOnly: settings.observeOnly,
+      status: refused ? "dropped" : "passed",
+    };
+    /* Only what is worth counting is kept: a refusal, or what a rule would have refused. */
+    if (wouldHold || refused) await this.deps.store.putScreen(record);
+    const reason = trust === "blocked" ? "This booking page isn't taking requests from this address. Contact the business directly." : refused ? `This can't be done here right now: ${signals.find((one) => one.hold)?.detail ?? "a limit was reached"}. Contact the business directly.` : undefined;
+    return { allowed: !refused, ...(reason ? { reason } : {}), record };
   }
 
   /** Held messages, newest first; or every screened one, for the observe-only period's numbers. */

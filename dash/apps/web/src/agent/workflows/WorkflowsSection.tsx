@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type ConnectionSummary } from "../../api";
 import type { Route } from "../../route.js";
 import { workflowState } from "./draft.js";
+import { EvalSettingsPanel } from "./EvalSettingsPanel.jsx";
 import { HeldEmails, InboundScreenSettings } from "./HeldEmails.jsx";
 import { TaskCard, when } from "./TaskCard.jsx";
 import { WorkflowEditor } from "./WorkflowEditor.jsx";
@@ -363,6 +364,7 @@ export const WorkflowsSection = ({ selected, onNavigate }: { readonly selected: 
           </ul>
         )}
         {!selected && <InboundScreenSettings />}
+        {!selected && <EvalSettingsPanel />}
         {selected && !current && loaded && <EmptyState icon="workflow" title="That workflow is not here" body="It may have been deleted." action={{ label: "Back to workflows", onClick: () => go() }} />}
       </section>
     </div>

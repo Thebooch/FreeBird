@@ -1,3 +1,4 @@
+import { toneCheck } from "./judge.js";
 import { actionVariant, type AgentSpec, type Check, type ScenarioInput, type ScriptedReply, type Turn, type WorkflowSpec } from "@freebirdai/dash-spec";
 
 /**
@@ -96,7 +97,8 @@ export const packForWorkflow = (workflow: WorkflowSpec, agents: readonly AgentSp
       world: { provider: "empty", workspace: { agents: [...agents], workflows: [{ ...workflow, enabled: true, parked: undefined }], records: [] } },
       turns,
       scriptedModel: scriptedFor(workflow),
-      checks: [...baseChecks(workflow), ...own],
+      /* A workflow that writes to people gets the Tone judge: it informs, never gates, and stays unsure until calibrated. */
+      checks: [...baseChecks(workflow), ...own, ...(workflow.nodes.some((node) => actionVariant(node.action)?.base === "outreach") && !own.some((check) => check.id === toneCheck.id) ? [toneCheck] : [])],
     },
   ];
 };

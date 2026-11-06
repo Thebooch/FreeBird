@@ -13,6 +13,7 @@ import { rolePolicy } from "../identity/policy.js";
 import { publicRoutesOf } from "../identity/public.js";
 import type { IdentityResolver } from "../identity/resolver.js";
 import { WorkspaceHost } from "../platform/workspaces.js";
+import { MemoryInboundStore } from "../inbound/store.js";
 import { MemoryRateLimiter } from "../public/limits.js";
 import { MemoryPublicTokenStore } from "../public/tokens.js";
 import { MemorySchedulingStore } from "../scheduling/store.js";
@@ -58,6 +59,7 @@ const setup = async (name: string, options: { readonly approval?: "always" | "no
     tasks: new MemoryTaskStore(),
     signals: new MemorySignalStore(),
     tokens: new MemoryPublicTokenStore(),
+    inbound: new MemoryInboundStore(),
     rateLimiter: options.limiter ?? new MemoryRateLimiter(),
     notifier: { notify: async (notice: TeamNotice) => (notices.push(notice), { status: "queued" as const }) },
     brand: async () => ({ name: "Acme Home Services", accent: "#0f766e" }),
@@ -250,6 +252,29 @@ describe("the public link", () => {
 
     await team.inject({ method: "PUT", url: "/api/scheduling/types/visit", payload: { publicLink: false } });
     expect((await world.inject({ method: "GET", url: "/api/public/acme/types/visit" })).statusCode).toBe(404);
+  });
+});
+
+describe("the requester policy on the booking pages", () => {
+  it("refuses a blocked sender, and once holding is on, a request past the day's limit", async () => {
+    const { team, world, contact, linkFor, at } = await setup("requesters");
+    expect((await team.inject({ method: "PUT", url: "/api/inbound/rules", payload: { key: "domain:spam.example", trust: "blocked" } })).statusCode).toBe(200);
+    const blocked = await world.inject({ method: "POST", url: "/api/public/acme/types/visit/start", payload: { name: "Bot", email: "bot@spam.example" } });
+    expect(blocked.statusCode).toBe(403);
+    expect(blocked.json().error).toMatch(/isn't taking requests/);
+
+    const lee = await contact("Lee Park", "lee@example.com");
+    const link = await linkFor(lee.id);
+    const request = (hour: number) => world.inject({ method: "POST", url: `/api/public/acme/book/${link.token}/request`, payload: { type: "visit", start: at(hour) } });
+    /* Watching only: past the limit is counted, not refused. */
+    await team.inject({ method: "PUT", url: "/api/inbound/settings", payload: { observeOnly: true, limits: { bookingsPerDay: 1 } } });
+    expect((await request(10)).statusCode).toBe(200);
+    /* Only the blocked start was kept: a request within the limit is not worth a record. */
+    expect((await team.inject({ method: "GET", url: "/api/inbound/summary" })).json()).toMatchObject({ screened: 1 });
+    await team.inject({ method: "PUT", url: "/api/inbound/settings", payload: { observeOnly: false, limits: { bookingsPerDay: 1 } } });
+    const refused = await request(11);
+    expect(refused.statusCode).toBe(429);
+    expect(refused.json().error).toMatch(/booking requests today/);
   });
 });
 
