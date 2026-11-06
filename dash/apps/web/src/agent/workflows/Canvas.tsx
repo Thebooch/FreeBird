@@ -48,6 +48,8 @@ export interface CanvasProps {
   readonly selected: string | null;
   /** Problems by step id, shown on the card. */
   readonly problems: Readonly<Record<string, readonly string[]>>;
+  /** After a test: each step's mark, pass or fail, with why. */
+  readonly marks?: Readonly<Record<string, { readonly result: "pass" | "fail"; readonly why?: string }>>;
   readonly onSelect: (id: string | null) => void;
   readonly onMove: (id: string, position: { x: number; y: number }) => void;
   readonly onConnect: (from: string, outcome: string, to: string) => void;
@@ -55,7 +57,7 @@ export interface CanvasProps {
 
 const triggerAt = (width: number) => ({ x: Math.max(24, Math.round(width / 2 - NODE_W / 2)), y: 24 });
 
-export const Canvas = ({ nodes, edges, triggerLabel, trial, selected, problems, onSelect, onMove, onConnect }: CanvasProps): JSX.Element => {
+export const Canvas = ({ nodes, edges, triggerLabel, trial, selected, problems, marks = {}, onSelect, onMove, onConnect }: CanvasProps): JSX.Element => {
   const width = Math.max(960, ...nodes.map((one) => one.position.x + NODE_W + 48));
   const height = Math.max(560, ...nodes.map((one) => one.position.y + NODE_H + 96));
   const trigger = triggerAt(width);
@@ -236,6 +238,16 @@ export const Canvas = ({ nodes, edges, triggerLabel, trial, selected, problems, 
                     {mode === "auto" ? "Auto" : "Approve"}
                   </span>
                 ) : null}
+                {marks[one.id] && (
+                  <span
+                    className="dash-canvas__test"
+                    data-result={marks[one.id]!.result}
+                    title={marks[one.id]!.why ?? (marks[one.id]!.result === "pass" ? "Passed its test" : "Failed its test")}
+                    data-testid={`canvas-test-${one.id}`}
+                  >
+                    {marks[one.id]!.result === "pass" ? "✓" : "✕"}
+                  </span>
+                )}
                 {issues.length > 0 && (
                   <span className="dash-canvas__issues" title={issues.join("\n")}>
                     {issues.length}

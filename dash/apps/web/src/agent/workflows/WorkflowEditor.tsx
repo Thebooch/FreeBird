@@ -20,6 +20,7 @@ import { NODE_H, autoLayout, blankNode, connect, fromSpec, removeNode, toInput }
 import { recordTypeChoices, type Entities } from "../entities.js";
 import { RecordPicker, TriggerEditor } from "./fields.jsx";
 import { StepPanel } from "./StepPanel.jsx";
+import { TestPanel } from "./TestPanel.jsx";
 
 /**
  * The workflow builder: a canvas of steps and arrows, with a panel beside it.
@@ -33,6 +34,8 @@ import { StepPanel } from "./StepPanel.jsx";
  * - Above the canvas, the workflow in one sentence and what it still needs,
  *   checked by the same rules the chat uses, as you edit.
  * - **Preview** runs it dry, as you: which records match and each one's path.
+ * - **Test** plays a saved workflow in a sandbox against its scenario, step by
+ *   step, and marks each step pass or fail (`TestPanel`).
  */
 
 const errorText = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));
@@ -68,6 +71,8 @@ export const WorkflowEditor = ({
   const [preview, setPreview] = useState<WorkflowPreview | null>(null);
   const [inserting, setInserting] = useState<{ template: WorkflowTemplate; values: Record<string, string> } | null>(null);
   const [templateName, setTemplateName] = useState("");
+  const [testing, setTesting] = useState(false);
+  const [marks, setMarks] = useState<Record<string, { result: "pass" | "fail"; why?: string }>>({});
 
   const nodes = draft.nodes ?? [];
   const edges = draft.edges ?? [];
@@ -329,6 +334,15 @@ export const WorkflowEditor = ({
           <Button size="sm" onClick={() => void api.previewWorkflow(workflow?.id ?? "new", toInput({ ...draft, name: draft.name.trim() || "Draft" })).then(setPreview, (cause: unknown) => setError(errorText(cause)))} testId="workflow-preview-run">
             Preview
           </Button>
+          <Button
+            size="sm"
+            disabled={!workflow}
+            title={workflow ? "Play it in a sandbox against a scenario, step by step" : "Save it first: a test plays what is saved"}
+            onClick={() => setTesting(true)}
+            testId="workflow-test"
+          >
+            Test
+          </Button>
           <Button size="sm" tone="primary" busy={busy} disabled={draft.name.trim() === ""} onClick={() => void save()} testId="workflow-save">
             {workflow ? "Save" : "Create"}
           </Button>
@@ -389,6 +403,27 @@ export const WorkflowEditor = ({
         </p>
       )}
       {notice && <p className="dash-callout">{notice}</p>}
+      {testing && workflow && (
+        <TestPanel
+          workflow={workflow.id}
+          onMarks={setMarks}
+          onGraduated={(saved) =>
+            /* Keep what is being edited; take the trial and each step's mode and standing from the server. */
+            setDraft((held) => ({
+              ...held,
+              trial: saved.trial,
+              nodes: (held.nodes ?? []).map((one) => {
+                const now = saved.nodes.find((node) => node.id === one.id);
+                return now ? { ...one, mode: now.mode, ...(now.graduated ? { graduated: now.graduated } : {}) } : one;
+              }),
+            }))
+          }
+          onClose={() => {
+            setTesting(false);
+            setMarks({});
+          }}
+        />
+      )}
 
       <div className="dash-builder__body">
         <Canvas
@@ -398,6 +433,7 @@ export const WorkflowEditor = ({
           trial={(draft.trial ?? 0) > 0}
           selected={selected}
           problems={problemsByStep}
+          marks={marks}
           onSelect={setSelected}
           onMove={(id, position) => set({ nodes: nodes.map((one) => (one.id === id ? { ...one, position } : one)) })}
           onConnect={(from, outcome, to) => set({ edges: connect(edges, from, outcome, to) })}

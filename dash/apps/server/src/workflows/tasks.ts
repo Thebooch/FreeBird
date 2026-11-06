@@ -1,8 +1,9 @@
 import type { WriteIntent, WriteReview } from "@freebirdai/connect";
 import { WriteError } from "@freebirdai/connect/host";
-import { FINAL_TASK_STATUSES, actionVariant, workflowReads, type Principal, type Task, type TaskStatus, type WorkflowCase } from "@freebirdai/dash-spec";
+import { FINAL_TASK_STATUSES, actionVariant, fieldProblems, settingChanges, workflowReads, type Principal, type Task, type TaskStatus, type WorkflowCase } from "@freebirdai/dash-spec";
 import { RECORD_CHANGE_VARIANTS, agentMay, intentFor } from "./actions.js";
 import { CaseBusy } from "./engine.js";
+import { demote } from "./graduation.js";
 import { startWorkflow, type Starter } from "./start.js";
 
 /**
@@ -108,9 +109,14 @@ export class TaskService {
   }
 
   /** Say yes. For a change, to the review this person opened. */
-  async approve(principal: Principal, id: string, approval: { readonly pendingId?: string; readonly digest?: string; readonly always?: boolean } = {}): Promise<{ readonly task: Task; readonly case?: WorkflowCase }> {
-    const task = await this.held(id);
+  async approve(
+    principal: Principal,
+    id: string,
+    approval: { readonly pendingId?: string; readonly digest?: string; readonly always?: boolean; readonly edits?: Readonly<Record<string, unknown>> } = {},
+  ): Promise<{ readonly task: Task; readonly case?: WorkflowCase }> {
+    let task = await this.held(id);
     if (task.status !== "waiting_approval") throw new TaskError(`This has already been ${task.status.replace("_", " ")}.`, 409, { task });
+    if (approval.edits && Object.keys(approval.edits).length > 0) task = await this.edit(principal, task, approval.edits);
 
     /* An agent's request to start a workflow. */
     if (!task.case) {
@@ -162,6 +168,29 @@ export class TaskService {
     }
     if (approval.always) await this.approveAlways(principal, after);
     return { task: after, case: advanced };
+  }
+
+  /**
+   * What was proposed, changed by the person approving it. The step runs with
+   * the changed settings, and the task records each change, so an approval
+   * after editing is told apart from one as proposed.
+   */
+  private async edit(principal: Principal, task: Task, edits: Readonly<Record<string, unknown>>): Promise<Task> {
+    const variant = actionVariant(task.action);
+    if (!task.case || !task.pending || !variant) throw new TaskError("This cannot be changed before approving it.", 400);
+    if (RECORD_CHANGE_VARIANTS.has(variant.id)) throw new TaskError("A change to an account cannot be edited here: decline it, or change the step.", 400);
+    const problems = fieldProblems(variant, edits);
+    if (problems.length > 0) throw new TaskError(problems.map((one) => one.message).join(" "), 400);
+    const pending = { ...task.pending, ...edits };
+    const changes = settingChanges(task.pending, pending);
+    if (changes.length === 0) return task;
+    const earlier = task.edited?.changes ?? [];
+    /* Edited again: each setting keeps what was first proposed as its "before". */
+    const merged = changes.map((change) => ({ ...change, before: earlier.find((one) => one.key === change.key)?.before ?? change.before }));
+    const kept = earlier.filter((one) => !merged.some((change) => change.key === one.key));
+    const edited: Task = { ...task, pending, edited: { by: principal.userId, at: this.iso(), changes: [...kept, ...merged] } };
+    await this.env.tasks.put(edited);
+    return edited;
   }
 
   /** Refuse a review that was not prepared from this task, for this purpose, by this person (and, for an approval, for this case step). */
@@ -332,6 +361,7 @@ export class TaskService {
     await this.env.tasks.put(made);
     const reversed: Task = { ...task, status: "reversed", reversal: { ...reversal, reversedBy: principal.userId, reversedAt: at, reversalTask: made.id } };
     await this.env.tasks.put(reversed);
+    await demote(this.env, task.workflow, task.node, `a person reversed "${task.title}".`);
     return { task: reversed, reversal: made };
   }
 }

@@ -2217,6 +2217,24 @@ export const DASH_REACT_STYLES = `
   font-size: 10.5px; min-width: 16px; height: 16px; line-height: 16px; text-align: center; border-radius: 8px;
   background: var(--dash-warning); color: var(--dash-surface); margin-left: 4px;
 }
+.dash-canvas__test {
+  font-size: 10.5px; min-width: 16px; height: 16px; line-height: 16px; text-align: center; border-radius: 8px; margin-left: 4px;
+  background: var(--dash-accent-wash); color: var(--dash-accent);
+}
+.dash-canvas__test[data-result="fail"] { background: var(--dash-critical); color: var(--dash-surface); }
+
+/* Dash Evals: a test played step by step, its verdicts, and leaving trial on evidence. */
+.dash-evals { display: flex; flex-direction: column; gap: var(--dash-space-2); padding: var(--dash-space-3); border: 1px solid var(--dash-border); border-radius: var(--dash-radius); background: var(--dash-surface); }
+.dash-evals__events { margin: 0; padding-left: 18px; font-size: var(--dash-text-sm); max-height: 260px; overflow: auto; }
+.dash-evals__events li[data-kind="turn"] { font-weight: var(--dash-weight-medium, 500); }
+.dash-evals__events li[data-kind="verdict"][data-result="fail"] { color: var(--dash-critical); }
+.dash-evals__events li[data-kind="snapshot"], .dash-evals__events li[data-kind="waiting"] { color: var(--dash-muted); }
+.dash-evals__verdicts { width: 100%; border-collapse: collapse; font-size: var(--dash-text-sm); }
+.dash-evals__verdicts td, .dash-evals__verdicts th { text-align: left; padding: 3px 6px; border-top: 1px solid var(--dash-border); }
+.dash-evals__verdicts tr[data-result="fail"] td:first-child { color: var(--dash-critical); }
+.dash-evals__verdicts tr[data-result="unsure"] td:first-child { color: var(--dash-muted); }
+.dash-eval-badge { font-size: var(--dash-text-xs); padding: 1px 6px; border-radius: var(--dash-radius-pill); background: var(--dash-accent-wash); color: var(--dash-accent); }
+.dash-eval-badge[data-result="fail"] { background: color-mix(in srgb, var(--dash-critical) 14%, transparent); color: var(--dash-critical); }
 .dash-canvas__name { font-size: var(--dash-text-sm); font-weight: var(--dash-weight-medium, 500); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .dash-canvas__when { font-size: 11px; color: var(--dash-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dash-canvas__ports { display: flex; border-top: 1px solid var(--dash-border); }

@@ -34,6 +34,9 @@ import type {
   Principal,
   Role,
   SchedulingProfile,
+  EvalDimension,
+  EvalRun,
+  RunEvent,
   Task,
   TaskStatus,
   WorkflowCase,
@@ -270,6 +273,28 @@ export interface AgentOverview {
     readonly by?: string;
     readonly reversible: boolean;
   }>;
+}
+
+/** One workflow version's eval verdicts by dimension: see `EvalService.trend`. */
+export interface EvalTrendPoint {
+  readonly workflow: string;
+  readonly version: number;
+  readonly at: string;
+  readonly dimensions: Partial<Record<EvalDimension, { pass: number; fail: number; silent: number; unsure: number }>>;
+}
+
+/** How one outside step stands on leaving trial: see `workflows/graduation.ts`. */
+export interface StepGraduation {
+  readonly node: string;
+  readonly name: string;
+  readonly mode: "auto" | "approve";
+  readonly graduated: boolean;
+  readonly demoted?: { readonly at: string; readonly reason: string };
+  readonly scenarios: "pass" | "fail" | "none";
+  readonly clean: number;
+  readonly needed: number;
+  readonly blockers: readonly string[];
+  readonly ready: boolean;
 }
 
 /** What a workflow would do now: see `previewWorkflow` on the server. */
@@ -1477,8 +1502,37 @@ export const api = {
   /** Open a task waiting for approval: a change is prepared now, as you. */
   reviewTask: (id: string): Promise<{ task: Task; review?: WriteReviewView; stale?: string }> => request(`/api/tasks/${encodeURIComponent(id)}/review`, json({})),
 
-  approveTask: (id: string, approval: { pendingId?: string; digest?: string; always?: boolean } = {}): Promise<{ task: Task; case?: WorkflowCase }> =>
+  approveTask: (id: string, approval: { pendingId?: string; digest?: string; always?: boolean; edits?: Record<string, unknown> } = {}): Promise<{ task: Task; case?: WorkflowCase }> =>
     request(`/api/tasks/${encodeURIComponent(id)}/approve`, json(approval)),
+
+  /* ── Dash Evals: testing a workflow in a sandbox, kept runs, leaving trial on evidence ── */
+
+  /** Starts a test of a saved workflow: nothing has played yet. */
+  startEvalSession: (workflow: string, scenario?: string): Promise<{ id: string; scenario: { id: string; name: string }; turns: number; events: RunEvent[] }> =>
+    request("/api/evals/sessions", json({ workflow, ...(scenario ? { scenario } : {}) })),
+
+  /** Plays the test's next turn; after the last, the run is scored and kept. */
+  stepEvalSession: (id: string): Promise<{ events: RunEvent[]; remaining: number; run?: EvalRun }> => request(`/api/evals/sessions/${encodeURIComponent(id)}/step`, json({})),
+
+  stopEvalSession: (id: string): Promise<unknown> => request(`/api/evals/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  /** Kept runs, newest first, without their event logs. */
+  evalRuns: (filter: { workflow?: string; agent?: string } = {}): Promise<Array<Omit<EvalRun, "events">>> => {
+    const query = new URLSearchParams(Object.entries(filter).filter(([, value]) => value !== undefined) as Array<[string, string]>);
+    return request(`/api/evals/runs${query.size > 0 ? `?${query}` : ""}`);
+  },
+
+  /** Each workflow version's runs by dimension, oldest first. */
+  evalTrend: (filter: { workflow?: string; agent?: string }): Promise<EvalTrendPoint[]> => {
+    const query = new URLSearchParams(Object.entries(filter).filter(([, value]) => value !== undefined) as Array<[string, string]>);
+    return request(`/api/evals/trend${query.size > 0 ? `?${query}` : ""}`);
+  },
+
+  /** How each outside step stands on leaving trial. */
+  workflowGraduation: (id: string): Promise<{ enabled: boolean; steps: StepGraduation[] }> => request(`/api/workflows/${encodeURIComponent(id)}/graduation`),
+
+  /** Accept Auto for a step that is ready. */
+  graduateStep: (id: string, node: string): Promise<WorkflowSpec> => request(`/api/workflows/${encodeURIComponent(id)}/steps/${encodeURIComponent(node)}/graduate`, json({})),
 
   declineTask: (id: string): Promise<Task> => request(`/api/tasks/${encodeURIComponent(id)}/decline`, json({})),
   /** It happened: a send Dash was not sure of is marked done, and not sent again. */

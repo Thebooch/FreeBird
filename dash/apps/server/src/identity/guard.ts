@@ -48,6 +48,12 @@ export const GUARDED_ROUTES: readonly GuardRule[] = [
   /* Workflows: making, changing, running and previewing them, and deciding what waits for a person. */
   { methods: WRITE, path: /^\/api\/workflows(\/|$)/, permission: "workflows.manage" },
   { methods: WRITE, path: /^\/api\/(tasks|cases|workflow-templates|workflow-events)(\/|$)/, permission: "workflows.manage" },
+  /* Dash Evals: testing a workflow in a sandbox, and watching a test as it plays. */
+  { methods: WRITE, path: /^\/api\/evals(\/|$)/, permission: "workflows.manage" },
+  { methods: ["GET"], path: /^\/api\/evals\/sessions(\/|$)/, permission: "workflows.manage" },
+  /* Dash Evals: testing a workflow in a sandbox, and watching a test as it plays. */
+  { methods: WRITE, path: /^\/api\/evals(\/|$)/, permission: "workflows.manage" },
+  { methods: ["GET"], path: /^\/api\/evals\/sessions(\/|$)/, permission: "workflows.manage" },
   /* The calendar: adding, changing and finishing entries. Appointments change through their bookings. */
   { methods: WRITE, path: /^\/api\/calendar(\/|$)/, permission: "calendar.manage" },
   /* Scheduling's setup: hosts, pools, appointment types, blocks and where they are placed. */

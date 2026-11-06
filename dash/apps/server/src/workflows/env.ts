@@ -27,6 +27,7 @@ export interface WorkflowWrites {
 export type WorkflowEvent =
   | { readonly type: "workflow.run"; readonly workflow: string; readonly run: string; readonly status: string; readonly cases: number }
   | { readonly type: "workflow.parked"; readonly workflow: string; readonly reason: string }
+  | { readonly type: "workflow.demoted"; readonly workflow: string; readonly node: string; readonly reason: string }
   | { readonly type: "case.finished"; readonly workflow: string; readonly case: string; readonly status: string }
   | { readonly type: "case.error"; readonly case: string; readonly message: string }
   | { readonly type: "task.waiting"; readonly task: string; readonly workflow?: string | undefined; readonly agent?: string | undefined };
@@ -81,6 +82,12 @@ export interface WorkflowEnv {
   /** Where a webhook wait's address starts, e.g. https://dash.example.com. */
   readonly publicOrigin?: string;
   readonly onEvent?: (event: WorkflowEvent) => void;
+  /**
+   * Trial ends on evidence (`graduation.ts`) rather than a count: the count
+   * no longer goes down, and each outside step leaves trial when a person
+   * accepts Auto for it. Off unless `DASH_EVAL_GRADUATION=on`.
+   */
+  readonly graduation?: boolean;
   /** Bookings, for the Schedule steps, Approve a booking and the booking waits. Absent: those steps cannot run here. */
   readonly bookings?: () => WorkflowBookings | undefined;
   /**

@@ -53,6 +53,7 @@ export const fake = (
     /** Where the clock starts. Default `T0`. */
     now?: number;
     onEvent?: WorkflowEnv["onEvent"];
+    graduation?: boolean;
   } = {},
 ): Fake => {
   const state = {
@@ -152,6 +153,7 @@ export const fake = (
     now: () => state.clock.now,
     newId: () => `id${++state.ids}`,
     ...(options.onEvent ? { onEvent: options.onEvent } : {}),
+    ...(options.graduation ? { graduation: true } : {}),
   };
   const leases = options.leases ? new MemoryLeaseLock(() => state.clock.now) : undefined;
   const engine = new WorkflowEngine({ env, holder: "me", ...(leases ? { leases } : {}) });

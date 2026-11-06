@@ -3,6 +3,7 @@ import { z } from "zod";
 import { principalSchema } from "./access.js";
 import { BOOKING_EVENTS, BOOKING_EVENT_WORDS } from "./booking-events.js";
 import { actionVariant, describeDuration, outcomesFor } from "./actions.js";
+import { checkSchema, verdictSchema } from "./eval-check.js";
 
 /**
  * A workflow: a trigger, and a graph of steps.
@@ -203,6 +204,14 @@ export const workflowNodeSchema = z.object({
   model: z.string().min(1).max(120).optional(),
   /** Where it sits on the canvas. */
   position: z.object({ x: z.number(), y: z.number() }).default({ x: 0, y: 0 }),
+  /**
+   * A step that leaves Dash and earned Auto on evidence (its scenarios pass,
+   * enough clean trial cases): it runs as its mode says even while the
+   * workflow is in trial. A person accepted it; it never flips by itself.
+   */
+  graduated: z.object({ at: z.string(), by: z.string() }).optional(),
+  /** Put back on Approve after it graduated: a check failed, or a task was reversed. */
+  demoted: z.object({ at: z.string(), reason: z.string() }).optional(),
 });
 export type WorkflowNode = z.infer<typeof workflowNodeSchema>;
 
@@ -225,11 +234,11 @@ export const workflowLimitsSchema = z.object({
   stepsPerCase: z.number().int().min(1).max(10000).default(200),
 });
 
-/** The mode a step runs in: what it says for a step that leaves Dash (always approve in trial); auto otherwise. */
-export const nodeMode = (node: Pick<WorkflowNode, "action" | "mode">, trial = false): WorkflowStepMode => {
+/** The mode a step runs in: what it says for a step that leaves Dash (approve in trial, unless it graduated); auto otherwise. */
+export const nodeMode = (node: Pick<WorkflowNode, "action" | "mode"> & { readonly graduated?: unknown }, trial = false): WorkflowStepMode => {
   const variant = actionVariant(node.action);
   if (!variant?.leavesDash) return "auto";
-  return trial ? "approve" : node.mode;
+  return trial && !node.graduated ? "approve" : node.mode;
 };
 
 /** A step's ways out, given its settings. */
@@ -267,6 +276,8 @@ const workflowShape = {
    * by agents doing Outreach for this workflow. Like a standing order.
    */
   guardrails: z.string().max(4000).default(""),
+  /** Standing checks (Dash Evals): rule checks run on each of its tasks as it finishes, and on its scenarios. */
+  checks: z.array(checkSchema).max(20).default([]),
 };
 
 export const workflowSchema = z.object({
@@ -309,6 +320,7 @@ export const workflowInputSchema = z.object({
   edges: z.array(workflowEdgeSchema).max(300).optional(),
   limits: workflowLimitsSchema.optional(),
   guardrails: z.string().max(4000).optional(),
+  checks: z.array(checkSchema).max(20).optional(),
 });
 export type WorkflowInput = z.infer<typeof workflowInputSchema>;
 
@@ -657,6 +669,15 @@ export const taskSchema = z.object({
       reverse: z.object({ pendingId: z.string(), by: z.string(), at: z.string() }).optional(),
     })
     .optional(),
+  /**
+   * A person changed what was proposed before approving it: who, when, and
+   * each setting before and after. Absent: approved as proposed, or not yet.
+   */
+  edited: z
+    .object({ by: z.string(), at: z.string(), changes: z.array(z.object({ key: z.string(), before: z.unknown(), after: z.unknown() })).max(50) })
+    .optional(),
+  /** Verdicts of the workflow's standing checks, given when the task finished (Dash Evals). */
+  eval: z.array(verdictSchema).max(20).optional(),
   /** Tries so far, and when the next one is due, for a step set to retry. */
   tries: z.number().int().optional(),
   retryAt: z.string().optional(),

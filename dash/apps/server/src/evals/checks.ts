@@ -43,7 +43,8 @@ export const checkRule = (check: RuleCheck, tasks: readonly Task[], now: number)
     result: pass ? "pass" : "fail",
     said: !pass && evidence.length > 0 && evidence.every(said),
     evidence: evidence.map((task) => task.id),
-    ...(note ? { note } : pass || !check.says ? {} : { note: check.says }),
+    /* What it checks, in its author's words; a failure says what went wrong first. */
+    ...(note || check.says ? { note: note ?? check.says } : {}),
   });
   switch (check.expect) {
     case "all":
@@ -78,3 +79,14 @@ export const checkAll = async (checks: readonly Check[], tasks: readonly Task[],
 /** Rule checks only: what may run on each new task as it happens. */
 export const checkRules = (checks: readonly Check[], tasks: readonly Task[], now: number): Verdict[] =>
   checks.filter((check): check is RuleCheck => check.kind === "rule").map((check) => checkRule(check, tasks, now));
+
+/**
+ * A live task's verdicts from its workflow's standing checks, when it
+ * finishes. Only `all` and `none` rules score one task alone (`some` and
+ * `one` speak about a whole run), and only those whose `where` picks it.
+ */
+export const scoreTask = (checks: readonly Check[], task: Task, now: number): Verdict[] =>
+  checks
+    .filter((check): check is RuleCheck => check.kind === "rule" && (check.expect === "all" || check.expect === "none"))
+    .filter((check) => !check.where || holds(check.where, task, now))
+    .map((check) => checkRule(check, [task], now));

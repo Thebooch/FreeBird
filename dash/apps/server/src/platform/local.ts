@@ -22,6 +22,7 @@ import { openChatDb } from "../chat/db.js";
 import { LOCAL_WORKSPACE_ID, type IdentityResolver } from "../identity/resolver.js";
 import { isWorkspaceId } from "./workspaces.js";
 import { DbAgentStore } from "../agents/store.js";
+import { DbEvalRunStore } from "../evals/store.js";
 import { DbCalendarStore, DbCaseStore, DbSignalStore, DbTaskStore, DbTemplateStore, DbWorkflowStore } from "../workflows/store.js";
 import { DbBookingStore } from "../bookings/store.js";
 import { DbPublicTokenStore } from "../public/tokens.js";
@@ -158,6 +159,7 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     workflows: new DbWorkflowStore(db, workspace),
     cases: new DbCaseStore(db, workspace),
     tasks: new DbTaskStore(db, workspace),
+    evalRuns: new DbEvalRunStore(db, workspace),
     calendar: new DbCalendarStore(db, workspace),
     templates: new DbTemplateStore(db, workspace),
     signals: new DbSignalStore(db, workspace),
