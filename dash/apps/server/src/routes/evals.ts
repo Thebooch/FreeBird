@@ -22,8 +22,7 @@ export const evalRoutes = (deps: { readonly evals: EvalService; readonly policy:
   const { evals, policy } = deps;
   const guarded =
     <T = unknown>(run: (principal: NonNullable<FastifyRequest["principal"]>, request: { readonly params: Record<string, string>; readonly body: T }) => Promise<unknown>) =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async (request: FastifyRequest<any>, reply: FastifyReply) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       const principal = await requirePermission(policy, request, reply, "workflows.manage");
       if (!principal) return reply;
       try {

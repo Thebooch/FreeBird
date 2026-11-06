@@ -5,7 +5,8 @@ import type { WorkflowEnv } from "./env.js";
  * Leaving trial on evidence, step by step (Dash Evals, behind
  * `DASH_EVAL_GRADUATION`): an outside step may run on Auto in trial once its
  * scenarios pass with no silent failure and enough live trial cases were
- * approved as proposed, with none declined or reversed. Dash proposes it; a
+ * approved as proposed (one approved after editing does not count), with
+ * none declined or reversed. Dash proposes it; a
  * person accepts it. A failed check or a reversal afterwards puts the step
  * back on Approve and says why.
  */
@@ -37,14 +38,15 @@ export const graduationOf = (workflow: WorkflowSpec, runs: readonly EvalRun[], t
   const rules = current.flatMap((run) => run.verdicts.filter((verdict) => verdict.result !== "unsure"));
   const scenarios: StepGraduation["scenarios"] = current.length === 0 ? "none" : rules.some((verdict) => verdict.result === "fail") ? "fail" : "pass";
   return workflow.nodes.filter(leavesDash).map((node) => {
-    const mine = tasks.filter((task) => task.workflow === workflow.id && task.node === node.id && FINAL_TASK_STATUSES.includes(task.status));
+    /* Since it was last put back on Approve, if it was: what came before is what put it back. */
+    const since = node.demoted?.at ?? "";
+    const mine = tasks.filter((task) => task.workflow === workflow.id && task.node === node.id && FINAL_TASK_STATUSES.includes(task.status) && task.createdAt >= since);
     const labels = mine.map((task) => taskLabel(task));
     const clean = labels.filter((label) => label === "good").length;
     const blockers: string[] = [];
     if (scenarios === "none") blockers.push("Its scenarios have not run on this version. Press Test.");
     if (scenarios === "fail") blockers.push("A scenario check failed on this version.");
     if (clean < needed) blockers.push(`${clean} of ${needed} trial cases approved as proposed.`);
-    if (labels.includes("partly_wrong")) blockers.push("A person edited what it proposed.");
     if (labels.includes("wrong")) blockers.push("A person declined what it proposed.");
     if (labels.includes("wrong_shipped")) blockers.push("Something it did was reversed.");
     const graduated = node.graduated !== undefined;

@@ -2,10 +2,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CatalogStore, KeyStore, LocalAesVault, MemoryJournal } from "@freebirdai/connect/host";
-import { taskLabel, type RunEvent } from "@freebirdai/dash-spec";
+import { chainEdges, taskLabel, type RunEvent } from "@freebirdai/dash-spec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
+import { WorkflowService } from "../workflows/service.js";
 import { TaskError } from "../workflows/tasks.js";
 import { agentOf, byHand, fake, node, owner, workflowOf } from "../workflows/testing.js";
 import { EvalService } from "./service.js";
@@ -137,8 +138,22 @@ describe("leaving trial on evidence", () => {
     const [waiting] = await f.env.tasks.list({ status: "waiting_approval" });
     await f.tasks.approve(owner, waiting!.id, { edits: { wording: "Changed" } });
     const step = (await evals.graduation("wf")).steps[0]!;
-    expect(step.blockers.join(" ")).toMatch(/not run.*0 of 2.*edited/);
+    expect(step.blockers.join(" ")).toMatch(/not run.*0 of 2 trial cases/);
     await expect(evals.graduate(owner, "wf", "say")).rejects.toThrow(/not ready/);
+  });
+
+  it("keeps a step's graduation through a save, and drops it when the step changes", async () => {
+    const { f } = setup({ graduation: true });
+    const service = new WorkflowService({ store: f.env.store, policy: { can: () => ({ ok: true }) }, agents: { list: async () => [agentOf()] }, hasConnection: () => true });
+    const made = await service.create(owner, { name: "Hi", trigger: { kind: "manual" }, trial: 3, nodes: [email()], edges: chainEdges([{ id: "say" }]) } as never);
+    await f.env.store.put({ ...made, nodes: made.nodes.map((one) => ({ ...one, graduated: { at: "2026-10-01T00:00:00.000Z", by: "local" } })) });
+    /* A save from an editor opened before it graduated, and one that tries to graduate a step itself, change nothing. */
+    const stale = await service.update(owner, made.id, { name: "Hi again", trigger: { kind: "manual" }, trial: 3, nodes: [email()], edges: made.edges } as never);
+    expect(stale.nodes[0]?.graduated).toMatchObject({ by: "local" });
+    const reworded = await service.update(owner, made.id, { name: "Hi again", trigger: { kind: "manual" }, trial: 3, nodes: [email({ settings: { agentId: "maint", to: "dana@example.com", subject: "Hi", purpose: "Say hi", content: "fixed", wording: "Hey" } })], edges: made.edges } as never);
+    expect(reworded.nodes[0]?.graduated).toBeUndefined();
+    const forged = await service.update(owner, made.id, { name: "Hi again", trigger: { kind: "manual" }, trial: 3, nodes: [{ ...reworded.nodes[0]!, graduated: { at: "2026-10-01T00:00:00.000Z", by: "me" } }], edges: made.edges } as never);
+    expect(forged.nodes[0]?.graduated).toBeUndefined();
   });
 
   it("is off unless the server turns it on", async () => {

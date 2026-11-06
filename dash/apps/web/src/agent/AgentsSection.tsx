@@ -15,6 +15,7 @@ import { itemAttrs, screenAttrs, useChatFocus, useChatScreen, useScreenChanged }
 import { api, type ConnectionSummary } from "../api";
 import type { Route } from "../route.js";
 import { recordTypeChoices, type Entities } from "./entities.js";
+import { AgentEvals } from "./AgentEvals.jsx";
 import { GenerateField } from "./GenerateField.jsx";
 import { usableRules } from "./ids.js";
 import { KnowledgeEditor } from "./KnowledgeEditor.jsx";
@@ -245,6 +246,7 @@ const EDITOR_TABS = [
   { id: "knowledge", label: "Knowledge" },
   { id: "tools", label: "Tools" },
   { id: "access", label: "Access" },
+  { id: "evals", label: "Evals" },
 ] as const;
 type EditorTab = (typeof EDITOR_TABS)[number]["id"];
 
@@ -337,7 +339,7 @@ const Editor = ({
     >
       <Tabs
         label="Agent settings"
-        tabs={EDITOR_TABS.map((one) => ({
+        tabs={EDITOR_TABS.filter((one) => one.id !== "evals" || agent).map((one) => ({
           ...one,
           ...(one.id === "tools" && tools.length > 0 ? { meta: `${active}/${tools.length}` } : {}),
           ...(one.id === "knowledge" && knowledge.context.length > 0 ? { meta: String(knowledge.context.length) } : {}),
@@ -437,6 +439,10 @@ const Editor = ({
             what the person approving it may do.
           </span>
         </div>
+      </div>
+
+      <div className="dash-agent-editor__pane" hidden={tab !== "evals"}>
+        {agent && tab === "evals" && <AgentEvals agentId={agent.id} />}
       </div>
 
       {error && (

@@ -1,6 +1,6 @@
 import { AgentChip, Badge, Button } from "@freebirdai/dash-components";
 import { WriteReview } from "@freebirdai/dash-react";
-import { BASE_INFO, describeDuration, type AgentSpec, type ActionBase, type Task, type WriteReviewView } from "@freebirdai/dash-spec";
+import { BASE_INFO, actionVariant, describeDuration, type AgentSpec, type ActionBase, type Task, type WriteReviewView } from "@freebirdai/dash-spec";
 import { useState } from "react";
 import { api } from "../../api";
 import { BookingSheet } from "../calendar/BookingSheet.jsx";
@@ -15,6 +15,9 @@ import { CopyLink } from "../CopyLink.jsx";
  * - A question for the team: its options, or an answer box.
  * - A to-do: Done.
  * - Finished and reversible: Reverse, through the same review for a change.
+ * - Its words can be changed before approving (not a change to an account,
+ *   which is approved as its review shows); the task then says it was edited.
+ * - A badge for its workflow's standing checks, when it finished (Dash Evals).
  */
 
 const errorText = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));
@@ -124,6 +127,31 @@ const BOOKING_ANSWER_WORDS: Readonly<Record<string, string>> = {
   withdrawn: "Withdrawn by them before anyone answered.",
 };
 
+/** Its verdicts from the workflow's standing checks, in one badge: what failed says itself. */
+export const EvalBadge = ({ task }: { task: Task }): JSX.Element | null => {
+  if (!task.eval || task.eval.length === 0) return null;
+  const failed = task.eval.filter((verdict) => verdict.result === "fail");
+  return (
+    <span
+      className="dash-eval-badge"
+      data-result={failed.length > 0 ? "fail" : "pass"}
+      title={task.eval.map((verdict) => `${verdict.result === "pass" ? "Passed" : verdict.result === "fail" ? "Failed" : "Unsure"}: ${verdict.note ?? verdict.check}`).join("\n")}
+      data-testid={`task-eval-${task.id}`}
+    >
+      {failed.length > 0 ? `Check failed: ${failed[0]!.note ?? failed[0]!.check}` : "Checks passed"}
+    </span>
+  );
+};
+
+/** The settings a person may change before approving: words, for a step that changes no account. */
+const editableOf = (task: Task): Array<{ key: string; label: string; long: boolean }> => {
+  const variant = actionVariant(task.action);
+  if (!variant || variant.permission || !task.pending || !task.case) return [];
+  return variant.fields
+    .filter((field) => (field.kind === "template" || field.kind === "longtext" || field.kind === "text") && typeof task.pending?.[field.key] === "string")
+    .map((field) => ({ key: field.key, label: field.label, long: field.kind === "longtext" }));
+};
+
 export const TaskCard = ({
   task,
   agent,
@@ -144,6 +172,8 @@ export const TaskCard = ({
   const isQuestion = task.body.kind === "question" && task.status === "waiting";
   const bookingAsk = task.body.kind === "booking" && task.status === "waiting" ? task.body : null;
   const [booking, setBooking] = useState<string | null>(null);
+  const editable = task.status === "waiting_approval" && !task.uncertain ? editableOf(task) : [];
+  const [edits, setEdits] = useState<Record<string, string> | null>(null);
 
   const act = async (work: () => Promise<unknown>, done = true): Promise<void> => {
     setBusy(true);
@@ -187,6 +217,7 @@ export const TaskCard = ({
         {agent && <AgentChip name={agent.name} color={agent.color} size="sm" />}
         <strong className="dash-task__title">{task.title}</strong>
         <Badge tone={status.tone}>{status.label}</Badge>
+        <EvalBadge task={task} />
       </div>
       {!compact && <TaskBody task={task} />}
       <span className="dash-hint">
@@ -194,6 +225,7 @@ export const TaskCard = ({
         {task.workflowName ? `${task.workflowName} · ` : ""}
         {when(task.finishedAt ?? task.createdAt)}
         {task.approvedBy ? ` · by ${task.approvedBy}` : ""}
+        {task.edited ? ` · edited before approving (${task.edited.changes.map((change) => change.key).join(", ")})` : ""}
         {task.error && task.status !== "failed" && !task.uncertain ? ` · ${task.error}` : ""}
         {task.retryAt && task.status === "waiting" ? ` · trying again ${when(task.retryAt)}` : ""}
       </span>
@@ -240,11 +272,50 @@ export const TaskCard = ({
               </Button>
             </>
           )}
-          {task.status === "waiting_approval" && !task.uncertain && (
+          {edits && (
+            <div className="dash-step-panel" data-testid={`task-edit-${task.id}`}>
+              {editable.map((field) => (
+                <label key={field.key} className="dash-workflow-field">
+                  <span className="dash-workflow-field__label">{field.label}</span>
+                  {field.long ? (
+                    <textarea className="dash-tool__deny" rows={4} value={edits[field.key] ?? ""} onChange={(event) => setEdits({ ...edits, [field.key]: event.target.value })} />
+                  ) : (
+                    <input className="dash-tool__when" value={edits[field.key] ?? ""} onChange={(event) => setEdits({ ...edits, [field.key]: event.target.value })} />
+                  )}
+                </label>
+              ))}
+              <div className="dash-row">
+                <Button
+                  size="sm"
+                  tone="primary"
+                  busy={busy}
+                  onClick={() =>
+                    void act(async () => {
+                      const changed = Object.fromEntries(Object.entries(edits).filter(([key, value]) => value !== task.pending?.[key]));
+                      await api.approveTask(task.id, { always, ...(Object.keys(changed).length > 0 ? { edits: changed } : {}) });
+                      setEdits(null);
+                    })
+                  }
+                  testId={`task-edit-approve-${task.id}`}
+                >
+                  Approve as edited
+                </Button>
+                <Button size="sm" tone="ghost" onClick={() => setEdits(null)}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+          {task.status === "waiting_approval" && !task.uncertain && !edits && (
             <>
               <Button size="sm" tone="primary" busy={busy} onClick={() => void open()} testId={`task-approve-${task.id}`}>
                 Review and approve
               </Button>
+              {editable.length > 0 && (
+                <Button size="sm" busy={busy} onClick={() => setEdits(Object.fromEntries(editable.map((field) => [field.key, String(task.pending?.[field.key] ?? "")])))} testId={`task-edit-open-${task.id}`}>
+                  Edit
+                </Button>
+              )}
               <label className="dash-reach__check">
                 <input type="checkbox" checked={always} onChange={(event) => setAlways(event.target.checked)} /> Always
               </label>

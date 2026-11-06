@@ -43,7 +43,8 @@ export const checkRule = (check: RuleCheck, tasks: readonly Task[], now: number)
     result: pass ? "pass" : "fail",
     said: !pass && evidence.length > 0 && evidence.every(said),
     evidence: evidence.map((task) => task.id),
-    ...(note ? { note } : pass || !check.says ? {} : { note: check.says }),
+    /* What it checks, in its author's words; a failure says what went wrong first. */
+    ...(note || check.says ? { note: note ?? check.says } : {}),
   });
   switch (check.expect) {
     case "all":

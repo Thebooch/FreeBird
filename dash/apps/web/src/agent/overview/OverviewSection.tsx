@@ -3,7 +3,7 @@ import type { AgentSpec, WorkflowSpec } from "@freebirdai/dash-spec";
 import { useEffect, useMemo, useState } from "react";
 import type { Task } from "@freebirdai/dash-spec";
 import { api, type AgentOverview } from "../../api";
-import { TaskCard } from "../workflows/TaskCard.jsx";
+import { EvalBadge, TaskCard } from "../workflows/TaskCard.jsx";
 import type { Route } from "../../route.js";
 import { NO_FILTER, byDay, keepActive, keepCompleted, taskLabel, tasksIn, type OverviewFilter } from "./filter.js";
 
@@ -13,7 +13,8 @@ import { NO_FILTER, byDay, keepActive, keepCompleted, taskLabel, tasksIn, type O
  * **Active workflows**: each that is on or has something waiting — the stage
  * it is at and what it is waiting for (your approval, its schedule, an API
  * change, an agent being asked, or somebody to turn it back on).
- * **Completed tasks**: everything done, newest first, by day.
+ * **Completed tasks**: everything done, newest first, by day, each with its
+ * eval badge when its workflow has standing checks.
  *
  * Both filter by agent, task and workflow. Refreshed every 15 seconds while
  * open, so a running workflow's stage moves on by itself.
@@ -196,6 +197,7 @@ export const OverviewSection = ({ onNavigate }: { readonly onNavigate: (route: R
                           {item.title}
                         </button>
                         {item.status === "reversed" ? <span className="dash-hint"> (reversed)</span> : null}
+                        {tasksById.get(item.id) ? <> <EvalBadge task={tasksById.get(item.id)!} /></> : null}
                         <span className="dash-hint">
                           {item.workflowName ? (
                             <>

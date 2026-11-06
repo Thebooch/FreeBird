@@ -1,7 +1,7 @@
 import { idSchema } from "@freebirdai/connect-spec";
 import { z } from "zod";
 import { agentSchema } from "./agent.js";
-import { checkSchema, EVAL_DIMENSIONS, verdictSchema, type EvalDimension, type Verdict } from "./eval-check.js";
+import { checkSchema, verdictSchema, type EvalDimension, type Verdict } from "./eval-check.js";
 import { workflowSchema, type Task } from "./workflow.js";
 
 /**

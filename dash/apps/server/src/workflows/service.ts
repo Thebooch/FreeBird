@@ -14,6 +14,7 @@ import {
   type AgentSpec,
   type Principal,
   type WorkflowInput,
+  type WorkflowNode,
   type WorkflowSpec,
 } from "@freebirdai/dash-spec";
 import type { Policy } from "../identity/policy.js";
@@ -117,6 +118,19 @@ export const callLoop = (workflow: Pick<WorkflowSpec, "nodes">, self: string | u
   };
   return walk(me, [me]);
 };
+
+/**
+ * Leaving trial on evidence is the server's to record (`graduation.ts`), never
+ * a save's: each step keeps the graduation it had, and loses it when its
+ * action or settings change, since what earned it is no longer what runs.
+ */
+const ownGraduation = (nodes: readonly WorkflowNode[], held: readonly WorkflowNode[]): WorkflowNode[] =>
+  nodes.map((node) => {
+    const { graduated: _graduated, demoted: _demoted, ...rest } = node;
+    const before = held.find((one) => one.id === node.id);
+    const unchanged = before !== undefined && before.action === node.action && JSON.stringify(before.settings) === JSON.stringify(node.settings);
+    return { ...rest, ...(unchanged && before.graduated ? { graduated: before.graduated } : {}), ...(before?.demoted ? { demoted: before.demoted } : {}) };
+  });
 
 export class WorkflowService {
   constructor(private readonly deps: WorkflowServiceDeps) {}
@@ -275,10 +289,11 @@ export class WorkflowService {
       ...(given.criteria ? { criteria: given.criteria } : {}),
       ...(given.rowKey ? { rowKey: given.rowKey } : {}),
       once: given.once ?? held?.once ?? "per-row",
-      nodes: given.nodes ?? held?.nodes ?? [],
+      nodes: ownGraduation(given.nodes ?? held?.nodes ?? [], held?.nodes ?? []),
       edges: given.edges ?? held?.edges ?? [],
       limits: given.limits ?? held?.limits ?? {},
       guardrails: given.guardrails ?? held?.guardrails ?? "",
+      checks: given.checks ?? held?.checks ?? [],
       /* Whoever saves it is who it runs as. */
       enabledBy: principal,
       ...(held?.parked && given.enabled !== true ? { parked: held.parked } : {}),
