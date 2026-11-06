@@ -18,6 +18,8 @@ import { CopyLink } from "../CopyLink.jsx";
  * - Its words can be changed before approving (not a change to an account,
  *   which is approved as its review shows); the task then says it was edited.
  * - A badge for its workflow's standing checks, when it finished (Dash Evals).
+ * - Save as a test: the case becomes a scenario in the workflow's pack, its
+ *   people redacted, so a mistake is tested for from then on.
  */
 
 const errorText = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));
@@ -174,6 +176,7 @@ export const TaskCard = ({
   const [booking, setBooking] = useState<string | null>(null);
   const editable = task.status === "waiting_approval" && !task.uncertain ? editableOf(task) : [];
   const [edits, setEdits] = useState<Record<string, string> | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
 
   const act = async (work: () => Promise<unknown>, done = true): Promise<void> => {
     setBusy(true);
@@ -356,6 +359,19 @@ export const TaskCard = ({
               Mark done
             </Button>
           )}
+          {task.case && task.workflow && !compact && ["done", "dismissed", "reversed", "failed"].includes(task.status) && (
+            <Button
+              size="sm"
+              tone="ghost"
+              busy={busy}
+              title="Keep this case as a test of the workflow, with its people replaced by stand-ins"
+              onClick={() => void act(async () => setSaved((await api.saveTaskAsScenario(task.id)).name), false)}
+              testId={`task-save-scenario-${task.id}`}
+            >
+              Save as a test
+            </Button>
+          )}
+          {saved && <span className="dash-hint">Saved: {saved}. It runs with the workflow's Test.</span>}
           {task.status === "done" && task.reversal?.available && (
             <Button size="sm" tone="ghost" busy={busy} onClick={() => void reverse()} testId={`task-reverse-${task.id}`}>
               Reverse

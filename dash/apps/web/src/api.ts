@@ -286,6 +286,21 @@ export interface EvalTrendPoint {
   readonly dimensions: Partial<Record<EvalDimension, { pass: number; fail: number; silent: number; unsure: number }>>;
 }
 
+/** A judge and how far it agrees with the team: see `evals/judge.ts`. */
+export interface EvalJudge {
+  readonly id: string;
+  readonly rubric: string;
+  readonly calibration: { readonly agreement: number; readonly examples: number; readonly at: string } | null;
+  readonly shown: boolean;
+  readonly needed: { readonly agreement: number; readonly examples: number };
+}
+
+/** The weekly eval summary's settings: see `evals/store.ts`. */
+export interface EvalSettings {
+  readonly weekly: { readonly enabled: boolean; readonly to: readonly string[] };
+  readonly lastSentAt?: string;
+}
+
 /** How one outside step stands on leaving trial: see `workflows/graduation.ts`. */
 export interface StepGraduation {
   readonly node: string;
@@ -1519,6 +1534,17 @@ export const api = {
   inboundRules: (): Promise<RequesterRule[]> => request("/api/inbound/rules"),
   removeInboundRule: (key: string): Promise<unknown> => request(`/api/inbound/rules/${encodeURIComponent(key)}`, { method: "DELETE" }),
   inboundSummary: (): Promise<{ screened: number; wouldHold: number; held: number; bySignal: Record<string, number> }> => request("/api/inbound/summary"),
+
+  /** Keeps a finished task's case as a test, its people redacted. */
+  saveTaskAsScenario: (id: string): Promise<{ id: string; name: string }> => request(`/api/tasks/${encodeURIComponent(id)}/save-as-scenario`, json({})),
+
+  /** The judges and how far each agrees with the team. */
+  evalJudges: (): Promise<EvalJudge[]> => request("/api/evals/judges"),
+  /** Calibrates the Tone judge against the team's approvals. Spends model calls. */
+  calibrateTone: (): Promise<NonNullable<EvalJudge["calibration"]>> => request("/api/evals/judges/tone/calibrate", json({})),
+  evalSettings: (): Promise<EvalSettings> => request("/api/evals/settings"),
+  putEvalSettings: (settings: Partial<EvalSettings>): Promise<EvalSettings> => request("/api/evals/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(settings) }),
+  sendEvalSummary: (): Promise<{ sent: number }> => request("/api/evals/report/send", json({})),
 
   /* ── Dash Evals: testing a workflow in a sandbox, kept runs, leaving trial on evidence ── */
 
