@@ -51,6 +51,7 @@ export const FROM_WORDS: Readonly<Record<FieldSource, string>> = {
   record: "From a record",
   person: "They told us",
   member: "Set by your team",
+  inbound: "Read from their email",
 };
 
 /** A value as a person reads it. */

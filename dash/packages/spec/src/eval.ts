@@ -2,6 +2,7 @@ import { idSchema } from "@freebirdai/connect-spec";
 import { z } from "zod";
 import { agentSchema } from "./agent.js";
 import { checkSchema, verdictSchema, type EvalDimension, type Verdict } from "./eval-check.js";
+import { inboundSettingsSchema, requesterRuleSchema } from "./inbound.js";
 import { workflowSchema, type Task } from "./workflow.js";
 
 /**
@@ -39,7 +40,7 @@ export type TurnKind = (typeof TURN_KINDS)[number];
  * One thing that happens to the sandbox, in order: an email arrives, a
  * booking changes, records change, or the clock moves. Payloads by kind:
  *
- * - `message`: `{ from, subject, text, mailbox? }`, an email as `message_received` workflows see it.
+ * - `message`: `{ from, name?, subject, text, mailbox?, contact? }`, an email: screened, then as `message_received` workflows see it.
  * - `booking`: `{ event, type?, row }`, a booking event; `row` is the booking shaped for steps.
  * - `record`: `{ add?: rows[], update?: { id, values }[] }`, the connection's records change.
  * - `clock`: `{ ms }`, time moves on.
@@ -75,6 +76,14 @@ export const worldWorkspaceSchema = z.object({
   workflows: z.array(workflowSchema).max(50).default([]),
   /** Rows the connection's reads return. Added to the provider's own seed. */
   records: z.array(z.record(z.unknown())).max(5000).default([]),
+  /** The inbound screen's settings and sender rules, and the team's addresses nobody outside may claim. */
+  inbound: z
+    .object({
+      settings: inboundSettingsSchema.default({}),
+      rules: z.array(requesterRuleSchema).max(200).default([]),
+      members: z.array(z.string()).max(100).default([]),
+    })
+    .default({}),
 });
 export type WorldWorkspace = z.infer<typeof worldWorkspaceSchema>;
 

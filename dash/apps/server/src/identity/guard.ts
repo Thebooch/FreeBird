@@ -48,6 +48,8 @@ export const GUARDED_ROUTES: readonly GuardRule[] = [
   /* Workflows: making, changing, running and previewing them, and deciding what waits for a person. */
   { methods: WRITE, path: /^\/api\/workflows(\/|$)/, permission: "workflows.manage" },
   { methods: WRITE, path: /^\/api\/(tasks|cases|workflow-templates|workflow-events)(\/|$)/, permission: "workflows.manage" },
+  /* The inbound screen: held emails and who is trusted or blocked are for the people who decide what workflows do. */
+  { methods: ["GET", ...WRITE], path: /^\/api\/inbound(\/|$)/, permission: "workflows.manage" },
   /* Dash Evals: testing a workflow in a sandbox, and watching a test as it plays. */
   { methods: WRITE, path: /^\/api\/evals(\/|$)/, permission: "workflows.manage" },
   { methods: ["GET"], path: /^\/api\/evals\/sessions(\/|$)/, permission: "workflows.manage" },

@@ -33,7 +33,7 @@ import type {
   TimeRange,
   WidgetBrief,
 } from "@freebirdai/dash-spec";
-import { fieldValueOf, type Contact, type MailDraft, type WorkflowSpec as MailWorkflow } from "@freebirdai/dash-spec";
+import { fieldValueOf, type Contact, type MailDraft, type MailMessage, type ScreenRecord, type WorkflowSpec as MailWorkflow } from "@freebirdai/dash-spec";
 import {
   readField,
   authTokenRefs,
@@ -143,6 +143,9 @@ import { buildScreens } from "./chat/screens/index.js";
 import { describeTurn, periodParams } from "./context/period.js";
 import { workflowRoutes } from "./routes/workflows.js";
 import { evalRoutes } from "./routes/evals.js";
+import { inboundRoutes } from "./routes/inbound.js";
+import { InboundService } from "./inbound/service.js";
+import { MemoryInboundStore, type InboundStore } from "./inbound/store.js";
 import { EvalService } from "./evals/service.js";
 import { MemoryEvalRunStore, type EvalRunStore } from "./evals/store.js";
 import { calendarRoutes } from "./routes/calendar.js";
@@ -461,6 +464,8 @@ export interface BuildServerOptions {
   readonly workflows?: WorkflowStore;
   readonly cases?: CaseStore;
   readonly tasks?: TaskStore;
+  /** The inbound screen's records, sender rules and settings (`inbound/store.ts`). Absent means in this process only. */
+  readonly inbound?: InboundStore;
   /** Scenario runs the Test button keeps (`evals/store.ts`). Absent means in this process only. */
   readonly evalRuns?: EvalRunStore;
   readonly calendar?: CalendarStore;
@@ -1219,6 +1224,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     emails: contact.emails,
     phones: contact.phones,
     types: await contacts.typesOf(contact),
+    /* Fields whose value only an email gave: they never drive an outside step on Auto (`workflows/inbound-mark.ts`). */
+    inboundFields: Object.entries(contact.fields).flatMap(([key, field]) => (fieldValueOf(field)?.from === "inbound" ? [key] : [])),
   });
   const contacts: ContactService = new ContactService({
     store: options.contacts ?? new MemoryContactStore(),
@@ -1345,64 +1352,99 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       await workflowEngine.emit(`reply:${draft.id}`, { from: message.from?.address ?? "", subject: message.subject, text: message.snippet, message: message.id }, `reply:${draft.id}:${message.id}`);
     },
     received: async (arrived) => {
-      const listening = (await workflowStore.list()).filter(
-        (one): one is MailWorkflow & { trigger: Extract<MailWorkflow["trigger"], { kind: "message_received" }> } =>
-          one.trigger.kind === "message_received" && one.enabled && !one.parked && one.trigger.channels.includes("email"),
-      );
-      const fieldDefs = (await contacts.setup()).fields;
       for (const arrival of arrived) {
         const { message } = arrival;
-        let contact = arrival.contact;
-        /* Fields set to fill from email, still empty on this contact: read once from this email, before any workflow sees the contact. */
-        const toFill = contact ? fieldsToFill(fieldDefs, contact) : [];
-        const extractor = toFill.length > 0 ? resolveLlm("extract") : null;
-        if (contact && extractor) {
-          try {
-            const words = (await comms.conversationText(message.mailbox, message.id, message.threadId)).text.split("\n\n---\n\n").at(-1) ?? message.snippet;
-            const found = await extractFields(extractor, toFill, `Subject: ${message.subject}\n\n${words}`);
-            for (const [key, value] of Object.entries(found)) await contacts.record(contact.id, key, value, "person").catch(() => undefined);
-            if (Object.keys(found).length > 0) contact = (await contacts.get(contact.id)) ?? contact;
-          } catch (error) {
-            app.log.warn(`contact fields were not read from a new email: ${String(error)}`);
-          }
+        /*
+         * The inbound screen (`inbound/`), before any model reads the email or
+         * any workflow starts. A held email waits for a person to Release it,
+         * Block or Trust its sender; it stays in Communications either way.
+         * A screen that cannot run lets nothing go on.
+         */
+        let screen: ScreenRecord;
+        try {
+          const words = (await comms.conversationText(message.mailbox, message.id, message.threadId).catch(() => ({ text: message.snippet }))).text.split("\n\n---\n\n").at(-1) ?? message.snippet;
+          screen = await inbound.screen(message, words, arrival.contact ? { contact: arrival.contact.id, knownContact: arrival.contact.links.length > 0 } : {});
+        } catch (error) {
+          app.log.warn(`a new email was not screened, so nothing went on from it: ${String(error)}`);
+          continue;
         }
-        /* An agent's own mailbox: the message is checked against that agent's highlights, and a match tells the team. */
-        const owner = store.getConnection(message.mailbox)?.mailbox?.owner;
-        if (owner?.kind === "agent") {
-          const agent = await agentStore.get(owner.id);
-          const llm = agent && activeHighlights(agent).length > 0 ? resolveLlm("agent-tools") : null;
-          if (agent && llm) {
-            try {
-              const words = `Subject: ${message.subject}\n\n${(await comms.conversationText(message.mailbox, message.id, message.threadId).catch(() => ({ text: message.snippet }))).text}`;
-              const matches = await checkHighlights(llm, agent, words);
-              if (matches.length > 0) await highlightNotifier.notify({ agent: { id: agent.id, name: agent.name, color: agent.color }, matches, conversation: `${message.mailbox}:${message.id}`, message: words });
-            } catch (error) {
-              app.log.warn(`highlights for a new email were not checked: ${String(error)}`);
-            }
-          }
-        }
-        const row: Record<string, unknown> = {
-          ...message,
-          channel: "email",
-          ...(contact ? { contact: await contactRowOf(contact) } : {}),
-        };
-        for (const workflow of listening) {
-          if (workflow.trigger.mailboxes.length > 0 && !workflow.trigger.mailboxes.includes(message.mailbox)) continue;
-          /* Made from the workflow and the message, so a message read twice opens one case. */
-          const id = `mr-${createHash("sha1").update(`${workflow.id}:${message.mailbox}:${message.id}`).digest("hex").slice(0, 16)}`;
-          try {
-            await workflowEngine.create(workflow, { id, row, rowKey: `${message.mailbox}:${message.id}`, start: { kind: "message", message: `${message.mailbox}:${message.id}` } });
-            await workflowEngine.advance(id);
-          } catch (error) {
-            if (!(error instanceof CaseBusy) && !(error instanceof RevisionConflict)) app.log.warn(`"${workflow.name}" did not start for a new email: ${String(error)}`);
-          }
-        }
+        if (screen.status === "held") continue;
+        await proceedArrival(message, arrival.contact, screen);
       }
     },
     now: () => Date.now(),
     newId: () => randomUUID(),
     log: { warn: (line) => app.log.warn(line) },
   });
+  /** An email the screen let through, or a person released: its contact's fields, highlights, then workflows. */
+  async function proceedArrival(message: MailMessage, arrived: Contact | undefined, screen: ScreenRecord): Promise<void> {
+    const listening = (await workflowStore.list()).filter(
+      (one): one is MailWorkflow & { trigger: Extract<MailWorkflow["trigger"], { kind: "message_received" }> } =>
+        one.trigger.kind === "message_received" && one.enabled && !one.parked && one.trigger.channels.includes("email"),
+    );
+    const fieldDefs = (await contacts.setup()).fields;
+    let contact = arrived;
+    /*
+     * Fields set to fill from email, still empty on this contact: read once
+     * from this email, before any workflow sees the contact. Kept as read
+     * from an email (`inbound`): the sender chose them.
+     */
+    const toFill = contact ? fieldsToFill(fieldDefs, contact) : [];
+    const extractor = toFill.length > 0 ? resolveLlm("extract") : null;
+    if (contact && extractor) {
+      try {
+        const words = (await comms.conversationText(message.mailbox, message.id, message.threadId)).text.split("\n\n---\n\n").at(-1) ?? message.snippet;
+        const found = await extractFields(extractor, toFill, `Subject: ${message.subject}\n\n${words}`);
+        for (const [key, value] of Object.entries(found)) await contacts.record(contact.id, key, value, "inbound").catch(() => undefined);
+        if (Object.keys(found).length > 0) contact = (await contacts.get(contact.id)) ?? contact;
+      } catch (error) {
+        app.log.warn(`contact fields were not read from a new email: ${String(error)}`);
+      }
+    }
+    /* An agent's own mailbox: the message is checked against that agent's highlights, and a match tells the team. */
+    const owner = store.getConnection(message.mailbox)?.mailbox?.owner;
+    if (owner?.kind === "agent") {
+      const agent = await agentStore.get(owner.id);
+      const llm = agent && activeHighlights(agent).length > 0 ? resolveLlm("agent-tools") : null;
+      if (agent && llm) {
+        try {
+          const words = `Subject: ${message.subject}\n\n${(await comms.conversationText(message.mailbox, message.id, message.threadId).catch(() => ({ text: message.snippet }))).text}`;
+          const matches = await checkHighlights(llm, agent, words);
+          if (matches.length > 0) await highlightNotifier.notify({ agent: { id: agent.id, name: agent.name, color: agent.color }, matches, conversation: `${message.mailbox}:${message.id}`, message: words });
+        } catch (error) {
+          app.log.warn(`highlights for a new email were not checked: ${String(error)}`);
+        }
+      }
+    }
+    const row: Record<string, unknown> = {
+      ...message,
+      channel: "email",
+      ...(contact ? { contact: await contactRowOf(contact) } : {}),
+      /* Who asked and how far they are trusted: a case it starts carries the mark (`workflows/inbound-mark.ts`). */
+      inbound: { screen: screen.id, requester: screen.requester.key, trust: screen.requester.trust, signals: screen.signals.map((one) => one.kind) },
+    };
+    for (const workflow of listening) {
+      if (workflow.trigger.mailboxes.length > 0 && !workflow.trigger.mailboxes.includes(message.mailbox)) continue;
+      /* Made from the workflow and the message, so a message read twice opens one case. */
+      const id = `mr-${createHash("sha1").update(`${workflow.id}:${message.mailbox}:${message.id}`).digest("hex").slice(0, 16)}`;
+      try {
+        await workflowEngine.create(workflow, { id, row, rowKey: `${message.mailbox}:${message.id}`, start: { kind: "message", message: `${message.mailbox}:${message.id}` } });
+        await workflowEngine.advance(id);
+      } catch (error) {
+        if (!(error instanceof CaseBusy) && !(error instanceof RevisionConflict)) app.log.warn(`"${workflow.name}" did not start for a new email: ${String(error)}`);
+      }
+    }
+  }
+  /* The inbound screen's rules, held emails and requester policy (`inbound/`, `routes/inbound.ts`). */
+  const inbound = new InboundService({
+    store: options.inbound ?? new MemoryInboundStore(),
+    now: () => Date.now(),
+    newId: () => randomUUID(),
+    members: async () => [...(await workspaceMembers()).map((one) => ({ email: one.email })), ...store.listConnections().flatMap((one) => (one.mailbox?.address ? [{ email: one.mailbox.address }] : []))],
+    message: async (mailbox, id) => (await commsStore.recent(mailbox)).find((one) => one.id === id) ?? null,
+    proceed: async (message, screen) => proceedArrival(message, screen.contact ? ((await contacts.get(screen.contact)) ?? undefined) : undefined, screen),
+  });
+  void app.register(inboundRoutes({ inbound, policy }));
   commsForWorkflows = comms;
   /* A draft a Reply step wrote was sent, saved or discarded: its case goes on down that way. */
   commsDraftSettled = async (draft) => {

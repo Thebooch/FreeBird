@@ -23,8 +23,12 @@ import { principalSchema } from "./access.js";
 export const CONTACT_ORIGINS = ["public_link", "agent", "member", "workflow", "email"] as const;
 export type ContactOrigin = (typeof CONTACT_ORIGINS)[number];
 
-/** Where a field's value came from, weakest first. */
-export const FIELD_SOURCES = ["person", "record", "member"] as const;
+/**
+ * Where a field's value came from, weakest first. `inbound`: read by a model
+ * from an email that arrived, so whoever wrote it chose it (Dash Evals'
+ * inbound screen). It never drives an outside step on Auto.
+ */
+export const FIELD_SOURCES = ["inbound", "person", "record", "member"] as const;
 export type FieldSource = (typeof FIELD_SOURCES)[number];
 
 export const CONTACT_FIELD_KINDS = ["text", "choice", "address", "email", "phone", "number", "date", "boolean"] as const;
@@ -117,6 +121,7 @@ export type ContactFieldValue = z.infer<typeof contactFieldValueSchema>;
 
 /** One field's values, one per place it came from. */
 export const contactFieldSchema = z.object({
+  inbound: contactFieldValueSchema.optional(),
   person: contactFieldValueSchema.optional(),
   record: contactFieldValueSchema.optional(),
   member: contactFieldValueSchema.optional(),
@@ -125,15 +130,16 @@ export type ContactField = z.infer<typeof contactFieldSchema>;
 
 /**
  * The value a field has, and where it came from: a member's, else a
- * record's, else the person's. `trusted` leaves out what the person said.
+ * record's, else the person's, else one read from an email. `trusted`
+ * leaves out what the person said and what an email said.
  */
 export const fieldValueOf = (
   field: ContactField | undefined,
   options: { readonly trusted?: boolean } = {},
 ): { readonly value: unknown; readonly from: FieldSource } | undefined => {
   if (!field) return undefined;
-  for (const from of ["member", "record", "person"] as const) {
-    if (from === "person" && options.trusted) return undefined;
+  for (const from of ["member", "record", "person", "inbound"] as const) {
+    if ((from === "person" || from === "inbound") && options.trusted) return undefined;
     const one = field[from];
     if (one && one.value !== undefined && one.value !== null && one.value !== "") return { value: one.value, from };
   }

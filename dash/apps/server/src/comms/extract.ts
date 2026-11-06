@@ -18,7 +18,7 @@ export const fieldsToFill = (defs: readonly ContactFieldDef[], contact: Pick<Con
 
 const contactHas = (contact: Pick<Contact, "fields">, key: string): boolean => {
   const field = contact.fields[key];
-  return Boolean(field && (field.member || field.record || field.person));
+  return Boolean(field && (field.member || field.record || field.person || field.inbound));
 };
 
 const KIND_WORDS: Readonly<Record<ContactFieldDef["kind"], string>> = {

@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
+import type { z } from "zod";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
-import type { SandboxSession, SandboxStatus, ScriptedReply, Task, Turn, WorkflowSpec, WorldRef } from "@freebirdai/dash-spec";
+import { mailMessageSchema, worldRefSchema, type SandboxSession, type SandboxStatus, type ScriptedReply, type Task, type Turn, type WorkflowSpec, type WorldRef } from "@freebirdai/dash-spec";
 import type { WorkflowEvent } from "../workflows/env.js";
+import { InboundService } from "../inbound/service.js";
+import { MemoryInboundStore } from "../inbound/store.js";
 import { WorkflowRunner } from "../workflows/runner.js";
 import { startWorkflow } from "../workflows/start.js";
 import { fake, owner, type Fake } from "../workflows/testing.js";
@@ -18,11 +21,13 @@ import { worldSeed } from "./worlds.js";
  * again gives the same tasks.
  */
 
+type WorldRefInput = z.input<typeof worldRefSchema>;
+
 export type SandboxEvent = { readonly kind: "step"; readonly data: WorkflowEvent } | { readonly kind: "task"; readonly data: Task };
 
 export interface SandboxOptions {
   readonly id?: string;
-  readonly world: WorldRef;
+  readonly world: WorldRef | WorldRefInput;
   /** Scripted mode: the model's replies, in order. Absent: no model is reachable. */
   readonly model?: readonly ScriptedReply[];
   /** Everything that happens, as it happens. */
@@ -95,11 +100,19 @@ export class Sandbox {
     private readonly runner: WorkflowRunner,
     /** The scripted model's place: the model reads it, so a restore moves it too. */
     private readonly modelAt: { at: number },
+    /** The inbound screen, over its own store: the same rules the server applies. */
+    private readonly inbound: InboundService,
+    private readonly inboundStore: MemoryInboundStore,
+    private readonly onEvent: SandboxOptions["onEvent"],
   ) {}
+
+  /** Emails the screen held, in order. */
+  private readonly held: Array<{ turn: string; from: string; signals: string[] }> = [];
 
   /** Boots the world: its records, agents and workflows, then one runner pass so watched triggers take their baseline. */
   static async start(options: SandboxOptions): Promise<Sandbox> {
-    const seed = worldSeed(options.world.provider, options.world.seed);
+    const world = worldRefSchema.parse(options.world);
+    const seed = worldSeed(world.provider, world.seed);
     const modelAt = { at: 0 };
     const model = options.model ? scriptedModel(options.model, modelAt) : undefined;
     const f = fake({
@@ -114,11 +127,16 @@ export class Sandbox {
       await put(task);
       options.onEvent?.({ kind: "task", data: structuredClone(task) });
     };
-    f.rows.push(...seed.records.map((row) => ({ ...row })), ...options.world.workspace.records.map((row) => ({ ...row })));
-    for (const agent of [...seed.agents, ...options.world.workspace.agents]) f.agents.set(agent.id, agent);
-    for (const workflow of options.world.workspace.workflows) await f.env.store.put(workflow);
+    f.rows.push(...seed.records.map((row) => ({ ...row })), ...world.workspace.records.map((row) => ({ ...row })));
+    for (const agent of [...seed.agents, ...world.workspace.agents]) f.agents.set(agent.id, agent);
+    for (const workflow of world.workspace.workflows) await f.env.store.put(workflow);
     const runner = new WorkflowRunner({ ...f.starter });
-    const sandbox = new Sandbox(options.id ?? `sandbox-${f.env.newId()}`, options.world, f, runner, modelAt);
+    const inboundStore = new MemoryInboundStore();
+    const screening = world.workspace.inbound;
+    await inboundStore.putSettings(screening.settings);
+    for (const rule of screening.rules) await inboundStore.putRule(rule);
+    const inbound = new InboundService({ store: inboundStore, now: () => f.clock.now, newId: () => f.env.newId(), members: async () => screening.members.map((email) => ({ email })) });
+    const sandbox = new Sandbox(options.id ?? `sandbox-${f.env.newId()}`, world, f, runner, modelAt, inbound, inboundStore, options.onEvent);
     await runner.tick();
     return sandbox;
   }
@@ -133,7 +151,7 @@ export class Sandbox {
 
   /** What the sandbox's outside steps would have done: messages sent and changes prepared and committed. Nothing left. */
   get intents() {
-    return { sent: [...this.f.sent], prepared: [...this.f.prepared], committed: [...this.f.committed], posts: [...this.f.posts] };
+    return { sent: [...this.f.sent], prepared: [...this.f.prepared], committed: [...this.f.committed], posts: [...this.f.posts], held: [...this.held] };
   }
 
   /** Every task, oldest first. */
@@ -151,6 +169,18 @@ export class Sandbox {
       case "message": {
         const mailbox = typeof payload["mailbox"] === "string" ? payload["mailbox"] : "inbox";
         const from = typeof payload["from"] === "string" ? { address: payload["from"], name: typeof payload["name"] === "string" ? payload["name"] : "" } : payload["from"];
+        /* Screened first, as the server screens every email (`inbound/`): a held one starts nothing. */
+        const address = String((from as { address?: unknown } | undefined)?.address ?? "");
+        const screen = await this.inbound.screen(
+          mailMessageSchema.parse({ id: turn.id, threadId: turn.id, mailbox, from: { address, name: (from as { name?: string } | undefined)?.name ?? "" }, subject: String(payload["subject"] ?? ""), snippet: String(payload["text"] ?? "").slice(0, 1000), at: new Date(this.f.clock.now).toISOString(), hasAttachments: payload["attachments"] === true }),
+          String(payload["text"] ?? ""),
+          { knownContact: payload["known"] === true },
+        );
+        if (screen.status === "held") {
+          this.held.push({ turn: turn.id, from: address, signals: screen.signals.map((one) => one.detail) });
+          this.onEvent?.({ kind: "step", data: { type: "inbound.held", workflow: "", reason: `Held for a person: ${screen.signals.map((one) => one.detail).join("; ") || "the sender is blocked"}.` } as unknown as WorkflowEvent });
+          break;
+        }
         const row: Record<string, unknown> = {
           mailbox,
           id: turn.id,
@@ -161,6 +191,7 @@ export class Sandbox {
           text: payload["text"] ?? "",
           channel: "email",
           ...(payload["contact"] ? { contact: payload["contact"] } : {}),
+          inbound: { screen: screen.id, requester: screen.requester.key, trust: screen.requester.trust, signals: screen.signals.map((one) => one.kind) },
         };
         for (const workflow of await this.listening("message_received")) {
           if (workflow.trigger.kind !== "message_received" || (workflow.trigger.mailboxes.length > 0 && !workflow.trigger.mailboxes.includes(mailbox))) continue;
@@ -258,7 +289,7 @@ export class Sandbox {
   /** Everything that keeps rows: the stores, the runner's own times, and the fake's records and intents. */
   private holders(): object[] {
     const { env } = this.f;
-    return [env.store, env.cases, env.tasks, env.calendar, env.templates, env.signals, this.runner, this.f];
+    return [env.store, env.cases, env.tasks, env.calendar, env.templates, env.signals, this.runner, this.f, this.inboundStore, { held: this.held }];
   }
 
   private async listening(kind: WorkflowSpec["trigger"]["kind"]): Promise<WorkflowSpec[]> {

@@ -226,7 +226,7 @@ export class ContactService implements ContactDirectory {
       const best = fieldValueOf(field);
       if (!best) continue;
       scope[key] = best.value;
-      if (best.from !== "person") trusted.add(`contact.${key}`);
+      if (best.from !== "person" && best.from !== "inbound") trusted.add(`contact.${key}`);
     }
     const kinds = new Map<string, FactKind>([
       ["contact.email", "email"],
@@ -407,7 +407,7 @@ export class ContactService implements ContactDirectory {
     );
   }
 
-  async record(id: string, field: string, value: unknown, from: "person" | "member", by?: string): Promise<void> {
+  async record(id: string, field: string, value: unknown, from: "inbound" | "person" | "member", by?: string): Promise<void> {
     const def = (await this.deps.store.fields()).find((one) => one.key === field);
     if (!def) throw new ContactError(`There is no field "${field}".`);
     const checked = fieldValueFor(def, value, this.callingCode);
