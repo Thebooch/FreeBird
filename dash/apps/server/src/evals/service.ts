@@ -1,8 +1,13 @@
-import { verdictsByDimension, type AgentSpec, type EvalRun, type Principal, type RunEvent, type ScenarioInput, type WorkflowSpec } from "@freebirdai/dash-spec";
+import type { EmailAdapter } from "@freebirdai/core";
+import type { LlmAdapter } from "@freebirdai/dash-agent";
+import { scenarioSchema, taskLabel, verdictsByDimension, type AgentSpec, type EvalRun, type Principal, type RunEvent, type ScenarioInput, type WorkflowSpec } from "@freebirdai/dash-spec";
 import type { WorkflowEnv } from "../workflows/env.js";
 import { DEFAULT_CLEAN_CASES, graduate, graduationOf, type StepGraduation } from "../workflows/graduation.js";
 import { ScenarioError, ScenarioSession } from "./runner.js";
-import type { EvalRunStore } from "./store.js";
+import type { Judge } from "./checks.js";
+import { SaveError, scenarioFromTask } from "./from-task.js";
+import { AGREEMENT_NEEDED, calibrate, calibrated, EXAMPLES_NEEDED, modelJudge, rubricKey, toneCheck, TONE_RUBRIC, type Calibration } from "./judge.js";
+import { evalSettingsSchema, type EvalRunStore, type EvalSettings } from "./store.js";
 import { packForWorkflow } from "./workflow-pack.js";
 
 /**
@@ -26,6 +31,16 @@ export interface EvalServiceDeps {
   readonly runs: EvalRunStore;
   /** Clean trial cases a step needs before Dash proposes Auto. */
   readonly cleanCases?: number;
+  /** A model for judges and calibration. Null or absent: judge checks stay `unsure`. */
+  readonly llm?: () => LlmAdapter | null;
+  /** The weekly summary: the mail it goes out with, the team it goes to, and the inbound screen's week. */
+  readonly report?: {
+    readonly email: () => EmailAdapter | null;
+    readonly team: () => Promise<readonly string[]>;
+    readonly inbound?: () => Promise<{ readonly screened: number; readonly wouldHold: number; readonly held: number }>;
+    /** Where people open the app: the summary links there. */
+    readonly origin?: string;
+  };
 }
 
 /** A session being stepped, and who is watching it. */
@@ -54,7 +69,126 @@ export class EvalService {
   /** The scenarios Dash offers this workflow. */
   async pack(workflowId: string): Promise<ScenarioInput[]> {
     const workflow = await this.workflow(workflowId);
-    return packForWorkflow(workflow, await this.agentsOf(workflow));
+    const saved = (await this.deps.runs.scenarios()).filter((one) => "workflow" in one.target && one.target.workflow === workflow.id);
+    return [...packForWorkflow(workflow, await this.agentsOf(workflow)), ...saved];
+  }
+
+  /** The judge a run uses: a model against calibrated rubrics, or none. */
+  private judge(): Judge | undefined {
+    const llm = this.deps.llm?.() ?? null;
+    return llm ? modelJudge(llm, (rubric) => this.deps.runs.calibration(rubric)) : undefined;
+  }
+
+  /** The judges and how far each agrees with the team: shown only once it agrees often enough. */
+  async judges(): Promise<Array<{ readonly id: string; readonly rubric: string; readonly calibration: Calibration | null; readonly shown: boolean; readonly needed: { readonly agreement: number; readonly examples: number } }>> {
+    const calibration = await this.deps.runs.calibration(rubricKey(TONE_RUBRIC));
+    return [{ id: toneCheck.id, rubric: TONE_RUBRIC, calibration, shown: calibrated(calibration), needed: { agreement: AGREEMENT_NEEDED, examples: EXAMPLES_NEEDED } }];
+  }
+
+  /** Calibrates the Tone judge against the team's recent approvals of messages. Spends model calls, one per example. */
+  async calibrateTone(): Promise<Calibration> {
+    const llm = this.deps.llm?.() ?? null;
+    if (!llm) throw new EvalError("No AI model is set up, so the judge cannot be calibrated.", 409);
+    const tasks = (await this.deps.env.tasks.list({ limit: 1000 })).filter((task) => task.base === "outreach" && taskLabel(task) !== null);
+    const calibration = await calibrate(llm, TONE_RUBRIC, tasks, this.deps.env.now());
+    await this.deps.runs.putCalibration(calibration);
+    return calibration;
+  }
+
+  /** Saves a real task's case as a scenario, its people redacted, with a check that what went wrong does not happen again unattended. */
+  async saveTask(taskId: string): Promise<ScenarioInput> {
+    const task = await this.deps.env.tasks.get(taskId);
+    if (!task?.case || !task.workflow) throw new EvalError("Only a workflow's task can be saved as a scenario.", 404);
+    const one = await this.deps.env.cases.get(task.case);
+    if (!one) throw new EvalError("The case behind this task is gone.", 404);
+    const workflow = await this.workflow(task.workflow);
+    /* The workflow as the case ran it: its own steps, frozen when it opened. */
+    const ran: WorkflowSpec = { ...workflow, ...(one.definition ? { nodes: one.definition.nodes, edges: one.definition.edges } : {}) };
+    let scenario: ScenarioInput;
+    try {
+      scenario = scenarioFromTask(task, one, ran, await this.agentsOf(ran), `saved-${this.deps.env.newId()}`.slice(0, 64));
+    } catch (error) {
+      if (error instanceof SaveError) throw new EvalError(error.message, 409);
+      throw error;
+    }
+    const parsed = scenarioSchema.parse(scenario);
+    await this.deps.runs.putScenario(parsed);
+    return parsed;
+  }
+
+  savedScenarios(): Promise<ScenarioInput[]> {
+    return this.deps.runs.scenarios();
+  }
+
+  removeScenario(id: string): Promise<void> {
+    return this.deps.runs.deleteScenario(id);
+  }
+
+  settings(): Promise<EvalSettings> {
+    return this.deps.runs.settings();
+  }
+
+  async putSettings(input: unknown): Promise<EvalSettings> {
+    const held = await this.deps.runs.settings();
+    const parsed = evalSettingsSchema.safeParse({ ...held, ...(input && typeof input === "object" ? input : {}) });
+    if (!parsed.success) throw new EvalError(parsed.error.issues.map((issue) => issue.message).join(" "), 400);
+    await this.deps.runs.putSettings(parsed.data);
+    return parsed.data;
+  }
+
+  /** The week in evals, as an email: tests by workflow and dimension, live tasks that failed a check, what people did, the inbound screen. */
+  async weeklySummary(): Promise<{ readonly subject: string; readonly text: string; readonly html: string }> {
+    const now = this.deps.env.now();
+    const since = new Date(now - 7 * 86_400_000).toISOString();
+    const runs = (await this.deps.runs.list({ limit: 500 })).filter((run) => (run.finishedAt ?? run.startedAt) >= since);
+    const workflows = new Map((await this.deps.env.store.list()).map((one) => [one.id, one.name]));
+    const tasks = (await this.deps.env.tasks.list({ limit: 1000 })).filter((task) => (task.finishedAt ?? task.createdAt) >= since);
+    const scored = tasks.filter((task) => task.eval && task.eval.length > 0);
+    const failing = scored.filter((task) => task.eval!.some((verdict) => verdict.result === "fail"));
+    const inbound = await this.deps.report?.inbound?.().catch(() => null);
+    const lines: string[] = [`Tests run: ${runs.length}.`];
+    const byWorkflow = new Map<string, EvalRun[]>();
+    for (const run of runs) {
+      const workflow = "workflow" in run.target ? run.target.workflow : run.scenario;
+      byWorkflow.set(workflow, [...(byWorkflow.get(workflow) ?? []), run]);
+    }
+    for (const [workflow, group] of byWorkflow) {
+      const tally = verdictsByDimension(group.flatMap((run) => run.verdicts));
+      const parts = Object.entries(tally).map(([dimension, one]) => `${dimension} ${one!.pass} passed${one!.fail ? `, ${one!.fail} failed` : ""}${one!.silent ? `, ${one!.silent} failed unsaid` : ""}`);
+      lines.push(`- ${workflows.get(workflow) ?? workflow}: ${parts.join("; ")}.`);
+    }
+    lines.push("", `Live tasks scored by their checks: ${scored.length}, of which ${failing.length} failed one.`);
+    for (const task of failing.slice(0, 10)) lines.push(`- ${task.title} (${task.workflowName ?? "a workflow"}): ${task.eval!.find((verdict) => verdict.result === "fail")?.note ?? "a check failed"}.`);
+    const labels = tasks.map((task) => taskLabel(task));
+    const count = (label: string) => labels.filter((one) => one === label).length;
+    lines.push("", `What people did: ${count("good")} approved as proposed, ${count("partly_wrong")} edited first, ${count("wrong")} declined, ${count("wrong_shipped")} reversed.`);
+    if (inbound) lines.push("", `Inbound screen: ${inbound.screened} screened, ${inbound.wouldHold} a rule flagged, ${inbound.held} held.`);
+    const judge = (await this.judges())[0];
+    if (judge?.calibration) lines.push("", `The Tone judge agrees with your team ${Math.round(judge.calibration.agreement * 100)}% of ${judge.calibration.examples} times${judge.shown ? "" : ", not enough to show its verdicts yet"}.`);
+    if (this.deps.report?.origin) lines.push("", `Open Dash: ${this.deps.report.origin}/#/agent/workflows`);
+    const escapeHtml = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const html = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;color:#111827">${lines.map((line) => (line === "" ? "<br>" : `<p style="margin:0 0 6px">${escapeHtml(line)}</p>`)).join("")}</div>`;
+    return { subject: "Dash evals: the week", text: lines.join("\n"), html };
+  }
+
+  /** Sends the weekly summary when it is on and a week has passed, or now when asked. Returns how many it went to. */
+  async sendWeekly(force = false): Promise<number> {
+    const settings = await this.deps.runs.settings();
+    if (!force && !settings.weekly.enabled) return 0;
+    const now = this.deps.env.now();
+    if (!force && settings.lastSentAt && now - Date.parse(settings.lastSentAt) < 7 * 86_400_000) return 0;
+    const email = this.deps.report?.email() ?? null;
+    if (!email) {
+      if (force) throw new EvalError("Email isn't set up on this server, so the summary cannot be sent.", 409);
+      return 0;
+    }
+    const to = settings.weekly.to.length > 0 ? settings.weekly.to : (await this.deps.report!.team()).filter((one) => one.includes("@"));
+    if (to.length === 0) return 0;
+    const summary = await this.weeklySummary();
+    /* Recorded first: a send that fails part way is not sent again the same week. */
+    await this.deps.runs.putSettings({ ...settings, lastSentAt: new Date(now).toISOString() });
+    for (const recipient of to) await email.send({ to: recipient, subject: summary.subject, text: summary.text, html: summary.html });
+    return to.length;
   }
 
   /** Starts a session on one of the workflow's scenarios (the first by default). Nothing has played yet. */
@@ -68,7 +202,8 @@ export class EvalService {
     const listeners = new Set<(event: RunEvent) => void>();
     let session: ScenarioSession;
     try {
-      session = await ScenarioSession.start(input, { id, onEvent: (event) => listeners.forEach((listener) => listener(event)) });
+      const judge = this.judge();
+      session = await ScenarioSession.start(input, { id, ...(judge ? { judge } : {}), onEvent: (event) => listeners.forEach((listener) => listener(event)) });
     } catch (error) {
       if (error instanceof ScenarioError) throw new EvalError(error.message, 400);
       throw error;
@@ -113,7 +248,8 @@ export class EvalService {
     if (pack.length === 0) throw new EvalError("Dash has no scenarios for what starts this workflow yet.", 404);
     const out: EvalRun[] = [];
     for (const input of pack) {
-      const run = await (await ScenarioSession.start(input, { id: `eval-${this.deps.env.newId()}` })).finish();
+      const judge = this.judge();
+      const run = await (await ScenarioSession.start(input, { id: `eval-${this.deps.env.newId()}`, ...(judge ? { judge } : {}) })).finish();
       await this.deps.runs.put(run);
       out.push(run);
     }

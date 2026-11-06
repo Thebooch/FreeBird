@@ -108,6 +108,27 @@ export const evalRoutes = (deps: { readonly evals: EvalService; readonly policy:
     evals.trend({ ...(request.query.workflow ? { workflow: request.query.workflow } : {}), ...(request.query.agent ? { agent: request.query.agent } : {}) }),
   );
 
+  /* Judges: how far each agrees with the team, and calibrating Tone against the team's approvals (spends model calls). */
+  app.get("/api/evals/judges", guarded(async () => evals.judges()));
+  app.post("/api/evals/judges/tone/calibrate", guarded(async () => evals.calibrateTone()));
+
+  /* Scenarios saved from the workspace's own tasks, redacted. */
+  app.post<{ Params: { id: string } }>("/api/tasks/:id/save-as-scenario", guarded(async (_principal, request) => evals.saveTask(request.params["id"]!)));
+  app.get("/api/evals/scenarios", guarded(async () => evals.savedScenarios()));
+  app.delete<{ Params: { id: string } }>(
+    "/api/evals/scenarios/:id",
+    guarded(async (_principal, request) => {
+      await evals.removeScenario(request.params["id"]!);
+      return { removed: true };
+    }),
+  );
+
+  /* The weekly summary: its settings, a look at this week's, and sending it now. */
+  app.get("/api/evals/settings", guarded(async () => evals.settings()));
+  app.put("/api/evals/settings", guarded(async (_principal, request) => evals.putSettings(request.body)));
+  app.get("/api/evals/report", guarded(async () => evals.weeklySummary()));
+  app.post("/api/evals/report/send", guarded(async () => ({ sent: await evals.sendWeekly(true) })));
+
   app.get<{ Params: { id: string } }>("/api/workflows/:id/graduation", (request, reply) => answered(reply, () => evals.graduation(request.params.id)));
 
   /** A person accepts Auto for a step that is ready. */

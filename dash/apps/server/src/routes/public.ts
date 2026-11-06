@@ -21,6 +21,7 @@ import { discover } from "../scheduling/discover.js";
 import { SchedulingError, type SchedulingService, type WorkspaceMember } from "../scheduling/service.js";
 import type { Slot } from "../scheduling/slots.js";
 import type { TaskStore } from "../workflows/store.js";
+import type { InboundService } from "../inbound/service.js";
 
 /**
  * The pages anyone may open, with no sign-in: a contact's booking page, an
@@ -61,6 +62,8 @@ export const PUBLIC_ROUTES = [
   "POST /api/workflow-hooks/:workspace/:token",
 ] as const;
 
+const DAY_MS = 86_400_000;
+
 export interface PublicRouteDeps {
   /** The workspace id its paths name. */
   readonly workspace: string;
@@ -78,6 +81,12 @@ export interface PublicRouteDeps {
   readonly now: () => number;
   /** How long a request made on the public link holds its time until the person is verified. */
   readonly unverifiedHoldFor?: string;
+  /**
+   * The requester policy (`inbound/`), keyed to the email a request is made
+   * with, never to an address on the network: blocked senders and limits per
+   * person. Absent: only the rate limits above apply.
+   */
+  readonly requesters?: Pick<InboundService, "gate">;
 }
 
 const DAY = 86_400_000;
@@ -142,6 +151,13 @@ export const publicRoutes = (deps: PublicRouteDeps) =>
       if (error instanceof BookingError) return reply.status(error.status).send({ error: error.message, ...(error.slots ? { slots: error.slots.map(publicSlot) } : {}) });
       if (error instanceof ContactError || error instanceof SchedulingError) return reply.status(error.status).send({ error: error.message });
       throw error;
+    };
+
+    /** Refuses a request the requester policy does not allow, in its words. */
+    const allowed = async (email: string, action: "start" | "book" | "cancel", counts: { bookingsToday?: number; openHolds?: number; cancellationsThisWeek?: number } = {}): Promise<void> => {
+      if (!deps.requesters) return;
+      const gate = await deps.requesters.gate({ email, action, ...counts });
+      if (!gate.allowed) throw new PublicError(gate.reason ?? "This can't be done here right now.", gate.record.requester.trust === "blocked" ? 403 : 429);
     };
 
     const tokenOf = async (raw: string): Promise<PublicToken | null> => (TOKEN.test(raw) ? tokens.byHash(hashToken(raw)) : null);
@@ -365,6 +381,14 @@ export const publicRoutes = (deps: PublicRouteDeps) =>
         const notes = str(body, "notes", 1000);
         const where = str(body, "where", 300);
         const timezone = str(body, "timezone", 64);
+        if (contact.emails[0]) {
+          const theirs = await bookings.list({ contact: contact.id, limit: 200 });
+          const dayAgo = new Date(now() - DAY_MS).toISOString();
+          await allowed(contact.emails[0], "book", {
+            bookingsToday: theirs.filter((one) => one.createdAt >= dayAgo && (one.origin === "link" || one.origin === "public_link")).length,
+            openHolds: theirs.filter((one) => one.status === "pending").length,
+          });
+        }
         const verified = Boolean(contact.verified.email || contact.verified.phone);
         await bookings.request({
           type: type.id,
@@ -399,7 +423,19 @@ export const publicRoutes = (deps: PublicRouteDeps) =>
         }
       };
 
-    app.post<{ Params: Params }>("/api/public/:workspace/book/:token/cancel", open, change((_token, contact, booking) => bookings.cancel(booking.id, as(contact))));
+    app.post<{ Params: Params }>(
+      "/api/public/:workspace/book/:token/cancel",
+      open,
+      change(async (_token, contact, booking) => {
+        if (contact.emails[0]) {
+          const weekAgo = new Date(now() - 7 * DAY_MS).toISOString();
+          const theirs = await bookings.list({ contact: contact.id, limit: 200 });
+          const cancellations = theirs.filter((one) => one.history.some((step) => step.status === "cancelled" && step.at >= weekAgo && step.by.kind === "contact")).length;
+          await allowed(contact.emails[0], "cancel", { cancellationsThisWeek: cancellations });
+        }
+        return bookings.cancel(booking.id, as(contact));
+      }),
+    );
     app.post<{ Params: Params }>(
       "/api/public/:workspace/book/:token/reschedule",
       open,
@@ -529,6 +565,7 @@ export const publicRoutes = (deps: PublicRouteDeps) =>
         const phone = str(body, "phone", 40);
         if (!name) throw new PublicError("Say your name.");
         if (!email) throw new PublicError("Say your email address.");
+        await allowed(email, "start");
         const contact = await contacts.findOrCreate({ name, email, ...(phone ? { phone } : {}), origin: "public_link", unverified: true });
         const minted = await links.contactLink(contact.id, { type: type.id, fromPublic: true });
         const secure = request.protocol === "https" || request.headers["x-forwarded-proto"] === "https";

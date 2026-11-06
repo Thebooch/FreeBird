@@ -138,6 +138,13 @@ CREATE TABLE IF NOT EXISTS dash_eval_runs (
 
 CREATE INDEX IF NOT EXISTS dash_eval_runs_workflow ON dash_eval_runs (workspace, workflow, at);
 
+CREATE TABLE IF NOT EXISTS dash_eval_meta (
+  workspace TEXT NOT NULL,
+  key       TEXT NOT NULL,
+  record    JSONB NOT NULL,
+  PRIMARY KEY (workspace, key)
+);
+
 CREATE TABLE IF NOT EXISTS dash_inbound_screens (
   workspace TEXT NOT NULL,
   id        TEXT NOT NULL,

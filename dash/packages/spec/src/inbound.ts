@@ -44,6 +44,10 @@ export const requesterLimitsSchema = z.object({
   messagesPerDay: z.number().int().min(1).max(10_000).default(20),
   /** Messages from every sender at one domain together: a swarm of look-alike addresses counts as one. */
   domainMessagesPerDay: z.number().int().min(1).max(100_000).default(200),
+  /** On the booking pages, keyed to the booking's email: requests a day, bookings waiting on the team at once, cancellations a week. */
+  bookingsPerDay: z.number().int().min(1).max(1000).default(5),
+  openHolds: z.number().int().min(1).max(1000).default(3),
+  cancellationsPerWeek: z.number().int().min(1).max(1000).default(5),
 });
 export type RequesterLimits = z.infer<typeof requesterLimitsSchema>;
 
@@ -73,6 +77,8 @@ export type ScreenStatus = (typeof SCREEN_STATUSES)[number];
 export const screenRecordSchema = z.object({
   id: z.string(),
   at: z.string(),
+  /** An email that arrived, or a request on a booking page (its `mailbox` is "booking", its `message` the action). */
+  channel: z.enum(["email", "booking"]).default("email"),
   mailbox: z.string(),
   message: z.string(),
   /** The sender's address. The message itself stays in Communications, sealed; this names it. */
