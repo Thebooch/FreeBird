@@ -286,6 +286,19 @@ export interface EvalTrendPoint {
   readonly dimensions: Partial<Record<EvalDimension, { pass: number; fail: number; silent: number; unsure: number }>>;
 }
 
+/** Whether the inbound screen has earned holding: see `InboundService.readiness`. */
+export interface InboundReadiness {
+  readonly observeOnly: boolean;
+  readonly screened: number;
+  readonly days: number;
+  readonly flagged: number;
+  readonly reviewed: number;
+  readonly fine: number;
+  readonly falseFlags: number | null;
+  readonly blockers: readonly string[];
+  readonly ready: boolean;
+}
+
 /** A judge and how far it agrees with the team: see `evals/judge.ts`. */
 export interface EvalJudge {
   readonly id: string;
@@ -1534,6 +1547,11 @@ export const api = {
   inboundRules: (): Promise<RequesterRule[]> => request("/api/inbound/rules"),
   removeInboundRule: (key: string): Promise<unknown> => request(`/api/inbound/rules/${encodeURIComponent(key)}`, { method: "DELETE" }),
   inboundSummary: (): Promise<{ screened: number; wouldHold: number; held: number; bySignal: Record<string, number> }> => request("/api/inbound/summary"),
+  /** Flags raised while the screen only watched, that nobody has looked at. */
+  inboundToReview: (): Promise<ScreenRecord[]> => request("/api/inbound/review"),
+  reviewInbound: (id: string, verdict: "good_catch" | "fine"): Promise<ScreenRecord> => request(`/api/inbound/screens/${encodeURIComponent(id)}/review`, json({ verdict })),
+  /** Whether the screen has earned holding, and what is still missing. */
+  inboundReadiness: (): Promise<InboundReadiness> => request("/api/inbound/readiness"),
 
   /** Keeps a finished task's case as a test, its people redacted. */
   saveTaskAsScenario: (id: string): Promise<{ id: string; name: string }> => request(`/api/tasks/${encodeURIComponent(id)}/save-as-scenario`, json({})),

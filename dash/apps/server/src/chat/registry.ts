@@ -25,6 +25,7 @@ import {
 } from "./handles.js";
 
 import { agentActions, agentKnowledge, type AgentChatOps } from "./agent-actions.js";
+import { evalActions, evalKnowledge, type EvalChatOps } from "./eval-actions.js";
 import { workflowActions, workflowKnowledge, type WorkflowChatOps } from "./workflow-actions.js";
 import { SCREENS, screenComponent } from "./screens/common.js";
 import { recordChangeActions, type RecordChangeOps } from "./record-actions.js";
@@ -125,6 +126,8 @@ export interface BuildChatRegistryInput {
    * Absent means the two actions are not registered.
    */
   readonly workflows?: WorkflowChatOps;
+  /** Dash Evals in the chat: test a workflow, save a task as a test, say why a check failed. */
+  readonly evals?: EvalChatOps;
   /**
    * The calendar's and contacts' screens, each a component with its own
    * actions, knowledge and place in the app (`chat/screens/`). Registered
@@ -927,7 +930,15 @@ export const buildChatRegistry = (input: BuildChatRegistryInput) => {
         ]
       : []),
     ...(input.agents ? [screenComponent(SCREENS.agents, agentKnowledge(input.agents).map((one) => one.text), agentActions(input.agents))] : []),
-    ...(input.workflows ? [screenComponent(SCREENS.workflows, workflowKnowledge(input.workflows).map((one) => one.text), workflowActions(input.workflows))] : []),
+    ...(input.workflows
+      ? [
+          screenComponent(
+            SCREENS.workflows,
+            [...workflowKnowledge(input.workflows), ...(input.evals ? evalKnowledge() : [])].map((one) => one.text),
+            [...workflowActions(input.workflows), ...(input.evals ? evalActions(input.evals) : [])],
+          ),
+        ]
+      : []),
   ];
 
   /*

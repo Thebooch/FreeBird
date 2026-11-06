@@ -168,6 +168,54 @@ export class InboundService {
     return { screened: all.length, wouldHold: all.filter((one) => one.wouldHold).length, held: all.filter((one) => one.status === "held").length, bySignal };
   }
 
+  /** A person's word on a flag raised while the screen only watched. */
+  async review(principal: Principal, id: string, verdict: "good_catch" | "fine"): Promise<ScreenRecord> {
+    const record = await this.screenOf(id);
+    if (!record.wouldHold) throw new InboundError("The screen raised no flag on this email.", 409);
+    const reviewed: ScreenRecord = { ...record, review: { verdict, by: principal.userId, at: new Date(this.deps.now()).toISOString() } };
+    await this.deps.store.putScreen(reviewed);
+    return reviewed;
+  }
+
+  /** Flags raised while watching that nobody has looked at yet, newest first. */
+  async toReview(limit = 50): Promise<ScreenRecord[]> {
+    return (await this.deps.store.screens({ status: "passed", limit: 1000 })).filter((one) => one.wouldHold && !one.review && one.channel === "email").slice(0, limit);
+  }
+
+  /**
+   * Whether the screen has earned holding: what it has seen, how often people
+   * said a flag was wrong, and what is still missing. Dash suggests the
+   * switch; a person makes it.
+   */
+  async readiness(): Promise<{
+    readonly observeOnly: boolean;
+    readonly screened: number;
+    readonly days: number;
+    readonly flagged: number;
+    readonly reviewed: number;
+    readonly fine: number;
+    readonly falseFlags: number | null;
+    readonly needed: InboundSettings["holdWhen"];
+    readonly blockers: readonly string[];
+    readonly ready: boolean;
+  }> {
+    const settings = await this.deps.store.settings();
+    const all = (await this.deps.store.screens({ limit: 1000 })).filter((one) => one.channel === "email");
+    const first = all.at(-1)?.at;
+    const days = first ? Math.floor((this.deps.now() - Date.parse(first)) / DAY_MS) : 0;
+    const flagged = all.filter((one) => one.wouldHold && one.requester.trust !== "blocked");
+    const reviewed = flagged.filter((one) => one.review);
+    const fine = reviewed.filter((one) => one.review!.verdict === "fine").length;
+    const falseFlags = reviewed.length > 0 ? fine / reviewed.length : null;
+    const needed = settings.holdWhen;
+    const blockers: string[] = [];
+    if (all.length < needed.minScreened) blockers.push(`${all.length} of ${needed.minScreened} emails screened.`);
+    if (days < needed.minDays) blockers.push(`${days} of ${needed.minDays} days watched.`);
+    if (flagged.length > reviewed.length) blockers.push(`${flagged.length - reviewed.length} flagged email${flagged.length - reviewed.length === 1 ? "" : "s"} still need a look.`);
+    if (falseFlags !== null && falseFlags > needed.maxFalseFlags) blockers.push(`${Math.round(falseFlags * 100)}% of flags were marked fine, more than ${Math.round(needed.maxFalseFlags * 100)}%.`);
+    return { observeOnly: settings.observeOnly, screened: all.length, days, flagged: flagged.length, reviewed: reviewed.length, fine, falseFlags, needed, blockers, ready: settings.observeOnly && blockers.length === 0 };
+  }
+
   /** Lets a held message go on, as if it had just arrived. */
   async release(principal: Principal, id: string): Promise<ScreenRecord> {
     const record = await this.held(id);

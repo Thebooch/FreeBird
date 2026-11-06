@@ -8,7 +8,7 @@ import type { Judge } from "./checks.js";
 import { SaveError, scenarioFromTask } from "./from-task.js";
 import { AGREEMENT_NEEDED, calibrate, calibrated, EXAMPLES_NEEDED, modelJudge, rubricKey, toneCheck, TONE_RUBRIC, type Calibration } from "./judge.js";
 import { evalSettingsSchema, type EvalRunStore, type EvalSettings } from "./store.js";
-import { packForWorkflow } from "./workflow-pack.js";
+import { packForWorkflow, personaPack } from "./workflow-pack.js";
 
 /**
  * Evals in the product: the Test button's sessions, the runs it keeps, the
@@ -243,8 +243,9 @@ export class EvalService {
   }
 
   /** Every scenario in the workflow's pack, played to the end and kept: the Test button without stepping. */
-  async test(workflowId: string): Promise<EvalRun[]> {
-    const pack = await this.pack(workflowId);
+  async test(workflowId: string, personas: readonly string[] = []): Promise<EvalRun[]> {
+    const workflow = await this.workflow(workflowId);
+    const pack = [...(await this.pack(workflowId)), ...personaPack(workflow, await this.agentsOf(workflow), personas)];
     if (pack.length === 0) throw new EvalError("Dash has no scenarios for what starts this workflow yet.", 404);
     const out: EvalRun[] = [];
     for (const input of pack) {
