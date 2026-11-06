@@ -149,6 +149,7 @@ import { outsideRegistry } from "./outside/registry.js";
 import { InboundService } from "./inbound/service.js";
 import { MemoryInboundStore, type InboundStore } from "./inbound/store.js";
 import { EvalService } from "./evals/service.js";
+import { PERSONAS } from "./evals/workflow-pack.js";
 import { MemoryEvalRunStore, type EvalRunStore } from "./evals/store.js";
 import { calendarRoutes } from "./routes/calendar.js";
 import { CalendarService } from "./calendar/service.js";
@@ -4199,7 +4200,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
          * workflows, and the calendar's and contacts' screens. A workspace
          * with no dashboard yet still has all of them.
          */
-        const appWide: Pick<BuildChatRegistryInput, "agents" | "workflows" | "screens"> = {
+        const appWide: Pick<BuildChatRegistryInput, "agents" | "workflows" | "screens" | "evals"> = {
           /*
            * Changes to connected accounts, proposed here and approved on the
            * card. Every hook takes who is asking from the turn itself — this
@@ -4212,6 +4213,14 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             create: (principal, input) => agents.create(principal, input),
             update: (principal, id, input) => agents.update(principal, id, input),
             archive: (id) => agents.setArchived(id, true),
+          },
+          evals: {
+            mayManage: async (principal) => (await policy.can(principal, "workflows.manage", {})).ok,
+            test: (workflowId, personas) => evalService.test(workflowId, personas),
+            saveTask: (taskId) => evalService.saveTask(taskId),
+            task: (taskId) => workflowEnv.tasks.get(taskId),
+            run: (runId) => evalService.run(runId),
+            personas: PERSONAS,
           },
           workflows: {
             roster: await workflows.list(),
