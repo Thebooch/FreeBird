@@ -152,6 +152,7 @@ Dash Evals put a workspace's own workflows and agents through scripted situation
 pnpm eval:scenarios                     # every built-in pack, dev split, scripted
 pnpm eval:scenarios --pack outbound     # one pack
 pnpm eval:scenarios --json              # the runs, with their event logs
+pnpm eval:scenarios --live --k 5        # a model on both sides, five runs each: pass rates; spends tokens
 ```
 
 ## Changes to this protocol
@@ -203,3 +204,4 @@ pnpm eval:scenarios --json              # the runs, with their event logs
   - Scans of the history leave `heldout*` out from now on, as searches of the source do.
 - 2026-11-05: **Agent-behaviour scenarios.** Dash Evals adopt this protocol for scenarios that score a workspace's own workflows and agents (the section above). The first pack is outbound and dev only; no held-out scenarios exist yet.
 - 2026-11-06: **Inbound personas.** The inbound pack adds six personas (ordinary, pushy, injector, impersonator, overreacher, swarm), dev only, written by the author of the inbound screen. Held-out personas are still to be written by someone who has read neither the screen's rules nor the agents' prompts.
+- 2026-11-06: **Live mode built.** `--live` plays each scenario k times with the configured model running the workflow and another call playing the persona from its goal and manner, and reports pass rates. It is never run in CI and never gates.

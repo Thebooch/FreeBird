@@ -30,6 +30,8 @@ export interface SandboxOptions {
   readonly world: WorldRef | WorldRefInput;
   /** Scripted mode: the model's replies, in order. Absent: no model is reachable. */
   readonly model?: readonly ScriptedReply[];
+  /** Live mode: a real model in place of the scripted one. It spends; nothing else leaves the sandbox. */
+  readonly llm?: LlmAdapter;
   /** Everything that happens, as it happens. */
   readonly onEvent?: (event: SandboxEvent) => void;
 }
@@ -114,7 +116,7 @@ export class Sandbox {
     const world = worldRefSchema.parse(options.world);
     const seed = worldSeed(world.provider, world.seed);
     const modelAt = { at: 0 };
-    const model = options.model ? scriptedModel(options.model, modelAt) : undefined;
+    const model = options.llm ?? (options.model ? scriptedModel(options.model, modelAt) : undefined);
     const f = fake({
       sender: true,
       now: SANDBOX_T0,
