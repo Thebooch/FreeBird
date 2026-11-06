@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/expr",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "FreeBird's safe path and expression language, hand-rolled to an AST with no eval. Shared by Connect and Dash.",
   "license": "MIT",
   "repository": {

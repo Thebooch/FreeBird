@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/dash-react",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "FreeBird Dash React layer: shared params, a deduplicating query cache, widget states, the provenance inspector, and the grid.",
   "license": "MIT",
   "repository": {

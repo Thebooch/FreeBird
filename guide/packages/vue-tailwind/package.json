@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/vue-tailwind",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pre-styled Tailwind preset for @freebirdai/vue. Opt-in.",
   "license": "MIT",
   "repository": {
