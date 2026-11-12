@@ -63,6 +63,8 @@ export interface FakeCarrierOptions {
   readonly accountName?: string;
   readonly trial?: boolean;
   readonly now?: () => number;
+  /** Numbers already in the account, as `list()` answers them. */
+  readonly numbers?: readonly string[];
 }
 
 const USE_CASES: readonly CampaignUse[] = [
@@ -127,6 +129,7 @@ export class FakeCarrier {
     this.accountName = options.accountName ?? "Fake carrier account";
     this.trial = options.trial ?? false;
     this.now = options.now ?? (() => Date.now());
+    for (const number of options.numbers ?? []) this.owned.push({ number: e164Schema.parse(number), providerId: `PNfake${hash(number)}`, capabilities: { text: true, voice: true } });
   }
 
   /** The provider, opened with a line's keys, as a server registers it. */

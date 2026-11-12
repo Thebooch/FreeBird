@@ -84,6 +84,10 @@ describe("FakeCarrier", () => {
     expect(carrier.endCall(call.providerId, 3)).toEqual({ providerId: call.providerId, status: "delivered", minutes: 3 });
   });
 
+  it("starts with the numbers it is given", async () => {
+    expect((await new FakeCarrier({ numbers: ["+15550100100"] }).open(keys).numbers.list()).map((one) => one.number)).toEqual(["+15550100100"]);
+  });
+
   it("buys, lists, routes and releases numbers; connects trunks", async () => {
     const carrier = new FakeCarrier();
     const provider = carrier.open(keys);

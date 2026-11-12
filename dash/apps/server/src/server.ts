@@ -1090,7 +1090,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    * texts and calls through the line's adapter after the line's own checks
    * and daily ceilings, which Dash counts, never the adapter.
    */
-  const fakeCarrier = process.env.DASH_PHONE_FAKE === "on" ? new FakeCarrier() : null;
+  /* A pretend account with one number in it, to try a line locally: nothing leaves this server. */
+  const fakeCarrier = process.env.DASH_PHONE_FAKE === "on" ? new FakeCarrier({ numbers: [process.env.DASH_PHONE_FAKE_NUMBER ?? "+15550100100"] }) : null;
   const phoneProviders: PhoneProviders = { ...(fakeCarrier ? { fake: fakeCarrier.open } : {}), ...options.phoneProviders };
   const phoneUsage = options.phoneUsage ?? new MemoryPhoneUsageStore();
   const phoneLines = new PhoneLines({
