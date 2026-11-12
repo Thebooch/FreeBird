@@ -4,6 +4,7 @@ import type {
   CommsSettings,
   MailboxOwner,
   MailboxView,
+  PhoneLineView,
   MailDraft,
   MailMessage,
   MailPage,
@@ -1624,7 +1625,7 @@ export const api = {
   /* ── communications ────────────────────────────────────────────────── */
 
   /** Every mailbox this person may read, and whether each provider's OAuth app has been given. */
-  commsMailboxes: (): Promise<{ mailboxes: MailboxView[]; apps: { gmail: boolean; outlook: boolean } }> => request("/api/comms/mailboxes"),
+  commsMailboxes: (): Promise<{ mailboxes: MailboxView[]; lines?: PhoneLineView[]; apps: { gmail: boolean; outlook: boolean } }> => request("/api/comms/mailboxes"),
   /** The workspace's own OAuth app for a provider, given once for every mailbox of it. */
   setCommsApp: (provider: "gmail" | "outlook", clientId: string, clientSecret: string): Promise<{ gmail: boolean; outlook: boolean }> =>
     request(`/api/comms/apps/${provider}`, json({ clientId, clientSecret })),

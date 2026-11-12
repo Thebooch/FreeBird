@@ -1,4 +1,4 @@
-import { areaKey, areaOf, matchesMailQuery, parseMailQuery, type AgentSpec, type MailboxView, type MailMessage } from "@freebirdai/dash-spec";
+import { areaKey, areaOf, matchesMailQuery, parseMailQuery, type AgentSpec, type MailboxView, type MailMessage, type PhoneLineView } from "@freebirdai/dash-spec";
 
 /**
  * What the Communications page decides without the server: which areas there
@@ -13,21 +13,34 @@ export interface AreaGroup {
   /** For an agent's area: its colour. */
   readonly color?: number;
   readonly mailboxes: readonly MailboxView[];
+  /** Its phone lines, shown beside the mailboxes. */
+  readonly lines: readonly PhoneLineView[];
 }
 
-/** Your comms first (always, even empty), then one area per agent with mailboxes of its own, by name. */
-export const areaGroups = (mailboxes: readonly MailboxView[], agents: readonly Pick<AgentSpec, "id" | "name" | "color">[]): { readonly team: AreaGroup; readonly agents: readonly AreaGroup[] } => {
-  const team = mailboxes.filter((one) => areaOf(one.owner).kind === "team");
-  const byAgent = new Map<string, MailboxView[]>();
+/** Your comms first (always, even empty), then one area per agent with mailboxes or phone lines of its own, by name. */
+export const areaGroups = (
+  mailboxes: readonly MailboxView[],
+  agents: readonly Pick<AgentSpec, "id" | "name" | "color">[],
+  lines: readonly PhoneLineView[] = [],
+): { readonly team: AreaGroup; readonly agents: readonly AreaGroup[] } => {
+  const byAgent = new Map<string, { mailboxes: MailboxView[]; lines: PhoneLineView[] }>();
+  const of = (id: string) => byAgent.get(id) ?? byAgent.set(id, { mailboxes: [], lines: [] }).get(id)!;
   for (const one of mailboxes) {
     const area = areaOf(one.owner);
-    if (area.kind === "agent") byAgent.set(area.id, [...(byAgent.get(area.id) ?? []), one]);
+    if (area.kind === "agent") of(area.id).mailboxes.push(one);
   }
-  const groups = [...byAgent].map(([id, list]): AreaGroup => {
+  for (const one of lines) {
+    const area = areaOf(one.owner);
+    if (area.kind === "agent") of(area.id).lines.push(one);
+  }
+  const groups = [...byAgent].map(([id, held]): AreaGroup => {
     const agent = agents.find((one) => one.id === id);
-    return { key: areaKey({ kind: "agent", id }), label: agent?.name ?? id, ...(agent ? { color: agent.color } : {}), mailboxes: list };
+    return { key: areaKey({ kind: "agent", id }), label: agent?.name ?? id, ...(agent ? { color: agent.color } : {}), mailboxes: held.mailboxes, lines: held.lines };
   });
-  return { team: { key: "team", label: "Your comms", mailboxes: team }, agents: groups.sort((a, b) => a.label.localeCompare(b.label)) };
+  return {
+    team: { key: "team", label: "Your comms", mailboxes: mailboxes.filter((one) => areaOf(one.owner).kind === "team"), lines: lines.filter((one) => areaOf(one.owner).kind === "team") },
+    agents: groups.sort((a, b) => a.label.localeCompare(b.label)),
+  };
 };
 
 const STORAGE = "dash.comms.selection";

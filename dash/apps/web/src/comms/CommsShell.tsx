@@ -1,5 +1,5 @@
 import { AgentChip, Button, EmptyState, Icon } from "@freebirdai/dash-components";
-import type { AgentSpec, MailboxView, MailPage } from "@freebirdai/dash-spec";
+import { PHONE_TEXT_WORDS, PHONE_VOICE_WORDS, type AgentSpec, type MailboxView, type MailPage, type PhoneLineView } from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
 import { AddMailboxSheet, MailboxSheet, signInTo } from "./MailboxSheet.jsx";
@@ -20,7 +20,9 @@ import { HeldEmails } from "../agent/workflows/HeldEmails.jsx";
  *   what shows at once; Enter searches every ticked mailbox's own index.
  * - **The conversation**, read live, with drafts inline.
  *
- * Texts and calls join the same panes in step 9.
+ * Phone lines are listed in each area beside its mailboxes, with where their
+ * texts and calls stand. Their conversations join the same panes with Dash
+ * Phone's texting phase.
  */
 
 type Shown = MailPage["messages"][number];
@@ -35,6 +37,7 @@ const sender = (one: Shown): string => (one.sent ? `To ${one.to.map((to) => to.n
 
 export const CommsShell = (): JSX.Element => {
   const [mailboxes, setMailboxes] = useState<readonly MailboxView[] | null>(null);
+  const [lines, setLines] = useState<readonly PhoneLineView[]>([]);
   const [apps, setApps] = useState({ gmail: false, outlook: false });
   const [agents, setAgents] = useState<readonly AgentSpec[]>([]);
   const [area, setArea] = useState("team");
@@ -54,6 +57,7 @@ export const CommsShell = (): JSX.Element => {
     try {
       const [boxes, people] = await Promise.all([api.commsMailboxes(), api.agents()]);
       setMailboxes(boxes.mailboxes);
+      setLines(boxes.lines ?? []);
       setApps(boxes.apps);
       setAgents(people);
     } catch (cause) {
@@ -76,7 +80,7 @@ export const CommsShell = (): JSX.Element => {
     };
   }, [loadMailboxes]);
 
-  const groups = useMemo(() => areaGroups(mailboxes ?? [], agents), [mailboxes, agents]);
+  const groups = useMemo(() => areaGroups(mailboxes ?? [], agents, lines), [mailboxes, agents, lines]);
   const all: readonly AreaGroup[] = [groups.team, ...groups.agents];
   const group = all.find((one) => one.key === area) ?? groups.team;
   const chosen = ticked(group, selection[group.key]);
@@ -155,6 +159,25 @@ export const CommsShell = (): JSX.Element => {
     );
   };
 
+  /** A phone line: its number, and where its texts and calls stand. */
+  const lineRows = (one: AreaGroup) =>
+    one.lines.length === 0 ? null : (
+      <ul className="dash-comms__list" aria-label="Phone lines">
+        {one.lines.map((line) => (
+          <li key={line.id} className="dash-comms-line" data-testid={`comms-line-${line.id}`}>
+            <span className="dash-comms-line__name" title={line.title}>
+              <Icon name="phone" />
+              {line.number ?? line.title}
+            </span>
+            <span className="dash-comms-line__status">
+              <span data-ready={line.text === "approved" ? "true" : undefined}>{PHONE_TEXT_WORDS[line.text]}</span>
+              <span data-ready={line.voice === "ready" ? "true" : undefined}>{PHONE_VOICE_WORDS[line.voice]}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+    );
+
   const areaButton = (one: AreaGroup) => (
     <button
       type="button"
@@ -183,13 +206,15 @@ export const CommsShell = (): JSX.Element => {
         <h2 className="dash-comms__group">Your comms</h2>
         {areaButton(groups.team)}
         <ul className="dash-comms__list">{groups.team.mailboxes.map((box) => mailboxRow(box, groups.team))}</ul>
-        {groups.team.mailboxes.length === 0 && <p className="dash-hint">Add your own Gmail or Outlook inbox.</p>}
+        {lineRows(groups.team)}
+        {groups.team.mailboxes.length === 0 && groups.team.lines.length === 0 && <p className="dash-hint">Add your own Gmail or Outlook inbox.</p>}
         <h2 className="dash-comms__group">Agent comms</h2>
         {groups.agents.length === 0 && <p className="dash-hint">An agent with an address of its own gets an area here. Add a mailbox and choose the agent it belongs to.</p>}
         {groups.agents.map((one) => (
           <div key={one.key} className="dash-comms__agent">
             {areaButton(one)}
             <ul className="dash-comms__list">{one.mailboxes.map((box) => mailboxRow(box, one))}</ul>
+            {lineRows(one)}
           </div>
         ))}
         <HeldEmails compact />

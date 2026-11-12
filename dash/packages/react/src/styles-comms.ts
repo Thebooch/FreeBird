@@ -46,6 +46,10 @@ export const DASH_COMMS_STYLES = `
 .dash-comms-box[data-status="needs_sign_in"] .dash-comms-box__name, .dash-comms-box[data-status="needs_app"] .dash-comms-box__name { color: var(--dash-muted); }
 .dash-comms-box__more { display: inline-flex; align-items: center; font: inherit; border: 0; background: transparent; color: var(--dash-muted); cursor: pointer; padding: 2px 6px; border-radius: var(--dash-radius-sm); }
 .dash-comms-box__more:hover { background: var(--dash-wash); color: var(--dash-ink); }
+.dash-comms-line { display: flex; flex-direction: column; gap: 2px; padding: 4px 4px 4px 12px; min-height: 30px; font-size: var(--dash-text-sm); color: var(--dash-ink-secondary); }
+.dash-comms-line__name { display: flex; align-items: center; gap: var(--dash-space-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-comms-line__status { display: flex; flex-wrap: wrap; gap: 2px var(--dash-space-2); padding-left: 22px; font-size: var(--dash-text-xs); color: var(--dash-muted); }
+.dash-comms-line__status [data-ready] { color: var(--dash-ink-secondary); }
 
 /* == mail ================================================================ */
 .dash-comms__search { padding: var(--dash-space-3); border-bottom: 1px solid var(--dash-border); position: sticky; top: 0; background: var(--dash-surface); z-index: 1; }
