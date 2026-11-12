@@ -54,6 +54,8 @@ export const fake = (
     now?: number;
     onEvent?: WorkflowEnv["onEvent"];
     graduation?: boolean;
+    /** Texts and calls go here instead of only being recorded (a sandbox's phone lines); what it takes is recorded too. */
+    phone?: OutreachSender["send"];
   } = {},
 ): Fake => {
   const state = {
@@ -93,6 +95,11 @@ export const fake = (
     }) as unknown as WriteReview;
   const sender: OutreachSender = {
     send: async (message) => {
+      if (options.phone && message.channel !== "email") {
+        const result = await options.phone(message);
+        if (result.status !== "not_sent" && !state.sent.some((one) => one.key === message.key)) state.sent.push({ channel: message.channel, to: message.to, text: message.text, key: message.key });
+        return result;
+      }
       if (!state.sent.some((one) => one.key === message.key)) state.sent.push({ channel: message.channel, to: message.to, text: message.text, key: message.key });
       return { status: "sent", conversation: `conv-${message.key}` };
     },
