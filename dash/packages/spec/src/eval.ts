@@ -1,8 +1,9 @@
-import { idSchema } from "@freebirdai/connect-spec";
+import { idSchema, mailboxOwnerSchema, phoneLineSchema } from "@freebirdai/connect-spec";
 import { z } from "zod";
 import { agentSchema } from "./agent.js";
 import { checkSchema, verdictSchema, type EvalDimension, type Verdict } from "./eval-check.js";
 import { inboundSettingsSchema, requesterRuleSchema } from "./inbound.js";
+import { PHONE_TEXT_STATUSES, PHONE_VOICE_STATUSES, e164Schema } from "./phone.js";
 import { workflowSchema, type Task } from "./workflow.js";
 
 /**
@@ -41,6 +42,7 @@ export type TurnKind = (typeof TURN_KINDS)[number];
  * booking changes, records change, or the clock moves. Payloads by kind:
  *
  * - `message`: `{ from, name?, subject, text, mailbox?, contact? }`, an email: screened, then as `message_received` workflows see it.
+ *   With `channel: "text"` it is a text instead: `{ channel, from, text, line?, stop? }` (`from` a phone number, `line` the world's line id, `stop` a STOP reply), carried by the world's fake carrier, so it needs `world.workspace.phone`.
  * - `booking`: `{ event, type?, row }`, a booking event; `row` is the booking shaped for steps.
  * - `record`: `{ add?: rows[], update?: { id, values }[] }`, the connection's records change.
  * - `clock`: `{ ms }`, time moves on.
@@ -70,6 +72,29 @@ export type Persona = z.infer<typeof personaSchema>;
 
 /* ── worlds and sessions ───────────────────────────────────────────────── */
 
+/** A world's phone lines, all on the fake carrier: what it sends, fails and replies is the scenario's to say. */
+export const worldPhoneSchema = z.object({
+  carrier: z.literal("fake").default("fake"),
+  lines: z
+    .array(
+      z.object({
+        id: idSchema,
+        number: e164Schema,
+        owner: mailboxOwnerSchema.default({ kind: "team" }),
+        /** Registered and ready, unless the scenario is about a line that is not. */
+        text: z.enum(PHONE_TEXT_STATUSES).default("approved"),
+        voice: z.enum(PHONE_VOICE_STATUSES).default("ready"),
+        ceilings: phoneLineSchema.shape.ceilings,
+      }),
+    )
+    .min(1)
+    .max(10)
+    .default([{ id: "line", number: "+15550100100" }]),
+  /** Numbers whose texts the carrier fails to deliver, with its error code. */
+  failures: z.array(z.object({ to: e164Schema, errorCode: z.string().max(40).default("30003") })).max(50).default([]),
+});
+export type WorldPhone = z.infer<typeof worldPhoneSchema>;
+
 /** The settings a world boots with: the agents, the workflows and the records a connection reads. */
 export const worldWorkspaceSchema = z.object({
   agents: z.array(agentSchema).max(50).default([]),
@@ -84,6 +109,8 @@ export const worldWorkspaceSchema = z.object({
       members: z.array(z.string()).max(100).default([]),
     })
     .default({}),
+  /** Phone lines on the fake carrier (`@freebirdai/phone`): texts and calls go through it, and `message` turns with `channel: "text"` come in through it. Absent: texts and calls are only recorded. */
+  phone: worldPhoneSchema.optional(),
 });
 export type WorldWorkspace = z.infer<typeof worldWorkspaceSchema>;
 

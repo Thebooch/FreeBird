@@ -209,6 +209,40 @@ export const mailboxSchema = z.object({
 });
 export type MailboxSpec = z.infer<typeof mailboxSchema>;
 
+/** A phone number as carriers write it: `+`, then the country code and number (E.164). */
+export const E164 = /^\+[1-9]\d{7,14}$/;
+
+/** Where a line's texting stands: registration (A2P 10DLC) gates every text. */
+export const PHONE_TEXT_STATUSES = ["needs_registration", "pending", "approved", "rejected"] as const;
+/** Where a line's calls stand: the carrier pointed at the media layer, or not. */
+export const PHONE_VOICE_STATUSES = ["not_connected", "ready", "off"] as const;
+
+/**
+ * A phone line: a number agents and workflows text and call from, and
+ * customers text and call. Modelled on `mailboxSchema`: whose it is decides
+ * where it shows in Communications and who may send from it. `provider`
+ * names a phone adapter (`@freebirdai/phone`): "twilio", "telnyx", "fake".
+ */
+export const phoneLineSchema = z.object({
+  provider: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/),
+  /** The number, once one is bought or chosen. */
+  number: z.string().regex(E164).optional(),
+  owner: mailboxOwnerSchema.default({ kind: "team" }),
+  text: z.object({ status: z.enum(PHONE_TEXT_STATUSES).default("needs_registration") }).default({}),
+  voice: z.object({ status: z.enum(PHONE_VOICE_STATUSES).default("not_connected") }).default({}),
+  /**
+   * What it may spend in a day (UTC), counted by Dash before each send or
+   * dial, never by the adapter: usage bills to the business's own account.
+   */
+  ceilings: z
+    .object({
+      textsPerDay: z.number().int().min(0).max(100_000).default(200),
+      callMinutesPerDay: z.number().int().min(0).max(100_000).default(120),
+    })
+    .default({}),
+});
+export type PhoneLineSpec = z.infer<typeof phoneLineSchema>;
+
 export const connectionSchema = z.object({
   credentialsRevision: z.number().int().min(0).optional(),
   paginationPending: z.boolean().optional(),
@@ -290,6 +324,12 @@ export const connectionSchema = z.object({
    * the engine reads and sends it like any other connection.
    */
   mailbox: mailboxSchema.optional(),
+  /**
+   * This connection is a phone line: a number on a phone provider's
+   * account, whose keys are in the vault. Beside `mailbox`, and owned the
+   * same way: the team's, or one agent's.
+   */
+  phone: phoneLineSchema.optional(),
   /**
    * Which parts of this API somebody wanted, and the boards that came of it.
    *

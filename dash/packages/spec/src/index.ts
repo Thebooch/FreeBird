@@ -643,6 +643,7 @@ export {
   verdictSchema,
   verdictsByDimension,
   worldRefSchema,
+  worldPhoneSchema,
   worldWorkspaceSchema,
 } from "./eval.js";
 
@@ -666,6 +667,7 @@ export type {
   TurnKind,
   Verdict,
   VerdictResult,
+  WorldPhone,
   WorldRef,
   WorldWorkspace,
 } from "./eval.js";
@@ -684,3 +686,53 @@ export {
 } from "./inbound.js";
 
 export type { InboundSettings, RequesterLimits, RequesterRule, RequesterTrust, ScreenRecord, ScreenSignal, ScreenSignalKind, ScreenStatus } from "./inbound.js";
+
+export {
+  BUSINESS_TYPES,
+  E164,
+  OPT_IN_METHODS,
+  PHONE_DELIVERY_STATUSES,
+  PHONE_TEXT_STATUSES,
+  PHONE_TEXT_WORDS,
+  PHONE_VOICE_STATUSES,
+  PHONE_VOICE_WORDS,
+  REGISTRATION_STATES,
+  accountInfoSchema,
+  availableNumberSchema,
+  brandProfileSchema,
+  campaignDraftSchema,
+  campaignUseSchema,
+  credentialFieldSchema,
+  deliveryUpdateSchema,
+  e164Schema,
+  inboundTextSchema,
+  ownedNumberSchema,
+  registrationStatusSchema,
+  rejectionHelpSchema,
+  sipTargetSchema,
+  submissionRefSchema,
+  trunkInfoSchema,
+} from "./phone.js";
+
+export type {
+  AccountInfo,
+  AvailableNumber,
+  BrandProfile,
+  BusinessType,
+  CampaignDraft,
+  CampaignUse,
+  CredentialField,
+  DeliveryUpdate,
+  InboundText,
+  OptInMethod,
+  OwnedNumber,
+  PhoneDeliveryStatus,
+  PhoneLineSpec,
+  PhoneLineView,
+  RegistrationState,
+  RegistrationStatus,
+  RejectionHelp,
+  SipTarget,
+  SubmissionRef,
+  TrunkInfo,
+} from "./phone.js";

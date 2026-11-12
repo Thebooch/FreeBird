@@ -60,9 +60,13 @@ export {
   MAIL_PROVIDERS,
   mailboxOwnerSchema,
   mailboxSchema,
+  E164,
+  PHONE_TEXT_STATUSES,
+  PHONE_VOICE_STATUSES,
+  phoneLineSchema,
 } from "./connection.js";
 
-export type { AuthSpec, ConnectionSpec, MailboxOwner, MailboxSpec, OpDef, OpSpec, PaginationSpec } from "./connection.js";
+export type { AuthSpec, ConnectionSpec, MailboxOwner, MailboxSpec, OpDef, PhoneLineSpec, OpSpec, PaginationSpec } from "./connection.js";
 
 export {
   ARCHETYPES,
