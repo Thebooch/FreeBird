@@ -260,6 +260,24 @@ CREATE TABLE IF NOT EXISTS dash_comms_notices (
   PRIMARY KEY (workspace, key)
 );
 
+CREATE TABLE IF NOT EXISTS dash_phone_sends (
+  workspace   TEXT NOT NULL,
+  line        TEXT NOT NULL,
+  key         TEXT NOT NULL,
+  kind        TEXT NOT NULL,
+  day         TEXT NOT NULL,
+  recipient   TEXT NOT NULL,
+  at          TEXT NOT NULL,
+  provider_id TEXT,
+  status      TEXT NOT NULL,
+  error_code  TEXT,
+  detail      TEXT,
+  minutes     INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (workspace, line, key)
+);
+CREATE INDEX IF NOT EXISTS dash_phone_sends_day ON dash_phone_sends (workspace, line, day, kind);
+CREATE INDEX IF NOT EXISTS dash_phone_sends_provider ON dash_phone_sends (workspace, line, provider_id);
+
 CREATE TABLE IF NOT EXISTS dash_comms_settings (
   workspace TEXT PRIMARY KEY,
   record    JSONB NOT NULL

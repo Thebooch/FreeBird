@@ -299,6 +299,9 @@ importers:
       '@freebirdai/mcp':
         specifier: workspace:*
         version: link:../../../guide/packages/mcp
+      '@freebirdai/phone':
+        specifier: workspace:*
+        version: link:../../packages/phone
       '@freebirdai/server':
         specifier: workspace:*
         version: link:../../../guide/packages/server

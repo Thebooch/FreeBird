@@ -145,6 +145,12 @@ import { workflowRoutes } from "./routes/workflows.js";
 import { evalRoutes } from "./routes/evals.js";
 import { inboundRoutes } from "./routes/inbound.js";
 import { outsideMcpRoutes } from "./routes/outside-mcp.js";
+import { phoneHookRoutes } from "./routes/phone-hooks.js";
+import { phoneLineRoutes } from "./routes/phone.js";
+import { FakeCarrier, type CallPlacer, type PhoneProviders } from "@freebirdai/phone";
+import { PhoneLines } from "./phone/lines.js";
+import { PhoneOutreach, routedOutreach } from "./phone/outreach.js";
+import { MemoryPhoneUsageStore, type PhoneUsageStore } from "./phone/usage.js";
 import { outsideRegistry } from "./outside/registry.js";
 import { InboundService } from "./inbound/service.js";
 import { MemoryInboundStore, type InboundStore } from "./inbound/store.js";
@@ -486,6 +492,15 @@ export interface BuildServerOptions {
   readonly outreach?: OutreachSender;
   /** Where this server is reached from outside, for webhook addresses a Wait step hands out. */
   readonly publicOrigin?: string;
+  /**
+   * The phone providers lines may be on (`@freebirdai/phone`), by id. None by
+   * default; `DASH_PHONE_FAKE=on` adds the fake carrier, to try a line locally.
+   */
+  readonly phoneProviders?: PhoneProviders;
+  /** Each line's sends by key and its day's use against its ceilings (`phone/usage.ts`). Memory unless supplied. */
+  readonly phoneUsage?: PhoneUsageStore;
+  /** Places outbound calls: the voice worker. Absent: calls are not placed, and tasks say so. */
+  readonly phoneCalls?: CallPlacer;
   /** Hashes of the links people open without signing in: booking pages and approval links (`public/tokens.ts`). Memory unless supplied. */
   readonly tokens?: PublicTokenStore;
   /** Tells the team about bookings: approval requests, reminders, decisions, changes. Comms supplies it; absent, nothing is sent and every request still waits in Waiting for you. */
@@ -1070,6 +1085,40 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   let reportsForWorkflows: ReportService | undefined;
   /* Set once Communications exists, below; Reply to the email reaches it only when it runs. */
   let commsForWorkflows: CommsService | undefined;
+  /*
+   * Phone lines (`phone/`): connections with `phone`, their keys in the vault,
+   * texts and calls through the line's adapter after the line's own checks
+   * and daily ceilings, which Dash counts, never the adapter.
+   */
+  const fakeCarrier = process.env.DASH_PHONE_FAKE === "on" ? new FakeCarrier() : null;
+  const phoneProviders: PhoneProviders = { ...(fakeCarrier ? { fake: fakeCarrier.open } : {}), ...options.phoneProviders };
+  const phoneUsage = options.phoneUsage ?? new MemoryPhoneUsageStore();
+  const phoneLines = new PhoneLines({
+    connections: {
+      list: () => store.listConnections(),
+      get: (id) => store.getConnection(id),
+      put: (spec) => store.putConnection(spec),
+      remove: async (id) => {
+        queries.invalidate(id);
+        store.deleteConnection(id);
+      },
+    },
+    keys,
+    providers: phoneProviders,
+    usage: phoneUsage,
+    policy,
+    agents: agentStore,
+    now: () => Date.now(),
+  });
+  const phoneOutreach = new PhoneOutreach({
+    lines: () => phoneLines.all(),
+    providers: phoneProviders,
+    keysFor: (line) => phoneLines.keysFor(line),
+    usage: phoneUsage,
+    agents: agentStore,
+    ...(options.phoneCalls ? { calls: options.phoneCalls } : fakeCarrier ? { calls: fakeCarrier.placer } : {}),
+    now: () => Date.now(),
+  });
   const commsNeeded = (): CommsService => {
     if (!commsForWorkflows) throw new Error("Email isn't set up on this server.");
     return commsForWorkflows;
@@ -1103,9 +1152,9 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
      * out from the agent's mailbox through Comms (its own, or a team one it
      * may send from), and texts and calls wait for step 9.
      */
-    outreach: options.outreach ?? {
-      send: async (message) => {
-        if (message.channel !== "email") return { status: "not_sent", detail: "Texts and calls are not connected yet, so nothing was sent." };
+    outreach:
+      options.outreach ??
+      routedOutreach(phoneOutreach, async (message) => {
         if (!commsForWorkflows) return { status: "not_sent", detail: "Email isn't set up on this server." };
         if (!message.actor) return { status: "not_sent", detail: "The workflow runs as nobody, so it cannot send email: turn it on again." };
         try {
@@ -1115,8 +1164,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           if (error instanceof CommsError) return { status: "not_sent", detail: error.message };
           throw error;
         }
-      },
-    },
+      }),
     /* A webhook goes through the same guard as every other request to an address someone typed. */
     post: async (url, body, how) => {
       const headers: Record<string, string> = { "content-type": "application/json", ...(how?.key ? { "idempotency-key": how.key } : {}) };
@@ -1470,6 +1518,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   void app.register(
     commsRoutes({
       comms,
+      lines: (principal) => phoneLines.lines(principal),
       contactAddresses: async (id) => (await contacts.get(id))?.emails ?? null,
       /* Fields set to fill from email, read from the newest 100 of each mailbox: for a field just added. */
       backfillFields: async (principal) => {
@@ -1598,6 +1647,23 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       now: () => Date.now(),
     }),
   );
+  /* A phone provider's webhooks for a line: its signature checked by the line's adapter before anything is parsed. */
+  void app.register(
+    phoneHookRoutes({
+      workspace: options.workspace?.id ?? LOCAL_WORKSPACE_ID,
+      limiter: options.rateLimiter ?? new MemoryRateLimiter(),
+      ...(options.publicOrigin ? { publicOrigin: options.publicOrigin } : {}),
+      webhook: {
+        line: (id) => phoneLines.get(id),
+        providers: phoneProviders,
+        keysFor: (line) => phoneLines.keysFor(line),
+        /* Received and checked; into Comms, contacts, the inbound screen and workflows with Phase 1 of Dash Phone. */
+        onText: async (line, text) => app.log.info({ line: line.id, providerId: text.providerId }, "phone: a text arrived"),
+        onStatus: async (line, update) => void (await phoneOutreach.delivered(line.id, update)),
+      },
+    }),
+  );
+  void app.register(phoneLineRoutes({ lines: phoneLines }));
   /*
    * Outside agents over MCP (`outside/`, `routes/outside-mcp.ts`): what a
    * stranger may do on the public booking page, and writing to the team,

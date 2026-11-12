@@ -24,6 +24,7 @@ import { isWorkspaceId } from "./workspaces.js";
 import { DbAgentStore } from "../agents/store.js";
 import { DbEvalRunStore } from "../evals/store.js";
 import { DbInboundStore } from "../inbound/store.js";
+import { DbPhoneUsageStore } from "../phone/usage.js";
 import { DbCalendarStore, DbCaseStore, DbSignalStore, DbTaskStore, DbTemplateStore, DbWorkflowStore } from "../workflows/store.js";
 import { DbBookingStore } from "../bookings/store.js";
 import { DbPublicTokenStore } from "../public/tokens.js";
@@ -171,6 +172,7 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     tokens: new DbPublicTokenStore(db, workspace),
     reports: new DbReportStore(db, workspace),
     comms: new DbCommsStore(db, vault, workspace),
+    phoneUsage: new DbPhoneUsageStore(db, workspace),
   });
 
   /**

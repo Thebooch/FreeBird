@@ -64,6 +64,8 @@ export const PUBLIC_ROUTES = [
   "POST /api/public/:workspace/mcp",
   "GET /api/public/:workspace/mcp",
   "DELETE /api/public/:workspace/mcp",
+  /* A phone provider's webhooks for one line: the provider's signature, checked before anything is parsed, is the authority (`routes/phone-hooks.ts`). */
+  "POST /api/public/:workspace/phone/:line/:event",
 ] as const;
 
 const DAY_MS = 86_400_000;

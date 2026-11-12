@@ -34,7 +34,7 @@ export const GUARDED_ROUTES: readonly GuardRule[] = [
   /* Timed reports and the values they track: making, changing, previewing and sending them. */
   { methods: WRITE, path: /^\/api\/(reports|tracked)(\/|$)/, permission: "boards.edit" },
   /* Communications: a mailbox, its app and its owner are connection work; drafts and sending are asked per mailbox by the service. */
-  { methods: WRITE, path: /^\/api\/comms\/(mailboxes|apps|settings)(\/|$)/, permission: "connections.manage" },
+  { methods: WRITE, path: /^\/api\/comms\/(mailboxes|lines|apps|settings)(\/|$)/, permission: "connections.manage" },
   { methods: WRITE, path: /^\/api\/comms(\/|$)/, permission: "records.read" },
   /* Connections and what they are made from. The query routes read, and are not here. */
   { methods: WRITE, path: /^\/api\/connections(\/|$)/, permission: "connections.manage" },
