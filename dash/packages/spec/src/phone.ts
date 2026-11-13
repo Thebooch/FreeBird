@@ -86,7 +86,13 @@ export type OwnedNumber = z.infer<typeof ownedNumberSchema>;
 export const sipTargetSchema = z.object({ uri: z.string().min(1).max(500), username: z.string().max(200).optional() });
 export type SipTarget = z.infer<typeof sipTargetSchema>;
 
-export const trunkInfoSchema = z.object({ id: z.string().min(1).max(200), sipUri: z.string().max(500), numbers: z.array(e164Schema).max(100) });
+export const trunkInfoSchema = z.object({
+  id: z.string().min(1).max(200),
+  sipUri: z.string().max(500),
+  numbers: z.array(e164Schema).max(100),
+  /** Where the media layer sends outbound calls through the carrier, and the credential it signs in with. The password goes to the vault, never a spec. */
+  termination: z.object({ address: z.string().max(300), username: z.string().max(100), password: z.string().max(200) }).optional(),
+});
 export type TrunkInfo = z.infer<typeof trunkInfoSchema>;
 
 /* ── registration (A2P 10DLC) ──────────────────────────────────────────── */

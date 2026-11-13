@@ -1,6 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { e164Schema, type AccountInfo, type AvailableNumber, type DeliveryUpdate, type InboundText, type OwnedNumber, type PhoneDeliveryStatus } from "@freebirdai/dash-spec";
 import { twilioRegistration } from "./registration.js";
+import { twilioVoice } from "./voice.js";
 import { PhoneKeysError, PhoneParseError, RepeatSendError, type OpenPhoneProvider, type PhoneKeys, type PhoneProvider, type RawRequest } from "@freebirdai/phone";
 
 /**
@@ -19,7 +20,7 @@ import { PhoneKeysError, PhoneParseError, RepeatSendError, type OpenPhoneProvide
  *   form field's name and value in name order, base64, keyed with the Auth
  *   Token. A JSON body is signed over the address alone and carries its own
  *   SHA-256 in `bodySHA256`.
- * - Registration (A2P 10DLC) is in `registration.ts`. Voice (SIP trunks) is a later phase.
+ * - Registration (A2P 10DLC) is in `registration.ts`; calls (Elastic SIP Trunking) in `voice.ts`.
  */
 
 export const TWILIO_PROVIDER_ID = "twilio";
@@ -33,6 +34,8 @@ export interface TwilioOptions {
   readonly now?: () => number;
   /** The API's origin. Default https://api.twilio.com. */
   readonly api?: string;
+  /** Elastic SIP Trunking, for calls. Default: Twilio's own. */
+  readonly trunking?: string;
   /** Trust Hub and Messaging, for registration. Defaults: Twilio's own. */
   readonly trustHub?: string;
   readonly messaging?: string;
@@ -181,6 +184,7 @@ export const createTwilioProvider = (options: TwilioOptions = {}): OpenPhoneProv
           await call("DELETE", `${base()}/IncomingPhoneNumbers/${await numberSid(number)}.json`);
         },
       },
+      voice: twilioVoice({ call, accountBase: base, numberSid, ...(options.trunking ? { trunking: options.trunking } : {}) }),
       registration: twilioRegistration({ call, accountBase: base, numberSid, descriptions, ...(options.trustHub ? { trustHub: options.trustHub } : {}), ...(options.messaging ? { messaging: options.messaging } : {}) }),
       text: {
         send: async (m) => {
