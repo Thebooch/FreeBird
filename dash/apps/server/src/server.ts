@@ -33,7 +33,7 @@ import type {
   TimeRange,
   WidgetBrief,
 } from "@freebirdai/dash-spec";
-import { fieldValueOf, type Contact, type MailDraft, type MailMessage, type ScreenRecord, type WorkflowSpec as MailWorkflow } from "@freebirdai/dash-spec";
+import { fieldValueOf, mailMessageSchema, type Contact, type MailDraft, type MailMessage, type ScreenRecord, type WorkflowSpec as MailWorkflow } from "@freebirdai/dash-spec";
 import {
   readField,
   authTokenRefs,
@@ -149,8 +149,12 @@ import { phoneHookRoutes } from "./routes/phone-hooks.js";
 import { phoneLineRoutes } from "./routes/phone.js";
 import { FakeCarrier, type CallPlacer, type PhoneProviders } from "@freebirdai/phone";
 import { PhoneLines } from "./phone/lines.js";
-import { PhoneOutreach, routedOutreach } from "./phone/outreach.js";
+import { PhoneOutreach, routedOutreach, type PhoneLine } from "./phone/outreach.js";
 import { MemoryPhoneUsageStore, type PhoneUsageStore } from "./phone/usage.js";
+import { MemoryPhoneTextStore, type PhoneTextStore } from "./phone/texts.js";
+import { PhoneInbox } from "./phone/inbox.js";
+import { PhoneSetup } from "./phone/setup.js";
+import { createTwilioProvider } from "@freebirdai/adapters-phone-twilio";
 import { outsideRegistry } from "./outside/registry.js";
 import { InboundService } from "./inbound/service.js";
 import { MemoryInboundStore, type InboundStore } from "./inbound/store.js";
@@ -493,12 +497,18 @@ export interface BuildServerOptions {
   /** Where this server is reached from outside, for webhook addresses a Wait step hands out. */
   readonly publicOrigin?: string;
   /**
-   * The phone providers lines may be on (`@freebirdai/phone`), by id. None by
-   * default; `DASH_PHONE_FAKE=on` adds the fake carrier, to try a line locally.
+   * The phone providers lines may be on (`@freebirdai/phone`), by id. Twilio
+   * by default (it does nothing until someone pastes its keys);
+   * `DASH_PHONE_FAKE=on` adds the fake carrier, to try a line locally. Given
+   * here, these are added to Twilio and win over it by id.
    */
   readonly phoneProviders?: PhoneProviders;
   /** Each line's sends by key and its day's use against its ceilings (`phone/usage.ts`). Memory unless supplied. */
   readonly phoneUsage?: PhoneUsageStore;
+  /** What Communications keeps of each line's texts, sealed, and who started each conversation (`phone/texts.ts`). Memory unless supplied. */
+  readonly phoneTexts?: PhoneTextStore;
+  /** Asks this server something through its public address, for Settings → Phone's address check. Default: `fetch`. */
+  readonly phoneProbe?: (url: string) => Promise<{ readonly status: number; readonly text: string }>;
   /** Places outbound calls: the voice worker. Absent: calls are not placed, and tasks say so. */
   readonly phoneCalls?: CallPlacer;
   /** Hashes of the links people open without signing in: booking pages and approval links (`public/tokens.ts`). Memory unless supplied. */
@@ -1092,8 +1102,18 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    */
   /* A pretend account with one number in it, to try a line locally: nothing leaves this server. */
   const fakeCarrier = process.env.DASH_PHONE_FAKE === "on" ? new FakeCarrier({ numbers: [process.env.DASH_PHONE_FAKE_NUMBER ?? "+15550100100"] }) : null;
-  const phoneProviders: PhoneProviders = { ...(fakeCarrier ? { fake: fakeCarrier.open } : {}), ...options.phoneProviders };
+  const workspaceId = options.workspace?.id ?? LOCAL_WORKSPACE_ID;
+  /** A line's webhook address, as providers call it. */
+  const lineHook = (line: string, event: "text" | "status"): string | undefined =>
+    options.publicOrigin ? `${options.publicOrigin.replace(/\/+$/, "")}/api/public/${workspaceId}/phone/${line}/${event}` : undefined;
+  const phoneProviders: PhoneProviders = {
+    /* Twilio's sent texts report their status to the line that sent them. */
+    twilio: createTwilioProvider({ statusCallback: (from) => { const line = phoneLines.all().find((one) => one.phone.number === from); return line ? lineHook(line.id, "status") : undefined; } }),
+    ...(fakeCarrier ? { fake: fakeCarrier.open } : {}),
+    ...options.phoneProviders,
+  };
   const phoneUsage = options.phoneUsage ?? new MemoryPhoneUsageStore();
+  const phoneTexts = options.phoneTexts ?? new MemoryPhoneTextStore();
   const phoneLines = new PhoneLines({
     connections: {
       list: () => store.listConnections(),
@@ -1118,6 +1138,11 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     usage: phoneUsage,
     agents: agentStore,
     ...(options.phoneCalls ? { calls: options.phoneCalls } : fakeCarrier ? { calls: fakeCarrier.placer } : {}),
+    /* Consent on the contact with this number: STOP on any line withdraws it for every line. */
+    consent: async (number) => (await contacts.byPhone(number))?.textConsent ?? null,
+    texts: phoneTexts,
+    /* A provider's delivery updates fill the task the text was sent for. */
+    tasks: { get: (id) => workflowEnv.tasks.get(id), put: (task) => workflowEnv.tasks.put(task) },
     now: () => Date.now(),
   });
   const commsNeeded = (): CommsService => {
@@ -1506,8 +1531,93 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     now: () => Date.now(),
     newId: () => randomUUID(),
     members: async () => [...(await workspaceMembers()).map((one) => ({ email: one.email })), ...store.listConnections().flatMap((one) => (one.mailbox?.address ? [{ email: one.mailbox.address }] : []))],
-    message: async (mailbox, id) => (await commsStore.recent(mailbox)).find((one) => one.id === id) ?? null,
-    proceed: async (message, screen) => proceedArrival(message, screen.contact ? ((await contacts.get(screen.contact)) ?? undefined) : undefined, screen),
+    message: async (mailbox, id) => (await commsStore.recent(mailbox)).find((one) => one.id === id) ?? (await textAsMessage(mailbox, id)),
+    proceed: async (message, screen) => {
+      const contact = screen.contact ? ((await contacts.get(screen.contact)) ?? undefined) : undefined;
+      if (screen.channel === "text") {
+        const line = phoneLines.get(message.mailbox);
+        const text = await phoneTexts.get(message.mailbox, message.id);
+        if (line && text) {
+          await phoneTexts.update(line.id, text.id, { held: false });
+          await textArrival(line, text, contact, screen);
+        }
+        return;
+      }
+      await proceedArrival(message, contact, screen);
+    },
+  });
+  /** A kept text, in the shape the inbound screen reads. */
+  async function textAsMessage(line: string, id: string): Promise<MailMessage | null> {
+    const text = await phoneTexts.get(line, id).catch(() => null);
+    if (!text || text.direction !== "in") return null;
+    return mailMessageSchema.parse({ id: text.id, threadId: `${line}:${text.number}`, mailbox: line, from: { address: text.number }, subject: "", snippet: text.body.slice(0, 1000), at: text.at });
+  }
+  /**
+   * A text that is conversation, after the screen let it through: its
+   * contact, then the workflows listening for texts on that line. Nobody who
+   * texts is trusted, so a case it starts carries the inbound mark.
+   */
+  async function textArrival(line: PhoneLine, text: { readonly id: string; readonly number: string; readonly body: string; readonly at: string }, contact: Contact | undefined, screen: ScreenRecord): Promise<void> {
+    const listening = (await workflowStore.list()).filter(
+      (one): one is MailWorkflow & { trigger: Extract<MailWorkflow["trigger"], { kind: "message_received" }> } =>
+        one.trigger.kind === "message_received" && one.enabled && !one.parked && one.trigger.channels.includes("text"),
+    );
+    const row: Record<string, unknown> = {
+      mailbox: line.id,
+      line: line.id,
+      id: text.id,
+      threadId: `${line.id}:${text.number}`,
+      from: { address: text.number, name: contact?.name ?? "" },
+      to: line.phone.number ?? "",
+      subject: "",
+      snippet: text.body.slice(0, 1000),
+      text: text.body,
+      at: text.at,
+      channel: "text",
+      ...(contact ? { contact: await contactRowOf(contact) } : {}),
+      inbound: { screen: screen.id, requester: screen.requester.key, trust: screen.requester.trust, signals: screen.signals.map((one) => one.kind) },
+    };
+    for (const workflow of listening) {
+      if (workflow.trigger.mailboxes.length > 0 && !workflow.trigger.mailboxes.includes(line.id)) continue;
+      const id = `mr-${createHash("sha1").update(`${workflow.id}:${line.id}:${text.id}`).digest("hex").slice(0, 16)}`;
+      try {
+        await workflowEngine.create(workflow, { id, row, rowKey: `${line.id}:${text.id}`, start: { kind: "message", message: `${line.id}:${text.id}` } });
+        await workflowEngine.advance(id);
+      } catch (error) {
+        if (!(error instanceof CaseBusy) && !(error instanceof RevisionConflict)) app.log.warn(`"${workflow.name}" did not start for a new text: ${String(error)}`);
+      }
+    }
+  }
+  /*
+   * Texts that arrive (`phone/inbox.ts`): kept once, STOP / HELP / START
+   * answered by Dash itself, everything else found a contact by its number,
+   * screened like an email, and on to the workflows listening for texts.
+   */
+  const phoneInbox = new PhoneInbox({
+    texts: phoneTexts,
+    outreach: phoneOutreach,
+    consent: {
+      withdraw: async (number) => {
+        await contacts.findOrCreate({ phone: number, origin: "text" });
+        await contacts.withdrawTextConsent(number);
+      },
+      restore: (number) => contacts.restoreTextConsent(number),
+    },
+    brand: async () => (await brand()).name,
+    arrived: async (line, text) => {
+      const contact = await contacts.findOrCreate({ phone: text.from, origin: "text" });
+      const message = mailMessageSchema.parse({ id: text.providerId, threadId: `${line.id}:${text.from}`, mailbox: line.id, from: { address: text.from, ...(contact.name ? { name: contact.name } : {}) }, subject: "", snippet: text.body.slice(0, 1000), at: text.at, hasAttachments: text.media.length > 0 });
+      let screen: ScreenRecord;
+      try {
+        screen = await inbound.screen(message, text.body, { contact: contact.id, knownContact: contact.links.length > 0, channel: "text" });
+      } catch (error) {
+        app.log.warn(`a new text was not screened, so nothing went on from it: ${String(error)}`);
+        return { contact: contact.id };
+      }
+      if (screen.status === "held") return { contact: contact.id, screen: screen.id, held: true };
+      await textArrival(line, { id: text.providerId, number: text.from, body: text.body, at: text.at }, contact, screen);
+      return { contact: contact.id, screen: screen.id };
+    },
   });
   void app.register(inboundRoutes({ inbound, policy }));
   commsForWorkflows = comms;
@@ -1645,6 +1755,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       brand,
       limiter: options.rateLimiter ?? new MemoryRateLimiter(),
       requesters: inbound,
+      /* The booking page's text box: the one place besides an opt-in form that gives consent to texts. */
+      textConsent: async (contact, phone, wording) => void (await contacts.giveTextConsent(contact, { source: "booking_page", wording, phone })),
       now: () => Date.now(),
     }),
   );
@@ -1658,13 +1770,22 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
         line: (id) => phoneLines.get(id),
         providers: phoneProviders,
         keysFor: (line) => phoneLines.keysFor(line),
-        /* Received and checked; into Comms, contacts, the inbound screen and workflows with Phase 1 of Dash Phone. */
-        onText: async (line, text) => app.log.info({ line: line.id, providerId: text.providerId }, "phone: a text arrived"),
+        onText: async (line, text) => void (await phoneInbox.receive(line, text)),
         onStatus: async (line, update) => void (await phoneOutreach.delivered(line.id, update)),
       },
+      answerCheck: (nonce) => phoneSetup.answer(nonce),
     }),
   );
-  void app.register(phoneLineRoutes({ lines: phoneLines }));
+  const phoneSetup = new PhoneSetup({
+    providers: phoneProviders,
+    keys,
+    lines: phoneLines,
+    workspace: workspaceId,
+    ...(options.publicOrigin ? { publicOrigin: options.publicOrigin } : {}),
+    ...(options.phoneProbe ? { probe: options.phoneProbe } : {}),
+    now: () => Date.now(),
+  });
+  void app.register(phoneLineRoutes({ lines: phoneLines, setup: phoneSetup, texts: phoneTexts, canRead: async (principal, line) => (await policy.can(principal, "records.read", { connection: line })).ok }));
   /*
    * Outside agents over MCP (`outside/`, `routes/outside-mcp.ts`): what a
    * stranger may do on the public booking page, and writing to the team,

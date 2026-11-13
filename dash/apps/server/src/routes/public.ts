@@ -1,4 +1,6 @@
 import {
+  bookingTextConsentWording,
+  normalizePhone,
   ACTIVE_BOOKING_STATUSES,
   BOOKING_STATUS_WORDS,
   LOCATION_WORDS,
@@ -66,6 +68,8 @@ export const PUBLIC_ROUTES = [
   "DELETE /api/public/:workspace/mcp",
   /* A phone provider's webhooks for one line: the provider's signature, checked before anything is parsed, is the authority (`routes/phone-hooks.ts`). */
   "POST /api/public/:workspace/phone/:line/:event",
+  /* Settings → Phone's public address check: answers only a one-time word this server is asking about right now. */
+  "GET /api/public/:workspace/phone-check/:nonce",
 ] as const;
 
 const DAY_MS = 86_400_000;
@@ -93,6 +97,12 @@ export interface PublicRouteDeps {
    * person. Absent: only the rate limits above apply.
    */
   readonly requesters?: Pick<InboundService, "gate">;
+  /**
+   * Records a booking page's own text checkbox as consent to texts, with the
+   * exact words shown (`bookingTextConsentWording`). Absent: the box is not
+   * offered.
+   */
+  readonly textConsent?: (contact: string, phone: string, wording: string) => Promise<void>;
 }
 
 const DAY = 86_400_000;
@@ -551,6 +561,8 @@ export const publicRoutes = (deps: PublicRouteDeps) =>
           type: await publicType(type),
           /* Until Comms can check an email, a type that needs a checked contact can't open publicly. */
           open: !type.requireVerifiedContact,
+          /* The words beside the text box, exactly as they will be kept. */
+          ...(deps.textConsent ? { textConsentWording: bookingTextConsentWording(brand.name) } : {}),
           ...(personal ? { personal } : {}),
         };
       } catch (error) {
@@ -573,6 +585,15 @@ export const publicRoutes = (deps: PublicRouteDeps) =>
         if (!email) throw new PublicError("Say your email address.");
         await allowed(email, "start");
         const contact = await contacts.findOrCreate({ name, email, ...(phone ? { phone } : {}), origin: "public_link", unverified: true });
+        /*
+         * Their own tick in the text box, unchecked until they tick it: kept with
+         * the words beside it, for the number they typed, only when that number
+         * is this contact's (a public form never adds to a contact it found).
+         */
+        if (phone && body["textConsent"] === true && deps.textConsent) {
+          const typed = normalizePhone(phone);
+          if (typed && contact.phones.includes(typed)) await deps.textConsent(contact.id, typed, bookingTextConsentWording((await deps.brand()).name));
+        }
         const minted = await links.contactLink(contact.id, { type: type.id, fromPublic: true });
         const secure = request.protocol === "https" || request.headers["x-forwarded-proto"] === "https";
         reply.header(

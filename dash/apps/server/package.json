@@ -37,6 +37,7 @@
     "@freebirdai/expr": "workspace:*",
     "@freebirdai/mcp": "workspace:*",
     "@freebirdai/phone": "workspace:*",
+    "@freebirdai/adapters-phone-twilio": "workspace:*",
     "@freebirdai/server": "workspace:*",
     "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
     "@modelcontextprotocol/sdk": "^1.12.1",

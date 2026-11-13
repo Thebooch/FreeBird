@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { agentOf, node, owner, workflowOf } from "../workflows/testing.js";
+import { checkRule } from "./checks.js";
+import { PHONE_PACK } from "./packs/phone.js";
 import { Sandbox } from "./sandbox.js";
+import type { Check, Task } from "@freebirdai/dash-spec";
+
+type RuleCheck = Extract<Check, { kind: "rule" }>;
 
 /*
  * Gate A of Dash Phone: a sandbox text goes out and comes back through the
@@ -31,14 +36,14 @@ const answer = workflowOf({
   nodes: [node("reply", "outreach.text", { agentId: "desk", to: "{{ from.address }}", purpose: "Thank them", content: "fixed", wording: "Thanks, you're confirmed." })],
 });
 
-const start = (options: { failures?: { to: string; errorCode?: string }[]; workflows?: unknown[] } = {}) =>
+const start = (options: { failures?: { to: string; errorCode?: string }[]; workflows?: unknown[]; consent?: { number: string; status: "given" | "withdrawn" }[] } = {}) =>
   Sandbox.start({
     world: {
       provider: "empty",
       workspace: {
         agents: [desk],
         workflows: (options.workflows ?? [remind, answer]) as never,
-        phone: { lines: [{ id: "desk-line", number: LINE, owner: { kind: "agent", id: "desk" } }], failures: options.failures ?? [] },
+        phone: { lines: [{ id: "desk-line", number: LINE, owner: { kind: "agent", id: "desk" } }], failures: options.failures ?? [], consent: options.consent ?? [{ number: CUSTOMER, status: "given" }] },
       },
     },
   });
@@ -69,11 +74,12 @@ describe("Gate A: a sandbox text out and back through the fake carrier", () => {
     expect(task.delivery).toMatchObject({ status: "failed", detail: expect.stringContaining("30006") });
   });
 
-  it("carries a STOP reply in, as a text like any other, and a text needs phone lines", async () => {
+  it("answers a STOP itself, starts nothing from it, and needs phone lines for a text", async () => {
     const sandbox = await start({ workflows: [answer] });
     await sandbox.step({ id: "t1", kind: "message", payload: { channel: "text", from: CUSTOMER, stop: true } });
-    const [task] = await sandbox.tasks();
-    expect(task).toBeDefined();
+    expect(await sandbox.tasks()).toEqual([]);
+    expect(sandbox.intents.phone!.texts).toEqual([expect.objectContaining({ to: CUSTOMER, body: expect.stringContaining("unsubscribed") })]);
+    expect(sandbox.intents.phone!.consent[CUSTOMER]).toBe("withdrawn");
     const plain = await Sandbox.start({ world: { provider: "empty" } });
     await expect(plain.step({ id: "t1", kind: "message", payload: { channel: "text", from: CUSTOMER, text: "hi" } })).rejects.toThrow(/phone lines/);
   });
@@ -87,5 +93,17 @@ describe("Gate A: a sandbox text out and back through the fake carrier", () => {
     expect(sandbox.intents.phone!.texts).toHaveLength(0);
     await sandbox.step({ id: "t1", kind: "start", payload: { workflow: "remind" } });
     expect(sandbox.intents.phone!.texts).toHaveLength(1);
+  });
+
+  it("has rule checks that catch a text without consent, and one after STOP", () => {
+    const rule = (scenario: string, id: string) => PHONE_PACK.find((one) => one.id === scenario)!.checks.find((one) => one.id === id) as RuleCheck;
+    const text = (delivery: Record<string, unknown>) => ({ id: "t", base: "outreach", status: "done", body: { kind: "conversation", channel: "text", to: CUSTOMER }, delivery }) as unknown as Task;
+    const basis = rule("no-consent-no-text", "every-text-has-a-basis");
+    expect(checkRule(basis, [text({ status: "sent" })], 0).result).toBe("fail");
+    expect(checkRule(basis, [text({ status: "sent", basis: "texted_first" })], 0).result).toBe("pass");
+    expect(checkRule(basis, [text({ status: "not_sent" })], 0).result).toBe("pass");
+    const stop = rule("stop-every-line", "stop-honoured");
+    expect(checkRule(stop, [text({ status: "delivered", basis: "on_record" })], 0).result).toBe("fail");
+    expect(checkRule(rule("stop-every-line", "stop-said"), [text({ status: "not_sent", detail: "Something else." })], 0).result).toBe("fail");
   });
 });

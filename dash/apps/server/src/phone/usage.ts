@@ -30,6 +30,8 @@ export interface PhoneSendRecord {
   readonly detail?: string | undefined;
   /** A call's minutes, once it ended. */
   readonly minutes: number;
+  /** The workflow task it was sent for: delivery updates fill its `delivery`. */
+  readonly task?: string | undefined;
 }
 
 export type PhoneClaim =
@@ -101,6 +103,7 @@ interface Row {
   error_code: string | null;
   detail: string | null;
   minutes: number;
+  task: string | null;
 }
 
 const recordOf = (row: Row): PhoneSendRecord => ({
@@ -115,6 +118,7 @@ const recordOf = (row: Row): PhoneSendRecord => ({
   ...(row.error_code ? { errorCode: row.error_code } : {}),
   ...(row.detail ? { detail: row.detail } : {}),
   minutes: Number(row.minutes),
+  ...(row.task ? { task: row.task } : {}),
 });
 
 export class DbPhoneUsageStore implements PhoneUsageStore {
@@ -126,8 +130,8 @@ export class DbPhoneUsageStore implements PhoneUsageStore {
   async claim(record: Omit<PhoneSendRecord, "status" | "minutes">, ceiling: number): Promise<PhoneClaim> {
     const measure = record.kind === "text" ? sql`count(*)` : sql`coalesce(sum(minutes), 0)`;
     const inserted = await sql<{ key: string }>`
-      INSERT INTO dash_phone_sends (workspace, line, key, kind, day, recipient, at, status, minutes)
-      SELECT ${this.workspace}, ${record.line}, ${record.key}, ${record.kind}, ${record.day}, ${record.to}, ${record.at}, 'not_sent', 0
+      INSERT INTO dash_phone_sends (workspace, line, key, kind, day, recipient, at, status, minutes, task)
+      SELECT ${this.workspace}, ${record.line}, ${record.key}, ${record.kind}, ${record.day}, ${record.to}, ${record.at}, 'not_sent', 0, ${record.task ?? null}
       WHERE (SELECT ${measure} FROM dash_phone_sends WHERE workspace = ${this.workspace} AND line = ${record.line} AND day = ${record.day} AND kind = ${record.kind}) < ${ceiling}
       ON CONFLICT (workspace, line, key) DO NOTHING
       RETURNING key

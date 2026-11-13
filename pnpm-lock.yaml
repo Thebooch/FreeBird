@@ -260,6 +260,9 @@ importers:
       '@freebirdai/adapters-email-smtp':
         specifier: workspace:*
         version: link:../../../guide/packages/adapters-email-smtp
+      '@freebirdai/adapters-phone-twilio':
+        specifier: workspace:*
+        version: link:../../packages/adapters-phone-twilio
       '@freebirdai/connect':
         specifier: workspace:*
         version: link:../../../connect/packages/connect

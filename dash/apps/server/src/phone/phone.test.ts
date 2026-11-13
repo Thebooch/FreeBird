@@ -14,6 +14,7 @@ import { buildServer } from "../server.js";
 import { SpecStore } from "../store.js";
 import { agentOf } from "../workflows/testing.js";
 import { NO_LINES, PhoneOutreach, routedOutreach, type PhoneLine } from "./outreach.js";
+import { MemoryPhoneTextStore } from "./texts.js";
 import { DbPhoneUsageStore, MemoryPhoneUsageStore, utcDay, type PhoneUsageStore } from "./usage.js";
 import { receivePhoneWebhook, type PhoneWebhookDeps } from "./webhook.js";
 
@@ -35,12 +36,15 @@ const lineOf = (id: string, number: string, phone: Partial<PhoneLineSpec> = {}):
   },
 });
 
-const world = (options: { lines?: PhoneLine[]; agents?: AgentSpec[]; calls?: boolean; usage?: PhoneUsageStore } = {}) => {
+const world = (options: { lines?: PhoneLine[]; agents?: AgentSpec[]; calls?: boolean; usage?: PhoneUsageStore; consent?: Record<string, "given" | "withdrawn"> } = {}) => {
   const clock = { now: T0 };
   const carrier = new FakeCarrier({ now: () => clock.now });
   const lines = options.lines ?? [lineOf("desk", "+15550100100", { owner: { kind: "agent", id: "maint" } })];
   const agents = new Map((options.agents ?? [agentOf()]).map((one) => [one.id, one]));
   const usage = options.usage ?? new MemoryPhoneUsageStore();
+  /* The customer agreed on a booking page, unless a test says otherwise. */
+  const consent = new Map<string, "given" | "withdrawn">(Object.entries(options.consent ?? { [CUSTOMER]: "given" }));
+  const texts = new MemoryPhoneTextStore();
   const phone = new PhoneOutreach({
     lines: () => lines,
     providers: { fake: carrier.open },
@@ -48,6 +52,8 @@ const world = (options: { lines?: PhoneLine[]; agents?: AgentSpec[]; calls?: boo
     usage,
     agents: { get: async (id) => agents.get(id) ?? null },
     ...(options.calls === false ? {} : { calls: carrier.placer }),
+    consent: async (number) => (consent.has(number) ? { status: consent.get(number)! } : null),
+    texts,
     now: () => clock.now,
   });
   const emailed: string[] = [];
@@ -55,7 +61,7 @@ const world = (options: { lines?: PhoneLine[]; agents?: AgentSpec[]; calls?: boo
     emailed.push(m.to);
     return { status: "sent", conversation: "mail-1" };
   });
-  return { clock, carrier, lines, phone, sender, usage, emailed };
+  return { clock, carrier, lines, phone, sender, usage, emailed, consent, texts };
 };
 
 const text = (key: string, to = CUSTOMER, agent = "maint") => ({ channel: "text" as const, to, text: "Your plumber is on the way.", agent: { id: agent, name: "Maintenance agent" }, key });
@@ -123,7 +129,7 @@ describe("OutreachSender routes texts and calls to the line", () => {
       const provider = broken.carrier.open(keys);
       return { ...provider, text: { ...provider.text!, send: async () => (tries++, Promise.reject(new Error("timed out"))) } };
     };
-    const phone = new PhoneOutreach({ lines: () => broken.lines, providers: { fake: throwing }, keysFor: () => ({ secret: FAKE_SECRET }), usage: broken.usage, agents: { get: async () => agentOf() }, now: () => T0 });
+    const phone = new PhoneOutreach({ lines: () => broken.lines, providers: { fake: throwing }, keysFor: () => ({ secret: FAKE_SECRET }), usage: broken.usage, agents: { get: async () => agentOf() }, consent: async () => ({ status: "given" }), texts: broken.texts, now: () => T0 });
     expect((await phone.send(text("x"))).status).toBe("failed");
     expect((await phone.send(text("x"))).detail).toMatch(/not sent again/);
     expect(tries).toBe(1);

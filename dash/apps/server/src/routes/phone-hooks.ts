@@ -21,6 +21,8 @@ export interface PhoneHookDeps {
   /** The address providers call, as they sign it. Absent: the request's own. */
   readonly publicOrigin?: string;
   readonly webhook: PhoneWebhookDeps;
+  /** The public address check's own question, answered only while this server is asking it (`PhoneSetup.answer`). */
+  readonly answerCheck?: (nonce: string) => boolean;
 }
 
 /** Carriers send in bursts: generous per address, but bounded. */
@@ -36,6 +38,12 @@ export const phoneHookRoutes = (deps: PhoneHookDeps) =>
       if (!deps.limiter.take(`phone:${request.ip}`, PER_MINUTE)) return reply.status(429).header("Retry-After", "60").send({ error: "Too many requests. Wait a minute, then try again." });
       if ((request.params as { workspace?: string } | undefined)?.workspace !== deps.workspace) return reply.status(404).send({ error: "Not found." });
       return undefined;
+    });
+
+    /* Settings → Phone asks itself through its public address and hears its own one-time word back. GET, so it changes nothing. */
+    app.get<{ Params: { workspace: string; nonce: string } }>("/api/public/:workspace/phone-check/:nonce", { config: { public: true } }, async (request, reply) => {
+      if (!/^[A-Za-z0-9_-]{16,64}$/.test(request.params.nonce) || !deps.answerCheck?.(request.params.nonce)) return reply.status(404).send({ error: "Not found." });
+      return { nonce: request.params.nonce };
     });
 
     app.post<{ Params: { workspace: string; line: string; event: string } }>("/api/public/:workspace/phone/:line/:event", { config: { public: true } }, async (request, reply) => {

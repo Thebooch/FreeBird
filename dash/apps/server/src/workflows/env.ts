@@ -44,7 +44,15 @@ export interface OutreachSender {
     readonly actor?: Principal | null;
     /** At most once: the same key is never sent twice. */
     readonly key: string;
-  }): Promise<{ readonly status: "queued" | "sent" | "delivered" | "failed" | "not_sent"; readonly detail?: string; readonly conversation?: string }>;
+    /** The task it is sent for: a provider's later delivery updates fill that task's `delivery`. */
+    readonly task?: string;
+  }): Promise<{
+    readonly status: "queued" | "sent" | "delivered" | "failed" | "not_sent";
+    readonly detail?: string;
+    readonly conversation?: string;
+    /** For a text that went: why it was allowed. */
+    readonly basis?: "on_record" | "texted_first" | "keyword_reply";
+  }>;
 }
 
 export const notConnectedSender: OutreachSender = {

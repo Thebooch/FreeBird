@@ -25,6 +25,7 @@ import { DbAgentStore } from "../agents/store.js";
 import { DbEvalRunStore } from "../evals/store.js";
 import { DbInboundStore } from "../inbound/store.js";
 import { DbPhoneUsageStore } from "../phone/usage.js";
+import { DbPhoneTextStore } from "../phone/texts.js";
 import { DbCalendarStore, DbCaseStore, DbSignalStore, DbTaskStore, DbTemplateStore, DbWorkflowStore } from "../workflows/store.js";
 import { DbBookingStore } from "../bookings/store.js";
 import { DbPublicTokenStore } from "../public/tokens.js";
@@ -173,6 +174,7 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     reports: new DbReportStore(db, workspace),
     comms: new DbCommsStore(db, vault, workspace),
     phoneUsage: new DbPhoneUsageStore(db, workspace),
+    phoneTexts: new DbPhoneTextStore(db, vault, workspace),
   });
 
   /**
@@ -384,6 +386,8 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     /* How public pages and messages look, and where people open them. */
     brand: async () => ({ ...(process.env.DASH_BRAND_NAME ? { name: process.env.DASH_BRAND_NAME } : {}), ...(process.env.DASH_BRAND_ACCENT ? { accent: process.env.DASH_BRAND_ACCENT } : {}) }),
     ...(process.env.DASH_PAGES_ORIGIN ? { pagesOrigin: process.env.DASH_PAGES_ORIGIN } : {}),
+    /* Where providers reach this server from outside: phone webhooks, a Wait step's hook. A tunnel's https address or the server's own domain. */
+    ...(process.env.DASH_PUBLIC_ORIGIN ? { publicOrigin: process.env.DASH_PUBLIC_ORIGIN } : {}),
     // The keeper: see `keeper/keeper.ts`. On here, off in tests.
     keeper: true,
     email: mailer.email,

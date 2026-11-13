@@ -122,7 +122,7 @@ export class Sandbox {
     const model = options.llm ?? (options.model ? scriptedModel(options.model, modelAt) : undefined);
     /* Phone lines on the fake carrier: texts and calls go out through the same code as the server's. Bound to the fake below. */
     let bound: Fake | undefined;
-    const phone = world.workspace.phone ? new SandboxPhone(world.workspace.phone, { now: () => bound?.clock.now ?? SANDBOX_T0, agents: { get: async (id) => bound?.agents.get(id) ?? null } }) : null;
+    const phone = world.workspace.phone ? new SandboxPhone(world.workspace.phone, { now: () => bound?.clock.now ?? SANDBOX_T0, agents: { get: async (id) => bound?.agents.get(id) ?? null }, tasks: () => bound!.env.tasks }) : null;
     const f = fake({
       sender: true,
       now: SANDBOX_T0,
@@ -167,7 +167,7 @@ export class Sandbox {
       committed: [...this.f.committed],
       posts: [...this.f.posts],
       held: [...this.held],
-      ...(this.phone ? { phone: { texts: [...this.phone.carrier.sent], calls: [...this.phone.carrier.calls] } } : {}),
+      ...(this.phone ? { phone: { texts: [...this.phone.carrier.sent], calls: [...this.phone.carrier.calls], consent: Object.fromEntries(this.phone.consent) } } : {}),
     };
   }
 
@@ -272,32 +272,46 @@ export class Sandbox {
    * trusted, so its values carry the inbound mark.
    */
   private async textArrives(turn: Turn): Promise<void> {
-    if (!this.phone) throw new Error('A text turn needs phone lines: give the world "workspace.phone".');
+    const phone = this.phone;
+    if (!phone) throw new Error('A text turn needs phone lines: give the world "workspace.phone".');
     const payload = turn.payload;
     const from = normalizePhone(payload["from"]);
     if (!from) throw new Error(`A text turn comes from a phone number: "${String(payload["from"])}" is not one.`);
-    const { line, text } = await this.phone.receive(typeof payload["line"] === "string" ? payload["line"] : undefined, from, String(payload["text"] ?? ""), { stop: payload["stop"] === true });
-    const row: Record<string, unknown> = {
-      mailbox: line.id,
-      line: line.id,
-      id: text.providerId,
-      threadId: `${line.id}:${from}`,
-      from: { address: from, name: typeof payload["name"] === "string" ? payload["name"] : "" },
-      to: text.to,
-      subject: "",
-      snippet: text.body.slice(0, 1000),
-      text: text.body,
-      channel: "text",
-      ...(payload["contact"] ? { contact: payload["contact"] } : {}),
-      inbound: { requester: `phone:${from}`, trust: "unknown", signals: [] },
+    const name = typeof payload["name"] === "string" ? payload["name"] : "";
+    /* Conversation (not STOP, HELP or START): screened like an email, then as `message_received` workflows listening for texts see it. */
+    phone.arrived = async (line, text) => {
+      const screen = await this.inbound.screen(
+        mailMessageSchema.parse({ id: text.providerId, threadId: `${line.id}:${from}`, mailbox: line.id, from: { address: from, name }, subject: "", snippet: text.body.slice(0, 1000), at: text.at }),
+        text.body,
+        { knownContact: payload["known"] === true, channel: "text" },
+      );
+      if (screen.status === "held") {
+        this.held.push({ turn: turn.id, from, signals: screen.signals.map((one) => one.detail) });
+        return;
+      }
+      const row: Record<string, unknown> = {
+        mailbox: line.id,
+        line: line.id,
+        id: text.providerId,
+        threadId: `${line.id}:${from}`,
+        from: { address: from, name },
+        to: text.to,
+        subject: "",
+        snippet: text.body.slice(0, 1000),
+        text: text.body,
+        channel: "text",
+        ...(payload["contact"] ? { contact: payload["contact"] } : {}),
+        inbound: { screen: screen.id, requester: screen.requester.key, trust: screen.requester.trust, signals: screen.signals.map((one) => one.kind) },
+      };
+      for (const workflow of await this.listening("message_received")) {
+        if (workflow.trigger.kind !== "message_received" || !workflow.trigger.channels.includes("text")) continue;
+        if (workflow.trigger.mailboxes.length > 0 && !workflow.trigger.mailboxes.includes(line.id)) continue;
+        const id = `mr-${shortHash(`${workflow.id}:${line.id}:${text.providerId}`)}`;
+        await this.f.engine.create(workflow, { id, row, rowKey: `${line.id}:${text.providerId}`, start: { kind: "message", message: `${line.id}:${text.providerId}` } });
+        await this.f.engine.advance(id);
+      }
     };
-    for (const workflow of await this.listening("message_received")) {
-      if (workflow.trigger.kind !== "message_received" || !workflow.trigger.channels.includes("text")) continue;
-      if (workflow.trigger.mailboxes.length > 0 && !workflow.trigger.mailboxes.includes(line.id)) continue;
-      const id = `mr-${shortHash(`${workflow.id}:${line.id}:${text.providerId}`)}`;
-      await this.f.engine.create(workflow, { id, row, rowKey: `${line.id}:${text.providerId}`, start: { kind: "message", message: `${line.id}:${text.providerId}` } });
-      await this.f.engine.advance(id);
-    }
+    await phone.receive(typeof payload["line"] === "string" ? payload["line"] : undefined, from, String(payload["text"] ?? ""), { stop: payload["stop"] === true });
   }
 
   /** Runner passes until nothing more happens: due triggers, time-outs, signals, watched records, and the carrier's delivery updates. */
@@ -305,7 +319,7 @@ export class Sandbox {
     let before = await this.fingerprint();
     for (let pass = 0; pass < MAX_PASSES; pass++) {
       await this.runner.tick();
-      await this.phone?.deliver(this.f.env.tasks);
+      await this.phone?.deliver();
       const after = await this.fingerprint();
       if (after === before) break;
       before = after;
