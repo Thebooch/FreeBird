@@ -80,3 +80,10 @@ export const useScreenChanged = (screens: readonly DashScreen[], onChange: () =>
     return () => window.removeEventListener(SCREEN_CHANGED, heard);
   }, [key, onChange]);
 };
+
+/** Asks the shell to open the chat column: "Need further explanation? Ask the chat". */
+export const OPEN_CHAT = "dash:open-chat";
+
+export const openChat = (): void => {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(OPEN_CHAT));
+};

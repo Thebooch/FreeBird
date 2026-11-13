@@ -7,6 +7,7 @@ import { areaGroups, filterShown, loadSelection, saveSelection, ticked, toggle, 
 import { ThreadView } from "./ThreadView.jsx";
 import { CommsSettingsSheet } from "./CommsSettingsSheet.jsx";
 import { AddPhoneLineSheet, LineChips, PhoneLineSheet } from "./PhoneSheet.jsx";
+import { RegistrationWizard } from "./RegistrationWizard.jsx";
 import { HeldEmails } from "../agent/workflows/HeldEmails.jsx";
 
 /**
@@ -54,6 +55,7 @@ export const CommsShell = (): JSX.Element => {
   const [settingUp, setSettingUp] = useState(false);
   const [addingLine, setAddingLine] = useState(false);
   const [lineOpen, setLineOpen] = useState<PhoneLineView | null>(null);
+  const [registering, setRegistering] = useState<PhoneLineView | null>(null);
   const asked = useRef(0);
 
   const loadMailboxes = useCallback(async () => {
@@ -345,7 +347,19 @@ export const CommsShell = (): JSX.Element => {
       )}
       {settingUp && <CommsSettingsSheet onClose={() => setSettingUp(false)} />}
       {addingLine && <AddPhoneLineSheet agents={agents} onClose={() => setAddingLine(false)} onAdded={() => void loadMailboxes()} />}
-      {lineOpen && <PhoneLineSheet line={lineOpen} agents={agents} onClose={() => setLineOpen(null)} onChanged={() => void loadMailboxes()} />}
+      {lineOpen && (
+        <PhoneLineSheet
+          line={lineOpen}
+          agents={agents}
+          onClose={() => setLineOpen(null)}
+          onChanged={() => void loadMailboxes()}
+          onRegister={() => {
+            setRegistering(lineOpen);
+            setLineOpen(null);
+          }}
+        />
+      )}
+      {registering && <RegistrationWizard line={registering} onClose={() => setRegistering(null)} onChanged={() => void loadMailboxes()} />}
       {managing && <MailboxSheet mailbox={managing} agents={agents} onClose={() => setManaging(null)} onChanged={() => void loadMailboxes()} />}
     </div>
   );

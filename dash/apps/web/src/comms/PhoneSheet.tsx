@@ -300,7 +300,20 @@ export const AddPhoneLineSheet = ({ agents, onClose, onAdded }: { readonly agent
 };
 
 /** One line: its conversations (read here), and whose it is. */
-export const PhoneLineSheet = ({ line, agents, onClose, onChanged }: { readonly line: PhoneLineView; readonly agents: readonly AgentSpec[]; readonly onClose: () => void; readonly onChanged: () => void }): JSX.Element => {
+export const PhoneLineSheet = ({
+  line,
+  agents,
+  onClose,
+  onChanged,
+  onRegister,
+}: {
+  readonly line: PhoneLineView;
+  readonly agents: readonly AgentSpec[];
+  readonly onClose: () => void;
+  readonly onChanged: () => void;
+  /** Opens the text registration wizard for this line. */
+  readonly onRegister?: () => void;
+}): JSX.Element => {
   const [owner, setOwner] = useState(ownerKey(line.owner));
   const [threads, setThreads] = useState<Awaited<ReturnType<typeof api.phoneThreads>>["threads"] | null>(null);
   const [open, setOpen] = useState<string | null>(null);
@@ -330,7 +343,16 @@ export const PhoneLineSheet = ({ line, agents, onClose, onChanged }: { readonly 
         onClose();
       }}
     >
-      <SheetSection title="Status">
+      <SheetSection
+        title="Status"
+        actions={
+          onRegister ? (
+            <Button size="sm" tone={line.text === "needs_registration" ? "primary" : undefined} onClick={onRegister} testId="phone-register">
+              {line.text === "needs_registration" ? "Start registration" : "Text registration"}
+            </Button>
+          ) : undefined
+        }
+      >
         <LineChips line={line} />
         <p className="dash-hint">
           Today: {line.today.texts} of {line.today.textsPerDay} texts, {line.today.callMinutes} of {line.today.callMinutesPerDay} call minutes.

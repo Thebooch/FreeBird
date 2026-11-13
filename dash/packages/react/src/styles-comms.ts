@@ -139,4 +139,23 @@ export const DASH_COMMS_STYLES = `
 .dash-workflow-field__picks { display: inline-flex; gap: var(--dash-space-2); margin-top: var(--dash-space-1); flex-wrap: wrap; }
 .dash-comms-row[data-set-aside="true"] { opacity: 0.6; }
 .dash-comms-thread__marks { margin-left: auto; display: inline-flex; gap: var(--dash-space-1); }
+
+/* == text registration wizard ============================================ */
+.dash-reg-steps { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: var(--dash-space-3); }
+.dash-reg-step { font: inherit; font-size: var(--dash-text-sm); border: 1px solid var(--dash-border); background: var(--dash-surface); color: var(--dash-ink-secondary); border-radius: var(--dash-radius-pill); padding: 3px 10px; cursor: pointer; }
+.dash-reg-step[data-active="true"] { border-color: var(--dash-accent); color: var(--dash-ink); box-shadow: 0 0 0 1px var(--dash-accent); }
+.dash-reg-uses { display: flex; flex-direction: column; gap: 4px; }
+.dash-reg-suggested { color: var(--dash-accent); font-size: var(--dash-text-xs); }
+.dash-reg-vetting { color: var(--dash-muted); font-size: var(--dash-text-xs); }
+.dash-reg-drafted { display: flex; flex-direction: column; gap: var(--dash-space-2); align-items: flex-start; padding: var(--dash-space-3); border: 1px dashed var(--dash-border); border-radius: var(--dash-radius); margin: var(--dash-space-2) 0; }
+.dash-reg-drafted ol { margin: 0; padding-left: 20px; font-size: var(--dash-text-sm); }
+.dash-reg-problems { margin: 0 0 var(--dash-space-3); padding-left: 20px; font-size: var(--dash-text-sm); display: flex; flex-direction: column; gap: 4px; }
+.dash-reg-ok { color: var(--dash-ink-secondary); font-size: var(--dash-text-sm); }
+.dash-reg-timeline { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: var(--dash-space-2); font-size: var(--dash-text-sm); }
+.dash-reg-reason { margin-top: 2px; color: var(--dash-ink-secondary); }
+.dash-reg-foot { display: flex; justify-content: space-between; align-items: center; margin-top: var(--dash-space-3); }
+.dash-reg-ask { margin-top: var(--dash-space-3); font-size: var(--dash-text-sm); color: var(--dash-muted); }
+/* "Ask the chat" from a sheet: the sheet leaves the chat column uncovered. */
+:root[data-sheet-beside-chat] .dash-sheet-backdrop { right: min(380px, 45vw); }
+.dash-link { font: inherit; border: 0; background: transparent; color: var(--dash-accent); cursor: pointer; padding: 0; text-decoration: underline; }
 `;
