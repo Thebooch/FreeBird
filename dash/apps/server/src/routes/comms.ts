@@ -1,5 +1,5 @@
 import { WriteError } from "@freebirdai/connect/host";
-import { COMMS_STATUSES, commsSettingsSchema, mailboxOwnerSchema, parseAreaKey, type Principal } from "@freebirdai/dash-spec";
+import { COMMS_STATUSES, commsSettingsSchema, mailboxOwnerSchema, parseAreaKey, type PhoneLineView, type Principal } from "@freebirdai/dash-spec";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { CommsError, type CommsService } from "../comms/service.js";
@@ -32,6 +32,8 @@ export const commsRoutes = (deps: {
   readonly backfillFields?: (principal: Principal) => Promise<{ readonly read: number; readonly filled: number }>;
   /** The contact with this email, for the card beside a conversation. */
   readonly contactCard?: (email: string) => Promise<ContactCard | null>;
+  /** The phone lines this person may read, listed beside the mailboxes (`phone/lines.ts`). */
+  readonly lines?: (principal: Principal) => Promise<readonly PhoneLineView[]>;
 }) =>
   async (app: FastifyInstance): Promise<void> => {
     const { comms } = deps;
@@ -55,7 +57,7 @@ export const commsRoutes = (deps: {
 
     app.get(
       "/api/comms/mailboxes",
-      handled(async (principal) => ({ mailboxes: await comms.mailboxes(principal), apps: comms.apps() })),
+      handled(async (principal) => ({ mailboxes: await comms.mailboxes(principal), lines: (await deps.lines?.(principal)) ?? [], apps: comms.apps() })),
     );
 
     app.post(

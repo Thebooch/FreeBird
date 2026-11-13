@@ -104,8 +104,8 @@ describe("the calendar's and contacts' screens, as the chat's components", () =>
   it("registers every screen with its place in the app, and says what each action takes", async () => {
     const { build } = await world();
     const screens = await build();
-    /* Agents and workflows are pages too, registered by the chat's registry with their ops. */
-    const others: readonly string[] = [SCREENS.agents.id, SCREENS.workflows.id, SCREENS.board.id];
+    /* Agents and workflows are pages too, registered by the chat's registry with their ops; text registration only where phone lines are. */
+    const others: readonly string[] = [SCREENS.agents.id, SCREENS.workflows.id, SCREENS.board.id, SCREENS.textRegistration.id];
     const own = Object.values(SCREENS).filter((one) => !others.includes(one.id));
     expect(screens.map((one) => one.id)).toEqual(own.map((one) => one.id));
     for (const screen of screens) {

@@ -61,7 +61,7 @@ export class InboundService {
    * Screens one email and keeps the result. Returns it; `status` is `held`
    * when it must wait for a person, `passed` when it may go on.
    */
-  async screen(message: MailMessage, text: string, extra: { readonly contact?: string; readonly knownContact?: boolean } = {}): Promise<ScreenRecord> {
+  async screen(message: MailMessage, text: string, extra: { readonly contact?: string; readonly knownContact?: boolean; readonly channel?: "email" | "text" } = {}): Promise<ScreenRecord> {
     const address = message.from?.address ?? "";
     const at = new Date(this.deps.now()).toISOString();
     const keys = requesterKeys(address);
@@ -93,7 +93,7 @@ export class InboundService {
     const record: ScreenRecord = {
       id: `screen-${this.deps.newId()}`,
       at,
-      channel: "email",
+      channel: extra.channel ?? "email",
       mailbox: message.mailbox,
       message: message.id,
       from: address,

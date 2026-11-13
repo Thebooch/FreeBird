@@ -1,7 +1,7 @@
 import type { CommitResult, WriteIntent, WriteReview } from "@freebirdai/connect";
 import type { RecordReader, WriteOnBehalfOf, WriteVia } from "@freebirdai/connect/host";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
-import type { ActionModelTask, AgentSpec, Booking, BookingEvent, Contact, MailDraft, MailMessage, Principal, ReportSend, SharedAgentKnowledge } from "@freebirdai/dash-spec";
+import type { ActionModelTask, AgentSpec, Booking, BookingEvent, Contact, MailDraft, MailMessage, Principal, ReportSend, SharedAgentKnowledge, Task } from "@freebirdai/dash-spec";
 import type { BookingLinks } from "../bookings/links.js";
 import type { BookingService } from "../bookings/service.js";
 import type { Policy } from "../identity/policy.js";
@@ -44,7 +44,15 @@ export interface OutreachSender {
     readonly actor?: Principal | null;
     /** At most once: the same key is never sent twice. */
     readonly key: string;
-  }): Promise<{ readonly status: "queued" | "sent" | "delivered" | "failed" | "not_sent"; readonly detail?: string; readonly conversation?: string }>;
+    /** The task it is sent for: a provider's later delivery updates fill that task's `delivery`. */
+    readonly task?: string;
+  }): Promise<{
+    readonly status: "queued" | "sent" | "delivered" | "failed" | "not_sent";
+    readonly detail?: string;
+    readonly conversation?: string;
+    /** For a text that went: why it was allowed. */
+    readonly basis?: "on_record" | "texted_first" | "keyword_reply";
+  }>;
 }
 
 export const notConnectedSender: OutreachSender = {
@@ -66,6 +74,8 @@ export interface WorkflowEnv {
   readonly read: RecordReader;
   readonly writes: WorkflowWrites;
   readonly outreach?: OutreachSender;
+  /** What an agent promised on a call (`call.follow_up` tasks): approving one runs it and texts the caller (`phone/call-service.ts`). */
+  readonly callFollowUps?: { approve(principal: Principal, task: Task): Promise<Task> };
   /**
    * Posts a webhook: the SSRF guard applies. `key` is the step's operation id,
    * sent as `Idempotency-Key` so a receiver that honours it ignores a repeat.

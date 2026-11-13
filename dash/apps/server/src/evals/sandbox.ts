@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
 import type { z } from "zod";
 import type { LlmAdapter } from "@freebirdai/dash-agent";
-import { mailMessageSchema, worldRefSchema, type SandboxSession, type SandboxStatus, type ScriptedReply, type Task, type Turn, type WorkflowSpec, type WorldRef } from "@freebirdai/dash-spec";
+import { mailMessageSchema, normalizePhone, worldRefSchema, type SandboxSession, type SandboxStatus, type ScriptedReply, type Task, type Turn, type WorkflowSpec, type WorldRef } from "@freebirdai/dash-spec";
 import type { WorkflowEvent } from "../workflows/env.js";
 import { InboundService } from "../inbound/service.js";
 import { MemoryInboundStore } from "../inbound/store.js";
 import { WorkflowRunner } from "../workflows/runner.js";
 import { startWorkflow } from "../workflows/start.js";
 import { fake, owner, type Fake } from "../workflows/testing.js";
+import { SandboxPhone, type SandboxCarrierFactory } from "./phone-world.js";
 import { worldSeed } from "./worlds.js";
 
 /**
@@ -34,6 +35,8 @@ export interface SandboxOptions {
   readonly llm?: LlmAdapter;
   /** Everything that happens, as it happens. */
   readonly onEvent?: (event: SandboxEvent) => void;
+  /** The pretend account the world's phone lines are on. Default: the fake carrier. Another provider's simulator runs the same turns through that provider's adapter. */
+  readonly phoneCarrier?: SandboxCarrierFactory;
 }
 
 /** What a snapshot holds: every store's rows, the fake's own state, the clock and where the model is. */
@@ -106,6 +109,8 @@ export class Sandbox {
     private readonly inbound: InboundService,
     private readonly inboundStore: MemoryInboundStore,
     private readonly onEvent: SandboxOptions["onEvent"],
+    /** The world's phone lines on the fake carrier, when it has any. */
+    private readonly phone: SandboxPhone | null,
   ) {}
 
   /** Emails the screen held, in order. */
@@ -117,12 +122,17 @@ export class Sandbox {
     const seed = worldSeed(world.provider, world.seed);
     const modelAt = { at: 0 };
     const model = options.llm ?? (options.model ? scriptedModel(options.model, modelAt) : undefined);
+    /* Phone lines on the fake carrier: texts and calls go out through the same code as the server's. Bound to the fake below. */
+    let bound: Fake | undefined;
+    const phone = world.workspace.phone ? new SandboxPhone(world.workspace.phone, { now: () => bound?.clock.now ?? SANDBOX_T0, agents: { get: async (id) => bound?.agents.get(id) ?? null }, tasks: () => bound!.env.tasks, llm: () => model ?? null, newId: () => bound!.env.newId(), ...(options.phoneCarrier ? { carrier: options.phoneCarrier } : {}) }) : null;
     const f = fake({
       sender: true,
       now: SANDBOX_T0,
+      ...(phone ? { phone: (message) => phone.outreach.send(message) } : {}),
       ...(model ? { llm: model } : {}),
       ...(options.onEvent ? { onEvent: (data: WorkflowEvent) => options.onEvent!({ kind: "step", data }) } : {}),
     });
+    bound = f;
     /* Every task as it is written: the run's log is built from these. */
     const put = f.env.tasks.put.bind(f.env.tasks);
     f.env.tasks.put = async (task) => {
@@ -138,7 +148,7 @@ export class Sandbox {
     await inboundStore.putSettings(screening.settings);
     for (const rule of screening.rules) await inboundStore.putRule(rule);
     const inbound = new InboundService({ store: inboundStore, now: () => f.clock.now, newId: () => f.env.newId(), members: async () => screening.members.map((email) => ({ email })) });
-    const sandbox = new Sandbox(options.id ?? `sandbox-${f.env.newId()}`, world, f, runner, modelAt, inbound, inboundStore, options.onEvent);
+    const sandbox = new Sandbox(options.id ?? `sandbox-${f.env.newId()}`, world, f, runner, modelAt, inbound, inboundStore, options.onEvent, phone);
     await runner.tick();
     return sandbox;
   }
@@ -153,7 +163,14 @@ export class Sandbox {
 
   /** What the sandbox's outside steps would have done: messages sent and changes prepared and committed. Nothing left. */
   get intents() {
-    return { sent: [...this.f.sent], prepared: [...this.f.prepared], committed: [...this.f.committed], posts: [...this.f.posts], held: [...this.held] };
+    return {
+      sent: [...this.f.sent],
+      prepared: [...this.f.prepared],
+      committed: [...this.f.committed],
+      posts: [...this.f.posts],
+      held: [...this.held],
+      ...(this.phone ? { phone: { texts: [...this.phone.carrier.sent], calls: [...this.phone.carrier.calls], consent: Object.fromEntries(this.phone.consent) } } : {}),
+    };
   }
 
   /** Every task, oldest first. */
@@ -169,6 +186,14 @@ export class Sandbox {
     const payload = turn.payload;
     switch (turn.kind) {
       case "message": {
+        if (payload["channel"] === "text") {
+          await this.textArrives(turn);
+          break;
+        }
+        if (payload["channel"] === "call") {
+          await this.callArrives(turn);
+          break;
+        }
         const mailbox = typeof payload["mailbox"] === "string" ? payload["mailbox"] : "inbox";
         const from = typeof payload["from"] === "string" ? { address: payload["from"], name: typeof payload["name"] === "string" ? payload["name"] : "" } : payload["from"];
         /* Screened first, as the server screens every email (`inbound/`): a held one starts nothing. */
@@ -246,11 +271,98 @@ export class Sandbox {
     return this.runUntilWaiting();
   }
 
-  /** Runner passes until nothing more happens: due triggers, time-outs, signals, watched records. */
+  /**
+   * A text to one of the world's lines: the fake carrier's signed webhook,
+   * verified and parsed like a real one, then as `message_received`
+   * workflows listening for texts on that line see it. Nobody who texts is
+   * trusted, so its values carry the inbound mark.
+   */
+  private async textArrives(turn: Turn): Promise<void> {
+    const phone = this.phone;
+    if (!phone) throw new Error('A text turn needs phone lines: give the world "workspace.phone".');
+    const payload = turn.payload;
+    const from = normalizePhone(payload["from"]);
+    if (!from) throw new Error(`A text turn comes from a phone number: "${String(payload["from"])}" is not one.`);
+    const name = typeof payload["name"] === "string" ? payload["name"] : "";
+    /* Conversation (not STOP, HELP or START): screened like an email, then as `message_received` workflows listening for texts see it. */
+    phone.arrived = async (line, text) => {
+      const screen = await this.inbound.screen(
+        mailMessageSchema.parse({ id: text.providerId, threadId: `${line.id}:${from}`, mailbox: line.id, from: { address: from, name }, subject: "", snippet: text.body.slice(0, 1000), at: text.at }),
+        text.body,
+        { knownContact: payload["known"] === true, channel: "text" },
+      );
+      if (screen.status === "held") {
+        this.held.push({ turn: turn.id, from, signals: screen.signals.map((one) => one.detail) });
+        return;
+      }
+      const row: Record<string, unknown> = {
+        mailbox: line.id,
+        line: line.id,
+        id: text.providerId,
+        threadId: `${line.id}:${from}`,
+        from: { address: from, name },
+        to: text.to,
+        subject: "",
+        snippet: text.body.slice(0, 1000),
+        text: text.body,
+        channel: "text",
+        ...(payload["contact"] ? { contact: payload["contact"] } : {}),
+        inbound: { screen: screen.id, requester: screen.requester.key, trust: screen.requester.trust, signals: screen.signals.map((one) => one.kind) },
+      };
+      for (const workflow of await this.listening("message_received")) {
+        if (workflow.trigger.kind !== "message_received" || !workflow.trigger.channels.includes("text")) continue;
+        if (workflow.trigger.mailboxes.length > 0 && !workflow.trigger.mailboxes.includes(line.id)) continue;
+        const id = `mr-${shortHash(`${workflow.id}:${line.id}:${text.providerId}`)}`;
+        await this.f.engine.create(workflow, { id, row, rowKey: `${line.id}:${text.providerId}`, start: { kind: "message", message: `${line.id}:${text.providerId}` } });
+        await this.f.engine.advance(id);
+      }
+    };
+    await phone.receive(typeof payload["line"] === "string" ? payload["line"] : undefined, from, String(payload["text"] ?? ""), { stop: payload["stop"] === true });
+  }
+
+  /**
+   * A call to one of the world's lines, as words: `{ channel: "call", from,
+   * says: [...], line? }`. Calls in sandboxes are transcripts, not audio. A
+   * call that ends starts the `message_received` workflows listening for
+   * calls, with the transcript and the inbound mark.
+   */
+  private async callArrives(turn: Turn): Promise<void> {
+    const phone = this.phone;
+    if (!phone) throw new Error('A call turn needs phone lines: give the world "workspace.phone".');
+    const payload = turn.payload;
+    const from = normalizePhone(payload["from"]);
+    if (!from) throw new Error(`A call turn comes from a phone number: "${String(payload["from"])}" is not one.`);
+    const says = Array.isArray(payload["says"]) ? payload["says"].map(String) : [];
+    phone.callEnded = async (line, call) => {
+      const row: Record<string, unknown> = {
+        mailbox: line.id,
+        line: line.id,
+        id: call.id,
+        threadId: `${line.id}:${from}`,
+        from: { address: from, name: "" },
+        subject: call.summary ?? "",
+        snippet: (call.summary ?? "").slice(0, 1000),
+        text: call.transcript.map((one) => `${one.who}: ${one.text}`).join("\n"),
+        channel: "call",
+        inbound: { requester: `address:${from}`, trust: "unknown", signals: [] },
+      };
+      for (const workflow of await this.listening("message_received")) {
+        if (workflow.trigger.kind !== "message_received" || !workflow.trigger.channels.includes("call")) continue;
+        if (workflow.trigger.mailboxes.length > 0 && !workflow.trigger.mailboxes.includes(line.id)) continue;
+        const id = `mr-${shortHash(`${workflow.id}:${line.id}:${call.id}`)}`;
+        await this.f.engine.create(workflow, { id, row, rowKey: `${line.id}:${call.id}`, start: { kind: "message", message: `${line.id}:${call.id}` } });
+        await this.f.engine.advance(id);
+      }
+    };
+    await phone.call(typeof payload["line"] === "string" ? payload["line"] : undefined, from, says, turn.id);
+  }
+
+  /** Runner passes until nothing more happens: due triggers, time-outs, signals, watched records, and the carrier's delivery updates. */
   async runUntilWaiting(): Promise<SandboxSession> {
     let before = await this.fingerprint();
     for (let pass = 0; pass < MAX_PASSES; pass++) {
       await this.runner.tick();
+      await this.phone?.deliver();
       const after = await this.fingerprint();
       if (after === before) break;
       before = after;
@@ -291,7 +403,7 @@ export class Sandbox {
   /** Everything that keeps rows: the stores, the runner's own times, and the fake's records and intents. */
   private holders(): object[] {
     const { env } = this.f;
-    return [env.store, env.cases, env.tasks, env.calendar, env.templates, env.signals, this.runner, this.f, this.inboundStore, { held: this.held }];
+    return [env.store, env.cases, env.tasks, env.calendar, env.templates, env.signals, this.runner, this.f, this.inboundStore, { held: this.held }, ...(this.phone?.holders() ?? [])];
   }
 
   private async listening(kind: WorkflowSpec["trigger"]["kind"]): Promise<WorkflowSpec[]> {

@@ -371,6 +371,10 @@ export {
   contactMatchRuleSchema,
   contactTypes,
   contactSchema,
+  TEXT_CONSENT_GIVERS,
+  TEXT_CONSENT_SOURCES,
+  bookingTextConsentWording,
+  textConsentSchema,
   contactStatsSchema,
   fieldRefSchema,
   fieldValueFor,
@@ -398,6 +402,8 @@ export type {
   FieldRef,
   FieldSource,
   MatchOutcome,
+  TextConsent,
+  TextConsentSource,
 } from "./contact.js";
 
 export {
@@ -643,6 +649,7 @@ export {
   verdictSchema,
   verdictsByDimension,
   worldRefSchema,
+  worldPhoneSchema,
   worldWorkspaceSchema,
 } from "./eval.js";
 
@@ -666,6 +673,7 @@ export type {
   TurnKind,
   Verdict,
   VerdictResult,
+  WorldPhone,
   WorldRef,
   WorldWorkspace,
 } from "./eval.js";
@@ -684,3 +692,81 @@ export {
 } from "./inbound.js";
 
 export type { InboundSettings, RequesterLimits, RequesterRule, RequesterTrust, ScreenRecord, ScreenSignal, ScreenSignalKind, ScreenStatus } from "./inbound.js";
+
+export {
+  BUSINESS_TYPES,
+  CALL_SPEAKERS,
+  E164,
+  RECORDING_NOTICE,
+  callRecordSchema,
+  openingLine,
+  HELP_WORDS,
+  OPT_IN_METHODS,
+  START_WORDS,
+  STOP_WORDS,
+  TEXT_BASES,
+  keywordOf,
+  phoneTextSchema,
+  PHONE_DELIVERY_STATUSES,
+  PHONE_TEXT_STATUSES,
+  PHONE_TEXT_WORDS,
+  PHONE_VOICE_STATUSES,
+  PHONE_VOICE_WORDS,
+  REGISTRATION_STATES,
+  accountInfoSchema,
+  availableNumberSchema,
+  brandProfileSchema,
+  campaignDraftSchema,
+  campaignUseSchema,
+  credentialFieldSchema,
+  deliveryUpdateSchema,
+  e164Schema,
+  inboundTextSchema,
+  ownedNumberSchema,
+  registrationStatusSchema,
+  rejectionHelpSchema,
+  sipTargetSchema,
+  submissionRefSchema,
+  trunkInfoSchema,
+} from "./phone.js";
+
+export type {
+  AccountInfo,
+  AvailableNumber,
+  BrandProfile,
+  BusinessType,
+  CallRecord,
+  CampaignDraft,
+  CampaignUse,
+  CredentialField,
+  DeliveryUpdate,
+  InboundText,
+  OptInMethod,
+  OwnedNumber,
+  PhoneDeliveryStatus,
+  PhoneKeyword,
+  PhoneLineSpec,
+  PhoneLineView,
+  PhoneText,
+  PhoneThreadView,
+  TextBasis,
+  RegistrationState,
+  RegistrationStatus,
+  RejectionHelp,
+  SipTarget,
+  SubmissionRef,
+  TrunkInfo,
+} from "./phone.js";
+
+export {
+  REGISTRATION_STEPS,
+  REGISTRATION_STEP_WORDS,
+  TIMELINE_EVENTS,
+  TIMELINE_WORDS,
+  draftView,
+  maskedEin,
+  policyScanSchema,
+  registrationDraftSchema,
+} from "./registration.js";
+
+export type { PolicyScan, RegistrationDraft, RegistrationDraftView, RegistrationProblem, RegistrationStep, TimelineEvent } from "./registration.js";

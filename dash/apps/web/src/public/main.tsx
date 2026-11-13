@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { ApprovalPage } from "./ApprovalPage.jsx";
 import { BookingPage } from "./BookingPage.jsx";
 import { StartPage } from "./StartPage.jsx";
+import { TextsPage } from "./TextsPage.jsx";
 import { publicRouteOf } from "./route.js";
 import { PUBLIC_STYLES } from "./styles.js";
 import { Shell, Unavailable } from "./ui.jsx";
@@ -26,6 +27,8 @@ const page =
     <StartPage workspace={route.workspace} slug={route.slug} />
   ) : route.kind === "approve" ? (
     <ApprovalPage workspace={route.workspace} token={route.token} choice={route.choice} />
+  ) : route.kind === "texts" ? (
+    <TextsPage workspace={route.workspace} page={route.page} />
   ) : (
     <Shell brand={null} width="narrow">
       <Unavailable title="There's nothing here" message="Check the link you were sent, or ask whoever sent it for a new one." />

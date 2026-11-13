@@ -4,6 +4,14 @@ import type {
   CommsSettings,
   MailboxOwner,
   MailboxView,
+  PhoneLineView,
+  RegistrationDraftView,
+  RegistrationProblem,
+  CampaignUse,
+  PhoneText,
+  AvailableNumber,
+  OwnedNumber,
+  CredentialField,
   MailDraft,
   MailMessage,
   MailPage,
@@ -161,6 +169,32 @@ export class ApiError extends Error {
  * The server already phrases failures for a person to read, so pass its
  * message through rather than replacing it with something more generic.
  */
+/** A phone provider as Settings → Phone shows it: whether its keys are in, and what it asks for. */
+export interface PhoneAccount {
+  readonly id: string;
+  readonly title: string;
+  readonly connected: boolean;
+  readonly credentials: readonly CredentialField[];
+  /** What the provider offers: a SIP-only carrier has no texts and no registration, so setup skips those steps. */
+  readonly capabilities?: { readonly text: boolean; readonly voice: "sip" | "none"; readonly registration: "10dlc" | "none" };
+}
+
+/** A line the server's host provides, as its setup card shows it. Only when the host offers one. */
+export interface PhoneLineOffer {
+  readonly id: string;
+  readonly title: string;
+  readonly description: string;
+  readonly areaCode: boolean;
+}
+
+/** Whether providers can reach this server, and how to fix it when they cannot. */
+export interface PhoneAddressCheck {
+  readonly ok: boolean;
+  readonly origin?: string;
+  readonly problem?: string;
+  readonly fixes?: readonly { readonly title: string; readonly steps: readonly string[] }[];
+}
+
 const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
   let response: Response;
   try {
@@ -1624,7 +1658,7 @@ export const api = {
   /* ── communications ────────────────────────────────────────────────── */
 
   /** Every mailbox this person may read, and whether each provider's OAuth app has been given. */
-  commsMailboxes: (): Promise<{ mailboxes: MailboxView[]; apps: { gmail: boolean; outlook: boolean } }> => request("/api/comms/mailboxes"),
+  commsMailboxes: (): Promise<{ mailboxes: MailboxView[]; lines?: PhoneLineView[]; apps: { gmail: boolean; outlook: boolean } }> => request("/api/comms/mailboxes"),
   /** The workspace's own OAuth app for a provider, given once for every mailbox of it. */
   setCommsApp: (provider: "gmail" | "outlook", clientId: string, clientSecret: string): Promise<{ gmail: boolean; outlook: boolean }> =>
     request(`/api/comms/apps/${provider}`, json({ clientId, clientSecret })),
@@ -1636,6 +1670,37 @@ export const api = {
     request(`/api/comms/mailboxes/${encodeURIComponent(id)}/calendar`, { ...json({ calendar }), method: "PUT" }),
   syncCalendars: (): Promise<{ written: number }> => request("/api/comms/calendar/sync", json({})),
   removeMailbox: (id: string): Promise<{ removed: string }> => request(`/api/comms/mailboxes/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /* Phone lines (Dash Phone): Settings → Phone, and each line's conversations. */
+  phoneLines: (): Promise<{ lines: PhoneLineView[]; accounts: PhoneAccount[]; offers?: PhoneLineOffer[]; callsAddress?: string }> => request("/api/comms/lines"),
+  providePhoneLine: (input: { offer: string; areaCode?: string; owner: MailboxOwner; title?: string }): Promise<{ line: PhoneLineView }> => request("/api/comms/lines/provided", json(input)),
+  setPhoneLineSuspended: (id: string, suspended: boolean, reason?: string): Promise<PhoneLineView> =>
+    request(`/api/comms/lines/${encodeURIComponent(id)}/suspended`, { ...json({ suspended, ...(reason ? { reason } : {}) }), method: "PUT" }),
+  connectPhoneAccount: (provider: string, keys: Record<string, string>): Promise<{ name: string; trial: boolean }> => request(`/api/comms/lines/accounts/${encodeURIComponent(provider)}`, json({ keys })),
+  searchPhoneNumbers: (provider: string, areaCode: string): Promise<{ numbers: AvailableNumber[] }> =>
+    request(`/api/comms/lines/accounts/${encodeURIComponent(provider)}/numbers${areaCode ? `?areaCode=${encodeURIComponent(areaCode)}` : ""}`),
+  ownedPhoneNumbers: (provider: string): Promise<{ numbers: OwnedNumber[] }> => request(`/api/comms/lines/accounts/${encodeURIComponent(provider)}/owned`),
+  checkPhoneAddress: (): Promise<PhoneAddressCheck> => request("/api/comms/lines/address-check", { method: "POST" }),
+  setUpPhoneLine: (input: { provider: string; choice: "new" | "existing" | "forward"; number: string; owner: MailboxOwner; title?: string }): Promise<{ line: PhoneLineView; forwarding?: string[] }> =>
+    request("/api/comms/lines/setup", json(input)),
+  setPhoneLineOwner: (id: string, owner: MailboxOwner): Promise<PhoneLineView> => request(`/api/comms/lines/${encodeURIComponent(id)}/owner`, { ...json({ owner }), method: "PUT" }),
+  setPhoneLineCalls: (id: string, calls: { answer: "agent" | "forward" | "voicemail"; forwardTo?: string; recording: boolean; disclosure: string }): Promise<PhoneLineView> =>
+    request(`/api/comms/lines/${encodeURIComponent(id)}/calls`, { ...json(calls), method: "PUT" }),
+  connectPhoneCalls: (id: string): Promise<PhoneLineView> => request(`/api/comms/lines/${encodeURIComponent(id)}/calls/connect`, { method: "POST" }),
+  disconnectPhoneCalls: (id: string): Promise<PhoneLineView> => request(`/api/comms/lines/${encodeURIComponent(id)}/calls/disconnect`, { method: "POST" }),
+  removePhoneLine: (id: string): Promise<{ removed: string }> => request(`/api/comms/lines/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  phoneThreads: (id: string): Promise<{ threads: Array<{ number: string; startedBy: "them" | "us"; lastAt: string; last: PhoneText | null }> }> => request(`/api/comms/lines/${encodeURIComponent(id)}/threads`),
+  /* Text registration (Dash Phone): the wizard's draft, autosaved. */
+  registration: (line: string): Promise<RegistrationDraftView> => request(`/api/comms/lines/${encodeURIComponent(line)}/registration`),
+  saveRegistration: (line: string, patch: Record<string, unknown>): Promise<RegistrationDraftView> => request(`/api/comms/lines/${encodeURIComponent(line)}/registration`, { ...json(patch), method: "PUT" }),
+  setRegistrationEin: (line: string, ein: string): Promise<RegistrationDraftView> => request(`/api/comms/lines/${encodeURIComponent(line)}/registration/ein`, json({ ein })),
+  draftRegistrationUse: (line: string): Promise<RegistrationDraftView> => request(`/api/comms/lines/${encodeURIComponent(line)}/registration/draft`, { method: "POST" }),
+  useRegistrationDraft: (line: string, accept: boolean): Promise<RegistrationDraftView> => request(`/api/comms/lines/${encodeURIComponent(line)}/registration/draft/use`, json({ accept })),
+  registrationUses: (line: string): Promise<{ uses: Array<CampaignUse & { suggested?: string }> }> => request(`/api/comms/lines/${encodeURIComponent(line)}/registration/uses`),
+  checkRegistration: (line: string): Promise<{ problems: RegistrationProblem[] }> => request(`/api/comms/lines/${encodeURIComponent(line)}/registration/check`, { method: "POST" }),
+  submitRegistration: (line: string): Promise<RegistrationDraftView> => request(`/api/comms/lines/${encodeURIComponent(line)}/registration/submit`, { method: "POST" }),
+  refreshRegistration: (line: string): Promise<RegistrationDraftView> => request(`/api/comms/lines/${encodeURIComponent(line)}/registration/refresh`, { method: "POST" }),
+  explainRejection: (line: string, code: string): Promise<{ code: string; sentence: string; field?: string }> => request(`/api/comms/lines/${encodeURIComponent(line)}/registration/explain/${encodeURIComponent(code)}`),
+  phoneThread: (id: string, number: string): Promise<{ texts: PhoneText[] }> => request(`/api/comms/lines/${encodeURIComponent(id)}/threads/${encodeURIComponent(number)}`),
   refreshMailbox: (id: string): Promise<MailboxView | null> => request(`/api/comms/mailboxes/${encodeURIComponent(id)}/refresh`, json({})),
   /** One page of an area's mail, merged by time across the mailboxes named (all of them when none are). */
   commsList: (input: { area: string; mailboxes?: readonly string[]; cursor?: string; q?: string }): Promise<MailPage> => {

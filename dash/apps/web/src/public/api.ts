@@ -82,6 +82,8 @@ export interface TypePage {
   readonly workspace: Brand;
   readonly type: PublicType;
   readonly open: boolean;
+  /** The words beside the text box, exactly as they are kept as consent. Absent: no box. */
+  readonly textConsentWording?: string;
   /** This browser started already: its own page. */
   readonly personal?: string;
 }
@@ -161,7 +163,7 @@ export const typeApi = (workspace: string, slug: string) => {
   const root = `${base(workspace)}/types/${encodeURIComponent(slug)}`;
   return {
     page: () => call<TypePage>(root),
-    start: (input: { readonly name: string; readonly email: string; readonly phone?: string; readonly timezone?: string; readonly website: string }) => call<{ page: string }>(`${root}/start`, input),
+    start: (input: { readonly name: string; readonly email: string; readonly phone?: string; readonly timezone?: string; readonly website: string; readonly textConsent?: boolean }) => call<{ page: string }>(`${root}/start`, input),
   };
 };
 
@@ -172,5 +174,22 @@ export const approvalApi = (workspace: string, token: string) => {
     times: (from: string, to: string) => call<{ host: { name: string; self: boolean }; slots: Slot[] }>(`${root}/times`, { from, to }),
     answer: (input: { readonly answer: "approve" | "suggest" | "deny"; readonly times?: ReadonlyArray<{ readonly start: string }>; readonly message?: string; readonly reason?: string; readonly allowOutside?: boolean }) =>
       call<ApprovalState>(root, input),
+  };
+};
+
+/** The words of a workspace's text pages: the opt-in form's consent wording, its privacy section and its messaging terms. */
+export interface TextsPage {
+  readonly workspace: Brand;
+  readonly business: string;
+  readonly wording: string;
+  readonly privacy: ReadonlyArray<{ readonly heading: string; readonly text: string }>;
+  readonly terms: ReadonlyArray<{ readonly heading: string; readonly text: string }>;
+}
+
+export const textsApi = (workspace: string) => {
+  const root = `${base(workspace)}/texts`;
+  return {
+    page: () => call<TextsPage>(root),
+    optIn: (input: { readonly name: string; readonly phone: string; readonly consent: true; readonly website: string }) => call<{ signedUp: true }>(`${root}/opt-in`, input),
   };
 };

@@ -93,7 +93,7 @@ export const screenRecordSchema = z.object({
   id: z.string(),
   at: z.string(),
   /** An email that arrived, or a request on a booking page (its `mailbox` is "booking", its `message` the action). */
-  channel: z.enum(["email", "booking"]).default("email"),
+  channel: z.enum(["email", "booking", "text"]).default("email"),
   mailbox: z.string(),
   message: z.string(),
   /** The sender's address. The message itself stays in Communications, sealed; this names it. */

@@ -118,6 +118,11 @@ export class TaskService {
     if (task.status !== "waiting_approval") throw new TaskError(`This has already been ${task.status.replace("_", " ")}.`, 409, { task });
     if (approval.edits && Object.keys(approval.edits).length > 0) task = await this.edit(principal, task, approval.edits);
 
+    /* What an agent promised on a call: it runs now, and the caller is texted a confirmation. */
+    if (!task.case && task.action === "call.follow_up") {
+      if (!this.env.callFollowUps) throw new TaskError("Calls are not set up on this server.", 501);
+      return { task: await this.env.callFollowUps.approve(principal, task) };
+    }
     /* An agent's request to start a workflow. */
     if (!task.case) {
       const workflowId = String(task.pending?.["workflow"] ?? task.workflow ?? "");

@@ -3,6 +3,7 @@ import { evalRunSchema, scenarioSchema, type EvalRun, type RunEvent, type Scenar
 import { z } from "zod";
 import { checkAll, checkRules, type Judge } from "./checks.js";
 import { Sandbox } from "./sandbox.js";
+import type { SandboxCarrierFactory } from "./phone-world.js";
 
 /**
  * Plays a scenario in a sandbox and scores it.
@@ -17,6 +18,8 @@ import { Sandbox } from "./sandbox.js";
 export interface RunOptions {
   /** The run's id. Default made from the scenario and its version. */
   readonly id?: string;
+  /** The pretend phone account the world's lines are on (`SandboxOptions.phoneCarrier`). Default: the fake carrier. */
+  readonly phoneCarrier?: SandboxCarrierFactory;
   /** Scores judge checks. Absent (scripted mode, CI): they are `unsure`. */
   readonly judge?: Judge;
   /** Each event as it is appended: a stepped view reads these. */
@@ -71,6 +74,7 @@ export class ScenarioSession {
       world: scenario.world,
       ...(options.live ? { llm: options.live.system } : scenario.scriptedModel ? { model: scenario.scriptedModel } : {}),
       onEvent: (event) => session.append(event.kind, event.data),
+      ...(options.phoneCarrier ? { phoneCarrier: options.phoneCarrier } : {}),
     });
     session.startedAt = new Date(session.sandbox.now).toISOString();
     return session;

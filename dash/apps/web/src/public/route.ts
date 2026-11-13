@@ -3,13 +3,15 @@
  *
  * - `/p/<workspace>/book/<token>`: a person's own booking page;
  * - `/p/<workspace>/t/<slug>`: an appointment type's public link;
- * - `/p/<workspace>/approve/<token>?choice=approve|suggest|deny`: a member's approval page.
+ * - `/p/<workspace>/approve/<token>?choice=approve|suggest|deny`: a member's approval page;
+ * - `/p/<workspace>/texts` (and `/privacy`, `/terms`): the text opt-in form and its pages.
  */
 
 export type PublicRoute =
   | { readonly kind: "book"; readonly workspace: string; readonly token: string }
   | { readonly kind: "type"; readonly workspace: string; readonly slug: string }
   | { readonly kind: "approve"; readonly workspace: string; readonly token: string; readonly choice: "approve" | "suggest" | "deny" | null }
+  | { readonly kind: "texts"; readonly workspace: string; readonly page: "opt-in" | "privacy" | "terms" }
   | { readonly kind: "none" };
 
 const WORKSPACE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
@@ -25,6 +27,11 @@ export const publicRouteOf = (pathname: string, search = ""): PublicRoute => {
     }
   });
   const [p, workspace, kind, key] = parts;
+  if (p === "p" && workspace && WORKSPACE.test(workspace) && kind === "texts" && parts.length <= 4) {
+    if (key === undefined) return { kind: "texts", workspace, page: "opt-in" };
+    if (key === "privacy" || key === "terms") return { kind: "texts", workspace, page: key };
+    return { kind: "none" };
+  }
   if (p !== "p" || !workspace || !WORKSPACE.test(workspace) || !key || parts.length !== 4) return { kind: "none" };
   if (kind === "book" && TOKEN.test(key)) return { kind: "book", workspace, token: key };
   if (kind === "t" && SLUG.test(key)) return { kind: "type", workspace, slug: key };

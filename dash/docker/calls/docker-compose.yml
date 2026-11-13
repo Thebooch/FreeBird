@@ -1,0 +1,50 @@
+# LiveKit beside Dash, for Dash Phone's calls (self-hosted).
+#
+#   cp .env.example .env    # then fill it in
+#   docker compose up -d
+#
+# Three services: LiveKit's server (rooms and media), its SIP service (where
+# the carrier sends calls), and Redis, which the two share. Dash itself runs
+# as usual and talks to them through DASH_LIVEKIT_* (see README.md).
+#
+# Using a LiveKit Cloud project instead? Skip this file and set the same
+# DASH_LIVEKIT_* variables from the project's settings.
+#
+# The images follow LiveKit's own tags; set LIVEKIT_IMAGE and LIVEKIT_SIP_IMAGE
+# to pin the versions you tested.
+
+services:
+  redis:
+    image: ${REDIS_IMAGE:-redis:7-alpine}
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+
+  livekit:
+    image: ${LIVEKIT_IMAGE:-livekit/livekit-server:latest}
+    restart: unless-stopped
+    depends_on: [redis]
+    command: ["--config", "/etc/livekit.yaml"]
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "7880:7880"         # API and WebSocket (Dash's DASH_LIVEKIT_URL)
+      - "7881:7881"         # WebRTC over TCP
+      - "50000-50100:50000-50100/udp"  # WebRTC media
+
+  sip:
+    image: ${LIVEKIT_SIP_IMAGE:-livekit/sip:latest}
+    restart: unless-stopped
+    depends_on: [redis, livekit]
+    environment:
+      SIP_CONFIG_BODY: |
+        api_key: ${LIVEKIT_API_KEY}
+        api_secret: ${LIVEKIT_API_SECRET}
+        ws_url: ws://livekit:7880
+        redis:
+          address: redis:6379
+        sip_port: 5060
+        rtp_port: 10000-10100
+        use_external_ip: true
+    network_mode: host      # SIP and RTP need the host's own address: the carrier sends to it

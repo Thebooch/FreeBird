@@ -472,7 +472,7 @@ const inform: ActionExecutor = async (ctx) => {
   const sender = env.outreach ?? notConnectedSender;
   let sent: Awaited<ReturnType<typeof sender.send>>;
   try {
-    sent = await sender.send({ channel, to, ...(channel === "email" ? { subject: `Your ${booking.type.name}` } : {}), text: wording, agent: { id: agent.id, name: agent.name }, key, actor: ctx.actor });
+    sent = await sender.send({ channel, to, ...(channel === "email" ? { subject: `Your ${booking.type.name}` } : {}), text: wording, agent: { id: agent.id, name: agent.name }, key, actor: ctx.actor, task: ctx.task.id });
   } catch (error) {
     return { kind: "failed", error: `Could not hand the message over to be sent: ${error instanceof Error ? error.message : String(error)}`, retryable: true };
   }
@@ -485,7 +485,7 @@ const inform: ActionExecutor = async (ctx) => {
       agent: agent.id,
       body: { kind: "conversation", channel, to, agent: agent.id, sent: wording, conversation },
       links: { conversation },
-      delivery: { status: sent.status, ...(sent.detail ? { detail: sent.detail } : {}), key },
+      delivery: { status: sent.status, ...(sent.detail ? { detail: sent.detail } : {}), key, ...(sent.basis ? { basis: sent.basis } : {}) },
       reversal: { available: false, reason: "A message cannot be unsent. Send a correction instead." },
       model: { task: "outreach", ...(modelUsed ? { model: modelUsed } : {}) },
     },

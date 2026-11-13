@@ -133,6 +133,8 @@ export const PUBLIC_STYLES = `
 .pub-input::placeholder, .pub-textarea::placeholder { color: var(--dash-muted); }
 /* The field only scripts fill in. */
 .pub-trap { position: absolute; left: -10000px; top: auto; width: 1px; height: 1px; overflow: hidden; }
+.pub-check { display: flex; gap: 10px; align-items: flex-start; font-size: var(--dash-text-sm); line-height: 1.5; color: var(--dash-ink-secondary); cursor: pointer; }
+.pub-check input { margin-top: 3px; accent-color: var(--dash-accent); flex: none; }
 
 /* ── notices ───────────────────────────────────────────────────────────── */
 .pub-alert { display: grid; grid-template-columns: 20px 1fr; gap: 10px; padding: 12px 14px; border-radius: 12px; font-size: var(--dash-text-sm); line-height: 1.55; border: 1px solid var(--dash-border); background: var(--dash-surface-sunken); color: var(--dash-ink-secondary); }

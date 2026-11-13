@@ -17,6 +17,8 @@ export const StartPage = ({ workspace, slug }: { readonly workspace: string; rea
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
+  /* Unticked until they tick it, and apart from anything else on the form. */
+  const [texts, setTexts] = useState(false);
   /* Never shown: only a script fills it in. */
   const [website, setWebsite] = useState("");
   const [busy, setBusy] = useState(false);
@@ -55,7 +57,7 @@ export const StartPage = ({ workspace, slug }: { readonly workspace: string; rea
     setBusy(true);
     setProblem(null);
     try {
-      const started = await api.start({ name: name.trim(), email: email.trim(), ...(phone.trim() ? { phone: phone.trim() } : {}), timezone: browserZone(), website });
+      const started = await api.start({ name: name.trim(), email: email.trim(), ...(phone.trim() ? { phone: phone.trim() } : {}), ...(phone.trim() && texts ? { textConsent: true } : {}), timezone: browserZone(), website });
       window.location.assign(started.page);
     } catch (error) {
       setProblem(error instanceof Error ? error.message : "That couldn't be sent. Try again.");
@@ -128,6 +130,12 @@ export const StartPage = ({ workspace, slug }: { readonly workspace: string; rea
               <Field label="Phone number" optional htmlFor="pub-phone" hint="Only if you'd like a text or call about it.">
                 <input id="pub-phone" className="pub-input" type="tel" autoComplete="tel" value={phone} maxLength={40} onChange={(event) => setPhone(event.target.value)} />
               </Field>
+              {page.textConsentWording && phone.trim() ? (
+                <label className="pub-check" htmlFor="pub-texts">
+                  <input id="pub-texts" type="checkbox" checked={texts} onChange={(event) => setTexts(event.target.checked)} />
+                  <span>{page.textConsentWording}</span>
+                </label>
+              ) : null}
               <div className="pub-trap" aria-hidden="true">
                 <label htmlFor="pub-website">Leave this empty</label>
                 <input id="pub-website" tabIndex={-1} autoComplete="off" value={website} onChange={(event) => setWebsite(event.target.value)} />

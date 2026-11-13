@@ -37,6 +37,12 @@ Wrap any content so the assistant can find it:
 `Mon–Fri 9–5`
 `[/freebird_component]`
 
+Place FreeBird Dash's text opt-in form (for A2P 10DLC text registration) on a page, with its consent box unticked and links to your privacy section and messaging terms:
+
+`[dash_text_optin dash="https://dash.example.com" workspace="local"]`
+
+The form posts to the Dash server you name (https only), which keeps each person's agreement with the exact words shown.
+
 == Frequently Asked Questions ==
 
 = Does this send my content to a third party? =

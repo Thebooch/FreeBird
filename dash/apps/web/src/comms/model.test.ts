@@ -1,4 +1,4 @@
-import type { MailboxView, MailMessage } from "@freebirdai/dash-spec";
+import type { MailboxView, MailMessage, PhoneLineView } from "@freebirdai/dash-spec";
 import { describe, expect, it } from "vitest";
 import { areaGroups, filterShown, ticked, toggle } from "./model.js";
 
@@ -21,6 +21,12 @@ const message = (id: string, from: string, subject: string, extra: Partial<MailM
 });
 
 describe("areaGroups", () => {
+  it("lists phone lines beside mailboxes, and gives an agent with only a line its own area", () => {
+    const line = (id: string, owner: PhoneLineView["owner"]): PhoneLineView => ({ id, title: id, provider: "fake", number: "+15550100100", owner, text: "approved", voice: "ready", today: { texts: 0, textsPerDay: 200, callMinutes: 0, callMinutesPerDay: 120 } });
+    const groups = areaGroups([box("a", { kind: "team" })], [{ id: "z", name: "Zed", color: 2 }], [line("l1", { kind: "team" }), line("l2", { kind: "agent", id: "z" })]);
+    expect(groups.team.lines.map((one) => one.id)).toEqual(["l1"]);
+    expect(groups.agents.map((one) => [one.key, one.mailboxes.length, one.lines.map((l) => l.id)])).toEqual([["agent:z", 0, ["l2"]]]);
+  });
   it("puts the team's mailboxes in Your comms and each agent's in its own area", () => {
     const groups = areaGroups(
       [box("a", { kind: "team" }), box("b", { kind: "agent", id: "z" }), box("c", { kind: "agent", id: "y" }), box("d", { kind: "agent", id: "z" })],

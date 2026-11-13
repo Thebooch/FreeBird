@@ -125,6 +125,35 @@ function freebird_wp_component_shortcode( $atts, $content = '' ) {
 }
 add_shortcode( 'freebird_component', 'freebird_wp_component_shortcode' );
 
+/**
+ * [dash_text_optin dash="https://dash.example.com" workspace="local"]
+ * Places FreeBird Dash's text opt-in form (Dash Phone) on this site: the
+ * consent box unticked and apart from any terms, with links to the
+ * workspace's privacy section and messaging terms. Registration reviewers
+ * check the business's own site, so this is the recommended place for it.
+ * The form posts to the Dash server named here, which keeps the consent
+ * with the exact words shown.
+ */
+function freebird_wp_text_optin_shortcode( $atts ) {
+	$atts = shortcode_atts(
+		array(
+			'dash'      => '',
+			'workspace' => 'local',
+		),
+		$atts,
+		'dash_text_optin'
+	);
+	$dash      = esc_url_raw( untrailingslashit( $atts['dash'] ) );
+	$workspace = preg_replace( '/[^A-Za-z0-9_-]/', '', $atts['workspace'] );
+	if ( '' === $dash || '' === $workspace || 0 !== strpos( $dash, 'https://' ) ) {
+		return '';
+	}
+	$src = sprintf( '%s/api/public/%s/texts/opt-in.js', $dash, rawurlencode( $workspace ) );
+	wp_enqueue_script( 'dash-text-optin-' . $workspace, $src, array(), null, true );
+	return '<div data-dash-texts></div>';
+}
+add_shortcode( 'dash_text_optin', 'freebird_wp_text_optin_shortcode' );
+
 /* -------------------------------------------------------------------------
  * 3. Push-model content registration
  * ---------------------------------------------------------------------- */

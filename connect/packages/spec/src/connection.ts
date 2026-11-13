@@ -209,6 +209,70 @@ export const mailboxSchema = z.object({
 });
 export type MailboxSpec = z.infer<typeof mailboxSchema>;
 
+/** A phone number as carriers write it: `+`, then the country code and number (E.164). */
+export const E164 = /^\+[1-9]\d{7,14}$/;
+
+/** Where a line's texting stands: registration (A2P 10DLC) gates every text. `none`: the provider carries calls only (a SIP trunk). */
+export const PHONE_TEXT_STATUSES = ["needs_registration", "pending", "approved", "rejected", "none"] as const;
+/** Where a line's calls stand: the carrier pointed at the media layer, or not. */
+export const PHONE_VOICE_STATUSES = ["not_connected", "ready", "off"] as const;
+
+/**
+ * A phone line: a number agents and workflows text and call from, and
+ * customers text and call. Modelled on `mailboxSchema`: whose it is decides
+ * where it shows in Communications and who may send from it. `provider`
+ * names a phone adapter (`@freebirdai/phone`): "twilio", "telnyx", "fake".
+ */
+export const phoneLineSchema = z.object({
+  provider: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/),
+  /** The number, once one is bought or chosen. */
+  number: z.string().regex(E164).optional(),
+  owner: mailboxOwnerSchema.default({ kind: "team" }),
+  text: z.object({ status: z.enum(PHONE_TEXT_STATUSES).default("needs_registration") }).default({}),
+  voice: z
+    .object({
+      status: z.enum(PHONE_VOICE_STATUSES).default("not_connected"),
+      /** The provider's trunk pointing this line's calls at the media layer, once connected. */
+      trunk: z.string().max(200).optional(),
+      /** The media layer's own side (LiveKit): its inbound trunk, dispatch rule and outbound trunk for this line. */
+      media: z.object({ inbound: z.string().max(200), dispatch: z.string().max(200), outbound: z.string().max(200) }).optional(),
+    })
+    .default({}),
+  /**
+   * A line the server's host provided (its line source), not one the
+   * workspace brought: its keys come from the host for each use, never the
+   * vault. `offer` is the host's offer it came from, `ref` the host's own id.
+   */
+  source: z.object({ offer: z.string().min(1).max(80), ref: z.string().min(1).max(200) }).optional(),
+  /** Suspended by a person: no texts out and no calls placed until resumed. Inbound is still recorded. */
+  suspended: z.object({ at: z.string().max(40), reason: z.string().max(300).optional() }).optional(),
+  /**
+   * What answers a call to the line: its agent, a forward to a team member's
+   * phone, or voicemail with a transcript. Recording is on unless switched
+   * off here, and the opening line always says the call is with an automated
+   * assistant (`disclosure` is the business's own wording around that).
+   */
+  calls: z
+    .object({
+      answer: z.enum(["agent", "forward", "voicemail"]).default("agent"),
+      forwardTo: z.string().regex(E164).optional(),
+      recording: z.boolean().default(true),
+      disclosure: z.string().max(300).default(""),
+    })
+    .default({}),
+  /**
+   * What it may spend in a day (UTC), counted by Dash before each send or
+   * dial, never by the adapter: usage bills to the business's own account.
+   */
+  ceilings: z
+    .object({
+      textsPerDay: z.number().int().min(0).max(100_000).default(200),
+      callMinutesPerDay: z.number().int().min(0).max(100_000).default(120),
+    })
+    .default({}),
+});
+export type PhoneLineSpec = z.infer<typeof phoneLineSchema>;
+
 export const connectionSchema = z.object({
   credentialsRevision: z.number().int().min(0).optional(),
   paginationPending: z.boolean().optional(),
@@ -290,6 +354,12 @@ export const connectionSchema = z.object({
    * the engine reads and sends it like any other connection.
    */
   mailbox: mailboxSchema.optional(),
+  /**
+   * This connection is a phone line: a number on a phone provider's
+   * account, whose keys are in the vault. Beside `mailbox`, and owned the
+   * same way: the team's, or one agent's.
+   */
+  phone: phoneLineSchema.optional(),
   /**
    * Which parts of this API somebody wanted, and the boards that came of it.
    *

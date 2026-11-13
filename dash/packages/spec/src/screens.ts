@@ -16,6 +16,8 @@ export const DASH_SCREENS = {
   contactFields: { id: "contact-fields", page: "#/agent/contacts/fields" },
   workflows: { id: "workflows", page: "#/agent/workflows" },
   agents: { id: "agents", page: "#/agent/agents" },
+  /** The text registration wizard (Dash Phone): its page names the line. */
+  textRegistration: { id: "text-registration", page: "#/comms" },
   /** The dashboard tab open now; its page is that tab's (`#/d/<id>`). */
   board: { id: "board", page: "#/" },
 } as const;

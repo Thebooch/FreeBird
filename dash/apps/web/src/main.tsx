@@ -22,6 +22,7 @@ import type {
 } from "@freebirdai/dash-spec";
 import { connectionSchema, parseDashboard, withoutWidget } from "@freebirdai/dash-spec";
 import { StrictMode, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { OPEN_CHAT } from "./agent/chatScreen.js";
 import { createRoot } from "react-dom/client";
 import { api } from "./api.js";
 import { ChatColumn } from "./ChatColumn.jsx";
@@ -390,6 +391,12 @@ const App = (): JSX.Element => {
   const [pendingMessage, setPendingMessage] = useState<string | null>(null);
   /** The claim on it, so one click can only ever be said once. */
   const pendingSlot = useMemo(() => createPendingMessage(setPendingMessage), []);
+  /* "Need further explanation? Ask the chat" (`OPEN_CHAT`): open the column; the page has already said what it is focused on. */
+  useEffect(() => {
+    const open = () => setChatOpen(true);
+    window.addEventListener(OPEN_CHAT, open);
+    return () => window.removeEventListener(OPEN_CHAT, open);
+  }, [setChatOpen]);
   const [dashboardId, setDashboardId] = useState<string | null>(null);
 
   /*
