@@ -1,5 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { e164Schema, type AccountInfo, type AvailableNumber, type DeliveryUpdate, type InboundText, type OwnedNumber, type PhoneDeliveryStatus } from "@freebirdai/dash-spec";
+import { twilioRegistration } from "./registration.js";
 import { PhoneKeysError, PhoneParseError, RepeatSendError, type OpenPhoneProvider, type PhoneKeys, type PhoneProvider, type RawRequest } from "@freebirdai/phone";
 
 /**
@@ -18,7 +19,7 @@ import { PhoneKeysError, PhoneParseError, RepeatSendError, type OpenPhoneProvide
  *   form field's name and value in name order, base64, keyed with the Auth
  *   Token. A JSON body is signed over the address alone and carries its own
  *   SHA-256 in `bodySHA256`.
- * - Voice (SIP trunks) and registration (A2P 10DLC) are later phases.
+ * - Registration (A2P 10DLC) is in `registration.ts`. Voice (SIP trunks) is a later phase.
  */
 
 export const TWILIO_PROVIDER_ID = "twilio";
@@ -32,6 +33,9 @@ export interface TwilioOptions {
   readonly now?: () => number;
   /** The API's origin. Default https://api.twilio.com. */
   readonly api?: string;
+  /** Trust Hub and Messaging, for registration. Defaults: Twilio's own. */
+  readonly trustHub?: string;
+  readonly messaging?: string;
 }
 
 /** A Twilio answer that was not a success, in its own words. */
@@ -97,6 +101,8 @@ export const createTwilioProvider = (options: TwilioOptions = {}): OpenPhoneProv
   const now = options.now ?? (() => Date.now());
   /* Send keys this provider has handed to Twilio, and the sid each became: Twilio has no idempotency key for messages. */
   const sentKeys = new Map<string, string>();
+  /* Twilio's words for each registration error code seen, for `explain`. */
+  const descriptions = new Map<string, string>();
 
   return (keys: PhoneKeys): PhoneProvider => {
     const sid = () => {
@@ -104,14 +110,15 @@ export const createTwilioProvider = (options: TwilioOptions = {}): OpenPhoneProv
       if (!value || !/^AC[0-9a-fA-F]{32}$/.test(value)) throw new PhoneKeysError("The Account SID starts with AC and has 32 more letters and digits.");
       return value;
     };
-    const call = async (method: string, path: string, form?: Record<string, string>, given: PhoneKeys = keys): Promise<Record<string, unknown>> => {
+    /** One request. `path` is under the REST API, or a whole address on another of Twilio's hosts. A form may repeat a field. */
+    const call = async (method: string, path: string, form?: Record<string, string> | ReadonlyArray<readonly [string, string]>, given: PhoneKeys = keys): Promise<Record<string, unknown>> => {
       const account = given["accountSid"]?.trim() ?? "";
       const token = given["authToken"]?.trim() ?? "";
       if (!token) throw new PhoneKeysError("Give the Auth Token.");
       const headers: Record<string, string> = { authorization: `Basic ${Buffer.from(`${account}:${token}`).toString("base64")}`, accept: "application/json" };
-      const body = form ? new URLSearchParams(form).toString() : undefined;
+      const body = form ? new URLSearchParams(Array.isArray(form) ? (form as Array<[string, string]>) : (form as Record<string, string>)).toString() : undefined;
       if (body !== undefined) headers["content-type"] = "application/x-www-form-urlencoded";
-      const answer = await doFetch(`${api}${path}`, { method, headers, ...(body !== undefined ? { body } : {}) });
+      const answer = await doFetch(path.startsWith("https://") ? path : `${api}${path}`, { method, headers, ...(body !== undefined ? { body } : {}) });
       const text = await answer.text();
       let parsed: Record<string, unknown> = {};
       try {
@@ -174,6 +181,7 @@ export const createTwilioProvider = (options: TwilioOptions = {}): OpenPhoneProv
           await call("DELETE", `${base()}/IncomingPhoneNumbers/${await numberSid(number)}.json`);
         },
       },
+      registration: twilioRegistration({ call, accountBase: base, numberSid, descriptions, ...(options.trustHub ? { trustHub: options.trustHub } : {}), ...(options.messaging ? { messaging: options.messaging } : {}) }),
       text: {
         send: async (m) => {
           const earlier = sentKeys.get(m.key);
