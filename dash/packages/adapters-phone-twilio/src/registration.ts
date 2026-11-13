@@ -25,12 +25,22 @@ import type { RegistrationAdapter } from "@freebirdai/phone";
 export const TRUST_HUB = "https://trusthub.twilio.com/v1";
 export const MESSAGING = "https://messaging.twilio.com/v1";
 
-/** Twilio's Trust Hub policies: a business's secondary customer profile and its A2P trust product, and the starter ones for a sole proprietor. */
+/**
+ * Twilio's Trust Hub policies, as its A2P 10DLC API onboarding pages give
+ * them (both dated 2026-10-30, checked 2026-11-13):
+ *
+ * - Standard brand, https://www.twilio.com/docs/messaging/compliance/a2p-10dlc/onboarding-isv-api:
+ *   the Secondary Customer Profile (step 1.1) and the A2P TrustProduct
+ *   ("The `policy_sid` must be `RNb0d4771c2c98518d916a3d4cd70a8f8b`", step 2.1).
+ * - Sole proprietor, https://www.twilio.com/docs/messaging/compliance/a2p-10dlc/onboarding-isv-api-sole-prop-new:
+ *   the Starter Customer Profile Policy (step 1.1) and the Sole Proprietor
+ *   A2P Trust Policy (step 2.1).
+ */
 export const POLICIES = {
   customerProfile: "RNdfbf3fae0e1107f8aded0e7cead80bf5",
-  a2pTrustProduct: "RN670d5d2e282a6130ae063b234b6019c8",
+  a2pTrustProduct: "RNb0d4771c2c98518d916a3d4cd70a8f8b",
   starterProfile: "RN806dd6cd175f314e1f96a9727ee271f4",
-  starterTrustProduct: "RNb0d4771c2c98518d916a3d4cd70a8f8b",
+  starterTrustProduct: "RN670d5d2e282a6130ae063b234b6019c8",
 } as const;
 
 type Call = (method: string, path: string, form?: Record<string, string> | ReadonlyArray<readonly [string, string]>) => Promise<Record<string, unknown>>;
@@ -148,7 +158,15 @@ export const twilioRegistration = (deps: TwilioRegistrationDeps): RegistrationAd
             social_media_profile_urls: "",
           });
       const profile = await bundle("CustomerProfiles", p.legalName, p.contact.email, sole ? POLICIES.starterProfile : POLICIES.customerProfile, sole ? [business, document] : [business, representative, document]);
-      const messagingProfile = await endUser("us_a2p_messaging_profile_information", p.legalName, sole ? {} : { company_type: p.businessType === "nonprofit" ? "non-profit" : "private" });
+      /*
+       * The trust bundle's own end user: `sole_proprietor_information` for a sole
+       * proprietor (sole-prop page, step 2.3), `us_a2p_messaging_profile_information`
+       * otherwise (standard page, step 2.2). The types are checked against the
+       * pages; the attribute names inside each are not yet, so check them at Gate C.
+       */
+      const messagingProfile = sole
+        ? await endUser("sole_proprietor_information", p.legalName, { brand_name: p.legalName, vertical: p.industry.toUpperCase().replace(/[^A-Z]+/g, "_") })
+        : await endUser("us_a2p_messaging_profile_information", p.legalName, { company_type: p.businessType === "nonprofit" ? "non-profit" : "private" });
       const product = await bundle("TrustProducts", `${p.legalName} A2P`, p.contact.email, sole ? POLICIES.starterTrustProduct : POLICIES.a2pTrustProduct, [messagingProfile, profile]);
       const brand = await call("POST", `${messaging}/a2p/BrandRegistrations`, { CustomerProfileBundleSid: profile, A2PProfileBundleSid: product, ...(sole ? { BrandType: "SOLE_PROPRIETOR" } : {}) });
       return { kind: "brand", id: sidOf(brand, "brand registration"), provider: "twilio" };

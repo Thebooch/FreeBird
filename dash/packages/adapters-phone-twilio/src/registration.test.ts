@@ -47,6 +47,15 @@ const brand = {
 };
 
 describe("Twilio registration: the brand", () => {
+  it("uses the policy sids Twilio's onboarding pages give (2026-10-30)", () => {
+    expect(POLICIES).toEqual({
+      customerProfile: "RNdfbf3fae0e1107f8aded0e7cead80bf5",
+      a2pTrustProduct: "RNb0d4771c2c98518d916a3d4cd70a8f8b",
+      starterProfile: "RN806dd6cd175f314e1f96a9727ee271f4",
+      starterTrustProduct: "RN670d5d2e282a6130ae063b234b6019c8",
+    });
+  });
+
   it("builds the customer profile and A2P trust product, then registers the brand", async () => {
     const twilio = pretendTwilio();
     const ref = await createTwilioProvider({ fetch: twilio.fetch })(keys).registration!.submitBrand(brand);
@@ -60,6 +69,9 @@ describe("Twilio registration: the brand", () => {
     expect(profile.form.get("PolicySid")).toBe(POLICIES.customerProfile);
     const business = twilio.calls.find((one) => one.form.get("Type") === "customer_profile_business_information")!;
     expect(JSON.parse(business.form.get("Attributes")!)).toMatchObject({ business_name: "Acme Plumbing LLC", business_registration_number: "123456789", business_type: "Limited Liability Corporation" });
+    expect(twilio.calls.find((one) => one.url === `${TRUST_HUB}/TrustProducts`)!.form.get("PolicySid")).toBe(POLICIES.a2pTrustProduct);
+    expect(twilio.calls.some((one) => one.form.get("Type") === "us_a2p_messaging_profile_information")).toBe(true);
+    expect(twilio.calls.at(-1)!.form.get("BrandType")).toBeNull();
     /* Each bundle is assigned, evaluated, then sent for review. */
     expect(twilio.calls.filter((one) => one.form.get("Status") === "pending-review")).toHaveLength(2);
   });
@@ -71,6 +83,9 @@ describe("Twilio registration: the brand", () => {
     expect(twilio.calls.some((one) => one.form.get("Type") === "customer_profile_business_information")).toBe(false);
     expect(twilio.calls.find((one) => one.url === `${TRUST_HUB}/CustomerProfiles`)!.form.get("PolicySid")).toBe(POLICIES.starterProfile);
     expect(twilio.calls.at(-1)!.form.get("BrandType")).toBe("SOLE_PROPRIETOR");
+    expect(twilio.calls.find((one) => one.url === `${TRUST_HUB}/TrustProducts`)!.form.get("PolicySid")).toBe(POLICIES.starterTrustProduct);
+    expect(twilio.calls.some((one) => one.form.get("Type") === "sole_proprietor_information")).toBe(true);
+    expect(twilio.calls.some((one) => one.form.get("Type") === "starter_customer_profile_information")).toBe(true);
   });
 });
 
