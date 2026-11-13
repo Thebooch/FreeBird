@@ -41,7 +41,7 @@ export class SandboxPhone {
     this.lines = world.lines.map((line) => ({
       id: line.id,
       title: `Line ${line.number}`,
-      phone: { provider: FAKE_PROVIDER_ID, number: line.number, owner: line.owner, text: { status: line.text }, voice: { status: line.voice }, ceilings: line.ceilings },
+      phone: { provider: FAKE_PROVIDER_ID, number: line.number, owner: line.owner, text: { status: line.text }, voice: { status: line.voice }, calls: line.calls, ceilings: line.ceilings },
     }));
     this.outreach = new PhoneOutreach({
       lines: () => this.lines,

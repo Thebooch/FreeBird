@@ -180,7 +180,7 @@ export class PhoneLines {
       authRequired: false,
       ops: [],
       resources: [],
-      phone: { provider: provider.id, number, owner, text: { status: pretend ? "approved" : "needs_registration" }, voice: { status: pretend ? "ready" : "not_connected" }, ceilings: { textsPerDay: 200, callMinutesPerDay: 120 } },
+      phone: { provider: provider.id, number, owner, text: { status: pretend ? "approved" : "needs_registration" }, voice: { status: pretend ? "ready" : "not_connected" }, ceilings: { textsPerDay: 200, callMinutesPerDay: 120 }, calls: { answer: "agent", recording: true, disclosure: "" } },
     } as unknown as ConnectionSpec & PhoneLine;
     this.deps.connections.put(connection);
     return connection;

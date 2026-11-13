@@ -32,6 +32,7 @@ const lineOf = (id: string, number: string, phone: Partial<PhoneLineSpec> = {}):
     text: { status: "approved" },
     voice: { status: "ready" },
     ceilings: { textsPerDay: 200, callMinutesPerDay: 120 },
+    calls: { answer: "agent", recording: true, disclosure: "" },
     ...phone,
   },
 });

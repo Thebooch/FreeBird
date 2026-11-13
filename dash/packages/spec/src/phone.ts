@@ -225,6 +225,8 @@ export const phoneTextSchema = z.object({
   at: z.string(),
   /** STOP, HELP or START, and Dash's answer to one: never shown to agents as conversation. */
   keyword: z.enum(["stop", "help", "start"]).optional(),
+  /** A call in the conversation rather than a text: `body` is its transcript. */
+  kind: z.enum(["text", "call"]).optional(),
   status: z.enum([...PHONE_DELIVERY_STATUSES, "not_sent"]).optional(),
   agent: z.string().optional(),
   contact: z.string().optional(),
@@ -244,6 +246,49 @@ export interface PhoneThreadView {
   readonly startedBy: "them" | "us";
   readonly last: PhoneText;
 }
+
+/* ── calls ─────────────────────────────────────────────────────────────── */
+
+/** Said whenever the call is recorded, word for word: the business cannot change or drop it while recording is on. */
+export const RECORDING_NOTICE = "This call is recorded.";
+
+/**
+ * The first thing every call hears. The business words its own greeting
+ * (`disclosure`), but the line always says it is an automated assistant for
+ * the business (added unless the greeting already says so) and, while
+ * recording is on, ends with the fixed recording notice.
+ */
+export const openingLine = (business: string, disclosure: string, recording: boolean): string => {
+  const own = disclosure.trim();
+  const greeting = own || `Hi, you've reached ${business}.`;
+  const says = /\b(automated|virtual|ai)\b[^.]*\bassistant\b|\bassistant\b[^.]*\b(automated|ai)\b/i.test(greeting);
+  const parts = [greeting, says ? "" : `I'm ${business}'s automated assistant.`, recording ? RECORDING_NOTICE : ""].filter(Boolean);
+  return parts.join(" ");
+};
+
+export const CALL_SPEAKERS = ["caller", "agent", "system"] as const;
+
+/** One call on a line, kept with the conversation: who answered, and what was said. */
+export const callRecordSchema = z.object({
+  id: z.string().min(1),
+  line: z.string().min(1),
+  /** The other side's number. */
+  number: e164Schema,
+  direction: z.enum(["in", "out"]),
+  answeredBy: z.enum(["agent", "forward", "voicemail"]),
+  agent: z.string().optional(),
+  startedAt: z.string(),
+  endedAt: z.string().optional(),
+  recording: z.boolean(),
+  transcript: z.array(z.object({ who: z.enum(CALL_SPEAKERS), text: z.string().max(4000), at: z.string() })).max(500),
+  /** Handed to a person, and what they were told first. */
+  transfer: z.object({ to: e164Schema, whisper: z.string().max(300) }).optional(),
+  /** Approve-mode actions the agent said it would take: tasks waiting for a person. */
+  waiting: z.array(z.string()).max(20).default([]),
+  /** What the caller was asking, in a sentence, for the conversation list and the workflow. */
+  summary: z.string().max(500).optional(),
+});
+export type CallRecord = z.infer<typeof callRecordSchema>;
 
 /* ── a line, as Communications shows it ────────────────────────────────── */
 

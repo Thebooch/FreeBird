@@ -229,7 +229,27 @@ export const phoneLineSchema = z.object({
   number: z.string().regex(E164).optional(),
   owner: mailboxOwnerSchema.default({ kind: "team" }),
   text: z.object({ status: z.enum(PHONE_TEXT_STATUSES).default("needs_registration") }).default({}),
-  voice: z.object({ status: z.enum(PHONE_VOICE_STATUSES).default("not_connected") }).default({}),
+  voice: z
+    .object({
+      status: z.enum(PHONE_VOICE_STATUSES).default("not_connected"),
+      /** The provider's trunk pointing this line's calls at the media layer, once connected. */
+      trunk: z.string().max(200).optional(),
+    })
+    .default({}),
+  /**
+   * What answers a call to the line: its agent, a forward to a team member's
+   * phone, or voicemail with a transcript. Recording is on unless switched
+   * off here, and the opening line always says the call is with an automated
+   * assistant (`disclosure` is the business's own wording around that).
+   */
+  calls: z
+    .object({
+      answer: z.enum(["agent", "forward", "voicemail"]).default("agent"),
+      forwardTo: z.string().regex(E164).optional(),
+      recording: z.boolean().default(true),
+      disclosure: z.string().max(300).default(""),
+    })
+    .default({}),
   /**
    * What it may spend in a day (UTC), counted by Dash before each send or
    * dial, never by the adapter: usage bills to the business's own account.

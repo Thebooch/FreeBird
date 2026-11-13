@@ -85,6 +85,8 @@ export const worldPhoneSchema = z.object({
         text: z.enum(PHONE_TEXT_STATUSES).default("approved"),
         voice: z.enum(PHONE_VOICE_STATUSES).default("ready"),
         ceilings: phoneLineSchema.shape.ceilings,
+        /** Who answers a call, the forward number, recording, and the business's own opening words. */
+        calls: phoneLineSchema.shape.calls,
       }),
     )
     .min(1)

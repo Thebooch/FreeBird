@@ -695,7 +695,11 @@ export type { InboundSettings, RequesterLimits, RequesterRule, RequesterTrust, S
 
 export {
   BUSINESS_TYPES,
+  CALL_SPEAKERS,
   E164,
+  RECORDING_NOTICE,
+  callRecordSchema,
+  openingLine,
   HELP_WORDS,
   OPT_IN_METHODS,
   START_WORDS,
@@ -731,6 +735,7 @@ export type {
   AvailableNumber,
   BrandProfile,
   BusinessType,
+  CallRecord,
   CampaignDraft,
   CampaignUse,
   CredentialField,

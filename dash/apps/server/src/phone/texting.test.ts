@@ -38,7 +38,7 @@ const LINE_B = "+15550100111";
 const lineOf = (id: string, number: string, phone: Partial<PhoneLineSpec> = {}): PhoneLine => ({
   id,
   title: `Line ${id}`,
-  phone: { provider: "fake", number, owner: { kind: "agent", id: "maint" }, text: { status: "approved" }, voice: { status: "ready" }, ceilings: { textsPerDay: 200, callMinutesPerDay: 120 }, ...phone },
+  phone: { provider: "fake", number, owner: { kind: "agent", id: "maint" }, text: { status: "approved" }, voice: { status: "ready" }, ceilings: { textsPerDay: 200, callMinutesPerDay: 120 }, calls: { answer: "agent", recording: true, disclosure: "" }, ...phone },
 });
 
 const inbound = (from: string, to: string, body: string, id: string): InboundText => ({ from, to, body, media: [], at: new Date(T0).toISOString(), providerId: id });
