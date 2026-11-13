@@ -121,7 +121,6 @@ export const liveKitMedia = (deps: {
   readonly load?: () => Promise<unknown>;
 }): MediaConnector => ({
   join: async (roomName) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rtc = (await (deps.load?.() ?? import("@livekit/rtc-node" as string))) as any;
     const room = new rtc.Room();
     await room.connect(deps.url, deps.token(roomName), { autoSubscribe: true, dynacast: true });
@@ -139,7 +138,6 @@ export const liveKitMedia = (deps: {
       closed = true;
       wake?.();
     });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     room.on(rtc.RoomEvent.TrackSubscribed, (remote: any) => {
       if (remote.kind !== rtc.TrackKind.KIND_AUDIO) return;
       void (async () => {

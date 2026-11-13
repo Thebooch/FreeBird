@@ -193,6 +193,23 @@ export class PhoneLines {
     this.deps.connections.put({ ...(line as unknown as ConnectionSpec), phone: { ...line.phone, text: { status } } } as ConnectionSpec);
   }
 
+  /** What answers its calls, its forward number, recording, and the business's own opening words. */
+  async setCalls(id: string, calls: PhoneLine["phone"]["calls"]): Promise<PhoneLineView> {
+    const line = this.get(id);
+    if (!line) throw new PhoneLineError(`There is no phone line "${id}".`, 404);
+    if (calls.answer === "forward" && !calls.forwardTo) throw new PhoneLineError("Give the number to forward calls to.");
+    const next = { ...(line as unknown as ConnectionSpec), phone: { ...line.phone, calls } } as ConnectionSpec & PhoneLine;
+    this.deps.connections.put(next);
+    return this.view(next);
+  }
+
+  /** Where its calls stand: connected to the media layer through these trunks, or not. */
+  setVoice(id: string, voice: PhoneLine["phone"]["voice"]): void {
+    const line = this.get(id);
+    if (!line) return;
+    this.deps.connections.put({ ...(line as unknown as ConnectionSpec), phone: { ...line.phone, voice } } as ConnectionSpec);
+  }
+
   /** Whose it is: only where it is shown, and who may text from it, changes. */
   async setOwner(id: string, owner: MailboxOwner): Promise<PhoneLineView> {
     const line = this.get(id);

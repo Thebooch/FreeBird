@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { PhoneLineError, type PhoneLines } from "../phone/lines.js";
 import type { PhoneSetup } from "../phone/setup.js";
+import type { CallSetup } from "../phone/call-setup.js";
 import type { PhoneTextStore } from "../phone/texts.js";
 
 /**
@@ -29,7 +30,14 @@ const setupSchema = z.object({
   title: z.string().max(120).optional(),
 });
 
-export const phoneLineRoutes = (deps: { readonly lines: PhoneLines; readonly setup?: PhoneSetup; readonly texts?: PhoneTextStore; readonly canRead?: (principal: Principal, line: string) => Promise<boolean> }) =>
+const callsSchema = z.object({
+  answer: z.enum(["agent", "forward", "voicemail"]),
+  forwardTo: z.string().regex(/^\+[1-9]\d{7,14}$/).optional(),
+  recording: z.boolean(),
+  disclosure: z.string().max(300).default(""),
+});
+
+export const phoneLineRoutes = (deps: { readonly lines: PhoneLines; readonly setup?: PhoneSetup; readonly calls?: CallSetup; readonly texts?: PhoneTextStore; readonly canRead?: (principal: Principal, line: string) => Promise<boolean> }) =>
   async (app: FastifyInstance): Promise<void> => {
     const handled =
       <P = Record<string, string>, Q = Record<string, string | undefined>>(run: (principal: Principal, request: { readonly params: P; readonly body: unknown; readonly query: Q }) => Promise<unknown>) =>
@@ -114,6 +122,26 @@ export const phoneLineRoutes = (deps: { readonly lines: PhoneLines; readonly set
     app.put(
       "/api/comms/lines/:id/owner",
       handled<{ id: string }>(async (_principal, request) => deps.lines.setOwner(request.params.id, mailboxOwnerSchema.parse((request.body as { owner?: unknown } | undefined)?.owner))),
+    );
+
+    /* Calls: who answers, the forward number, recording and the opening words; connecting the line's calls to the media layer. */
+    app.put(
+      "/api/comms/lines/:id/calls",
+      handled<{ id: string }>(async (_principal, request) => deps.lines.setCalls(request.params.id, callsSchema.parse(request.body))),
+    );
+    app.post(
+      "/api/comms/lines/:id/calls/connect",
+      handled<{ id: string }>(async (_principal, request) => {
+        if (!deps.calls) throw new PhoneLineError("Calls aren't set up on this server.", 501);
+        return deps.calls.connect(request.params.id);
+      }),
+    );
+    app.post(
+      "/api/comms/lines/:id/calls/disconnect",
+      handled<{ id: string }>(async (_principal, request) => {
+        if (!deps.calls) throw new PhoneLineError("Calls aren't set up on this server.", 501);
+        return deps.calls.disconnect(request.params.id);
+      }),
     );
 
     app.delete(

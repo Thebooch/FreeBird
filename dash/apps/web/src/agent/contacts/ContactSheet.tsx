@@ -372,6 +372,7 @@ const ORIGIN_WORDS: Readonly<Record<Contact["origin"], string>> = {
   workflow: "by a workflow",
   email: "from an email they sent",
   text: "from a text they sent",
+  call: "from a call",
 };
 
 const Stat = ({ label, value }: { readonly label: string; readonly value: string }): JSX.Element => (

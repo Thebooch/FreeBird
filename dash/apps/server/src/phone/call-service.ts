@@ -118,7 +118,8 @@ export class CallService {
     }
     let result: string;
     try {
-      result = await this.deps.runTool(agent, tool, (pending["args"] ?? {}) as Record<string, unknown>, caller);
+      /* A person has just approved it: it runs as approved, not as a second request. */
+      result = await this.deps.runTool(agent, { ...tool, mode: "auto" }, (pending["args"] ?? {}) as Record<string, unknown>, caller);
     } catch (error) {
       const failed: Task = { ...task, status: "failed", error: error instanceof Error ? error.message : String(error), approvedBy: principal.userId, finishedAt: at };
       await this.deps.tasks.put(failed);

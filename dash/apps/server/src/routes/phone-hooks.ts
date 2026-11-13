@@ -23,6 +23,8 @@ export interface PhoneHookDeps {
   readonly webhook: PhoneWebhookDeps;
   /** The public address check's own question, answered only while this server is asking it (`PhoneSetup.answer`). */
   readonly answerCheck?: (nonce: string) => boolean;
+  /** LiveKit's webhooks (calls): checked against the server's own LiveKit secret before anything is read. Absent: no route answers. */
+  readonly liveKit?: (body: string, authorization: string | undefined) => Promise<boolean>;
 }
 
 /** Carriers send in bursts: generous per address, but bounded. */
@@ -44,6 +46,13 @@ export const phoneHookRoutes = (deps: PhoneHookDeps) =>
     app.get<{ Params: { workspace: string; nonce: string } }>("/api/public/:workspace/phone-check/:nonce", { config: { public: true } }, async (request, reply) => {
       if (!/^[A-Za-z0-9_-]{16,64}$/.test(request.params.nonce) || !deps.answerCheck?.(request.params.nonce)) return reply.status(404).send({ error: "Not found." });
       return { nonce: request.params.nonce };
+    });
+
+    /* LiveKit says a call's room started or someone joined it: the voice worker goes in. */
+    app.post<{ Params: { workspace: string } }>("/api/public/:workspace/phone/livekit", { config: { public: true } }, async (request, reply) => {
+      if (!deps.liveKit) return reply.status(404).send({ error: "Not found." });
+      const accepted = await deps.liveKit(typeof request.body === "string" ? request.body : "", request.headers["authorization"]);
+      return accepted ? reply.status(200).send("") : reply.status(403).send({ error: "The signature does not match." });
     });
 
     app.post<{ Params: { workspace: string; line: string; event: string } }>("/api/public/:workspace/phone/:line/:event", { config: { public: true } }, async (request, reply) => {
