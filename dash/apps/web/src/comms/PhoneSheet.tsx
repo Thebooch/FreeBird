@@ -44,6 +44,15 @@ export const LineChips = ({ line }: { readonly line: Pick<PhoneLineView, "text" 
   </span>
 );
 
+/** A step with a command in it shows the command as code: "Run: <code>", or "… with <code>NAME=value</code>." */
+const commandOf = (step: string): JSX.Element | string => {
+  const run = /^Run: (.+)$/.exec(step);
+  if (run) return <>Run: <code>{run[1]}</code></>;
+  const setting = /^(.*?)(DASH_PUBLIC_ORIGIN=\S+?)(\.?)$/.exec(step);
+  if (setting) return <>{setting[1]}<code>{setting[2]}</code>{setting[3]}</>;
+  return step;
+};
+
 const AddressProblem = ({ check, onRetry }: { readonly check: PhoneAddressCheck; readonly onRetry: () => void }): JSX.Element => (
   <div className="dash-phone-address" data-testid="phone-address-problem">
     <p className="dash-sched-error">{check.problem}</p>
@@ -53,7 +62,7 @@ const AddressProblem = ({ check, onRetry }: { readonly check: PhoneAddressCheck;
         <strong>{fix.title}</strong>
         <ol>
           {fix.steps.map((step) => (
-            <li key={step}>{step.includes("cloudflared") || step.includes("DASH_PUBLIC_ORIGIN=") ? <code>{step}</code> : step}</li>
+            <li key={step}>{commandOf(step)}</li>
           ))}
         </ol>
       </div>

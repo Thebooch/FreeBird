@@ -201,12 +201,14 @@ export const CommsShell = (): JSX.Element => {
       <aside className="dash-comms__boxes" aria-label="Mailboxes">
         <div className="dash-comms__boxes-head">
           <h1 className="dash-comms__title">Comms</h1>
-          <Button size="sm" tone="primary" onClick={() => setAdding(true)} testId="comms-add-mailbox">
-            Add mailbox
-          </Button>
-          <Button size="sm" onClick={() => setAddingLine(true)} testId="comms-add-line">
-            Add phone line
-          </Button>
+          <span className="dash-comms__adds">
+            <Button size="sm" tone="primary" onClick={() => setAdding(true)} testId="comms-add-mailbox">
+              Add mailbox
+            </Button>
+            <Button size="sm" onClick={() => setAddingLine(true)} testId="comms-add-line">
+              Add phone line
+            </Button>
+          </span>
         </div>
         <h2 className="dash-comms__group">Your comms</h2>
         {areaButton(groups.team)}

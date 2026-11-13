@@ -22,7 +22,8 @@ export const DASH_COMMS_STYLES = `
 }
 
 /* == mailboxes =========================================================== */
-.dash-comms__boxes-head { display: flex; align-items: center; justify-content: space-between; gap: var(--dash-space-2); margin-bottom: var(--dash-space-3); }
+.dash-comms__boxes-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--dash-space-2); margin-bottom: var(--dash-space-3); }
+.dash-comms__adds { display: flex; flex-wrap: wrap; gap: var(--dash-space-1); }
 .dash-comms__title { font-size: var(--dash-text-lg); font-weight: var(--dash-weight-semi); margin: 0; color: var(--dash-ink); }
 .dash-comms__group {
   font-family: var(--dash-label-font); font-size: var(--dash-label-size); font-weight: var(--dash-weight-medium);
