@@ -98,10 +98,10 @@ export class PhoneSetup {
   }
 
   /** Each provider this server knows, whether its keys are in, and what they ask for. */
-  accounts(): Array<{ readonly id: string; readonly title: string; readonly connected: boolean; readonly credentials: ReturnType<PhoneProviders[string]>["credentials"] }> {
+  accounts(): Array<{ readonly id: string; readonly title: string; readonly connected: boolean; readonly credentials: ReturnType<PhoneProviders[string]>["credentials"]; readonly capabilities: ReturnType<PhoneProviders[string]>["capabilities"] }> {
     return Object.values(this.deps.providers).map((open) => {
       const provider = open({});
-      return { id: provider.id, title: provider.title, connected: provider.credentials.every((field) => this.deps.keys.has(accountKeyRef(provider.id, field.key))), credentials: provider.credentials };
+      return { id: provider.id, title: provider.title, connected: provider.credentials.every((field) => this.deps.keys.has(accountKeyRef(provider.id, field.key))), credentials: provider.credentials, capabilities: provider.capabilities };
     });
   }
 
@@ -175,6 +175,8 @@ export class PhoneSetup {
     const open = this.open(input.provider);
     const keys = this.connected(input.provider);
     const numbers = open(keys).numbers;
+    const texts = open({}).capabilities.text;
+    if (!texts && input.choice !== "existing") throw new PhoneLineError("This provider's numbers come from the carrier: pick one already on the trunk.");
     await this.deps.lines.checkOwner(input.owner);
     let number = input.number.trim();
     if (input.choice === "existing") {
@@ -183,7 +185,8 @@ export class PhoneSetup {
       number = (await numbers.buy(number)).number;
     }
     const line = await this.deps.lines.create({ provider: input.provider, number, keys, ...(input.owner ? { owner: input.owner } : {}), ...(input.title ? { title: input.title } : {}) });
-    await numbers.route(number, { textWebhook: new URL(`${address.origin}/api/public/${this.deps.workspace}/phone/${line.id}/text`) });
+    /* Texts point at the line's webhook; a calls-only line's calls are connected from the line itself. */
+    if (texts) await numbers.route(number, { textWebhook: new URL(`${address.origin}/api/public/${this.deps.workspace}/phone/${line.id}/text`) });
     return { line: await this.deps.lines.view(line), ...(input.choice === "forward" ? { forwarding: forwardingSteps(number) } : {}) };
   }
 }

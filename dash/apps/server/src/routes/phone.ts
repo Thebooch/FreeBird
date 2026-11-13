@@ -1,6 +1,7 @@
 import { mailboxOwnerSchema, type Principal } from "@freebirdai/dash-spec";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { PhoneProviderError } from "@freebirdai/phone";
 import { PhoneLineError, type PhoneLines } from "../phone/lines.js";
 import type { PhoneSetup } from "../phone/setup.js";
 import type { CallSetup } from "../phone/call-setup.js";
@@ -37,7 +38,7 @@ const callsSchema = z.object({
   disclosure: z.string().max(300).default(""),
 });
 
-export const phoneLineRoutes = (deps: { readonly lines: PhoneLines; readonly setup?: PhoneSetup; readonly calls?: CallSetup; readonly texts?: PhoneTextStore; readonly canRead?: (principal: Principal, line: string) => Promise<boolean> }) =>
+export const phoneLineRoutes = (deps: { readonly lines: PhoneLines; readonly setup?: PhoneSetup; /** Where a carrier without an API sends calls: the media layer's SIP address. */ readonly callsAddress?: string; readonly calls?: CallSetup; readonly texts?: PhoneTextStore; readonly canRead?: (principal: Principal, line: string) => Promise<boolean> }) =>
   async (app: FastifyInstance): Promise<void> => {
     const handled =
       <P = Record<string, string>, Q = Record<string, string | undefined>>(run: (principal: Principal, request: { readonly params: P; readonly body: unknown; readonly query: Q }) => Promise<unknown>) =>
@@ -50,7 +51,7 @@ export const phoneLineRoutes = (deps: { readonly lines: PhoneLines; readonly set
           if (error instanceof PhoneLineError) return reply.status(error.status).send({ error: error.message });
           if (error instanceof z.ZodError) return reply.status(400).send({ error: "That request is not one this understands.", detail: error.issues });
           if (error instanceof Error && error.name === "PhoneKeysError") return reply.status(400).send({ error: error.message });
-          if (error instanceof Error && error.name === "TwilioError") return reply.status(502).send({ error: `Twilio said: ${error.message}` });
+          if (error instanceof PhoneProviderError) return reply.status(502).send({ error: `${error.provider} said: ${error.message}` });
           throw error;
         }
       };
@@ -64,7 +65,7 @@ export const phoneLineRoutes = (deps: { readonly lines: PhoneLines; readonly set
 
     app.get(
       "/api/comms/lines",
-      handled(async (principal) => ({ lines: await deps.lines.lines(principal), providers: deps.lines.providers(), accounts: deps.setup?.accounts() ?? [] })),
+      handled(async (principal) => ({ lines: await deps.lines.lines(principal), providers: deps.lines.providers(), accounts: deps.setup?.accounts() ?? [], ...(deps.callsAddress ? { callsAddress: deps.callsAddress } : {}) })),
     );
 
     app.post(

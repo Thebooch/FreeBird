@@ -166,6 +166,8 @@ import { LiveKitApi, ROOM_IN, ROOM_OUT, liveKitFromEnv, liveKitPlacer, verifyLiv
 import { openAiSpeech, speechFromEnv, type SpeechModels } from "./phone/speech.js";
 import { VoiceWorker, liveKitMedia, type CallInfo, type MediaConnector } from "./phone/voice-worker.js";
 import { createTwilioProvider } from "@freebirdai/adapters-phone-twilio";
+import { createTelnyxProvider } from "@freebirdai/adapters-phone-telnyx";
+import { createSipProvider } from "@freebirdai/adapters-phone-sip";
 import { outsideRegistry } from "./outside/registry.js";
 import { InboundService } from "./inbound/service.js";
 import { MemoryInboundStore, type InboundStore } from "./inbound/store.js";
@@ -508,10 +510,11 @@ export interface BuildServerOptions {
   /** Where this server is reached from outside, for webhook addresses a Wait step hands out. */
   readonly publicOrigin?: string;
   /**
-   * The phone providers lines may be on (`@freebirdai/phone`), by id. Twilio
-   * by default (it does nothing until someone pastes its keys);
+   * The phone providers lines may be on (`@freebirdai/phone`), by id. Twilio,
+   * Telnyx and generic SIP (any carrier's calls over a trunk)
+   * by default (each does nothing until someone pastes its keys);
    * `DASH_PHONE_FAKE=on` adds the fake carrier, to try a line locally. Given
-   * here, these are added to Twilio and win over it by id.
+   * here, these are added to them and win by id.
    */
   readonly phoneProviders?: PhoneProviders;
   /** Each line's sends by key and its day's use against its ceilings (`phone/usage.ts`). Memory unless supplied. */
@@ -1130,6 +1133,9 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   const phoneProviders: PhoneProviders = {
     /* Twilio's sent texts report their status to the line that sent them. */
     twilio: createTwilioProvider({ statusCallback: (from) => { const line = phoneLines.all().find((one) => one.phone.number === from); return line ? lineHook(line.id, "status") : undefined; } }),
+    telnyx: createTelnyxProvider({ statusCallback: (from) => { const line = phoneLines.all().find((one) => one.phone.number === from); return line ? lineHook(line.id, "status") : undefined; } }),
+    /* Any carrier's calls over a SIP trunk the business sets up: voice only. */
+    sip: createSipProvider(),
     ...(fakeCarrier ? { fake: fakeCarrier.open } : {}),
     ...options.phoneProviders,
   };
@@ -2011,7 +2017,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     return null;
   };
   void app.register(registrationRoutes({ registration, canRead: async (principal, line) => (await policy.can(principal, "records.read", { connection: line })).ok }));
-  void app.register(phoneLineRoutes({ lines: phoneLines, setup: phoneSetup, calls: callSetup, texts: phoneTexts, canRead: async (principal, line) => (await policy.can(principal, "records.read", { connection: line })).ok }));
+  void app.register(phoneLineRoutes({ lines: phoneLines, setup: phoneSetup, calls: callSetup, ...(liveKitConfig ? { callsAddress: liveKitConfig.sipUri } : {}), texts: phoneTexts, canRead: async (principal, line) => (await policy.can(principal, "records.read", { connection: line })).ok }));
   /*
    * Outside agents over MCP (`outside/`, `routes/outside-mcp.ts`): what a
    * stranger may do on the public booking page, and writing to the team,

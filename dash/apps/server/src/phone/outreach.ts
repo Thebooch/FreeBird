@@ -107,6 +107,7 @@ export class PhoneOutreach {
 
   private async text(line: PhoneLine, open: PhoneProviders[string], to: string, m: OutreachMessage): Promise<OutreachResult> {
     /* 1. Registration. */
+    if (line.phone.text.status === "none") return { status: "not_sent", detail: "This line carries calls only: its provider has no texts. Nothing was sent." };
     if (line.phone.text.status !== "approved") return { status: "not_sent", detail: "Texting starts when this line's registration is approved. Nothing was sent." };
     /* 2 and 3. Not opted out; consent on record, or they texted first. */
     const may = await this.mayText(line, to);

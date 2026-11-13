@@ -1,5 +1,6 @@
 import type { BrandProfile, CampaignDraft, CampaignUse, RegistrationStatus, RejectionHelp, SubmissionRef } from "@freebirdai/dash-spec";
 import type { RegistrationAdapter } from "@freebirdai/phone";
+import { TelnyxError } from "./errors.js";
 
 /**
  * Telnyx's 10DLC registration, as Dash Phone's `RegistrationAdapter`. Checked
@@ -134,7 +135,7 @@ export const telnyxRegistration = (deps: TelnyxRegistrationDeps): RegistrationAd
   return {
     descriptions,
     submitBrand: async (p: BrandProfile): Promise<SubmissionRef> => {
-      if (p.businessType === "sole_proprietor") throw new Error("Telnyx registers a sole proprietor with a one-time PIN texted to the owner's mobile, which Dash's wizard does not take yet. Register as a business with an EIN, or use Twilio for a sole proprietor.");
+      if (p.businessType === "sole_proprietor") throw new TelnyxError("Telnyx registers a sole proprietor with a one-time PIN texted to the owner's mobile, which Dash's wizard does not take yet. Register as a business with an EIN, or use Twilio for a sole proprietor.", 422);
       const [first, ...rest] = p.contact.name.trim().split(/\s+/);
       const made = dataOf(
         await call("POST", "/10dlc/brand", {

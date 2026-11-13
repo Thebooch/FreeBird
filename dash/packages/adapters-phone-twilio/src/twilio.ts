@@ -2,7 +2,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { e164Schema, type AccountInfo, type AvailableNumber, type DeliveryUpdate, type InboundText, type OwnedNumber, type PhoneDeliveryStatus } from "@freebirdai/dash-spec";
 import { twilioRegistration } from "./registration.js";
 import { twilioVoice } from "./voice.js";
-import { PhoneKeysError, PhoneParseError, RepeatSendError, type OpenPhoneProvider, type PhoneKeys, type PhoneProvider, type RawRequest } from "@freebirdai/phone";
+import { PhoneKeysError, PhoneParseError, PhoneProviderError, RepeatSendError, type OpenPhoneProvider, type PhoneKeys, type PhoneProvider, type RawRequest } from "@freebirdai/phone";
 
 /**
  * Twilio, for Dash Phone: verify an account, search, buy, list, route and
@@ -42,14 +42,10 @@ export interface TwilioOptions {
 }
 
 /** A Twilio answer that was not a success, in its own words. */
-export class TwilioError extends Error {
-  override readonly name = "TwilioError";
-  constructor(
-    message: string,
-    readonly status: number,
-    readonly code?: number,
-  ) {
-    super(message);
+export class TwilioError extends PhoneProviderError {
+  override readonly name: string = "TwilioError";
+  constructor(message: string, status: number, code?: number) {
+    super(message, "Twilio", status, code);
   }
 }
 

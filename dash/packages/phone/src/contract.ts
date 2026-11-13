@@ -133,6 +133,23 @@ export class RepeatSendError extends Error {
   }
 }
 
+/**
+ * A provider's own refusal, in its words: the provider's name, the HTTP
+ * status it answered and its error code. Every adapter's error extends it,
+ * so Dash says "<provider> said: …" without knowing any one provider.
+ */
+export class PhoneProviderError extends Error {
+  override readonly name: string = "PhoneProviderError";
+  constructor(
+    message: string,
+    readonly provider: string,
+    readonly status: number,
+    readonly code?: string | number,
+  ) {
+    super(message);
+  }
+}
+
 /** A webhook body that does not hold what its event says. Thrown only after `verify` accepted it. */
 export class PhoneParseError extends Error {
   override readonly name = "PhoneParseError";

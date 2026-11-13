@@ -78,6 +78,7 @@ export class PhoneLines {
 
   async view(line: PhoneLine): Promise<PhoneLineView> {
     const day = utcDay(this.deps.now());
+    const open = this.deps.providers[line.phone.provider];
     return {
       id: line.id,
       title: line.title,
@@ -87,6 +88,7 @@ export class PhoneLines {
       text: line.phone.text.status,
       voice: line.phone.voice.status,
       calls: line.phone.calls,
+      ...(open ? { capabilities: open({}).capabilities } : {}),
       today: {
         texts: await this.deps.usage.used(line.id, day, "text"),
         textsPerDay: line.phone.ceilings.textsPerDay,
@@ -181,7 +183,7 @@ export class PhoneLines {
       authRequired: false,
       ops: [],
       resources: [],
-      phone: { provider: provider.id, number, owner, text: { status: pretend ? "approved" : "needs_registration" }, voice: { status: pretend ? "ready" : "not_connected" }, ceilings: { textsPerDay: 200, callMinutesPerDay: 120 }, calls: { answer: "agent", recording: true, disclosure: "" } },
+      phone: { provider: provider.id, number, owner, text: { status: !provider.capabilities.text ? "none" : pretend ? "approved" : "needs_registration" }, voice: { status: pretend ? "ready" : "not_connected" }, ceilings: { textsPerDay: 200, callMinutesPerDay: 120 }, calls: { answer: "agent", recording: true, disclosure: "" } },
     } as unknown as ConnectionSpec & PhoneLine;
     this.deps.connections.put(connection);
     return connection;

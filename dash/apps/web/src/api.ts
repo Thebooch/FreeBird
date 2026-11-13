@@ -175,6 +175,8 @@ export interface PhoneAccount {
   readonly title: string;
   readonly connected: boolean;
   readonly credentials: readonly CredentialField[];
+  /** What the provider offers: a SIP-only carrier has no texts and no registration, so setup skips those steps. */
+  readonly capabilities?: { readonly text: boolean; readonly voice: "sip" | "none"; readonly registration: "10dlc" | "none" };
 }
 
 /** Whether providers can reach this server, and how to fix it when they cannot. */
@@ -1661,7 +1663,7 @@ export const api = {
   syncCalendars: (): Promise<{ written: number }> => request("/api/comms/calendar/sync", json({})),
   removeMailbox: (id: string): Promise<{ removed: string }> => request(`/api/comms/mailboxes/${encodeURIComponent(id)}`, { method: "DELETE" }),
   /* Phone lines (Dash Phone): Settings → Phone, and each line's conversations. */
-  phoneLines: (): Promise<{ lines: PhoneLineView[]; accounts: PhoneAccount[] }> => request("/api/comms/lines"),
+  phoneLines: (): Promise<{ lines: PhoneLineView[]; accounts: PhoneAccount[]; callsAddress?: string }> => request("/api/comms/lines"),
   connectPhoneAccount: (provider: string, keys: Record<string, string>): Promise<{ name: string; trial: boolean }> => request(`/api/comms/lines/accounts/${encodeURIComponent(provider)}`, json({ keys })),
   searchPhoneNumbers: (provider: string, areaCode: string): Promise<{ numbers: AvailableNumber[] }> =>
     request(`/api/comms/lines/accounts/${encodeURIComponent(provider)}/numbers${areaCode ? `?areaCode=${encodeURIComponent(areaCode)}` : ""}`),

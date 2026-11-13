@@ -1,6 +1,7 @@
 export {
   PhoneKeysError,
   PhoneParseError,
+  PhoneProviderError,
   RepeatSendError,
   type CallPlacer,
   type NumberAdapter,

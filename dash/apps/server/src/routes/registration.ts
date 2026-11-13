@@ -1,6 +1,7 @@
 import type { Principal } from "@freebirdai/dash-spec";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { PhoneProviderError } from "@freebirdai/phone";
 import { RegistrationError, type RegistrationService } from "../phone/registration.js";
 
 /**
@@ -25,7 +26,7 @@ export const registrationRoutes = (deps: { readonly registration: RegistrationSe
         } catch (error) {
           if (error instanceof RegistrationError) return reply.status(error.status).send({ error: error.message, ...(error.problems ? { problems: error.problems } : {}) });
           if (error instanceof z.ZodError) return reply.status(400).send({ error: "That request is not one this understands.", detail: error.issues });
-          if (error instanceof Error && error.name === "TwilioError") return reply.status(502).send({ error: `Twilio said: ${error.message}` });
+          if (error instanceof PhoneProviderError) return reply.status(502).send({ error: `${error.provider} said: ${error.message}` });
           throw error;
         }
       };

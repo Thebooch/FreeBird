@@ -1,6 +1,7 @@
 import { createHash, createPublicKey, verify as verifySignature, type KeyObject } from "node:crypto";
 import { e164Schema, type AccountInfo, type AvailableNumber, type DeliveryUpdate, type InboundText, type OwnedNumber, type PhoneDeliveryStatus } from "@freebirdai/dash-spec";
 import { PhoneKeysError, PhoneParseError, RepeatSendError, type OpenPhoneProvider, type PhoneKeys, type PhoneProvider, type RawRequest } from "@freebirdai/phone";
+import { TelnyxError } from "./errors.js";
 import { telnyxRegistration } from "./registration.js";
 import { telnyxVoice } from "./voice.js";
 
@@ -56,6 +57,8 @@ import { telnyxVoice } from "./voice.js";
  * the media layer) in `voice.ts`.
  */
 
+export { TelnyxError };
+
 export const TELNYX_PROVIDER_ID = "telnyx";
 export const TELNYX_API = "https://api.telnyx.com/v2";
 export const TELNYX_SIGNATURE_HEADER = "telnyx-signature-ed25519";
@@ -75,17 +78,6 @@ export interface TelnyxOptions {
   readonly api?: string;
 }
 
-/** A Telnyx answer that was not a success, in its own words. */
-export class TelnyxError extends Error {
-  override readonly name = "TelnyxError";
-  constructor(
-    message: string,
-    readonly status: number,
-    readonly code?: string,
-  ) {
-    super(message);
-  }
-}
 
 /** Telnyx's per-recipient message statuses, in the four words Dash uses. */
 export const telnyxStatus = (status: string): PhoneDeliveryStatus => {

@@ -308,6 +308,8 @@ export interface PhoneLineView {
   readonly voice: (typeof PHONE_VOICE_STATUSES)[number];
   /** What answers its calls, the forward number, recording, and the business's own opening words. */
   readonly calls?: PhoneLineSpec["calls"];
+  /** What its provider offers: a SIP-only line has no texts and no registration. */
+  readonly capabilities?: { readonly text: boolean; readonly voice: "sip" | "none"; readonly registration: "10dlc" | "none" };
   /** Today's use against the line's ceilings (UTC day). */
   readonly today: { readonly texts: number; readonly textsPerDay: number; readonly callMinutes: number; readonly callMinutesPerDay: number };
 }
@@ -317,6 +319,7 @@ export const PHONE_TEXT_WORDS: Readonly<Record<(typeof PHONE_TEXT_STATUSES)[numb
   pending: "Texts: registration pending",
   approved: "Texts: ready",
   rejected: "Texts: registration rejected",
+  none: "Calls only: no texts on this line",
 };
 
 export const PHONE_VOICE_WORDS: Readonly<Record<(typeof PHONE_VOICE_STATUSES)[number], string>> = {

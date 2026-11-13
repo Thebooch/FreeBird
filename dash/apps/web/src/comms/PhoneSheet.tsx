@@ -1,6 +1,6 @@
 import { Button } from "@freebirdai/dash-components";
 import { PHONE_TEXT_WORDS, PHONE_VOICE_WORDS, RECORDING_NOTICE, openingLine, type AgentSpec, type AvailableNumber, type MailboxOwner, type OwnedNumber, type PhoneLineView, type PhoneText } from "@freebirdai/dash-spec";
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { api, type PhoneAccount, type PhoneAddressCheck } from "../api.js";
 import { FormRow, SheetSection, TextInput } from "../agent/calendar/scheduling/inputs.jsx";
 import { SetupSheet } from "../agent/calendar/scheduling/SetupSheet.jsx";
@@ -37,6 +37,14 @@ const OwnerSelect = ({ id, value, agents, onChange }: { readonly id: string; rea
 );
 
 /** Where a line's texts and calls stand, as two chips. */
+/** What a provider offers, in a line: drives which setup steps show. */
+const offers = (account: Pick<PhoneAccount, "capabilities">): string => {
+  const can = account.capabilities;
+  if (!can) return "Texts and calls";
+  if (!can.text) return can.voice === "sip" ? "Calls only, over a SIP trunk you set up at your carrier" : "Numbers only";
+  return can.voice === "sip" ? `Texts${can.registration === "10dlc" ? " with registration" : ""} and calls` : "Texts";
+};
+
 export const LineChips = ({ line }: { readonly line: Pick<PhoneLineView, "text" | "voice"> }): JSX.Element => (
   <span className="dash-comms-line__status">
     <span data-ready={line.text === "approved" ? "true" : undefined}>{PHONE_TEXT_WORDS[line.text]}</span>
@@ -90,14 +98,19 @@ export const AddPhoneLineSheet = ({ agents, onClose, onAdded }: { readonly agent
   const [note, setNote] = useState<string | null>(null);
   const [made, setMade] = useState<{ line: PhoneLineView; forwarding?: string[] } | null>(null);
   const [heard, setHeard] = useState<PhoneText | null>(null);
+  const [callsAddress, setCallsAddress] = useState<string | undefined>(undefined);
 
   const chosen = accounts.find((one) => one.id === provider);
+  /* A provider without texts (a SIP trunk): no number to buy, no texts to route, no registration. */
+  const texts = chosen?.capabilities?.text !== false;
+  const others = accounts.filter((one) => one.id !== "twilio");
   const connected = Boolean(account) || Boolean(chosen?.connected);
 
   useEffect(() => {
     void api.phoneLines().then(
       (answer) => {
         setAccounts(answer.accounts);
+        setCallsAddress(answer.callsAddress);
         if (!answer.accounts.some((one) => one.id === "twilio") && answer.accounts[0]) setProvider(answer.accounts[0].id);
       },
       (cause: unknown) => setNote(message(cause)),
@@ -118,7 +131,7 @@ export const AddPhoneLineSheet = ({ agents, onClose, onAdded }: { readonly agent
 
   /* The test: wait for a text from the person's own phone. */
   useEffect(() => {
-    if (!made || heard) return;
+    if (!made || heard || made.line.text === "none") return;
     const every = window.setInterval(() => {
       void api.phoneThreads(made.line.id).then((answer) => {
         const inbound = answer.threads.map((one) => one.last).find((one): one is PhoneText => Boolean(one && one.direction === "in"));
@@ -143,9 +156,23 @@ export const AddPhoneLineSheet = ({ agents, onClose, onAdded }: { readonly agent
   if (made) {
     return (
       <SetupSheet trail="Communications · Phone" title={made.line.number ?? made.line.title} testId="phone-line-made" saveLabel="Done" onClose={onClose} onSave={async () => onClose()}>
-        <SheetSection title="Your line is wired" description="Dash pointed this number's texts at your workspace through the provider. Nothing to type into the provider's console.">
+        <SheetSection
+          title="Your line is wired"
+          description={made.line.text === "none" ? "This line carries calls only. Open it to connect its calls; then point your carrier's inbound calls at Dash's SIP address." : "Dash pointed this number's texts at your workspace through the provider. Nothing to type into the provider's console."}
+        >
           <LineChips line={made.line} />
-          {made.line.text !== "approved" && <p className="dash-hint">Texting starts when the line's text registration (A2P 10DLC) is approved. Replies to people who text you first follow the same rule.</p>}
+          {made.line.text === "none" && (
+            <p className="dash-hint" data-testid="phone-sip-address">
+              {callsAddress ? (
+                <>
+                  In your carrier's portal, send this trunk's inbound calls to <code>{callsAddress}</code>.
+                </>
+              ) : (
+                "Calls need the media layer (LiveKit) set up on this server first: see dash/docker/calls."
+              )}
+            </p>
+          )}
+          {made.line.text !== "approved" && made.line.text !== "none" && <p className="dash-hint">Texting starts when the line's text registration (A2P 10DLC) is approved. Replies to people who text you first follow the same rule.</p>}
         </SheetSection>
         {made.forwarding && (
           <SheetSection title="Forward your business number" description={`People keep dialling the number they know: forward its calls to ${made.line.number}.`}>
@@ -156,6 +183,11 @@ export const AddPhoneLineSheet = ({ agents, onClose, onAdded }: { readonly agent
             </ol>
           </SheetSection>
         )}
+        {made.line.text === "none" ? (
+          <SheetSection title="Test it" description={`Once calls are connected, call ${made.line.number} from your own phone: the line's agent answers, and the call shows up in Communications.`}>
+            <p className="dash-hint">Nothing to text: this line has no texts.</p>
+          </SheetSection>
+        ) : (
         <SheetSection title="Test it" description={`Text ${made.line.number} from your own phone. It shows up here, and in Communications, the moment it arrives.`}>
           {heard ? (
             <p className="dash-phone-heard" data-testid="phone-test-heard">
@@ -167,6 +199,7 @@ export const AddPhoneLineSheet = ({ agents, onClose, onAdded }: { readonly agent
             </p>
           )}
         </SheetSection>
+        )}
       </SetupSheet>
     );
   }
@@ -189,7 +222,13 @@ export const AddPhoneLineSheet = ({ agents, onClose, onAdded }: { readonly agent
     >
       <SheetSection title="1. Provider">
         <div className="dash-phone-providers" role="radiogroup" aria-label="Provider">
-          {accounts.map((one) => (
+          {[...accounts.filter((one) => one.id === "twilio"), ...others].map((one, index) => (
+            <Fragment key={one.id}>
+            {index > 0 && one === others[0] && accounts.some((two) => two.id === "twilio") && (
+              <p className="dash-phone-others" data-testid="phone-other-providers">
+                Use another provider
+              </p>
+            )}
             <button
               key={one.id}
               type="button"
@@ -205,12 +244,14 @@ export const AddPhoneLineSheet = ({ agents, onClose, onAdded }: { readonly agent
                 setFound(null);
                 setOwned(null);
                 setNumber("");
+                setChoice(one.capabilities?.text === false ? "existing" : "new");
               }}
               data-testid={`phone-provider-${one.id}`}
             >
               <strong>{one.title}</strong>
-              <span>{one.connected ? "Connected" : one.id === "twilio" ? "The default: paste two keys, pick a number" : "Use another provider"}</span>
+              <span>{one.connected ? `Connected · ${offers(one)}` : one.id === "twilio" ? "The default: paste two keys, pick a number" : offers(one)}</span>
             </button>
+            </Fragment>
           ))}
         </div>
       </SheetSection>
@@ -253,11 +294,13 @@ export const AddPhoneLineSheet = ({ agents, onClose, onAdded }: { readonly agent
           <SheetSection title="3. Number">
             <div className="dash-phone-choices" role="radiogroup" aria-label="Which number">
               {(
-                [
-                  ["new", "Get a new number"],
-                  ["existing", "Use a number already in this account"],
-                  ["forward", "Keep your business number"],
-                ] as const
+                texts
+                  ? ([
+                      ["new", "Get a new number"],
+                      ["existing", "Use a number already in this account"],
+                      ["forward", "Keep your business number"],
+                    ] as const)
+                  : ([["existing", "A number on this trunk"]] as const)
               ).map(([value, label]) => (
                 <label key={value} className="dash-check">
                   <input type="radio" name="phone-choice" checked={choice === value} onChange={() => (setChoice(value), setNumber(""))} data-testid={`phone-choice-${value}`} /> {label}
@@ -322,6 +365,11 @@ export const PhoneLineSheet = ({
   const [voice, setVoice] = useState(line.voice);
   const [callNote, setCallNote] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const callsOnly = line.text === "none";
+  const [callsAddress, setCallsAddress] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (callsOnly) void api.phoneLines().then((answer) => setCallsAddress(answer.callsAddress), () => undefined);
+  }, [callsOnly]);
   useEffect(() => {
     void api.phoneThreads(line.id).then((answer) => setThreads(answer.threads), () => setThreads([]));
   }, [line.id]);
@@ -351,7 +399,7 @@ export const PhoneLineSheet = ({
       <SheetSection
         title="Status"
         actions={
-          onRegister ? (
+          onRegister && !callsOnly && line.capabilities?.registration !== "none" ? (
             <Button size="sm" tone={line.text === "needs_registration" ? "primary" : undefined} onClick={onRegister} testId="phone-register">
               {line.text === "needs_registration" ? "Start registration" : "Text registration"}
             </Button>
@@ -438,6 +486,17 @@ export const PhoneLineSheet = ({
         <p className="dash-hint" data-testid="phone-calls-opening">
           Callers hear: “{openingLine("your business",calls.disclosure, calls.recording)}”
         </p>
+        {callsOnly && (
+          <p className="dash-hint" data-testid="phone-calls-carrier">
+            {callsAddress ? (
+              <>
+                Your carrier has no API Dash can use: in its portal, send this trunk's inbound calls to <code>{callsAddress}</code>.
+              </>
+            ) : (
+              "Calls need the media layer (LiveKit) set up on this server first: see dash/docker/calls."
+            )}
+          </p>
+        )}
         {callNote && <p className="dash-sched-error">{callNote}</p>}
       </SheetSection>
       <SheetSection title="Whose it is" description="Changing this only moves where the line is shown, and which agent texts from it.">

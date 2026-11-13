@@ -212,8 +212,8 @@ export type MailboxSpec = z.infer<typeof mailboxSchema>;
 /** A phone number as carriers write it: `+`, then the country code and number (E.164). */
 export const E164 = /^\+[1-9]\d{7,14}$/;
 
-/** Where a line's texting stands: registration (A2P 10DLC) gates every text. */
-export const PHONE_TEXT_STATUSES = ["needs_registration", "pending", "approved", "rejected"] as const;
+/** Where a line's texting stands: registration (A2P 10DLC) gates every text. `none`: the provider carries calls only (a SIP trunk). */
+export const PHONE_TEXT_STATUSES = ["needs_registration", "pending", "approved", "rejected", "none"] as const;
 /** Where a line's calls stand: the carrier pointed at the media layer, or not. */
 export const PHONE_VOICE_STATUSES = ["not_connected", "ready", "off"] as const;
 
