@@ -152,7 +152,7 @@ export const providerContractCases = (harness: ContractHarness): ContractCase[] 
       if (!text) return;
       const raw = a.inbound({ from: CUSTOMER, to: a.number, body: "Yes, 9 works" }, `${HOOK}/text`);
       assert.equal(text.verify(raw, a.keys), true, "the provider's own signature verifies");
-      assert.equal(text.verify({ ...raw, body: raw.body.replace("9 works", "10 works") }, a.keys), false, "a changed body does not");
+      assert.equal(text.verify({ ...raw, body: raw.body.replace("works", "worked") }, a.keys), false, "a changed body does not");
       assert.equal(text.verify(raw, a.badKeys), false, "other keys do not");
       const unsigned = { ...raw, headers: Object.fromEntries(Object.entries(raw.headers).filter(([name]) => name === "content-type")) };
       assert.equal(text.verify(unsigned, a.keys), false, "no signature does not");
