@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/dash-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "FreeBird Dash authoring agent: deterministic schema inference plus a single LLM call that proposes a binding, validated and previewed before it is saved.",
   "license": "MIT",
   "repository": {

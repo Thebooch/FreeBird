@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/adapters-phone-twilio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Twilio for Dash Phone: verify an account, search, buy, route and release numbers, and send and receive texts with signed webhooks.",
   "license": "MIT",
   "repository": {
