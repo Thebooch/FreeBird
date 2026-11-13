@@ -50,6 +50,30 @@ export const DASH_COMMS_STYLES = `
 .dash-comms-line__name { display: flex; align-items: center; gap: var(--dash-space-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dash-comms-line__status { display: flex; flex-wrap: wrap; gap: 2px var(--dash-space-2); padding-left: 22px; font-size: var(--dash-text-xs); color: var(--dash-muted); }
 .dash-comms-line__status [data-ready] { color: var(--dash-ink-secondary); }
+.dash-comms-line__open { display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left; font: inherit; color: inherit; border: 0; background: transparent; cursor: pointer; padding: 0; border-radius: var(--dash-radius-sm); }
+.dash-comms-line__open:hover { background: var(--dash-wash); }
+
+/* == phone setup ========================================================= */
+.dash-phone-providers { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--dash-space-2); }
+.dash-phone-provider { display: flex; flex-direction: column; gap: 4px; text-align: left; font: inherit; padding: var(--dash-space-3); border: 1px solid var(--dash-border); border-radius: var(--dash-radius); background: var(--dash-surface); color: var(--dash-ink); cursor: pointer; }
+.dash-phone-provider span { font-size: var(--dash-text-xs); color: var(--dash-muted); }
+.dash-phone-provider[data-default="true"] { grid-column: 1 / -1; }
+.dash-phone-provider[data-active="true"] { border-color: var(--dash-accent); box-shadow: 0 0 0 1px var(--dash-accent); }
+.dash-phone-search { display: flex; gap: var(--dash-space-2); align-items: center; }
+.dash-phone-choices { display: flex; flex-direction: column; gap: var(--dash-space-1); margin-bottom: var(--dash-space-2); }
+.dash-phone-connected, .dash-phone-heard { font-size: var(--dash-text-sm); color: var(--dash-ink-secondary); margin: var(--dash-space-2) 0; }
+.dash-phone-address { display: flex; flex-direction: column; gap: var(--dash-space-2); padding: var(--dash-space-3); border: 1px solid var(--dash-border); border-radius: var(--dash-radius); }
+.dash-phone-address__fix ol, .dash-phone-steps { margin: 4px 0 0; padding-left: 20px; font-size: var(--dash-text-sm); }
+.dash-phone-address code { overflow-wrap: anywhere; }
+.dash-phone-threads { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.dash-phone-thread { display: flex; gap: var(--dash-space-2); width: 100%; text-align: left; font: inherit; border: 0; background: transparent; color: var(--dash-ink); padding: 4px 6px; border-radius: var(--dash-radius-sm); cursor: pointer; }
+.dash-phone-thread span { color: var(--dash-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.dash-phone-thread[data-active="true"], .dash-phone-thread:hover { background: var(--dash-wash); }
+.dash-phone-texts { list-style: none; margin: var(--dash-space-3) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--dash-space-2); }
+.dash-phone-texts li { display: flex; flex-direction: column; max-width: 80%; padding: 6px 10px; border-radius: var(--dash-radius); background: var(--dash-wash); }
+.dash-phone-texts li[data-direction="out"] { align-self: flex-end; background: var(--dash-surface); border: 1px solid var(--dash-border); }
+.dash-phone-texts li[data-keyword] { opacity: 0.75; font-style: italic; }
+.dash-phone-text__meta { font-size: var(--dash-text-xs); color: var(--dash-muted); }
 
 /* == mail ================================================================ */
 .dash-comms__search { padding: var(--dash-space-3); border-bottom: 1px solid var(--dash-border); position: sticky; top: 0; background: var(--dash-surface); z-index: 1; }

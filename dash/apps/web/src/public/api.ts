@@ -82,6 +82,8 @@ export interface TypePage {
   readonly workspace: Brand;
   readonly type: PublicType;
   readonly open: boolean;
+  /** The words beside the text box, exactly as they are kept as consent. Absent: no box. */
+  readonly textConsentWording?: string;
   /** This browser started already: its own page. */
   readonly personal?: string;
 }
@@ -161,7 +163,7 @@ export const typeApi = (workspace: string, slug: string) => {
   const root = `${base(workspace)}/types/${encodeURIComponent(slug)}`;
   return {
     page: () => call<TypePage>(root),
-    start: (input: { readonly name: string; readonly email: string; readonly phone?: string; readonly timezone?: string; readonly website: string }) => call<{ page: string }>(`${root}/start`, input),
+    start: (input: { readonly name: string; readonly email: string; readonly phone?: string; readonly timezone?: string; readonly website: string; readonly textConsent?: boolean }) => call<{ page: string }>(`${root}/start`, input),
   };
 };
 

@@ -255,6 +255,28 @@ describe("the public link", () => {
   });
 });
 
+describe("the booking page's text box", () => {
+  it("offers the exact words, and keeps them as consent only when ticked, for the number they typed", async () => {
+    const { team, world } = await setup("consent");
+    const page = (await world.inject({ method: "GET", url: "/api/public/acme/types/visit" })).json();
+    expect(page.textConsentWording).toMatch(/Reply HELP for help, STOP to opt out\.$/);
+
+    await world.inject({ method: "POST", url: "/api/public/acme/types/visit/start", payload: { name: "Ben", email: "ben@example.com", phone: "512-555-0101" } });
+    await world.inject({ method: "POST", url: "/api/public/acme/types/visit/start", payload: { name: "Cy", email: "cy@example.com", phone: "512-555-0102", textConsent: true } });
+    const list = (await team.inject({ method: "GET", url: "/api/contacts" })).json() as { contacts: Array<{ emails: string[]; textConsent?: { status: string; source: string; wording: string; phone: string } }> };
+    const of = (email: string) => list.contacts.find((one) => one.emails.includes(email));
+    expect(of("ben@example.com")?.textConsent).toBeUndefined();
+    expect(of("cy@example.com")?.textConsent).toMatchObject({ status: "given", source: "booking_page", wording: page.textConsentWording, phone: "+15125550102" });
+  });
+
+  it("never adds consent to a contact someone else's email found", async () => {
+    const { team, world, contact } = await setup("consent-found");
+    const ana = await contact("Ana Ruiz", "ana@example.com");
+    await world.inject({ method: "POST", url: "/api/public/acme/types/visit/start", payload: { name: "Someone", email: "ana@example.com", phone: "512-555-0199", textConsent: true } });
+    expect((await team.inject({ method: "GET", url: `/api/contacts/${ana.id}` })).json().textConsent).toBeUndefined();
+  });
+});
+
 describe("the requester policy on the booking pages", () => {
   it("refuses a blocked sender, and once holding is on, a request past the day's limit", async () => {
     const { team, world, contact, linkFor, at } = await setup("requesters");

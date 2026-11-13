@@ -1,11 +1,12 @@
 import { AgentChip, Button, EmptyState, Icon } from "@freebirdai/dash-components";
-import { PHONE_TEXT_WORDS, PHONE_VOICE_WORDS, type AgentSpec, type MailboxView, type MailPage, type PhoneLineView } from "@freebirdai/dash-spec";
+import { type AgentSpec, type MailboxView, type MailPage, type PhoneLineView } from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
 import { AddMailboxSheet, MailboxSheet, signInTo } from "./MailboxSheet.jsx";
 import { areaGroups, filterShown, loadSelection, saveSelection, ticked, toggle, when, type AreaGroup } from "./model.js";
 import { ThreadView } from "./ThreadView.jsx";
 import { CommsSettingsSheet } from "./CommsSettingsSheet.jsx";
+import { AddPhoneLineSheet, LineChips, PhoneLineSheet } from "./PhoneSheet.jsx";
 import { HeldEmails } from "../agent/workflows/HeldEmails.jsx";
 
 /**
@@ -51,6 +52,8 @@ export const CommsShell = (): JSX.Element => {
   const [adding, setAdding] = useState(false);
   const [managing, setManaging] = useState<MailboxView | null>(null);
   const [settingUp, setSettingUp] = useState(false);
+  const [addingLine, setAddingLine] = useState(false);
+  const [lineOpen, setLineOpen] = useState<PhoneLineView | null>(null);
   const asked = useRef(0);
 
   const loadMailboxes = useCallback(async () => {
@@ -165,14 +168,13 @@ export const CommsShell = (): JSX.Element => {
       <ul className="dash-comms__list" aria-label="Phone lines">
         {one.lines.map((line) => (
           <li key={line.id} className="dash-comms-line" data-testid={`comms-line-${line.id}`}>
-            <span className="dash-comms-line__name" title={line.title}>
-              <Icon name="phone" />
-              {line.number ?? line.title}
-            </span>
-            <span className="dash-comms-line__status">
-              <span data-ready={line.text === "approved" ? "true" : undefined}>{PHONE_TEXT_WORDS[line.text]}</span>
-              <span data-ready={line.voice === "ready" ? "true" : undefined}>{PHONE_VOICE_WORDS[line.voice]}</span>
-            </span>
+            <button type="button" className="dash-comms-line__open" onClick={() => setLineOpen(line)} title={line.title}>
+              <span className="dash-comms-line__name">
+                <Icon name="phone" />
+                {line.number ?? line.title}
+              </span>
+              <LineChips line={line} />
+            </button>
           </li>
         ))}
       </ul>
@@ -201,6 +203,9 @@ export const CommsShell = (): JSX.Element => {
           <h1 className="dash-comms__title">Comms</h1>
           <Button size="sm" tone="primary" onClick={() => setAdding(true)} testId="comms-add-mailbox">
             Add mailbox
+          </Button>
+          <Button size="sm" onClick={() => setAddingLine(true)} testId="comms-add-line">
+            Add phone line
           </Button>
         </div>
         <h2 className="dash-comms__group">Your comms</h2>
@@ -337,6 +342,8 @@ export const CommsShell = (): JSX.Element => {
         />
       )}
       {settingUp && <CommsSettingsSheet onClose={() => setSettingUp(false)} />}
+      {addingLine && <AddPhoneLineSheet agents={agents} onClose={() => setAddingLine(false)} onAdded={() => void loadMailboxes()} />}
+      {lineOpen && <PhoneLineSheet line={lineOpen} agents={agents} onClose={() => setLineOpen(null)} onChanged={() => void loadMailboxes()} />}
       {managing && <MailboxSheet mailbox={managing} agents={agents} onClose={() => setManaging(null)} onChanged={() => void loadMailboxes()} />}
     </div>
   );

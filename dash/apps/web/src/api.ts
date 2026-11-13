@@ -5,6 +5,10 @@ import type {
   MailboxOwner,
   MailboxView,
   PhoneLineView,
+  PhoneText,
+  AvailableNumber,
+  OwnedNumber,
+  CredentialField,
   MailDraft,
   MailMessage,
   MailPage,
@@ -162,6 +166,22 @@ export class ApiError extends Error {
  * The server already phrases failures for a person to read, so pass its
  * message through rather than replacing it with something more generic.
  */
+/** A phone provider as Settings → Phone shows it: whether its keys are in, and what it asks for. */
+export interface PhoneAccount {
+  readonly id: string;
+  readonly title: string;
+  readonly connected: boolean;
+  readonly credentials: readonly CredentialField[];
+}
+
+/** Whether providers can reach this server, and how to fix it when they cannot. */
+export interface PhoneAddressCheck {
+  readonly ok: boolean;
+  readonly origin?: string;
+  readonly problem?: string;
+  readonly fixes?: readonly { readonly title: string; readonly steps: readonly string[] }[];
+}
+
 const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
   let response: Response;
   try {
@@ -1637,6 +1657,19 @@ export const api = {
     request(`/api/comms/mailboxes/${encodeURIComponent(id)}/calendar`, { ...json({ calendar }), method: "PUT" }),
   syncCalendars: (): Promise<{ written: number }> => request("/api/comms/calendar/sync", json({})),
   removeMailbox: (id: string): Promise<{ removed: string }> => request(`/api/comms/mailboxes/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /* Phone lines (Dash Phone): Settings → Phone, and each line's conversations. */
+  phoneLines: (): Promise<{ lines: PhoneLineView[]; accounts: PhoneAccount[] }> => request("/api/comms/lines"),
+  connectPhoneAccount: (provider: string, keys: Record<string, string>): Promise<{ name: string; trial: boolean }> => request(`/api/comms/lines/accounts/${encodeURIComponent(provider)}`, json({ keys })),
+  searchPhoneNumbers: (provider: string, areaCode: string): Promise<{ numbers: AvailableNumber[] }> =>
+    request(`/api/comms/lines/accounts/${encodeURIComponent(provider)}/numbers${areaCode ? `?areaCode=${encodeURIComponent(areaCode)}` : ""}`),
+  ownedPhoneNumbers: (provider: string): Promise<{ numbers: OwnedNumber[] }> => request(`/api/comms/lines/accounts/${encodeURIComponent(provider)}/owned`),
+  checkPhoneAddress: (): Promise<PhoneAddressCheck> => request("/api/comms/lines/address-check", { method: "POST" }),
+  setUpPhoneLine: (input: { provider: string; choice: "new" | "existing" | "forward"; number: string; owner: MailboxOwner; title?: string }): Promise<{ line: PhoneLineView; forwarding?: string[] }> =>
+    request("/api/comms/lines/setup", json(input)),
+  setPhoneLineOwner: (id: string, owner: MailboxOwner): Promise<PhoneLineView> => request(`/api/comms/lines/${encodeURIComponent(id)}/owner`, { ...json({ owner }), method: "PUT" }),
+  removePhoneLine: (id: string): Promise<{ removed: string }> => request(`/api/comms/lines/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  phoneThreads: (id: string): Promise<{ threads: Array<{ number: string; startedBy: "them" | "us"; lastAt: string; last: PhoneText | null }> }> => request(`/api/comms/lines/${encodeURIComponent(id)}/threads`),
+  phoneThread: (id: string, number: string): Promise<{ texts: PhoneText[] }> => request(`/api/comms/lines/${encodeURIComponent(id)}/threads/${encodeURIComponent(number)}`),
   refreshMailbox: (id: string): Promise<MailboxView | null> => request(`/api/comms/mailboxes/${encodeURIComponent(id)}/refresh`, json({})),
   /** One page of an area's mail, merged by time across the mailboxes named (all of them when none are). */
   commsList: (input: { area: string; mailboxes?: readonly string[]; cursor?: string; q?: string }): Promise<MailPage> => {
