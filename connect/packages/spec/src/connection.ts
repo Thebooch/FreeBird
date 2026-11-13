@@ -234,6 +234,8 @@ export const phoneLineSchema = z.object({
       status: z.enum(PHONE_VOICE_STATUSES).default("not_connected"),
       /** The provider's trunk pointing this line's calls at the media layer, once connected. */
       trunk: z.string().max(200).optional(),
+      /** The media layer's own side (LiveKit): its inbound trunk, dispatch rule and outbound trunk for this line. */
+      media: z.object({ inbound: z.string().max(200), dispatch: z.string().max(200), outbound: z.string().max(200) }).optional(),
     })
     .default({}),
   /**
