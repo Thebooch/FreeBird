@@ -13,7 +13,7 @@ import { SetupSheet } from "../agent/calendar/scheduling/SetupSheet.jsx";
  * 2. Paste its keys: Dash checks them and names the account.
  * 3. Dash checks that the internet can reach it, before anything is bought.
  * 4. Choose a number: a new one, one already in the account, or a new one
- *    to receive on while customers keep dialling the business's own number.
+ *    to receive on while people keep dialling the business's own number.
  * 5. Dash points the number's texts at the line; then text it to test.
  * 6. Whose it is: the team's, or one agent's.
  *
@@ -148,7 +148,7 @@ export const AddPhoneLineSheet = ({ agents, onClose, onAdded }: { readonly agent
           {made.line.text !== "approved" && <p className="dash-hint">Texting starts when the line's text registration (A2P 10DLC) is approved. Replies to people who text you first follow the same rule.</p>}
         </SheetSection>
         {made.forwarding && (
-          <SheetSection title="Forward your business number" description={`Customers keep dialling the number they know: forward its calls to ${made.line.number}.`}>
+          <SheetSection title="Forward your business number" description={`People keep dialling the number they know: forward its calls to ${made.line.number}.`}>
             <ol className="dash-phone-steps" data-testid="phone-forwarding">
               {made.forwarding.map((step) => (
                 <li key={step}>{step}</li>
@@ -265,7 +265,7 @@ export const AddPhoneLineSheet = ({ agents, onClose, onAdded }: { readonly agent
               ))}
             </div>
             {choice === "forward" && (
-              <FormRow label="Your business number" hint="Customers keep dialling it. Dash gets a number to receive on, then shows how to forward your calls to it.">
+              <FormRow label="Your business number" hint="People keep dialling it. Dash gets a number to receive on, then shows how to forward your calls to it.">
                 {(id) => <TextInput id={id} value={businessNumber} onChange={setBusinessNumber} placeholder="+1 555 123 4567" />}
               </FormRow>
             )}
