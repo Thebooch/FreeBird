@@ -1,7 +1,8 @@
 import { Button } from "@freebirdai/dash-components";
 import { PHONE_TEXT_WORDS, PHONE_VOICE_WORDS, RECORDING_NOTICE, openingLine, type AgentSpec, type AvailableNumber, type MailboxOwner, type OwnedNumber, type PhoneLineView, type PhoneText } from "@freebirdai/dash-spec";
 import { Fragment, useCallback, useEffect, useState } from "react";
-import { api, type PhoneAccount, type PhoneAddressCheck } from "../api.js";
+import { api, type PhoneAccount, type PhoneAddressCheck, type PhoneLineOffer } from "../api.js";
+import { OFFER_PREFIX, setupCards } from "./phoneChoices.js";
 import { FormRow, SheetSection, TextInput } from "../agent/calendar/scheduling/inputs.jsx";
 import { SetupSheet } from "../agent/calendar/scheduling/SetupSheet.jsx";
 
@@ -37,16 +38,13 @@ const OwnerSelect = ({ id, value, agents, onChange }: { readonly id: string; rea
 );
 
 /** Where a line's texts and calls stand, as two chips. */
-/** What a provider offers, in a line: drives which setup steps show. */
-const offers = (account: Pick<PhoneAccount, "capabilities">): string => {
-  const can = account.capabilities;
-  if (!can) return "Texts and calls";
-  if (!can.text) return can.voice === "sip" ? "Calls only, over a SIP trunk you set up at your carrier" : "Numbers only";
-  return can.voice === "sip" ? `Texts${can.registration === "10dlc" ? " with registration" : ""} and calls` : "Texts";
-};
-
-export const LineChips = ({ line }: { readonly line: Pick<PhoneLineView, "text" | "voice"> }): JSX.Element => (
+export const LineChips = ({ line }: { readonly line: Pick<PhoneLineView, "text" | "voice" | "suspended"> }): JSX.Element => (
   <span className="dash-comms-line__status">
+    {line.suspended && (
+      <span data-suspended="true" data-testid="phone-line-suspended">
+        Suspended{line.suspended.by === "host" ? " by the provider of this number" : ""}
+      </span>
+    )}
     <span data-ready={line.text === "approved" ? "true" : undefined}>{PHONE_TEXT_WORDS[line.text]}</span>
     <span data-ready={line.voice === "ready" ? "true" : undefined}>{PHONE_VOICE_WORDS[line.voice]}</span>
   </span>
@@ -99,11 +97,14 @@ export const AddPhoneLineSheet = ({ agents, onClose, onAdded }: { readonly agent
   const [made, setMade] = useState<{ line: PhoneLineView; forwarding?: string[] } | null>(null);
   const [heard, setHeard] = useState<PhoneText | null>(null);
   const [callsAddress, setCallsAddress] = useState<string | undefined>(undefined);
+  const [lineOffers, setLineOffers] = useState<readonly PhoneLineOffer[]>([]);
 
+  /* A line the server's host provides: picked from its card, only when it offers one. */
+  const offer = provider.startsWith(OFFER_PREFIX) ? lineOffers.find((one) => `${OFFER_PREFIX}${one.id}` === provider) : undefined;
   const chosen = accounts.find((one) => one.id === provider);
   /* A provider without texts (a SIP trunk): no number to buy, no texts to route, no registration. */
   const texts = chosen?.capabilities?.text !== false;
-  const others = accounts.filter((one) => one.id !== "twilio");
+
   const connected = Boolean(account) || Boolean(chosen?.connected);
 
   useEffect(() => {
@@ -111,6 +112,7 @@ export const AddPhoneLineSheet = ({ agents, onClose, onAdded }: { readonly agent
       (answer) => {
         setAccounts(answer.accounts);
         setCallsAddress(answer.callsAddress);
+        setLineOffers(answer.offers ?? []);
         if (!answer.accounts.some((one) => one.id === "twilio") && answer.accounts[0]) setProvider(answer.accounts[0].id);
       },
       (cause: unknown) => setNote(message(cause)),
@@ -122,8 +124,8 @@ export const AddPhoneLineSheet = ({ agents, onClose, onAdded }: { readonly agent
     void api.checkPhoneAddress().then(setAddress, (cause: unknown) => setAddress({ ok: false, problem: message(cause) }));
   }, []);
   useEffect(() => {
-    if (connected && !address) checkAddress();
-  }, [connected, address, checkAddress]);
+    if ((connected || offer) && !address) checkAddress();
+  }, [connected, offer, address, checkAddress]);
 
   useEffect(() => {
     if (connected && choice === "existing" && owned === null) void api.ownedPhoneNumbers(provider).then((answer) => setOwned(answer.numbers), (cause: unknown) => setNote(message(cause)));
@@ -212,6 +214,13 @@ export const AddPhoneLineSheet = ({ agents, onClose, onAdded }: { readonly agent
       testId="add-phone-line"
       onClose={onClose}
       onSave={async () => {
+        if (offer) {
+          if (!address?.ok) throw new Error("This server can't be reached from the internet yet: fix the address first.");
+          const result = await api.providePhoneLine({ offer: offer.id, ...(offer.areaCode && areaCode.trim() ? { areaCode: areaCode.trim() } : {}), owner: ownerOf(owner) });
+          setMade(result);
+          onAdded();
+          return;
+        }
         if (!connected) throw new Error("Connect the provider's account first.");
         if (!address?.ok) throw new Error("This server can't be reached from the internet yet: fix the address first.");
         if (!number) throw new Error(choice === "existing" ? "Pick a number from the account." : "Search, then pick a number.");
@@ -222,35 +231,34 @@ export const AddPhoneLineSheet = ({ agents, onClose, onAdded }: { readonly agent
     >
       <SheetSection title="1. Provider">
         <div className="dash-phone-providers" role="radiogroup" aria-label="Provider">
-          {[...accounts.filter((one) => one.id === "twilio"), ...others].map((one, index) => (
-            <Fragment key={one.id}>
-            {index > 0 && one === others[0] && accounts.some((two) => two.id === "twilio") && (
-              <p className="dash-phone-others" data-testid="phone-other-providers">
-                Use another provider
-              </p>
-            )}
-            <button
-              key={one.id}
-              type="button"
-              role="radio"
-              aria-checked={provider === one.id}
-              className="dash-phone-provider"
-              data-default={one.id === "twilio" ? "true" : undefined}
-              data-active={provider === one.id ? "true" : undefined}
-              onClick={() => {
-                setProvider(one.id);
-                setAccount(null);
-                setKeys({});
-                setFound(null);
-                setOwned(null);
-                setNumber("");
-                setChoice(one.capabilities?.text === false ? "existing" : "new");
-              }}
-              data-testid={`phone-provider-${one.id}`}
-            >
-              <strong>{one.title}</strong>
-              <span>{one.connected ? `Connected · ${offers(one)}` : one.id === "twilio" ? "The default: paste two keys, pick a number" : offers(one)}</span>
-            </button>
+          {setupCards(accounts, lineOffers).map((card) => (
+            <Fragment key={card.id}>
+              {card.kind === "provider" && card.firstOther && (
+                <p className="dash-phone-others" data-testid="phone-other-providers">
+                  Use another provider
+                </p>
+              )}
+              <button
+                type="button"
+                role="radio"
+                aria-checked={provider === card.id}
+                className="dash-phone-provider"
+                data-default={card.kind === "offer" || card.isDefault ? "true" : undefined}
+                data-active={provider === card.id ? "true" : undefined}
+                onClick={() => {
+                  setProvider(card.id);
+                  setAccount(null);
+                  setKeys({});
+                  setFound(null);
+                  setOwned(null);
+                  setNumber("");
+                  setChoice(card.kind === "provider" && card.account.capabilities?.text === false ? "existing" : "new");
+                }}
+                data-testid={card.kind === "offer" ? `phone-offer-${card.offer.id}` : `phone-provider-${card.id}`}
+              >
+                <strong>{card.title}</strong>
+                <span>{card.description}</span>
+              </button>
             </Fragment>
           ))}
         </div>
@@ -286,8 +294,23 @@ export const AddPhoneLineSheet = ({ agents, onClose, onAdded }: { readonly agent
         </p>
       )}
 
-      {connected && address && !address.ok && <AddressProblem check={address} onRetry={checkAddress} />}
-      {connected && !address && <p className="dash-hint">Checking that providers can reach this server…</p>}
+      {(connected || offer) && address && !address.ok && <AddressProblem check={address} onRetry={checkAddress} />}
+      {(connected || offer) && !address && <p className="dash-hint">Checking that providers can reach this server…</p>}
+
+      {offer && address?.ok && (
+        <>
+          <SheetSection title="2. Number" description="The number is bought and wired for you; nothing to paste.">
+            {offer.areaCode && (
+              <FormRow label="Area code" hint="Optional: leave it empty for any local number.">
+                {(id) => <TextInput id={id} value={areaCode} onChange={setAreaCode} maxLength={3} placeholder="415" testId="phone-offer-area-code" />}
+              </FormRow>
+            )}
+          </SheetSection>
+          <SheetSection title="3. Whose it is" description="The team's line shows under Your comms; an agent's own line shows in its area, and only that agent texts from it.">
+            <FormRow label="Owner">{(id) => <OwnerSelect id={id} value={owner} agents={agents.filter((one) => !one.archived)} onChange={setOwner} />}</FormRow>
+          </SheetSection>
+        </>
+      )}
 
       {connected && address?.ok && (
         <>
@@ -366,6 +389,8 @@ export const PhoneLineSheet = ({
   const [callNote, setCallNote] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const callsOnly = line.text === "none";
+  const [suspended, setSuspended] = useState(line.suspended ?? null);
+  const [suspending, setSuspending] = useState(false);
   const [callsAddress, setCallsAddress] = useState<string | undefined>(undefined);
   useEffect(() => {
     if (callsOnly) void api.phoneLines().then((answer) => setCallsAddress(answer.callsAddress), () => undefined);
@@ -406,7 +431,31 @@ export const PhoneLineSheet = ({
           ) : undefined
         }
       >
-        <LineChips line={line} />
+        <LineChips line={{ ...line, ...(suspended ? { suspended } : { suspended: undefined }) }} />
+        <div className="dash-phone-suspend">
+          <Button
+            size="sm"
+            busy={suspending}
+            testId="phone-suspend"
+            disabled={suspended?.by === "host"}
+            onClick={() => {
+              setSuspending(true);
+              void api
+                .setPhoneLineSuspended(line.id, !suspended)
+                .then((next) => (setSuspended(next.suspended ?? null), onChanged()))
+                .finally(() => setSuspending(false));
+            }}
+          >
+            {suspended ? "Resume line" : "Suspend line"}
+          </Button>
+          <span className="dash-hint">
+            {suspended?.by === "host"
+              ? `The provider of this number suspended it${suspended.reason ? `: ${suspended.reason}` : ""}.`
+              : suspended
+                ? "No texts go out and no calls are placed; texts and calls that come in are still kept."
+                : "Suspending stops every text and call from this line until it is resumed."}
+          </span>
+        </div>
         <p className="dash-hint">
           Today: {line.today.texts} of {line.today.textsPerDay} texts, {line.today.callMinutes} of {line.today.callMinutesPerDay} call minutes.
         </p>

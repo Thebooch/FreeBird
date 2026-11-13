@@ -61,6 +61,8 @@ export const DASH_COMMS_STYLES = `
 .dash-phone-provider[data-default="true"] { grid-column: 1 / -1; }
 .dash-phone-provider[data-active="true"] { border-color: var(--dash-accent); box-shadow: 0 0 0 1px var(--dash-accent); }
 .dash-phone-others { grid-column: 1 / -1; margin: var(--dash-space-2) 0 0; font-size: var(--dash-text-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--dash-muted); }
+.dash-phone-suspend { display: flex; flex-wrap: wrap; gap: var(--dash-space-2); align-items: center; margin: var(--dash-space-2) 0; }
+.dash-comms-line__status [data-suspended="true"] { color: var(--dash-danger, #b42318); font-weight: 600; }
 .dash-phone-search { display: flex; gap: var(--dash-space-2); align-items: center; }
 .dash-phone-choices { display: flex; flex-direction: column; gap: var(--dash-space-1); margin-bottom: var(--dash-space-2); }
 .dash-phone-connected, .dash-phone-heard { font-size: var(--dash-text-sm); color: var(--dash-ink-secondary); margin: var(--dash-space-2) 0; }

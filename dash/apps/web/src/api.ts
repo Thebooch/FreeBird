@@ -179,6 +179,14 @@ export interface PhoneAccount {
   readonly capabilities?: { readonly text: boolean; readonly voice: "sip" | "none"; readonly registration: "10dlc" | "none" };
 }
 
+/** A line the server's host provides, as its setup card shows it. Only when the host offers one. */
+export interface PhoneLineOffer {
+  readonly id: string;
+  readonly title: string;
+  readonly description: string;
+  readonly areaCode: boolean;
+}
+
 /** Whether providers can reach this server, and how to fix it when they cannot. */
 export interface PhoneAddressCheck {
   readonly ok: boolean;
@@ -1663,7 +1671,10 @@ export const api = {
   syncCalendars: (): Promise<{ written: number }> => request("/api/comms/calendar/sync", json({})),
   removeMailbox: (id: string): Promise<{ removed: string }> => request(`/api/comms/mailboxes/${encodeURIComponent(id)}`, { method: "DELETE" }),
   /* Phone lines (Dash Phone): Settings → Phone, and each line's conversations. */
-  phoneLines: (): Promise<{ lines: PhoneLineView[]; accounts: PhoneAccount[]; callsAddress?: string }> => request("/api/comms/lines"),
+  phoneLines: (): Promise<{ lines: PhoneLineView[]; accounts: PhoneAccount[]; offers?: PhoneLineOffer[]; callsAddress?: string }> => request("/api/comms/lines"),
+  providePhoneLine: (input: { offer: string; areaCode?: string; owner: MailboxOwner; title?: string }): Promise<{ line: PhoneLineView }> => request("/api/comms/lines/provided", json(input)),
+  setPhoneLineSuspended: (id: string, suspended: boolean, reason?: string): Promise<PhoneLineView> =>
+    request(`/api/comms/lines/${encodeURIComponent(id)}/suspended`, { ...json({ suspended, ...(reason ? { reason } : {}) }), method: "PUT" }),
   connectPhoneAccount: (provider: string, keys: Record<string, string>): Promise<{ name: string; trial: boolean }> => request(`/api/comms/lines/accounts/${encodeURIComponent(provider)}`, json({ keys })),
   searchPhoneNumbers: (provider: string, areaCode: string): Promise<{ numbers: AvailableNumber[] }> =>
     request(`/api/comms/lines/accounts/${encodeURIComponent(provider)}/numbers${areaCode ? `?areaCode=${encodeURIComponent(areaCode)}` : ""}`),
