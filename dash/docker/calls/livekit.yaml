@@ -1,0 +1,18 @@
+# LiveKit's server, for Dash Phone's calls. Keys come from LIVEKIT_KEYS
+# (docker-compose.yml); the webhook tells Dash when a call's room fills, so
+# the voice worker can join it. Replace the webhook URL with your Dash
+# server's public address (the same as DASH_PUBLIC_ORIGIN) and workspace.
+
+port: 7880
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 50100
+  use_external_ip: true
+redis:
+  address: redis:6379
+webhook:
+  # The key LiveKit signs webhooks with: the same as LIVEKIT_API_KEY.
+  api_key: CHANGE_ME_TO_LIVEKIT_API_KEY
+  urls:
+    - https://your-dash.example.com/api/public/local/phone/livekit

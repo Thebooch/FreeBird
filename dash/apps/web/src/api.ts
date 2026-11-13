@@ -1670,6 +1670,10 @@ export const api = {
   setUpPhoneLine: (input: { provider: string; choice: "new" | "existing" | "forward"; number: string; owner: MailboxOwner; title?: string }): Promise<{ line: PhoneLineView; forwarding?: string[] }> =>
     request("/api/comms/lines/setup", json(input)),
   setPhoneLineOwner: (id: string, owner: MailboxOwner): Promise<PhoneLineView> => request(`/api/comms/lines/${encodeURIComponent(id)}/owner`, { ...json({ owner }), method: "PUT" }),
+  setPhoneLineCalls: (id: string, calls: { answer: "agent" | "forward" | "voicemail"; forwardTo?: string; recording: boolean; disclosure: string }): Promise<PhoneLineView> =>
+    request(`/api/comms/lines/${encodeURIComponent(id)}/calls`, { ...json(calls), method: "PUT" }),
+  connectPhoneCalls: (id: string): Promise<PhoneLineView> => request(`/api/comms/lines/${encodeURIComponent(id)}/calls/connect`, { method: "POST" }),
+  disconnectPhoneCalls: (id: string): Promise<PhoneLineView> => request(`/api/comms/lines/${encodeURIComponent(id)}/calls/disconnect`, { method: "POST" }),
   removePhoneLine: (id: string): Promise<{ removed: string }> => request(`/api/comms/lines/${encodeURIComponent(id)}`, { method: "DELETE" }),
   phoneThreads: (id: string): Promise<{ threads: Array<{ number: string; startedBy: "them" | "us"; lastAt: string; last: PhoneText | null }> }> => request(`/api/comms/lines/${encodeURIComponent(id)}/threads`),
   /* Text registration (Dash Phone): the wizard's draft, autosaved. */

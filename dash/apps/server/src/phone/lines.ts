@@ -86,6 +86,7 @@ export class PhoneLines {
       owner: line.phone.owner,
       text: line.phone.text.status,
       voice: line.phone.voice.status,
+      calls: line.phone.calls,
       today: {
         texts: await this.deps.usage.used(line.id, day, "text"),
         textsPerDay: line.phone.ceilings.textsPerDay,

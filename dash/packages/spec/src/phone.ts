@@ -306,6 +306,8 @@ export interface PhoneLineView {
   readonly owner: z.infer<typeof mailboxOwnerSchema>;
   readonly text: (typeof PHONE_TEXT_STATUSES)[number];
   readonly voice: (typeof PHONE_VOICE_STATUSES)[number];
+  /** What answers its calls, the forward number, recording, and the business's own opening words. */
+  readonly calls?: PhoneLineSpec["calls"];
   /** Today's use against the line's ceilings (UTC day). */
   readonly today: { readonly texts: number; readonly textsPerDay: number; readonly callMinutes: number; readonly callMinutesPerDay: number };
 }

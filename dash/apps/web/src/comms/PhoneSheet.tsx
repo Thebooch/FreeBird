@@ -1,5 +1,5 @@
 import { Button } from "@freebirdai/dash-components";
-import { PHONE_TEXT_WORDS, PHONE_VOICE_WORDS, type AgentSpec, type AvailableNumber, type MailboxOwner, type OwnedNumber, type PhoneLineView, type PhoneText } from "@freebirdai/dash-spec";
+import { PHONE_TEXT_WORDS, PHONE_VOICE_WORDS, RECORDING_NOTICE, openingLine, type AgentSpec, type AvailableNumber, type MailboxOwner, type OwnedNumber, type PhoneLineView, type PhoneText } from "@freebirdai/dash-spec";
 import { useCallback, useEffect, useState } from "react";
 import { api, type PhoneAccount, type PhoneAddressCheck } from "../api.js";
 import { FormRow, SheetSection, TextInput } from "../agent/calendar/scheduling/inputs.jsx";
@@ -318,6 +318,10 @@ export const PhoneLineSheet = ({
   const [threads, setThreads] = useState<Awaited<ReturnType<typeof api.phoneThreads>>["threads"] | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [texts, setTexts] = useState<readonly PhoneText[]>([]);
+  const [calls, setCalls] = useState(line.calls ?? { answer: "agent" as const, recording: true, disclosure: "" });
+  const [voice, setVoice] = useState(line.voice);
+  const [callNote, setCallNote] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(false);
   useEffect(() => {
     void api.phoneThreads(line.id).then((answer) => setThreads(answer.threads), () => setThreads([]));
   }, [line.id]);
@@ -333,6 +337,7 @@ export const PhoneLineSheet = ({
       onClose={onClose}
       onSave={async () => {
         if (owner !== ownerKey(line.owner)) await api.setPhoneLineOwner(line.id, ownerOf(owner));
+        if (JSON.stringify(calls) !== JSON.stringify(line.calls ?? null)) await api.setPhoneLineCalls(line.id, { answer: calls.answer, recording: calls.recording, disclosure: calls.disclosure, ...(calls.forwardTo ? { forwardTo: calls.forwardTo } : {}) });
         onChanged();
         onClose();
       }}
@@ -390,6 +395,50 @@ export const PhoneLineSheet = ({
             ))}
           </ol>
         )}
+      </SheetSection>
+      <SheetSection
+        title="Calls"
+        description="What answers a call, and how it opens. Every call says it is an automated assistant for the business; the transcript is always kept."
+        actions={
+          <Button
+            size="sm"
+            busy={connecting}
+            testId="phone-calls-connect"
+            onClick={() => {
+              setConnecting(true);
+              setCallNote(null);
+              void (voice === "ready" ? api.disconnectPhoneCalls(line.id) : api.connectPhoneCalls(line.id))
+                .then((next) => (setVoice(next.voice), onChanged()))
+                .catch((cause: unknown) => setCallNote(cause instanceof Error ? cause.message : String(cause)))
+                .finally(() => setConnecting(false));
+            }}
+          >
+            {voice === "ready" ? "Disconnect calls" : "Connect calls"}
+          </Button>
+        }
+      >
+        <FormRow label="Who answers">
+          {(id) => (
+            <select id={id} className="dash-sched-input" value={calls.answer} onChange={(event) => setCalls({ ...calls, answer: event.target.value as typeof calls.answer })} data-testid="phone-calls-answer">
+              <option value="agent">The line's agent</option>
+              <option value="forward">Forward to a team member's phone</option>
+              <option value="voicemail">Voicemail, with a transcript</option>
+            </select>
+          )}
+        </FormRow>
+        <FormRow label="Team member's phone" hint="Where forwarded calls ring, and where the agent hands a caller who asks for a person.">
+          {(id) => <TextInput id={id} value={calls.forwardTo ?? ""} onChange={(value) => setCalls({ ...calls, ...(value.trim() ? { forwardTo: value.trim() } : { forwardTo: undefined }) })} placeholder="+15551234567" testId="phone-calls-forward" />}
+        </FormRow>
+        <FormRow label="Opening words" hint="Your own greeting. The line always adds that it is your automated assistant, if your words don't say so.">
+          {(id) => <TextInput id={id} value={calls.disclosure} onChange={(value) => setCalls({ ...calls, disclosure: value })} maxLength={300} placeholder="Thanks for calling!" testId="phone-calls-disclosure" />}
+        </FormRow>
+        <label className="dash-check">
+          <input type="checkbox" checked={calls.recording} onChange={(event) => setCalls({ ...calls, recording: event.target.checked })} data-testid="phone-calls-recording" /> Record calls (on by default; the opening then says “{RECORDING_NOTICE}”)
+        </label>
+        <p className="dash-hint" data-testid="phone-calls-opening">
+          Callers hear: “{openingLine(line.title.replace(/^(Twilio|Fake carrier)\s+/, "") || "your business", calls.disclosure, calls.recording)}”
+        </p>
+        {callNote && <p className="dash-sched-error">{callNote}</p>}
       </SheetSection>
       <SheetSection title="Whose it is" description="Changing this only moves where the line is shown, and which agent texts from it.">
         <FormRow label="Owner">{(id) => <OwnerSelect id={id} value={owner} agents={agents.filter((one) => !one.archived)} onChange={setOwner} />}</FormRow>
