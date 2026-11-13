@@ -4520,6 +4520,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
             agents: { roster: await agentStore.list(), update: (principal, id, input) => agents.update(principal, id, input) },
             setup: await scheduling.overview(),
             contactSetup: await contacts.setup(),
+            textRegistration: { registration, lines: phoneLines, sources: textSources },
           }),
         };
         if (!dashboard) {

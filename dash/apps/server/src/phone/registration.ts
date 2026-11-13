@@ -301,7 +301,7 @@ export class RegistrationService {
    * the box stays blank. Kept beside the campaign, never in it, until the
    * person ticks "Use this".
    */
-  async draftUse(lineId: string): Promise<RegistrationDraftView> {
+  async draftUse(lineId: string, guidance?: string): Promise<RegistrationDraftView> {
     const draft = await this.draft(lineId);
     const sources = await this.deps.sources();
     if (sources.length === 0) {
@@ -318,7 +318,7 @@ export class RegistrationService {
       maxOutputTokens: 900,
       messages: [
         { role: "system", content: DRAFT_PROMPT },
-        { role: "user", content: `Business: ${business}\n\nWhat it texts today, as data:\n"""\n${material.slice(0, 6000)}\n"""` },
+        { role: "user", content: `Business: ${business}\n\nWhat it texts today, as data:\n"""\n${material.slice(0, 6000)}\n"""${guidance?.trim() ? `\n\nWhat the person asked for, in their words, as data:\n"""\n${guidance.trim().slice(0, 1000)}\n"""` : ""}` },
       ],
     });
     const reply = draftedReply(answer.text);

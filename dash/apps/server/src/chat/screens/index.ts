@@ -15,6 +15,7 @@ import { contactsScreen } from "./contacts.js";
 import { peopleScreen } from "./people.js";
 import { settingsScreen } from "./settings.js";
 import { typesScreen } from "./types.js";
+import { textRegistrationScreen, type TextRegistrationDeps } from "./text-registration.js";
 
 export { SCREENS, type Screen } from "./common.js";
 
@@ -33,6 +34,8 @@ export interface ScreensInput extends ScreenAccess {
   /** The setup as it was when the turn began: for knowledge and the cards' "before". */
   readonly setup: SchedulingOverview;
   readonly contactSetup: { readonly fields: readonly ContactFieldDef[]; readonly matchRules: readonly ContactMatchRule[] };
+  /** Text registration (Dash Phone): registered when the server has phone lines' registration. */
+  readonly textRegistration?: Pick<TextRegistrationDeps, "registration" | "lines" | "sources">;
 }
 
 /**
@@ -51,5 +54,6 @@ export const buildScreens = (input: ScreensInput): ComponentDefinition[] => {
     settingsScreen({ ...access, setup: input.setup, scheduling: input.scheduling }),
     contactsScreen({ ...access, contacts: input.contacts, links: input.links, setup: input.setup, fieldKeys: input.contactSetup.fields.map((one) => one.key) }),
     contactFieldsScreen({ ...access, contacts: input.contacts, setup: input.contactSetup }),
+    ...(input.textRegistration ? [textRegistrationScreen({ ...access, ...input.textRegistration })] : []),
   ];
 };

@@ -83,6 +83,12 @@ export const SCREENS = {
     page: DASH_SCREENS.board.page,
     description: "The dashboard tab open now and its widgets.",
   },
+  textRegistration: {
+    id: DASH_SCREENS.textRegistration.id,
+    title: "Text registration",
+    page: DASH_SCREENS.textRegistration.page,
+    description: "A phone line's text registration (A2P 10DLC): the six-step wizard, its checks, the drafted use description, and where the submission stands.",
+  },
   agents: {
     id: DASH_SCREENS.agents.id,
     title: "Agents",
