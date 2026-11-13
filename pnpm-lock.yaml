@@ -404,6 +404,31 @@ importers:
         specifier: ^5.4.11
         version: 5.4.21(@types/node@22.19.17)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
 
+  dash/packages/adapters-phone-sip:
+    dependencies:
+      '@freebirdai/dash-spec':
+        specifier: workspace:*
+        version: link:../spec
+      '@freebirdai/phone':
+        specifier: workspace:*
+        version: link:../phone
+    devDependencies:
+      '@types/node':
+        specifier: ^22.9.0
+        version: 22.19.17
+      tsup:
+        specifier: ^8.3.5
+        version: 8.5.1(jiti@1.21.7)(postcss@8.5.10)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.9.0)
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.6
+        version: 2.1.9(@types/node@22.19.17)(happy-dom@15.11.7)(less@4.6.4)(sass@1.99.0)(terser@5.46.1)
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+
   dash/packages/adapters-phone-telnyx:
     dependencies:
       '@freebirdai/dash-spec':
