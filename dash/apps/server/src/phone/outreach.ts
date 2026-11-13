@@ -3,6 +3,7 @@ import { RepeatSendError, type CallPlacer, type PhoneKeys, type PhoneProviders }
 import type { OutreachSender } from "../workflows/env.js";
 import type { PhoneTextStore } from "./texts.js";
 import { utcDay, type PhoneSendRecord, type PhoneUsageStore } from "./usage.js";
+import type { PhoneUse } from "./usage-events.js";
 
 /**
  * Texts and calls from a workspace's phone lines: `OutreachSender`'s `text`
@@ -55,6 +56,10 @@ export interface PhoneOutreachDeps {
   /** Where a provider's delivery update is written onto the task a text was sent for. Absent: tasks are left as they were. */
   readonly tasks?: { get(id: string): Promise<Task | null>; put(task: Task): Promise<void> };
   readonly now: () => number;
+  /** Whether the line is suspended (`PhoneLines.suspension`): nothing goes out from a suspended line. Absent: never. */
+  readonly suspended?: (line: PhoneLine) => Promise<{ readonly by: "person" | "host"; readonly reason?: string } | null>;
+  /** Reports a use (`PhoneLines.report`). Absent: nowhere. */
+  readonly report?: (line: PhoneLine, use: Omit<PhoneUse, "line" | "provider" | "provided">) => void;
 }
 
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -90,6 +95,8 @@ export class PhoneOutreach {
     const chosen = await this.lineFor(m.agent.id);
     if ("refused" in chosen) return { status: "not_sent", detail: chosen.refused };
     const { line } = chosen;
+    const held = await this.deps.suspended?.(line);
+    if (held) return { status: "not_sent", detail: `This line is suspended${held.reason ? ` (${held.reason})` : ""}, so ${m.channel === "text" ? "nothing was sent" : "nobody was called"}.` };
     const open = this.deps.providers[line.phone.provider];
     if (!open) return { status: "not_sent", detail: `This line's provider (${line.phone.provider}) is not set up on this server, so nothing was sent.` };
     return m.channel === "text" ? this.text(line, open, to, m) : this.call(line, open, to, m);
@@ -127,6 +134,7 @@ export class PhoneOutreach {
       const sent = await adapter.send({ from: line.phone.number!, to, body: m.text, key: m.key });
       await this.deps.usage.settle(line.id, m.key, { providerId: sent.providerId, status: sent.status });
       await this.deps.texts.add({ line: line.id, id: sent.providerId, number: to, direction: "out", body: m.text, at: new Date(this.deps.now()).toISOString(), status: sent.status, agent: m.agent.id });
+      this.deps.report?.(line, { kind: "text_sent", quantity: 1, at: new Date(this.deps.now()).toISOString(), key: `text:${line.id}:${m.key}` });
       return { status: sent.status, conversation, basis: may.basis };
     } catch (error) {
       if (error instanceof RepeatSendError) {
@@ -171,12 +179,14 @@ export class PhoneOutreach {
     const open = this.deps.providers[line.phone.provider];
     const adapter = open?.(this.deps.keysFor(line)).text;
     if (!adapter || !line.phone.number) return { status: "not_sent", detail: "This line cannot send texts." };
+    if (await this.deps.suspended?.(line)) return { status: "not_sent", detail: "This line is suspended, so nothing was sent." };
     const claim = await this.deps.usage.claim({ line: line.id, key, kind: "text", day: utcDay(this.deps.now()), to, at: new Date(this.deps.now()).toISOString() }, Number.MAX_SAFE_INTEGER);
     if (!claim.claimed) return "existing" in claim ? earlier(claim.existing, `${line.id}:${to}`) : { status: "not_sent" };
     try {
       const sent = await adapter.send({ from: line.phone.number, to, body, key });
       await this.deps.usage.settle(line.id, key, { providerId: sent.providerId, status: sent.status });
       await this.deps.texts.add({ line: line.id, id: sent.providerId, number: to, direction: "out", body, at: new Date(this.deps.now()).toISOString(), status: sent.status, keyword });
+      this.deps.report?.(line, { kind: "text_sent", quantity: 1, at: new Date(this.deps.now()).toISOString(), key: `text:${line.id}:${key}` });
       return { status: sent.status, basis: "keyword_reply" };
     } catch (error) {
       if (error instanceof RepeatSendError) return { status: "queued", basis: "keyword_reply" };
@@ -195,6 +205,8 @@ export class PhoneOutreach {
     if (!record) return null;
     const settled = await this.deps.usage.settle(lineId, record.key, { status: update.status, ...(update.errorCode ? { errorCode: update.errorCode } : {}), ...(update.minutes !== undefined ? { minutes: update.minutes } : {}) });
     if (record.kind === "text") await this.deps.texts.update(lineId, update.providerId, { status: update.status });
+    const line = this.deps.lines().find((one) => one.id === lineId);
+    if (record.kind === "call" && update.minutes !== undefined && line) this.deps.report?.(line, { kind: "call_minutes", quantity: update.minutes, at: new Date(this.deps.now()).toISOString(), key: `call:${lineId}:${record.key}` });
     const task = record.task && this.deps.tasks ? await this.deps.tasks.get(record.task) : null;
     if (task?.delivery && this.deps.tasks) {
       await this.deps.tasks.put({ ...task, delivery: { ...task.delivery, status: update.status, ...(update.errorCode ? { detail: `The carrier could not deliver it (error ${update.errorCode}).` } : {}) } });

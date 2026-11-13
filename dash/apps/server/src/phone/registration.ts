@@ -223,8 +223,8 @@ export class RegistrationService {
   }
 
   private adapter(line: PhoneLine): RegistrationAdapter {
-    const open = this.deps.providers[line.phone.provider];
-    const adapter = open?.(this.deps.lines.keysFor(line)).registration;
+    /* A provided line's host may register it its own way; otherwise the provider's adapter. */
+    const adapter = this.deps.lines.registrationFor(line);
     if (!adapter) throw new RegistrationError(`This line's provider does not register texts.`, 501);
     return adapter;
   }
@@ -398,6 +398,7 @@ export class RegistrationService {
     const problems = checkDraft(draft, await this.scans(draft), this.deps.now());
     if (problems.length > 0) throw new RegistrationError("Fix these before submitting: each costs a fee and restarts the wait if the registry finds it.", 409, problems);
     const brand = await this.adapter(line).submitBrand(this.brandProfile(draft));
+    this.deps.lines.report(line, { kind: "registration_submitted", quantity: 1, at: new Date(this.deps.now()).toISOString(), key: `registration:${lineId}:brand:${brand.id}` });
     await this.deps.lines.setTextStatus(lineId, "pending");
     return draftView(await this.record(draft, "brand_submitted", [], "The business was submitted for review.", { brand, brandState: "pending", codes: [] }));
   }
@@ -422,6 +423,7 @@ export class RegistrationService {
         return this.record(draft, "campaign_rejected", ["use"], `The registry does not take "${draft.campaign.use ?? ""}" for this business: pick one of its uses on step 3.`, { campaignState: "rejected", codes: [{ code: "use", message: "Not a use the registry accepts for this brand." }] });
       }
       const made = await adapter.submitCampaign(draft.submitted.brand!, this.campaign(draft));
+      this.deps.lines.report(line, { kind: "registration_submitted", quantity: 1, at: new Date(this.deps.now()).toISOString(), key: `registration:${line.id}:campaign:${made.id}` });
       draft = await this.record(draft, "campaign_submitted", [], "The campaign was submitted for review.", { campaign: made, campaignState: "pending" });
     }
     if (campaign && draft.submitted.campaignState === "pending") {

@@ -239,6 +239,14 @@ export const phoneLineSchema = z.object({
     })
     .default({}),
   /**
+   * A line the server's host provided (its line source), not one the
+   * workspace brought: its keys come from the host for each use, never the
+   * vault. `offer` is the host's offer it came from, `ref` the host's own id.
+   */
+  source: z.object({ offer: z.string().min(1).max(80), ref: z.string().min(1).max(200) }).optional(),
+  /** Suspended by a person: no texts out and no calls placed until resumed. Inbound is still recorded. */
+  suspended: z.object({ at: z.string().max(40), reason: z.string().max(300).optional() }).optional(),
+  /**
    * What answers a call to the line: its agent, a forward to a team member's
    * phone, or voicemail with a transcript. Recording is on unless switched
    * off here, and the opening line always says the call is with an automated

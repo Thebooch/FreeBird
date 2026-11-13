@@ -20,6 +20,21 @@ import { PhoneKeysError, PhoneParseError, PhoneProviderError, RepeatSendError, t
  *   form field's name and value in name order, base64, keyed with the Auth
  *   Token. A JSON body is signed over the address alone and carries its own
  *   SHA-256 in `bodySHA256`.
+ * - **Subaccounts.** Keys may be scoped to a subaccount
+ *   (https://www.twilio.com/docs/iam/api/subaccounts, checked 2026-11-13):
+ *   either the subaccount's own SID and Auth Token ("You may also use a
+ *   subaccount's AccountSid and AuthToken to access the resources of that
+ *   subaccount"), or `accountSid` the subaccount with `parentSid` and the
+ *   parent's Auth Token. With the parent's token, REST API paths
+ *   (`/2010-04-01/Accounts/<subaccount>/…`) authenticate as the parent, as the
+ *   page's samples do; Twilio's other hosts (Trunking, Trust Hub, Messaging)
+ *   "must be accessed directly using subaccount credentials", so the
+ *   subaccount's own token is used there: `subaccountToken` when given, else
+ *   read once per use from the subaccount's account resource (the page's
+ *   fetch sample answers with `auth_token`; unconfirmed in prose). A webhook
+ *   for a subaccount's number is checked against `subaccountToken` as well as
+ *   `authToken` (that Twilio signs it with the subaccount's token is
+ *   unconfirmed).
  * - Registration (A2P 10DLC) is in `registration.ts`; calls (Elastic SIP Trunking) in `voice.ts`.
  */
 
@@ -110,11 +125,28 @@ export const createTwilioProvider = (options: TwilioOptions = {}): OpenPhoneProv
       return value;
     };
     /** One request. `path` is under the REST API, or a whole address on another of Twilio's hosts. A form may repeat a field. */
+    /* A subaccount's own token, for Twilio's other hosts when the keys hold the parent's: read once per open. */
+    let subaccountToken: Promise<string> | null = null;
+    const ownToken = (given: PhoneKeys): Promise<string> => {
+      const supplied = given["subaccountToken"]?.trim();
+      if (supplied) return Promise.resolve(supplied);
+      subaccountToken ??= call("GET", `/2010-04-01/Accounts/${given["accountSid"]?.trim() ?? ""}.json`, undefined, given).then((answer) => {
+        const token = answer["auth_token"];
+        if (typeof token !== "string" || !token) throw new PhoneKeysError("Twilio did not give this subaccount's Auth Token to its parent's keys.");
+        return token;
+      });
+      return subaccountToken;
+    };
     const call = async (method: string, path: string, form?: Record<string, string> | ReadonlyArray<readonly [string, string]>, given: PhoneKeys = keys): Promise<Record<string, unknown>> => {
       const account = given["accountSid"]?.trim() ?? "";
       const token = given["authToken"]?.trim() ?? "";
       if (!token) throw new PhoneKeysError("Give the Auth Token.");
-      const headers: Record<string, string> = { authorization: `Basic ${Buffer.from(`${account}:${token}`).toString("base64")}`, accept: "application/json" };
+      const parent = given["parentSid"]?.trim();
+      if (parent !== undefined && !/^AC[0-9a-fA-F]{32}$/.test(parent)) throw new PhoneKeysError("The parent Account SID starts with AC and has 32 more letters and digits.");
+      /* The REST API takes the parent's keys for a subaccount's path; Twilio's other hosts take only the subaccount's own. */
+      const otherHost = path.startsWith("https://") && !path.startsWith(`${api}/`);
+      const [user, secret] = parent ? (otherHost ? [account, await ownToken(given)] : [parent, token]) : [account, token];
+      const headers: Record<string, string> = { authorization: `Basic ${Buffer.from(`${user}:${secret}`).toString("base64")}`, accept: "application/json" };
       const body = form ? new URLSearchParams(Array.isArray(form) ? (form as Array<[string, string]>) : (form as Record<string, string>)).toString() : undefined;
       if (body !== undefined) headers["content-type"] = "application/x-www-form-urlencoded";
       const answer = await doFetch(path.startsWith("https://") ? path : `${api}${path}`, { method, headers, ...(body !== undefined ? { body } : {}) });
@@ -195,14 +227,15 @@ export const createTwilioProvider = (options: TwilioOptions = {}): OpenPhoneProv
           return { providerId, status: twilioStatus(String(answer["status"] ?? "queued")) };
         },
         verify: (req, given) => {
-          const token = given["authToken"]?.trim();
+          /* A subaccount's number may sign with the subaccount's own token. */
+          const tokens = [given["subaccountToken"]?.trim(), given["authToken"]?.trim()].filter((one): one is string => Boolean(one));
           const signature = req.headers["x-twilio-signature"];
-          if (!token || !signature || req.method.toUpperCase() !== "POST") return false;
-          if (isForm(req)) return same(signature, twilioSignature(token, req.url, new URLSearchParams(req.body)));
+          if (tokens.length === 0 || !signature || req.method.toUpperCase() !== "POST") return false;
+          if (isForm(req)) return tokens.some((token) => same(signature, twilioSignature(token, req.url, new URLSearchParams(req.body))));
           /* A JSON body: the address is signed, and it carries the body's own SHA-256. */
           const claimed = new URL(req.url).searchParams.get("bodySHA256");
           if (!claimed || !same(claimed, createHash("sha256").update(req.body, "utf8").digest("hex"))) return false;
-          return same(signature, twilioSignature(token, req.url, []));
+          return tokens.some((token) => same(signature, twilioSignature(token, req.url, [])));
         },
         parseInbound: (req): InboundText => {
           const form = formOf(req);

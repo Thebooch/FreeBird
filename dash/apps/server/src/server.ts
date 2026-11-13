@@ -168,6 +168,8 @@ import { VoiceWorker, liveKitMedia, type CallInfo, type MediaConnector } from ".
 import { createTwilioProvider } from "@freebirdai/adapters-phone-twilio";
 import { createTelnyxProvider } from "@freebirdai/adapters-phone-telnyx";
 import { createSipProvider } from "@freebirdai/adapters-phone-sip";
+import type { PhoneLineSource } from "./phone/line-source.js";
+import { IGNORE_PHONE_USAGE, type PhoneUsage } from "./phone/usage-events.js";
 import { outsideRegistry } from "./outside/registry.js";
 import { InboundService } from "./inbound/service.js";
 import { MemoryInboundStore, type InboundStore } from "./inbound/store.js";
@@ -519,6 +521,14 @@ export interface BuildServerOptions {
   readonly phoneProviders?: PhoneProviders;
   /** Each line's sends by key and its day's use against its ceilings (`phone/usage.ts`). Memory unless supplied. */
   readonly phoneUsage?: PhoneUsageStore;
+  /**
+   * Phone lines the host provides (`phone/line-source.ts`): an offer on the
+   * setup screen, a number on the host's account, its keys for each use.
+   * Absent: none, so setup offers only connecting your own provider.
+   */
+  readonly phoneLineSource?: PhoneLineSource;
+  /** Where the lines' use is reported (`phone/usage-events.ts`): texts, call minutes, numbers, registrations. Absent: nowhere. */
+  readonly phoneUsageEvents?: PhoneUsage;
   /** What Communications keeps of each line's texts, sealed, and who started each conversation (`phone/texts.ts`). Memory unless supplied. */
   readonly phoneTexts?: PhoneTextStore;
   /** Each line's text registration draft (`phone/registration.ts`). Memory unless supplied. */
@@ -1162,6 +1172,9 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     policy,
     agents: agentStore,
     now: () => Date.now(),
+    workspace: workspaceId,
+    ...(options.phoneLineSource ? { source: options.phoneLineSource } : {}),
+    report: (use) => (options.phoneUsageEvents ?? IGNORE_PHONE_USAGE).record({ workspace: workspaceId, ...use }),
   });
   const phoneOutreach = new PhoneOutreach({
     lines: () => phoneLines.all(),
@@ -1176,6 +1189,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     /* A provider's delivery updates fill the task the text was sent for. */
     tasks: { get: (id) => workflowEnv.tasks.get(id), put: (task) => workflowEnv.tasks.put(task) },
     now: () => Date.now(),
+    suspended: (line) => phoneLines.suspension(line),
+    report: (line, use) => phoneLines.report(line, use),
   });
   const commsNeeded = (): CommsService => {
     if (!commsForWorkflows) throw new Error("Email isn't set up on this server.");
@@ -1634,6 +1649,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
    */
   const phoneInbox = new PhoneInbox({
     texts: phoneTexts,
+    report: (line, use) => phoneLines.report(line, use),
     outreach: phoneOutreach,
     consent: {
       withdraw: async (number) => {
@@ -1829,6 +1845,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   );
   const phoneSetup = new PhoneSetup({
     providers: phoneProviders,
+    ...(options.phoneLineSource ? { source: options.phoneLineSource } : {}),
     keys,
     lines: phoneLines,
     workspace: workspaceId,
@@ -1984,6 +2001,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           const key = info.key ?? info.room;
           if (!info.key) await phoneUsage.claim({ line: info.line, key, kind: "call", day: new Date().toISOString().slice(0, 10), to: info.number, at: new Date().toISOString() }, Number.MAX_SAFE_INTEGER);
           await phoneUsage.settle(info.line, key, { providerId: info.room, status: "delivered", minutes });
+          const line = phoneLines.get(info.line);
+          if (line) phoneLines.report(line, { kind: "call_minutes", quantity: minutes, at: new Date().toISOString(), key: `call:${info.line}:${key}` });
         },
         now: () => Date.now(),
         log: (line) => app.log.warn(line),

@@ -31,6 +31,8 @@ export interface PhoneInboxDeps {
   readonly brand: () => Promise<string>;
   /** A text that is conversation: the contact, the inbound screen, and workflows. What became of it. */
   readonly arrived: (line: PhoneLine, text: InboundText) => Promise<{ readonly contact?: string; readonly screen?: string; readonly held?: boolean }>;
+  /** Reports a use (`PhoneLines.report`): each text received, once. Absent: nowhere. */
+  readonly report?: (line: PhoneLine, use: { readonly kind: "text_received"; readonly quantity: number; readonly at: string; readonly key: string }) => void;
 }
 
 export type InboxOutcome = { readonly kind: "duplicate" } | { readonly kind: "keyword"; readonly keyword: PhoneKeyword } | { readonly kind: "arrived"; readonly held: boolean };
@@ -55,6 +57,7 @@ export class PhoneInbox {
     const keyword = keywordOf(text.body);
     const kept = await this.deps.texts.add({ line: line.id, id: text.providerId, number: text.from, direction: "in", body: text.body, at: text.at, ...(keyword ? { keyword } : {}) });
     if (!kept) return { kind: "duplicate" };
+    this.deps.report?.(line, { kind: "text_received", quantity: 1, at: text.at, key: `text-in:${line.id}:${text.providerId}` });
     if (keyword) {
       let restored = false;
       if (keyword === "stop") await this.deps.consent.withdraw(text.from);

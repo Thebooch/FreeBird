@@ -308,6 +308,10 @@ export interface PhoneLineView {
   readonly voice: (typeof PHONE_VOICE_STATUSES)[number];
   /** What answers its calls, the forward number, recording, and the business's own opening words. */
   readonly calls?: PhoneLineSpec["calls"];
+  /** Provided by the server's host rather than brought by the workspace. */
+  readonly provided?: boolean;
+  /** Suspended, by a person here or by the host: no texts out and no calls placed. */
+  readonly suspended?: { readonly by: "person" | "host"; readonly reason?: string };
   /** What its provider offers: a SIP-only line has no texts and no registration. */
   readonly capabilities?: { readonly text: boolean; readonly voice: "sip" | "none"; readonly registration: "10dlc" | "none" };
   /** Today's use against the line's ceilings (UTC day). */

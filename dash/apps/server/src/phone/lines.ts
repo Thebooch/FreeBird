@@ -1,6 +1,8 @@
 import type { SecretRepository } from "@freebirdai/connect/host";
 import { e164Schema, mailboxOwnerSchema, type ConnectionSpec, type CredentialField, type MailboxOwner, type PhoneLineView, type Principal } from "@freebirdai/dash-spec";
-import { FAKE_PROVIDER_ID, PhoneKeysError, type PhoneKeys, type PhoneProviders } from "@freebirdai/phone";
+import { FAKE_PROVIDER_ID, PhoneKeysError, type PhoneKeys, type PhoneProviders, type RegistrationAdapter } from "@freebirdai/phone";
+import { NO_LINE_SOURCE, type PhoneLineSource, type ProvidedLineRef } from "./line-source.js";
+import { reportUse, type PhoneUse } from "./usage-events.js";
 import type { Policy } from "../identity/policy.js";
 import type { PhoneLine } from "./outreach.js";
 import { utcDay, type PhoneUsageStore } from "./usage.js";
@@ -42,6 +44,12 @@ export interface PhoneLinesDeps {
   readonly policy: Policy;
   readonly agents: { get(id: string): Promise<{ readonly archived?: boolean | undefined } | null> };
   readonly now: () => number;
+  /** The workspace these lines are in, as the host's line source knows it. Default "local". */
+  readonly workspace?: string;
+  /** Lines the server's host provides (`PhoneLineSource`). Default: none. */
+  readonly source?: PhoneLineSource;
+  /** Where use is reported (`PhoneUsage`), the workspace added by the server. Default: nowhere. */
+  readonly report?: (use: PhoneUse) => void | Promise<void>;
 }
 
 export class PhoneLines {
@@ -56,8 +64,51 @@ export class PhoneLines {
     return connection && isLine(connection) ? connection : null;
   }
 
-  /** The line's keys, from the vault, for one use. */
+  /** The host's handle on a provided line; null for a line the workspace brought. */
+  providedRef(line: PhoneLine): ProvidedLineRef | null {
+    const source = line.phone.source;
+    return source ? { workspace: this.deps.workspace ?? "local", line: line.id, ref: source.ref } : null;
+  }
+
+  private get source(): PhoneLineSource {
+    return this.deps.source ?? NO_LINE_SOURCE;
+  }
+
+  /** Reports one use of a line (`PhoneUsage`), never failing the caller. */
+  report(line: PhoneLine, use: Omit<PhoneUse, "line" | "provider" | "provided">): void {
+    reportUse(this.deps.report, { ...use, line: line.id, provider: line.phone.provider, provided: line.phone.source !== undefined });
+  }
+
+  /** The line's registration adapter: the host's for a provided line when it gives one, else the provider's own. */
+  registrationFor(line: PhoneLine): RegistrationAdapter | undefined {
+    const keys = this.keysFor(line);
+    const ref = this.providedRef(line);
+    return (ref ? this.source.registration?.(ref, keys) : undefined) ?? this.deps.providers[line.phone.provider]?.(keys).registration;
+  }
+
+  /** Why the line may not send now: suspended by a person here, or by the host. */
+  async suspension(line: PhoneLine): Promise<{ readonly by: "person" | "host"; readonly reason?: string } | null> {
+    if (line.phone.suspended) return { by: "person", ...(line.phone.suspended.reason ? { reason: line.phone.suspended.reason } : {}) };
+    const ref = this.providedRef(line);
+    const held = ref && this.source.suspended ? await this.source.suspended(ref) : null;
+    return held ? { by: "host", ...(held.reason ? { reason: held.reason } : {}) } : null;
+  }
+
+  /** Suspends the line (no texts out, no calls placed), or resumes it. */
+  async setSuspended(id: string, suspended: boolean, reason?: string): Promise<PhoneLineView> {
+    const line = this.get(id);
+    if (!line) throw new PhoneLineError(`There is no phone line "${id}".`, 404);
+    const { suspended: _was, ...rest } = line.phone;
+    const phone = suspended ? { ...rest, suspended: { at: new Date(this.deps.now()).toISOString(), ...(reason?.trim() ? { reason: reason.trim().slice(0, 300) } : {}) } } : rest;
+    const next = { ...(line as unknown as ConnectionSpec), phone } as ConnectionSpec & PhoneLine;
+    this.deps.connections.put(next);
+    return this.view(next);
+  }
+
+  /** The line's keys for one use: from the host for a provided line, else from the vault. */
   keysFor(line: PhoneLine): PhoneKeys {
+    const ref = this.providedRef(line);
+    if (ref) return this.source.keys(ref);
     const open = this.deps.providers[line.phone.provider];
     if (!open) return {};
     const out: Record<string, string> = {};
@@ -89,6 +140,8 @@ export class PhoneLines {
       voice: line.phone.voice.status,
       calls: line.phone.calls,
       ...(open ? { capabilities: open({}).capabilities } : {}),
+      ...(line.phone.source ? { provided: true } : {}),
+      ...(await this.suspension(line).then((held) => (held ? { suspended: held } : {}))),
       today: {
         texts: await this.deps.usage.used(line.id, day, "text"),
         textsPerDay: line.phone.ceilings.textsPerDay,
@@ -186,6 +239,35 @@ export class PhoneLines {
       phone: { provider: provider.id, number, owner, text: { status: !provider.capabilities.text ? "none" : pretend ? "approved" : "needs_registration" }, voice: { status: pretend ? "ready" : "not_connected" }, ceilings: { textsPerDay: 200, callMinutesPerDay: 120 }, calls: { answer: "agent", recording: true, disclosure: "" } },
     } as unknown as ConnectionSpec & PhoneLine;
     this.deps.connections.put(connection);
+    this.report(connection, { kind: "number_held", quantity: 1, at: new Date(this.deps.now()).toISOString(), key: `number-held:${id}:${number}` });
+    return connection;
+  }
+
+  /**
+   * A line the host provided: its number on the host's account, its keys the
+   * host's for each use (nothing goes in the vault), and its texts unregistered
+   * until the wizard runs, through the host's registration adapter if it gives one.
+   */
+  async createProvided(input: { readonly offer: string; readonly provider: string; readonly number: string; readonly ref: string; readonly owner?: MailboxOwner; readonly title?: string }): Promise<PhoneLine> {
+    const provider = this.provider(input.provider)({});
+    const number = this.number(input.number);
+    const owner = await this.checkOwner(input.owner);
+    if (this.all().some((one) => one.phone.number === number)) throw new PhoneLineError(`${number} is already a line here.`, 409);
+    let id = `line-${number.slice(1)}`;
+    for (let suffix = 2; this.deps.connections.get(id); suffix++) id = `line-${number.slice(1)}-${suffix}`;
+    const connection = {
+      specVersion: 1,
+      id,
+      title: input.title?.trim().slice(0, 120) || `${provider.title} ${number}`,
+      kind: "inline",
+      auth: { type: "none" },
+      authRequired: false,
+      ops: [],
+      resources: [],
+      phone: { provider: provider.id, number, owner, source: { offer: input.offer, ref: input.ref }, text: { status: provider.capabilities.text ? "needs_registration" : "none" }, voice: { status: "not_connected" }, ceilings: { textsPerDay: 200, callMinutesPerDay: 120 }, calls: { answer: "agent", recording: true, disclosure: "" } },
+    } as unknown as ConnectionSpec & PhoneLine;
+    this.deps.connections.put(connection);
+    this.report(connection, { kind: "number_held", quantity: 1, at: new Date(this.deps.now()).toISOString(), key: `number-held:${id}:${number}` });
     return connection;
   }
 
@@ -225,8 +307,12 @@ export class PhoneLines {
   async remove(id: string): Promise<void> {
     const line = this.get(id);
     if (!line) throw new PhoneLineError(`There is no phone line "${id}".`, 404);
+    const ref = this.providedRef(line);
+    /* A provided number goes back to the host; a brought line's keys leave the vault. */
+    if (ref) await this.source.release(ref);
     const open = this.deps.providers[line.phone.provider];
-    for (const field of open ? open({}).credentials : []) this.deps.keys.delete(lineKeyRef(id, field.key));
+    if (!ref) for (const field of open ? open({}).credentials : []) this.deps.keys.delete(lineKeyRef(id, field.key));
     await this.deps.connections.remove(id);
+    if (line.phone.number) this.report(line, { kind: "number_released", quantity: 1, at: new Date(this.deps.now()).toISOString(), key: `number-released:${id}:${line.phone.number}` });
   }
 }

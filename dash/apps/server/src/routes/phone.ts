@@ -31,6 +31,15 @@ const setupSchema = z.object({
   title: z.string().max(120).optional(),
 });
 
+const provideSchema = z.object({
+  offer: z.string().min(1).max(80),
+  areaCode: z.string().regex(/^\d{3}$/).optional(),
+  owner: mailboxOwnerSchema.optional(),
+  title: z.string().max(120).optional(),
+});
+
+const suspendSchema = z.object({ suspended: z.boolean(), reason: z.string().max(300).optional() });
+
 const callsSchema = z.object({
   answer: z.enum(["agent", "forward", "voicemail"]),
   forwardTo: z.string().regex(/^\+[1-9]\d{7,14}$/).optional(),
@@ -65,7 +74,23 @@ export const phoneLineRoutes = (deps: { readonly lines: PhoneLines; readonly set
 
     app.get(
       "/api/comms/lines",
-      handled(async (principal) => ({ lines: await deps.lines.lines(principal), providers: deps.lines.providers(), accounts: deps.setup?.accounts() ?? [], ...(deps.callsAddress ? { callsAddress: deps.callsAddress } : {}) })),
+      handled(async (principal) => ({ lines: await deps.lines.lines(principal), providers: deps.lines.providers(), accounts: deps.setup?.accounts() ?? [], offers: (await deps.setup?.offers()) ?? [], ...(deps.callsAddress ? { callsAddress: deps.callsAddress } : {}) })),
+    );
+
+    /* A line the server's host provides: only when its line source offers one. */
+    app.post(
+      "/api/comms/lines/provided",
+      handled(async (_principal, { body }) => setupNeeded().provideLine(provideSchema.parse(body))),
+    );
+
+    /* Suspend or resume a line: no texts out and no calls placed while suspended. */
+    app.put(
+      "/api/comms/lines/:id/suspended",
+      handled<{ id: string }>(async (principal, { params, body }) => {
+        await readable(principal, params.id);
+        const input = suspendSchema.parse(body);
+        return deps.lines.setSuspended(params.id, input.suspended, input.reason);
+      }),
     );
 
     app.post(

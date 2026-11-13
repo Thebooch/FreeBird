@@ -3,6 +3,7 @@ import type { SecretRepository } from "@freebirdai/connect/host";
 import type { AccountInfo, AvailableNumber, MailboxOwner, OwnedNumber, PhoneLineView } from "@freebirdai/dash-spec";
 import { PhoneKeysError, type PhoneKeys, type PhoneProviders } from "@freebirdai/phone";
 import { PhoneLineError, type PhoneLines } from "./lines.js";
+import type { PhoneLineOffer, PhoneLineSource } from "./line-source.js";
 
 /**
  * Settings → Phone: connecting a provider and a number, so a person never
@@ -37,6 +38,8 @@ export type NumberChoice = "new" | "existing" | "forward";
 
 export interface PhoneSetupDeps {
   readonly providers: PhoneProviders;
+  /** Lines the server's host provides. Default: none, so setup offers only connecting your own provider. */
+  readonly source?: PhoneLineSource;
   readonly keys: Pick<SecretRepository, "get" | "set" | "delete" | "has">;
   readonly lines: PhoneLines;
   readonly workspace: string;
@@ -162,6 +165,37 @@ export class PhoneSetup {
   answer(nonce: string): boolean {
     const at = this.asked.get(nonce);
     return at !== undefined && this.deps.now() - at < 60_000;
+  }
+
+  /** What the host offers this workspace: none unless the server has a line source. */
+  async offers(): Promise<readonly PhoneLineOffer[]> {
+    return this.deps.source ? this.deps.source.offers(this.deps.workspace) : [];
+  }
+
+  /**
+   * A line the host provides: the address checked first, then the host makes
+   * the number on its own account, then the line is made with the host's keys
+   * and its texts pointed at the line's webhook, as for a line of one's own.
+   * Its number goes back to the host if wiring it fails.
+   */
+  async provideLine(input: { readonly offer: string; readonly areaCode?: string; readonly owner?: MailboxOwner; readonly title?: string }): Promise<{ readonly line: PhoneLineView }> {
+    const source = this.deps.source;
+    if (!source || !(await source.offers(this.deps.workspace)).some((one) => one.id === input.offer)) throw new PhoneLineError("This server provides no such line.", 404);
+    const address = await this.checkAddress();
+    if (!address.ok || !address.origin) throw new PhoneLineError(address.problem ?? "This server cannot be reached from the internet yet.", 409);
+    await this.deps.lines.checkOwner(input.owner);
+    const made = await source.provision({ workspace: this.deps.workspace, offer: input.offer, ...(input.areaCode && /^\d{3}$/.test(input.areaCode) ? { areaCode: input.areaCode } : {}) });
+    let line: Awaited<ReturnType<PhoneLines["createProvided"]>>;
+    try {
+      this.open(made.provider);
+      line = await this.deps.lines.createProvided({ offer: input.offer, provider: made.provider, number: made.number, ref: made.ref, ...(input.owner ? { owner: input.owner } : {}), ...(input.title ? { title: input.title } : {}) });
+    } catch (error) {
+      await source.release({ workspace: this.deps.workspace, line: "", ref: made.ref });
+      throw error;
+    }
+    const provider = this.open(made.provider);
+    if (provider({}).capabilities.text) await provider(this.deps.lines.keysFor(line)).numbers.route(made.number, { textWebhook: new URL(`${address.origin}/api/public/${this.deps.workspace}/phone/${line.id}/text`) });
+    return { line: await this.deps.lines.view(line) };
   }
 
   /**
