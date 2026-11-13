@@ -42,7 +42,7 @@ export type TurnKind = (typeof TURN_KINDS)[number];
  * booking changes, records change, or the clock moves. Payloads by kind:
  *
  * - `message`: `{ from, name?, subject, text, mailbox?, contact? }`, an email: screened, then as `message_received` workflows see it.
- *   With `channel: "text"` it is a text instead: `{ channel, from, text, line?, stop? }` (`from` a phone number, `line` the world's line id, `stop` a STOP reply), carried by the world's fake carrier, so it needs `world.workspace.phone`.
+ *   With `channel: "text"` it is a text instead: `{ channel, from, text, line?, stop? }` (`from` a phone number, `line` the world's line id, `stop` a STOP reply), carried by the world's fake carrier, so it needs `world.workspace.phone`. STOP, HELP and START are answered by Dash and start nothing.
  * - `booking`: `{ event, type?, row }`, a booking event; `row` is the booking shaped for steps.
  * - `record`: `{ add?: rows[], update?: { id, values }[] }`, the connection's records change.
  * - `clock`: `{ ms }`, time moves on.
@@ -92,6 +92,10 @@ export const worldPhoneSchema = z.object({
     .default([{ id: "line", number: "+15550100100" }]),
   /** Numbers whose texts the carrier fails to deliver, with its error code. */
   failures: z.array(z.object({ to: e164Schema, errorCode: z.string().max(40).default("30003") })).max(50).default([]),
+  /** Consent to texts on record, by number, as an opt-in form or a booking page would have left it. Absent: none. */
+  consent: z.array(z.object({ number: e164Schema, status: z.enum(["given", "withdrawn"]).default("given") })).max(200).default([]),
+  /** The business's name, as texts sign it. */
+  brand: z.string().max(120).default("Acme"),
 });
 export type WorldPhone = z.infer<typeof worldPhoneSchema>;
 

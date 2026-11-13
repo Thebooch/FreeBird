@@ -17,6 +17,9 @@ import {
   contactTypes,
   type MatchOutcome,
   type Principal,
+  TEXT_CONSENT_GIVERS,
+  type TextConsent,
+  type TextConsentSource,
 } from "@freebirdai/dash-spec";
 import type { ZodError } from "zod";
 import { normalizeFact, type FactKind, type Facts } from "../scheduling/rules.js";
@@ -118,6 +121,57 @@ export class ContactService implements ContactDirectory {
   async byEmail(email: string): Promise<Contact | null> {
     const normal = normalizeEmail(email);
     return normal ? this.deps.store.byKey(`email:${normal}`) : null;
+  }
+
+  /** The contact with this phone number, if there is one. Never made. */
+  async byPhone(phone: string): Promise<Contact | null> {
+    const normal = normalizePhone(phone, this.callingCode);
+    return normal ? this.deps.store.byKey(`phone:${normal}`) : null;
+  }
+
+  /* ── consent to texts (Dash Phone) ───────────────────────────────────── */
+
+  /**
+   * Consent given, with the exact words the person agreed to. Only an opt-in
+   * form or a booking page's own checkbox gives it (`TEXT_CONSENT_GIVERS`):
+   * nothing a member, an agent or a workflow does can, and a contact's own
+   * edits never carry it.
+   */
+  async giveTextConsent(id: string, consent: { readonly source: TextConsentSource; readonly wording: string; readonly phone: string; readonly at?: string }): Promise<Contact> {
+    if (!TEXT_CONSENT_GIVERS.includes(consent.source)) throw new ContactError("Consent to texts is given only on an opt-in form or a booking page.", 403);
+    const phone = normalizePhone(consent.phone, this.callingCode);
+    if (!phone) throw new ContactError("That is not a phone number with its area code.");
+    const wording = consent.wording.trim();
+    if (!wording) throw new ContactError("Consent keeps the exact words the person agreed to.");
+    const at = consent.at ?? iso(this.deps.now());
+    return this.mutate(id, (contact) => {
+      if (!contact.phones.includes(phone)) throw new ContactError("Consent is for one of the contact's own numbers.");
+      return { ...contact, textConsent: { status: "given", source: consent.source, at, wording, phone } };
+    });
+  }
+
+  /** STOP: consent withdrawn for whoever has this number, kept with where it first came from. Null when nobody has it. */
+  async withdrawTextConsent(phone: string): Promise<Contact | null> {
+    const contact = await this.byPhone(phone);
+    if (!contact) return null;
+    const at = iso(this.deps.now());
+    return this.mutate(contact.id, (current) => ({
+      ...current,
+      textConsent: current.textConsent
+        ? { ...current.textConsent, status: "withdrawn", changedAt: at }
+        : ({ status: "withdrawn", source: "keyword", at, wording: "STOP", phone: normalizePhone(phone, this.callingCode) ?? phone, changedAt: at } satisfies TextConsent),
+    }));
+  }
+
+  /** START: consent given before on a form or a booking page, given again. False when there was none to restore. */
+  async restoreTextConsent(phone: string): Promise<boolean> {
+    const contact = await this.byPhone(phone);
+    const held = contact?.textConsent;
+    if (!contact || !held || !TEXT_CONSENT_GIVERS.includes(held.source)) return false;
+    if (held.status === "given") return true;
+    const at = iso(this.deps.now());
+    await this.mutate(contact.id, (current) => ({ ...current, textConsent: { ...current.textConsent!, status: "given", changedAt: at } }));
+    return true;
   }
 
   /**

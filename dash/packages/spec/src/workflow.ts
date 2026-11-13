@@ -638,7 +638,13 @@ export const taskSchema = z.object({
   reversal: taskReversalSchema.optional(),
   /** For Outreach: sending and delivery, apart from whether the step worked. */
   delivery: z
-    .object({ status: z.enum(["queued", "sent", "delivered", "failed", "not_sent"]), detail: z.string().optional(), key: z.string().optional() })
+    .object({
+      status: z.enum(["queued", "sent", "delivered", "failed", "not_sent"]),
+      detail: z.string().optional(),
+      key: z.string().optional(),
+      /** For a text that went: why it was allowed (consent on record, or they texted this line first). */
+      basis: z.enum(["on_record", "texted_first", "keyword_reply"]).optional(),
+    })
     .optional(),
   model: z.object({ task: z.string(), model: z.string().optional() }).optional(),
   reason: z.string().optional(),

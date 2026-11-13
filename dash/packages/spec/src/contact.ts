@@ -20,7 +20,7 @@ import { principalSchema } from "./access.js";
  *   never changes under a booking without someone seeing why.
  */
 
-export const CONTACT_ORIGINS = ["public_link", "agent", "member", "workflow", "email"] as const;
+export const CONTACT_ORIGINS = ["public_link", "agent", "member", "workflow", "email", "text"] as const;
 export type ContactOrigin = (typeof CONTACT_ORIGINS)[number];
 
 /**
@@ -173,6 +173,35 @@ export const contactStatsSchema = z.object({
 });
 export type ContactStats = z.infer<typeof contactStatsSchema>;
 
+/**
+ * Where a contact's agreement to texts came from. Only an opt-in form or a
+ * booking page's own checkbox can make it `given`; `keyword` is START,
+ * which only restores consent given before; `imported` is a list brought in
+ * with proof.
+ */
+export const TEXT_CONSENT_SOURCES = ["opt_in_form", "booking_page", "keyword", "imported"] as const;
+export type TextConsentSource = (typeof TEXT_CONSENT_SOURCES)[number];
+/** The sources that may make consent `given` on their own. */
+export const TEXT_CONSENT_GIVERS: readonly TextConsentSource[] = ["opt_in_form", "booking_page"];
+
+/** A contact's consent to texts: given or withdrawn, from where, when, and the exact words they agreed to. */
+export const textConsentSchema = z.object({
+  status: z.enum(["given", "withdrawn"]),
+  source: z.enum(TEXT_CONSENT_SOURCES),
+  at: z.string(),
+  /** The wording shown beside the box they ticked, word for word. */
+  wording: z.string().max(2000),
+  /** The number it was given for. */
+  phone: z.string().optional(),
+  /** When a STOP withdrew it, or a START restored it. */
+  changedAt: z.string().optional(),
+});
+export type TextConsent = z.infer<typeof textConsentSchema>;
+
+/** The words beside a booking page's text box: shown, kept as the consent, never paraphrased. */
+export const bookingTextConsentWording = (business: string): string =>
+  `Text me about this booking. ${business} will send appointment texts to this number. Message frequency varies. Msg & data rates may apply. Reply HELP for help, STOP to opt out.`;
+
 export const contactSchema = z.object({
   id: z.string().min(1),
   name: z.string().max(160).default(""),
@@ -204,6 +233,8 @@ export const contactSchema = z.object({
     })
     .default({ optOut: [] }),
   preferredHost: z.string().optional(),
+  /** Consent to texts (Dash Phone). Absent: none on record. */
+  textConsent: textConsentSchema.optional(),
   stats: contactStatsSchema,
   /** What Comms has confirmed, once it can. */
   verified: z.object({ email: z.string().optional(), phone: z.string().optional() }).default({}),

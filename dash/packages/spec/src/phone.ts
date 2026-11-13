@@ -187,6 +187,64 @@ export const rejectionHelpSchema = z.object({
 });
 export type RejectionHelp = z.infer<typeof rejectionHelpSchema>;
 
+/* ── keywords Dash answers itself ──────────────────────────────────────── */
+
+/**
+ * STOP, HELP and START, answered by Dash on every provider so behaviour does
+ * not depend on a provider's settings. A message that is only one of these
+ * words (any case, trailing punctuation allowed) is a keyword; anything
+ * longer is conversation. `YES` is not a START word here: Dash's own texts
+ * ask people to reply YES to confirm.
+ */
+export const STOP_WORDS = ["STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT", "OPTOUT", "REVOKE"] as const;
+export const HELP_WORDS = ["HELP", "INFO"] as const;
+export const START_WORDS = ["START", "UNSTOP"] as const;
+export type PhoneKeyword = "stop" | "help" | "start";
+
+export const keywordOf = (body: string): PhoneKeyword | null => {
+  const word = body.trim().replace(/[\s.!?]+$/u, "").toUpperCase();
+  if ((STOP_WORDS as readonly string[]).includes(word)) return "stop";
+  if ((HELP_WORDS as readonly string[]).includes(word)) return "help";
+  if ((START_WORDS as readonly string[]).includes(word)) return "start";
+  return null;
+};
+
+/** Why a text was allowed to go: consent on record, or they texted this line first in this conversation. */
+export const TEXT_BASES = ["on_record", "texted_first", "keyword_reply"] as const;
+export type TextBasis = (typeof TEXT_BASES)[number];
+
+/* ── texts Dash keeps ──────────────────────────────────────────────────── */
+
+/** One text on a line, in or out, as Communications keeps it (sealed). `number` is the other side. */
+export const phoneTextSchema = z.object({
+  line: z.string().min(1),
+  id: z.string().min(1).max(200),
+  number: e164Schema,
+  direction: z.enum(["in", "out"]),
+  body: z.string().max(10_000),
+  at: z.string(),
+  /** STOP, HELP or START, and Dash's answer to one: never shown to agents as conversation. */
+  keyword: z.enum(["stop", "help", "start"]).optional(),
+  status: z.enum([...PHONE_DELIVERY_STATUSES, "not_sent"]).optional(),
+  agent: z.string().optional(),
+  contact: z.string().optional(),
+  /** The inbound screen's record, and whether it held the text. */
+  screen: z.string().optional(),
+  held: z.boolean().optional(),
+});
+export type PhoneText = z.infer<typeof phoneTextSchema>;
+
+/** A conversation on a line with one number, newest first in a list. */
+export interface PhoneThreadView {
+  readonly line: string;
+  readonly number: string;
+  readonly contact?: string | undefined;
+  readonly name?: string | undefined;
+  /** Who wrote first: they did, or the business. */
+  readonly startedBy: "them" | "us";
+  readonly last: PhoneText;
+}
+
 /* ── a line, as Communications shows it ────────────────────────────────── */
 
 export interface PhoneLineView {
