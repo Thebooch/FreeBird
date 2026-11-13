@@ -752,3 +752,16 @@ export type {
   SubmissionRef,
   TrunkInfo,
 } from "./phone.js";
+
+export {
+  REGISTRATION_STEPS,
+  REGISTRATION_STEP_WORDS,
+  TIMELINE_EVENTS,
+  TIMELINE_WORDS,
+  draftView,
+  maskedEin,
+  policyScanSchema,
+  registrationDraftSchema,
+} from "./registration.js";
+
+export type { PolicyScan, RegistrationDraft, RegistrationDraftView, RegistrationProblem, RegistrationStep, TimelineEvent } from "./registration.js";
