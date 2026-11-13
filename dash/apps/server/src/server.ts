@@ -157,6 +157,7 @@ import { PhoneSetup } from "./phone/setup.js";
 import { MemoryRegistrationStore, RegistrationService, type DraftSource, type RegistrationStore } from "./phone/registration.js";
 import { scanPolicy } from "./phone/policy-scan.js";
 import { registrationRoutes } from "./routes/registration.js";
+import { textsPublicRoutes } from "./routes/texts-public.js";
 import { emailRegistrationNotifier } from "./comms/notify.js";
 import { createTwilioProvider } from "@freebirdai/adapters-phone-twilio";
 import { outsideRegistry } from "./outside/registry.js";
@@ -1842,6 +1843,19 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     notify: (draft, event, detail) => registrationNotifier(draft, event, TIMELINE_WORDS[event], detail),
     now: () => Date.now(),
   });
+  void app.register(
+    textsPublicRoutes({
+      workspace: workspaceId,
+      limiter: options.rateLimiter ?? new MemoryRateLimiter(),
+      contacts,
+      brand: async () => {
+        const held = await brand();
+        return { name: held.name, accent: held.accent };
+      },
+      pagesOrigin: () => (options.pagesOrigin ?? options.publicOrigin ?? "http://localhost:5400").replace(/\/+$/, ""),
+      apiOrigin: (request) => (options.publicOrigin ?? `${request.protocol}://${request.host}`).replace(/\/+$/, ""),
+    }),
+  );
   void app.register(registrationRoutes({ registration, canRead: async (principal, line) => (await policy.can(principal, "records.read", { connection: line })).ok }));
   void app.register(phoneLineRoutes({ lines: phoneLines, setup: phoneSetup, texts: phoneTexts, canRead: async (principal, line) => (await policy.can(principal, "records.read", { connection: line })).ok }));
   /*

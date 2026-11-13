@@ -11,6 +11,10 @@ describe("public routes", () => {
     expect(publicRouteOf("/p/acme/t/home-inspection")).toEqual({ kind: "type", workspace: "acme", slug: "home-inspection" });
     expect(publicRouteOf(`/p/acme/approve/${TOKEN}`, "?choice=suggest")).toEqual({ kind: "approve", workspace: "acme", token: TOKEN, choice: "suggest" });
     expect(publicRouteOf(`/p/acme/approve/${TOKEN}`, "?choice=delete")).toMatchObject({ choice: null });
+    expect(publicRouteOf("/p/acme/texts")).toEqual({ kind: "texts", workspace: "acme", page: "opt-in" });
+    expect(publicRouteOf("/p/acme/texts/privacy")).toEqual({ kind: "texts", workspace: "acme", page: "privacy" });
+    expect(publicRouteOf("/p/acme/texts/terms")).toEqual({ kind: "texts", workspace: "acme", page: "terms" });
+    expect(publicRouteOf("/p/acme/texts/other")).toEqual({ kind: "none" });
     for (const path of ["/", "/p/acme", `/p/acme/book/short`, "/p/acme/t/Not_A_Slug", `/p/../book/${TOKEN}`, `/p/acme/book/${TOKEN}/extra`, `/x/acme/book/${TOKEN}`]) {
       expect(publicRouteOf(path)).toEqual({ kind: "none" });
     }

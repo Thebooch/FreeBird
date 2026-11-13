@@ -22,6 +22,7 @@ const SCREEN_TITLES: Readonly<Record<DashScreen, string>> = {
   contactFields: "Contact fields",
   workflows: "Workflows",
   agents: "Agents",
+  textRegistration: "Text registration",
   board: "Dashboard",
 };
 

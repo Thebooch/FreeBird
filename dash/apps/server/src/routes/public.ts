@@ -70,6 +70,11 @@ export const PUBLIC_ROUTES = [
   "POST /api/public/:workspace/phone/:line/:event",
   /* Settings → Phone's public address check: answers only a one-time word this server is asking about right now. */
   "GET /api/public/:workspace/phone-check/:nonce",
+  /* Text registration's hosted pages: the words, the opt-in form (open to the business's own site), and that form as a script (`routes/texts-public.ts`). */
+  "GET /api/public/:workspace/texts",
+  "POST /api/public/:workspace/texts/opt-in",
+  "OPTIONS /api/public/:workspace/texts/opt-in",
+  "GET /api/public/:workspace/texts/opt-in.js",
 ] as const;
 
 const DAY_MS = 86_400_000;

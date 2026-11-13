@@ -176,3 +176,20 @@ export const approvalApi = (workspace: string, token: string) => {
       call<ApprovalState>(root, input),
   };
 };
+
+/** The words of a workspace's text pages: the opt-in form's consent wording, its privacy section and its messaging terms. */
+export interface TextsPage {
+  readonly workspace: Brand;
+  readonly business: string;
+  readonly wording: string;
+  readonly privacy: ReadonlyArray<{ readonly heading: string; readonly text: string }>;
+  readonly terms: ReadonlyArray<{ readonly heading: string; readonly text: string }>;
+}
+
+export const textsApi = (workspace: string) => {
+  const root = `${base(workspace)}/texts`;
+  return {
+    page: () => call<TextsPage>(root),
+    optIn: (input: { readonly name: string; readonly phone: string; readonly consent: true; readonly website: string }) => call<{ signedUp: true }>(`${root}/opt-in`, input),
+  };
+};
