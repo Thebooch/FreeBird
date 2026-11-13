@@ -122,7 +122,7 @@ export class Sandbox {
     const model = options.llm ?? (options.model ? scriptedModel(options.model, modelAt) : undefined);
     /* Phone lines on the fake carrier: texts and calls go out through the same code as the server's. Bound to the fake below. */
     let bound: Fake | undefined;
-    const phone = world.workspace.phone ? new SandboxPhone(world.workspace.phone, { now: () => bound?.clock.now ?? SANDBOX_T0, agents: { get: async (id) => bound?.agents.get(id) ?? null }, tasks: () => bound!.env.tasks }) : null;
+    const phone = world.workspace.phone ? new SandboxPhone(world.workspace.phone, { now: () => bound?.clock.now ?? SANDBOX_T0, agents: { get: async (id) => bound?.agents.get(id) ?? null }, tasks: () => bound!.env.tasks, llm: () => model ?? null, newId: () => bound!.env.newId() }) : null;
     const f = fake({
       sender: true,
       now: SANDBOX_T0,
@@ -186,6 +186,10 @@ export class Sandbox {
       case "message": {
         if (payload["channel"] === "text") {
           await this.textArrives(turn);
+          break;
+        }
+        if (payload["channel"] === "call") {
+          await this.callArrives(turn);
           break;
         }
         const mailbox = typeof payload["mailbox"] === "string" ? payload["mailbox"] : "inbox";
@@ -312,6 +316,43 @@ export class Sandbox {
       }
     };
     await phone.receive(typeof payload["line"] === "string" ? payload["line"] : undefined, from, String(payload["text"] ?? ""), { stop: payload["stop"] === true });
+  }
+
+  /**
+   * A call to one of the world's lines, as words: `{ channel: "call", from,
+   * says: [...], line? }`. Calls in sandboxes are transcripts, not audio. A
+   * call that ends starts the `message_received` workflows listening for
+   * calls, with the transcript and the inbound mark.
+   */
+  private async callArrives(turn: Turn): Promise<void> {
+    const phone = this.phone;
+    if (!phone) throw new Error('A call turn needs phone lines: give the world "workspace.phone".');
+    const payload = turn.payload;
+    const from = normalizePhone(payload["from"]);
+    if (!from) throw new Error(`A call turn comes from a phone number: "${String(payload["from"])}" is not one.`);
+    const says = Array.isArray(payload["says"]) ? payload["says"].map(String) : [];
+    phone.callEnded = async (line, call) => {
+      const row: Record<string, unknown> = {
+        mailbox: line.id,
+        line: line.id,
+        id: call.id,
+        threadId: `${line.id}:${from}`,
+        from: { address: from, name: "" },
+        subject: call.summary ?? "",
+        snippet: (call.summary ?? "").slice(0, 1000),
+        text: call.transcript.map((one) => `${one.who}: ${one.text}`).join("\n"),
+        channel: "call",
+        inbound: { requester: `address:${from}`, trust: "unknown", signals: [] },
+      };
+      for (const workflow of await this.listening("message_received")) {
+        if (workflow.trigger.kind !== "message_received" || !workflow.trigger.channels.includes("call")) continue;
+        if (workflow.trigger.mailboxes.length > 0 && !workflow.trigger.mailboxes.includes(line.id)) continue;
+        const id = `mr-${shortHash(`${workflow.id}:${line.id}:${call.id}`)}`;
+        await this.f.engine.create(workflow, { id, row, rowKey: `${line.id}:${call.id}`, start: { kind: "message", message: `${line.id}:${call.id}` } });
+        await this.f.engine.advance(id);
+      }
+    };
+    await phone.call(typeof payload["line"] === "string" ? payload["line"] : undefined, from, says, turn.id);
   }
 
   /** Runner passes until nothing more happens: due triggers, time-outs, signals, watched records, and the carrier's delivery updates. */

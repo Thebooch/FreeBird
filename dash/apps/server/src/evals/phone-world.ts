@@ -1,4 +1,7 @@
-import type { AgentSpec, InboundText, Task, WorldPhone } from "@freebirdai/dash-spec";
+import type { LlmAdapter } from "@freebirdai/dash-agent";
+import type { AgentSpec, CallRecord, InboundText, Task, WorldPhone } from "@freebirdai/dash-spec";
+import { CallService } from "../phone/call-service.js";
+import { callId, transcriptText } from "../phone/calls.js";
 import { FAKE_PROVIDER_ID, FakeCarrier } from "@freebirdai/phone";
 import { PhoneInbox, type InboxOutcome } from "../phone/inbox.js";
 import { PhoneOutreach, type PhoneLine } from "../phone/outreach.js";
@@ -33,8 +36,19 @@ export class SandboxPhone {
   private readonly inbox: PhoneInbox;
   /** Set by the sandbox: a text that is conversation, on to the workflows. */
   arrived: (line: PhoneLine, text: InboundText) => Promise<void> = async () => undefined;
+  /** Set by the sandbox: a call that ended, on to the workflows that listen for calls. */
+  callEnded: (line: PhoneLine, call: CallRecord) => Promise<void> = async () => undefined;
+  /** Calls, as transcripts: the same `CallService` the voice worker drives. */
+  readonly calls: CallService;
+  private readonly tasks: () => TaskStore;
+  private readonly now: () => number;
 
-  constructor(world: WorldPhone, deps: { readonly now: () => number; readonly agents: { get(id: string): Promise<AgentSpec | null> }; readonly tasks: () => TaskStore }) {
+  constructor(
+    world: WorldPhone,
+    deps: { readonly now: () => number; readonly agents: { get(id: string): Promise<AgentSpec | null> }; readonly tasks: () => TaskStore; readonly llm?: () => LlmAdapter | null; readonly newId?: () => string },
+  ) {
+    this.tasks = deps.tasks;
+    this.now = deps.now;
     this.carrier = new FakeCarrier({ now: deps.now, accountName: "Sandbox carrier" });
     for (const failure of world.failures) this.carrier.failDelivery(failure.to, failure.errorCode);
     for (const one of world.consent) this.consent.set(one.number, one.status);
@@ -76,6 +90,54 @@ export class SandboxPhone {
         return {};
       },
     });
+    let n = 0;
+    this.calls = new CallService({
+      lines: { get: (id) => this.lines.find((one) => one.id === id) ?? null },
+      agents: deps.agents,
+      llm: deps.llm ?? (() => null),
+      /* A tool used live on a call: what a rule check reads, as a task. Nothing reaches a real account. */
+      runTool: async (_agent, tool, args) => {
+        await deps.tasks().put({ id: `call-tool-${deps.newId?.() ?? ++n}`, action: "call.tool", base: "call", title: `Used ${tool.label ?? tool.kind} on a call`, status: "done", body: { kind: "decision", reason: JSON.stringify(args).slice(0, 500) }, pending: { tool: tool.id, mode: tool.mode, during: "call", args }, links: {}, createdAt: new Date(deps.now()).toISOString() } as Task);
+        return "Done.";
+      },
+      business: async () => world.brand,
+      texts: this.texts,
+      tasks: { get: (id) => deps.tasks().get(id), put: (task: Task) => deps.tasks().put(task) },
+      arrived: async (line, call) => this.callEnded(line, call),
+      outreach: { send: (message) => this.outreach.send(message) },
+      now: deps.now,
+      newId: () => deps.newId?.() ?? `c${++n}`,
+    });
+  }
+
+  /**
+   * A call to a line, as transcript: the persona's spoken turns, each
+   * answered by the line's agent. The call is kept as a `call.conversation`
+   * task (its opening line in `body.sent`, the transcript in `body.reply`),
+   * which the call rule checks read.
+   */
+  async call(lineId: string | undefined, from: string, says: readonly string[], turn: string): Promise<CallRecord> {
+    const line = this.line(lineId);
+    const id = callId(line.id, turn);
+    const { turn: opened } = await this.calls.start({ id, line: line.id, number: from, direction: "in" });
+    for (const words of says) {
+      const next = await this.calls.hear(id, words);
+      if (next.end || next.transfer) break;
+    }
+    const call = await this.calls.end(id);
+    await this.tasks().put({
+      id: `task-${id}`,
+      action: "call.conversation",
+      base: "call",
+      title: `Call from ${from}`,
+      status: "done",
+      body: { kind: "conversation", channel: "call", to: from, agent: call.agent ?? "", sent: opened.say, reply: transcriptText(call) },
+      ...(call.agent ? { agent: call.agent } : {}),
+      pending: { recording: call.recording, answeredBy: call.answeredBy, waiting: call.waiting, ...(call.transfer ? { transferredTo: call.transfer.to } : {}) },
+      links: { conversation: `${line.id}:${from}` },
+      createdAt: new Date(this.now()).toISOString(),
+    } as Task);
+    return call;
   }
 
   /** What the carrier, the lines' records and consent hold: for the sandbox's snapshots. */

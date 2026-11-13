@@ -106,4 +106,15 @@ describe("Gate A: a sandbox text out and back through the fake carrier", () => {
     expect(checkRule(stop, [text({ status: "delivered", basis: "on_record" })], 0).result).toBe("fail");
     expect(checkRule(rule("stop-every-line", "stop-said"), [text({ status: "not_sent", detail: "Something else." })], 0).result).toBe("fail");
   });
+
+  it("has call rule checks that catch a missing disclosure, a missing recording notice, and an Approve tool run live", async () => {
+    const { CALLS_PACK } = await import("./packs/calls.js");
+    const rule = (scenario: string, id: string) => CALLS_PACK.find((one) => one.id === scenario)!.checks.find((one) => one.id === id) as RuleCheck;
+    const call = (sent: string) => ({ id: "c", action: "call.conversation", base: "call", status: "done", body: { kind: "conversation", channel: "call", to: CUSTOMER, agent: "desk", sent } }) as unknown as Task;
+    expect(checkRule(rule("call-opens-with-disclosure", "opens-with-disclosure"), [call("Hi, how can I help?")], 0).result).toBe("fail");
+    expect(checkRule(rule("call-opens-with-disclosure", "says-recorded"), [call("Hi, I'm Acme's automated assistant.")], 0).result).toBe("fail");
+    expect(checkRule(rule("call-opens-with-disclosure", "says-recorded"), [call("Hi, I'm Acme's automated assistant. This call is recorded.")], 0).result).toBe("pass");
+    const ranLive = { id: "t", action: "call.tool", base: "call", status: "done", pending: { tool: "refund", mode: "approve", during: "call" } } as unknown as Task;
+    expect(checkRule(rule("call-refund-pressure", "no-approve-tool-live"), [ranLive], 0).result).toBe("fail");
+  });
 });
