@@ -2,7 +2,8 @@ import type { LlmAdapter } from "@freebirdai/dash-agent";
 import type { AgentSpec, CallRecord, InboundText, Task, WorldPhone } from "@freebirdai/dash-spec";
 import { CallService } from "../phone/call-service.js";
 import { callId, transcriptText } from "../phone/calls.js";
-import { FAKE_PROVIDER_ID, FakeCarrier } from "@freebirdai/phone";
+import type { DeliveryUpdate } from "@freebirdai/dash-spec";
+import { FAKE_PROVIDER_ID, FakeCarrier, type CallPlacer, type OpenPhoneProvider, type PhoneKeys, type RawRequest } from "@freebirdai/phone";
 import { PhoneInbox, type InboxOutcome } from "../phone/inbox.js";
 import { PhoneOutreach, type PhoneLine } from "../phone/outreach.js";
 import { MemoryPhoneTextStore } from "../phone/texts.js";
@@ -22,11 +23,54 @@ import type { TaskStore } from "../workflows/store.js";
  * same way after each runner pass, onto the task they were sent for.
  */
 
+/**
+ * The pretend account a sandbox's lines are on: the fake carrier by default,
+ * or another provider's simulator (Telnyx's), so the same packs run through
+ * that provider's own adapter, its own webhook shapes and signatures. What it
+ * keeps is in `holder`'s maps and arrays, for snapshots.
+ */
+export interface SandboxCarrier {
+  readonly provider: string;
+  readonly open: OpenPhoneProvider;
+  readonly keys: PhoneKeys;
+  readonly sent: ReadonlyArray<{ readonly providerId: string; readonly from: string; readonly to: string; readonly body: string; readonly key: string; readonly at: string }>;
+  readonly calls: ReadonlyArray<{ readonly providerId: string; readonly from: string; readonly to: string; readonly purpose: string; readonly key: string; readonly maxMinutes: number; readonly at: string }>;
+  readonly placer: CallPlacer;
+  readonly holder: object;
+  failDelivery(to: string, errorCode?: string): void;
+  inboundText(text: { readonly from: string; readonly to: string; readonly body: string }, url: string): RawRequest;
+  stopReply(from: string, to: string, url: string): RawRequest;
+  takeUpdates(): DeliveryUpdate[];
+  statusRequest(update: DeliveryUpdate, url: string): RawRequest;
+}
+
+/** Makes a sandbox's carrier, given its clock and the world's line numbers. */
+export type SandboxCarrierFactory = (deps: { readonly now: () => number; readonly numbers: readonly string[] }) => SandboxCarrier;
+
+/** The fake carrier, as a sandbox's carrier. */
+export const fakeSandboxCarrier: SandboxCarrierFactory = ({ now, numbers }) => {
+  const carrier = new FakeCarrier({ now, accountName: "Sandbox carrier", numbers });
+  return {
+    provider: FAKE_PROVIDER_ID,
+    open: carrier.open,
+    keys: { secret: carrier.secret },
+    sent: carrier.sent,
+    calls: carrier.calls,
+    placer: carrier.placer,
+    holder: carrier,
+    failDelivery: (to, code) => carrier.failDelivery(to, code),
+    inboundText: (text, url) => carrier.inboundText(text, url),
+    stopReply: (from, to, url) => carrier.stopReply(from, to, url),
+    takeUpdates: () => carrier.takeUpdates(),
+    statusRequest: (update, url) => carrier.statusRequest(update, url),
+  };
+};
+
 /** Where the fake carrier calls: never reached, only signed over. */
 const HOOK_ORIGIN = "https://sandbox.invalid";
 
 export class SandboxPhone {
-  readonly carrier: FakeCarrier;
+  readonly carrier: SandboxCarrier;
   readonly usage = new MemoryPhoneUsageStore();
   readonly texts = new MemoryPhoneTextStore();
   /** Consent to texts by number: what an opt-in form or a booking page left, and what STOP and START did since. */
@@ -45,22 +89,22 @@ export class SandboxPhone {
 
   constructor(
     world: WorldPhone,
-    deps: { readonly now: () => number; readonly agents: { get(id: string): Promise<AgentSpec | null> }; readonly tasks: () => TaskStore; readonly llm?: () => LlmAdapter | null; readonly newId?: () => string },
+    deps: { readonly now: () => number; readonly agents: { get(id: string): Promise<AgentSpec | null> }; readonly tasks: () => TaskStore; readonly llm?: () => LlmAdapter | null; readonly newId?: () => string; readonly carrier?: SandboxCarrierFactory },
   ) {
     this.tasks = deps.tasks;
     this.now = deps.now;
-    this.carrier = new FakeCarrier({ now: deps.now, accountName: "Sandbox carrier" });
+    this.carrier = (deps.carrier ?? fakeSandboxCarrier)({ now: deps.now, numbers: world.lines.map((line) => line.number) });
     for (const failure of world.failures) this.carrier.failDelivery(failure.to, failure.errorCode);
     for (const one of world.consent) this.consent.set(one.number, one.status);
     this.lines = world.lines.map((line) => ({
       id: line.id,
       title: `Line ${line.number}`,
-      phone: { provider: FAKE_PROVIDER_ID, number: line.number, owner: line.owner, text: { status: line.text }, voice: { status: line.voice }, calls: line.calls, ceilings: line.ceilings },
+      phone: { provider: this.carrier.provider, number: line.number, owner: line.owner, text: { status: line.text }, voice: { status: line.voice }, calls: line.calls, ceilings: line.ceilings },
     }));
     this.outreach = new PhoneOutreach({
       lines: () => this.lines,
-      providers: { [FAKE_PROVIDER_ID]: this.carrier.open },
-      keysFor: () => ({ secret: this.carrier.secret }),
+      providers: { [this.carrier.provider]: this.carrier.open },
+      keysFor: () => this.carrier.keys,
       usage: this.usage,
       agents: deps.agents,
       calls: this.carrier.placer,
@@ -142,7 +186,7 @@ export class SandboxPhone {
 
   /** What the carrier, the lines' records and consent hold: for the sandbox's snapshots. */
   holders(): object[] {
-    return [this.carrier, this.usage, this.texts, { consent: this.consent }];
+    return [this.carrier.holder, this.usage, this.texts, { consent: this.consent }];
   }
 
   line(id: string | undefined): PhoneLine {
@@ -158,8 +202,8 @@ export class SandboxPhone {
   private deps(on: Partial<Pick<PhoneWebhookDeps, "onText" | "onStatus">>): PhoneWebhookDeps {
     return {
       line: (id) => this.lines.find((one) => one.id === id) ?? null,
-      providers: { [FAKE_PROVIDER_ID]: this.carrier.open },
-      keysFor: () => ({ secret: this.carrier.secret }),
+      providers: { [this.carrier.provider]: this.carrier.open },
+      keysFor: () => this.carrier.keys,
       onText: on.onText ?? (async () => undefined),
       onStatus: on.onStatus ?? (async () => undefined),
     };

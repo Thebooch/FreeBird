@@ -3,6 +3,8 @@ import { agentOf, node, owner, workflowOf } from "../workflows/testing.js";
 import { checkRule } from "./checks.js";
 import { PHONE_PACK } from "./packs/phone.js";
 import { Sandbox } from "./sandbox.js";
+import type { SandboxCarrierFactory } from "./phone-world.js";
+import { telnyxSandboxCarrier } from "./testing-carriers.js";
 import type { Check, Task } from "@freebirdai/dash-spec";
 
 type RuleCheck = Extract<Check, { kind: "rule" }>;
@@ -36,8 +38,15 @@ const answer = workflowOf({
   nodes: [node("reply", "outreach.text", { agentId: "desk", to: "{{ from.address }}", purpose: "Thank them", content: "fixed", wording: "Thanks, you're confirmed." })],
 });
 
-const start = (options: { failures?: { to: string; errorCode?: string }[]; workflows?: unknown[]; consent?: { number: string; status: "given" | "withdrawn" }[] } = {}) =>
+/* The fake carrier, and Telnyx's simulator through Telnyx's own adapter: the same turns and the same answers on both. */
+const CARRIERS: ReadonlyArray<readonly [string, SandboxCarrierFactory | undefined]> = [
+  ["fake carrier", undefined],
+  ["Telnyx simulator", telnyxSandboxCarrier],
+];
+
+const start = (options: { carrier?: SandboxCarrierFactory | undefined; failures?: { to: string; errorCode?: string }[]; workflows?: unknown[]; consent?: { number: string; status: "given" | "withdrawn" }[] } = {}) =>
   Sandbox.start({
+    ...(options.carrier ? { phoneCarrier: options.carrier } : {}),
     world: {
       provider: "empty",
       workspace: {
@@ -48,9 +57,10 @@ const start = (options: { failures?: { to: string; errorCode?: string }[]; workf
     },
   });
 
-describe("Gate A: a sandbox text out and back through the fake carrier", () => {
+for (const [name, carrier] of CARRIERS)
+  describe(`Gate A: a sandbox text out and back through the ${name}`, () => {
   it("texts out through the line, takes the reply in through the webhook, and answers it", async () => {
-    const sandbox = await start();
+    const sandbox = await start({ carrier });
     await sandbox.step({ id: "t1", kind: "start", payload: { workflow: "remind" } });
     const texts = () => sandbox.intents.phone!.texts;
     expect(texts()).toEqual([expect.objectContaining({ from: LINE, to: CUSTOMER, body: "Acme: your visit is tomorrow at 9. Reply YES to confirm." })]);
@@ -68,14 +78,14 @@ describe("Gate A: a sandbox text out and back through the fake carrier", () => {
   });
 
   it("plays a delivery failure the scenario asked for", async () => {
-    const sandbox = await start({ failures: [{ to: CUSTOMER, errorCode: "30006" }] });
+    const sandbox = await start({ carrier, failures: [{ to: CUSTOMER, errorCode: "30006" }] });
     await sandbox.step({ id: "t1", kind: "start", payload: { workflow: "remind" } });
     const task = (await sandbox.tasks()).find((one) => one.node === "text")!;
     expect(task.delivery).toMatchObject({ status: "failed", detail: expect.stringContaining("30006") });
   });
 
   it("answers a STOP itself, starts nothing from it, and needs phone lines for a text", async () => {
-    const sandbox = await start({ workflows: [answer] });
+    const sandbox = await start({ carrier, workflows: [answer] });
     await sandbox.step({ id: "t1", kind: "message", payload: { channel: "text", from: CUSTOMER, stop: true } });
     expect(await sandbox.tasks()).toEqual([]);
     expect(sandbox.intents.phone!.texts).toEqual([expect.objectContaining({ to: CUSTOMER, body: expect.stringContaining("unsubscribed") })]);
@@ -85,7 +95,7 @@ describe("Gate A: a sandbox text out and back through the fake carrier", () => {
   });
 
   it("restores the carrier with a snapshot, so a replay sends again", async () => {
-    const sandbox = await start();
+    const sandbox = await start({ carrier });
     const before = sandbox.snapshot();
     await sandbox.step({ id: "t1", kind: "start", payload: { workflow: "remind" } });
     expect(sandbox.intents.phone!.texts).toHaveLength(1);
@@ -94,7 +104,9 @@ describe("Gate A: a sandbox text out and back through the fake carrier", () => {
     await sandbox.step({ id: "t1", kind: "start", payload: { workflow: "remind" } });
     expect(sandbox.intents.phone!.texts).toHaveLength(1);
   });
+  });
 
+describe("Dash Phone rule checks", () => {
   it("has rule checks that catch a text without consent, and one after STOP", () => {
     const rule = (scenario: string, id: string) => PHONE_PACK.find((one) => one.id === scenario)!.checks.find((one) => one.id === id) as RuleCheck;
     const text = (delivery: Record<string, unknown>) => ({ id: "t", base: "outreach", status: "done", body: { kind: "conversation", channel: "text", to: CUSTOMER }, delivery }) as unknown as Task;

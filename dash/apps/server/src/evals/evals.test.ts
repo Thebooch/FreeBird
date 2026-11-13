@@ -5,6 +5,7 @@ import { checkRule } from "./checks.js";
 import { PACKS } from "./packs/index.js";
 import { runScenario, ScenarioError } from "./runner.js";
 import { Sandbox } from "./sandbox.js";
+import { telnyxSandboxCarrier } from "./testing-carriers.js";
 
 const confirm = (to: string) =>
   workflowOf({
@@ -32,6 +33,20 @@ describe("scenario packs", () => {
         const failed = run.verdicts.filter((verdict) => verdict.result === "fail");
         expect(failed).toEqual([]);
         expect(run.verdicts.every((verdict) => verdict.result !== "unsure" || one.checks.find((check) => check.id === verdict.check)?.kind === "judge")).toBe(true);
+      });
+    }
+  }
+});
+
+/* Dash Phone, Phase 4: the phone and call packs, unchanged, with the world's lines on Telnyx's simulator instead of the fake carrier. */
+describe("scenario packs on Telnyx", () => {
+  for (const pack of ["phone", "calls"] as const) {
+    for (const one of PACKS[pack]!) {
+      it(`${pack}: ${one.name} passes its rule checks on Telnyx`, async () => {
+        const onFake = await runScenario(one);
+        const onTelnyx = await runScenario(one, { phoneCarrier: telnyxSandboxCarrier });
+        expect(onTelnyx.verdicts.filter((verdict) => verdict.result === "fail")).toEqual([]);
+        expect(onTelnyx.verdicts.map((verdict) => [verdict.check, verdict.result])).toEqual(onFake.verdicts.map((verdict) => [verdict.check, verdict.result]));
       });
     }
   }

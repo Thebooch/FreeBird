@@ -8,7 +8,7 @@ import { MemoryInboundStore } from "../inbound/store.js";
 import { WorkflowRunner } from "../workflows/runner.js";
 import { startWorkflow } from "../workflows/start.js";
 import { fake, owner, type Fake } from "../workflows/testing.js";
-import { SandboxPhone } from "./phone-world.js";
+import { SandboxPhone, type SandboxCarrierFactory } from "./phone-world.js";
 import { worldSeed } from "./worlds.js";
 
 /**
@@ -35,6 +35,8 @@ export interface SandboxOptions {
   readonly llm?: LlmAdapter;
   /** Everything that happens, as it happens. */
   readonly onEvent?: (event: SandboxEvent) => void;
+  /** The pretend account the world's phone lines are on. Default: the fake carrier. Another provider's simulator runs the same turns through that provider's adapter. */
+  readonly phoneCarrier?: SandboxCarrierFactory;
 }
 
 /** What a snapshot holds: every store's rows, the fake's own state, the clock and where the model is. */
@@ -122,7 +124,7 @@ export class Sandbox {
     const model = options.llm ?? (options.model ? scriptedModel(options.model, modelAt) : undefined);
     /* Phone lines on the fake carrier: texts and calls go out through the same code as the server's. Bound to the fake below. */
     let bound: Fake | undefined;
-    const phone = world.workspace.phone ? new SandboxPhone(world.workspace.phone, { now: () => bound?.clock.now ?? SANDBOX_T0, agents: { get: async (id) => bound?.agents.get(id) ?? null }, tasks: () => bound!.env.tasks, llm: () => model ?? null, newId: () => bound!.env.newId() }) : null;
+    const phone = world.workspace.phone ? new SandboxPhone(world.workspace.phone, { now: () => bound?.clock.now ?? SANDBOX_T0, agents: { get: async (id) => bound?.agents.get(id) ?? null }, tasks: () => bound!.env.tasks, llm: () => model ?? null, newId: () => bound!.env.newId(), ...(options.phoneCarrier ? { carrier: options.phoneCarrier } : {}) }) : null;
     const f = fake({
       sender: true,
       now: SANDBOX_T0,
