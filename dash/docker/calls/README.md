@@ -65,3 +65,9 @@ It is not installed by default, so a server without calls needs nothing.
 In Comms, open the line and press **Connect calls**. Dash points the carrier's
 trunk at LiveKit, makes LiveKit's inbound trunk, dispatch rule and outbound
 trunk, and the line shows **Calls: ready**.
+
+The same goes for a Telnyx line (Dash makes an FQDN connection to LiveKit's SIP
+host, with an outbound voice profile). A generic SIP line (any other carrier)
+has no API Dash can use, so after **Connect calls** point the trunk's inbound
+calls at the SIP address the line shows (`DASH_LIVEKIT_SIP_URI`) in your
+carrier's portal.
