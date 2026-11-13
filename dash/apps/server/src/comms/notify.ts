@@ -77,3 +77,19 @@ export const emailHighlightNotifier = (deps: NoticeDeps): HighlightNotifier => (
     for (const address of to) await sendOnce(deps, `highlight:${event.conversation ?? ""}:${event.agent.id}:${address}`, address, { subject, text, html });
   },
 });
+
+/**
+ * Text registration (Dash Phone): one email to the workspace's owners at
+ * each change on a line's timeline, each sent at most once.
+ */
+export const emailRegistrationNotifier =
+  (deps: NoticeDeps & { readonly owners: () => Promise<readonly string[]> }) =>
+  async (draft: { readonly line: string; readonly timeline: readonly { readonly event: string }[] }, event: string, title: string, detail: string): Promise<void> => {
+    const owners = (await deps.owners()).map((one) => one.trim()).filter(Boolean);
+    const fallback = await addressFor(deps, undefined);
+    const to = [...new Set(owners.length > 0 ? owners : fallback ? [fallback] : [])];
+    const subject = `Text registration: ${title}`;
+    const text = `${title}\n\n${detail}\n\nOpen Comms, then the line, to see where it stands.`;
+    const html = `<p><strong>${escape(title)}</strong></p><p>${escape(detail)}</p><p>Open Comms, then the line, to see where it stands.</p>`;
+    for (const address of to) await sendOnce(deps, `registration:${draft.line}:${draft.timeline.length}:${event}:${address}`, address, { subject, text, html });
+  };

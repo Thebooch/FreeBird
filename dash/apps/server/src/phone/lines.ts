@@ -186,6 +186,13 @@ export class PhoneLines {
     return connection;
   }
 
+  /** Where its texting stands, as registration moves on. Only registration sets it. */
+  async setTextStatus(id: string, status: PhoneLine["phone"]["text"]["status"]): Promise<void> {
+    const line = this.get(id);
+    if (!line || line.phone.text.status === status) return;
+    this.deps.connections.put({ ...(line as unknown as ConnectionSpec), phone: { ...line.phone, text: { status } } } as ConnectionSpec);
+  }
+
   /** Whose it is: only where it is shown, and who may text from it, changes. */
   async setOwner(id: string, owner: MailboxOwner): Promise<PhoneLineView> {
     const line = this.get(id);

@@ -33,7 +33,7 @@ import type {
   TimeRange,
   WidgetBrief,
 } from "@freebirdai/dash-spec";
-import { fieldValueOf, mailMessageSchema, type Contact, type MailDraft, type MailMessage, type ScreenRecord, type WorkflowSpec as MailWorkflow } from "@freebirdai/dash-spec";
+import { TIMELINE_WORDS, fieldValueOf, mailMessageSchema, type Contact, type MailDraft, type MailMessage, type ScreenRecord, type WorkflowSpec as MailWorkflow } from "@freebirdai/dash-spec";
 import {
   readField,
   authTokenRefs,
@@ -154,6 +154,10 @@ import { MemoryPhoneUsageStore, type PhoneUsageStore } from "./phone/usage.js";
 import { MemoryPhoneTextStore, type PhoneTextStore } from "./phone/texts.js";
 import { PhoneInbox } from "./phone/inbox.js";
 import { PhoneSetup } from "./phone/setup.js";
+import { MemoryRegistrationStore, RegistrationService, type DraftSource, type RegistrationStore } from "./phone/registration.js";
+import { scanPolicy } from "./phone/policy-scan.js";
+import { registrationRoutes } from "./routes/registration.js";
+import { emailRegistrationNotifier } from "./comms/notify.js";
 import { createTwilioProvider } from "@freebirdai/adapters-phone-twilio";
 import { outsideRegistry } from "./outside/registry.js";
 import { InboundService } from "./inbound/service.js";
@@ -507,6 +511,10 @@ export interface BuildServerOptions {
   readonly phoneUsage?: PhoneUsageStore;
   /** What Communications keeps of each line's texts, sealed, and who started each conversation (`phone/texts.ts`). Memory unless supplied. */
   readonly phoneTexts?: PhoneTextStore;
+  /** Each line's text registration draft (`phone/registration.ts`). Memory unless supplied. */
+  readonly phoneRegistrations?: RegistrationStore;
+  /** Reads a business's own page for the registration checks. Default: `fetchPublicDocument`, SSRF-guarded. */
+  readonly fetchPolicyPage?: (url: string) => Promise<{ readonly status: number; readonly text: string }>;
   /** Asks this server something through its public address, for Settings → Phone's address check. Default: `fetch`. */
   readonly phoneProbe?: (url: string) => Promise<{ readonly status: number; readonly text: string }>;
   /** Places outbound calls: the voice worker. Absent: calls are not placed, and tasks say so. */
@@ -1785,6 +1793,56 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     ...(options.phoneProbe ? { probe: options.phoneProbe } : {}),
     now: () => Date.now(),
   });
+  /*
+   * Text registration (`phone/registration.ts`): the wizard's draft, its
+   * checks, the drafted use description, and the timeline, moved on by the
+   * "registration" runner pass with one email to the owners at each change.
+   */
+  const registrationNotifier = emailRegistrationNotifier({
+    ...noticeDeps,
+    owners: async () => (await workspaceMembers()).filter((one) => one.role === "owner").map((one) => one.email),
+  });
+  const textSources = async (): Promise<DraftSource[]> => {
+    const out: DraftSource[] = [];
+    for (const workflow of await workflowStore.list()) {
+      const words = workflow.nodes
+        .filter((node) => node.action === "outreach.text" || (node.action === "outreach.inform" && ["text", "preferred"].includes(String(node.settings["channel"] ?? "preferred"))))
+        .flatMap((node) => [String(node.settings["wording"] ?? ""), String(node.settings["purpose"] ?? "")].filter((one) => one.trim()));
+      if (words.length === 0) continue;
+      out.push({ kind: workflow.trigger.kind === "booking" ? "booking" : "workflow", name: workflow.name, words });
+    }
+    for (const line of phoneLines.all()) {
+      if (line.phone.owner.kind !== "agent") continue;
+      const agent = await agentStore.get(line.phone.owner.id);
+      if (agent && !agent.archived) out.push({ kind: "agent", name: agent.name, words: [agent.role ?? "", "Replies to people who text its line."] });
+    }
+    return out;
+  };
+  const registration = new RegistrationService({
+    store: options.phoneRegistrations ?? new MemoryRegistrationStore(),
+    keys,
+    lines: phoneLines,
+    providers: phoneProviders,
+    scan: (url, legalName) =>
+      scanPolicy(url, {
+        legalName,
+        fetch: options.fetchPolicyPage ?? (async (page) => {
+          const answer = await fetchPublicDocument(page);
+          return { status: answer.status, text: answer.text };
+        }),
+      }),
+    sources: textSources,
+    llm: () => resolveLlm("registration-draft"),
+    hostedPages: () => {
+      const origin = (options.pagesOrigin ?? options.publicOrigin)?.replace(/\/+$/, "");
+      if (!origin) return null;
+      const page = `${origin}/p/${encodeURIComponent(workspaceId)}/texts`;
+      return { pageUrl: page, privacyUrl: `${page}/privacy`, termsUrl: `${page}/terms` };
+    },
+    notify: (draft, event, detail) => registrationNotifier(draft, event, TIMELINE_WORDS[event], detail),
+    now: () => Date.now(),
+  });
+  void app.register(registrationRoutes({ registration, canRead: async (principal, line) => (await policy.can(principal, "records.read", { connection: line })).ok }));
   void app.register(phoneLineRoutes({ lines: phoneLines, setup: phoneSetup, texts: phoneTexts, canRead: async (principal, line) => (await policy.can(principal, "records.read", { connection: line })).ok }));
   /*
    * Outside agents over MCP (`outside/`, `routes/outside-mcp.ts`): what a
@@ -1864,6 +1922,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
       { name: "calendars", run: () => comms.pushCalendars() },
       /* The weekly eval summary, when a workspace turned it on. */
       { name: "eval summary", run: () => evalService.sendWeekly() },
+      /* Text registrations waiting on the registry: where each stands, and the next step once one is approved. */
+      { name: "registration", run: () => registration.pollAll((line, error) => app.log.warn(`registration for ${line} was not checked: ${String(error)}`)) },
     ],
   });
   if (options.workflowRunner === true) workflowRunner.start();

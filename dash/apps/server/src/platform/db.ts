@@ -292,6 +292,13 @@ CREATE TABLE IF NOT EXISTS dash_phone_texts (
 CREATE INDEX IF NOT EXISTS dash_phone_texts_thread ON dash_phone_texts (workspace, line, number, at);
 CREATE INDEX IF NOT EXISTS dash_phone_texts_at ON dash_phone_texts (workspace, line, at);
 
+CREATE TABLE IF NOT EXISTS dash_phone_registrations (
+  workspace TEXT NOT NULL,
+  line      TEXT NOT NULL,
+  record    JSONB NOT NULL,
+  PRIMARY KEY (workspace, line)
+);
+
 CREATE TABLE IF NOT EXISTS dash_phone_threads (
   workspace  TEXT NOT NULL,
   line       TEXT NOT NULL,

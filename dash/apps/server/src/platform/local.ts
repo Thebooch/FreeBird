@@ -26,6 +26,7 @@ import { DbEvalRunStore } from "../evals/store.js";
 import { DbInboundStore } from "../inbound/store.js";
 import { DbPhoneUsageStore } from "../phone/usage.js";
 import { DbPhoneTextStore } from "../phone/texts.js";
+import { DbRegistrationStore } from "../phone/registration.js";
 import { DbCalendarStore, DbCaseStore, DbSignalStore, DbTaskStore, DbTemplateStore, DbWorkflowStore } from "../workflows/store.js";
 import { DbBookingStore } from "../bookings/store.js";
 import { DbPublicTokenStore } from "../public/tokens.js";
@@ -175,6 +176,7 @@ export const createLocalPlatform = async (here: string): Promise<LocalPlatform> 
     comms: new DbCommsStore(db, vault, workspace),
     phoneUsage: new DbPhoneUsageStore(db, workspace),
     phoneTexts: new DbPhoneTextStore(db, vault, workspace),
+    phoneRegistrations: new DbRegistrationStore(db, workspace),
   });
 
   /**
