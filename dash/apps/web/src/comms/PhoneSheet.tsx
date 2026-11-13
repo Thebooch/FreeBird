@@ -436,7 +436,7 @@ export const PhoneLineSheet = ({
           <input type="checkbox" checked={calls.recording} onChange={(event) => setCalls({ ...calls, recording: event.target.checked })} data-testid="phone-calls-recording" /> Record calls (on by default; the opening then says “{RECORDING_NOTICE}”)
         </label>
         <p className="dash-hint" data-testid="phone-calls-opening">
-          Callers hear: “{openingLine(line.title.replace(/^(Twilio|Fake carrier)\s+/, "") || "your business", calls.disclosure, calls.recording)}”
+          Callers hear: “{openingLine("your business",calls.disclosure, calls.recording)}”
         </p>
         {callNote && <p className="dash-sched-error">{callNote}</p>}
       </SheetSection>
