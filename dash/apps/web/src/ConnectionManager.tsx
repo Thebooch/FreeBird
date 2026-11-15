@@ -1199,11 +1199,21 @@ export const ConnectionManager = ({
       }
     });
 
+  /*
+   * The connection somebody pressed Remove on, until they say yes or keep it.
+   * Removing takes the connection and its stored key, and every widget that
+   * read it stops loading, so one press only asks.
+   */
+  const [removing, setRemoving] = useState<string | null>(null);
   const remove = (id: string): Promise<void> =>
     run(async () => {
-      await api.deleteConnection(id);
-      await refresh();
-      onChanged();
+      try {
+        await api.deleteConnection(id);
+        await refresh();
+        onChanged();
+      } finally {
+        setRemoving(null);
+      }
     });
 
   const body = (): JSX.Element => {
@@ -1278,14 +1288,31 @@ export const ConnectionManager = ({
                     >
                       Endpoints
                     </button>
-                    <button
-                      className="dash-iconbtn dash-danger"
-                      title="Remove this connection and its key"
-                      aria-label={`Remove ${connection.title}`}
-                      onClick={() => void remove(connection.id)}
-                    >
-                      Remove
-                    </button>
+                    {removing === connection.id ? (
+                      <span className="dash-row" role="alertdialog" aria-label={`Remove ${connection.title}?`} data-testid={`remove-confirm-${connection.id}`}>
+                        <span className="dash-hint">Remove it and its key? Widgets that read it will stop loading.</span>
+                        <button className="dash-iconbtn" disabled={busy} onClick={() => setRemoving(null)}>
+                          Keep it
+                        </button>
+                        <button
+                          className="dash-iconbtn dash-danger"
+                          disabled={busy}
+                          aria-label={`Yes, remove ${connection.title}`}
+                          onClick={() => void remove(connection.id)}
+                        >
+                          Yes, remove
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        className="dash-iconbtn dash-danger"
+                        title="Remove this connection and its key"
+                        aria-label={`Remove ${connection.title}`}
+                        onClick={() => setRemoving(connection.id)}
+                      >
+                        Remove
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>

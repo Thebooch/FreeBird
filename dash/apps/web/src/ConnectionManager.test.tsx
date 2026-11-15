@@ -87,13 +87,32 @@ describe("the connections panel", () => {
     expect(page.querySelector(".dash-conn-list > li")).toBeNull();
   });
 
-  it("removes the connection named, reads the list again, and tells the page around it", async () => {
+  it("asks before removing, and removes nothing when the person keeps it", async () => {
+    const page = await open({
+      "GET /api/connections": [connection({}, true), connection({ id: "beta", title: "Beta API" }, true)],
+      "DELETE /api/connections/beta": { ok: true },
+    });
+    await click(button(page, /^Remove Beta API$/));
+    expect(shown(page.querySelector('[data-testid="remove-confirm-beta"]')!)).toContain("Remove it and its key? Widgets that read it will stop loading.");
+    /* Only the one pressed is asked about. */
+    expect(page.querySelector('[data-testid="remove-confirm-acme"]')).toBeNull();
+    expect(writes()).toEqual([]);
+
+    await click(button(page, "Keep it"));
+    expect(page.querySelector('[data-testid="remove-confirm-beta"]')).toBeNull();
+    expect(writes()).toEqual([]);
+    expect(onChanged).not.toHaveBeenCalled();
+    expect([...page.querySelectorAll(".dash-conn-list__title")].map((one) => one.textContent)).toEqual(["Acme API", "Beta API"]);
+  });
+
+  it("removes the connection named once the person says yes, reads the list again, and tells the page around it", async () => {
     const page = await open({
       "GET /api/connections": [connection({}, true), connection({ id: "beta", title: "Beta API" }, true)],
       "DELETE /api/connections/beta": { ok: true },
     });
     server.on("GET /api/connections", [connection({}, true)]);
-    await click(button(page, "Remove Beta API"));
+    await click(button(page, /^Remove Beta API$/));
+    await click(button(page, "Yes, remove Beta API"));
     await settle();
     expect(writes()).toEqual(["DELETE /api/connections/beta"]);
     expect(server.sent("GET /api/connections")).toHaveLength(2);
@@ -106,9 +125,12 @@ describe("the connections panel", () => {
       "GET /api/connections": [connection({}, true)],
       "DELETE /api/connections/acme": { status: 409, body: { error: "Three widgets still read this connection." } },
     });
-    await click(button(page, "Remove Acme API"));
+    await click(button(page, /^Remove Acme API$/));
+    await click(button(page, "Yes, remove Acme API"));
     await settle();
     expect(shown(page)).toContain("Three widgets still read this connection.");
+    /* The question is put away, so a second yes cannot follow by accident. */
+    expect(page.querySelector('[data-testid="remove-confirm-acme"]')).toBeNull();
     expect(onChanged).not.toHaveBeenCalled();
     expect([...page.querySelectorAll(".dash-conn-list__title")].map((one) => one.textContent)).toEqual(["Acme API"]);
   });
