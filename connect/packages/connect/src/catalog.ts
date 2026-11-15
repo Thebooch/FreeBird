@@ -185,6 +185,34 @@ export class CatalogStore implements IntegrationStore {
     return merged;
   }
 
+  /**
+   * What the catalog's files are right now, as one string: each file's path,
+   * modified time and size. Equal stamps mean `list()` would answer the same,
+   * so a caller that derives something from the whole catalog can keep it
+   * without paying for a copy of every entry to find out nothing changed.
+   */
+  stamp(): string {
+    const parts: string[] = [];
+    for (const dir of [this.seedDir, this.registryDir, this.overlayDir]) {
+      if (!dir) continue;
+      let names: string[] = [];
+      try {
+        names = readdirSync(dir).filter((name) => name.endsWith(".json")).sort();
+      } catch {
+        /* No such folder: nothing in it. */
+      }
+      for (const name of names) {
+        try {
+          const stat = statSync(join(dir, name));
+          parts.push(`${dir}/${name}:${stat.mtimeMs}:${stat.size}`);
+        } catch {
+          /* Gone between the listing and the look. */
+        }
+      }
+    }
+    return parts.join("|");
+  }
+
   list(): CatalogEntry[] {
     return [...this.merged().values()]
       .sort((a, b) => a.title.localeCompare(b.title))

@@ -52,6 +52,7 @@ import {
   resolveRange,
   statusTone,
 } from "@freebirdai/dash-spec";
+import compress from "@fastify/compress";
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
 import { createFreeBirdPlugin } from "@freebirdai/server/fastify";
@@ -294,7 +295,7 @@ import {
   parseView,
 } from "./context/onscreen.js";
 import { LOOK_UP_WIDGET_TOOL, lookUpWidget, lookUpWidgetSchema } from "./chat/lookUpWidget.js";
-import { type SpecRepository } from "./store.js";
+import { deepFreeze, type SpecRepository } from "./store.js";
 import { GrantStore, approveWidget, dashboardApprovals, widgetGrantSubject } from "./grants.js";
 import { savedReads } from "./drift/watch.js";
 import { MemorySnapshotStore, type SnapshotStore } from "./history/store.js";
@@ -745,6 +746,15 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
   const { store, keys } = options;
   migrateCredentialRefs(store, keys);
   const app = Fastify({ logger: options.logger ?? false, bodyLimit: 1_000_000 });
+
+  /*
+   * JSON answers are compressed for a browser that asks. The list of
+   * connections and the catalog run to megabytes of field names, which
+   * compress to a small fraction. JSON only: the chat's stream and the eval
+   * sessions' events are sent a line at a time and must not wait in a
+   * compressor's buffer.
+   */
+  void app.register(compress, { customTypes: /^application\/json\b/, encodings: ["br", "gzip"] });
 
   /*
    * Every request gets a spend ceiling.
@@ -2211,10 +2221,30 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
     }
   };
 
-  const conciergeContext = () =>
-    buildConciergeContext({
-      connections: store.listConnections(),
-      reports: store.listReports(),
+  /*
+   * Kept while everything it was built from is the same: the very connection
+   * and report objects the store handed out last time, whether each
+   * connection has its key, and the catalog's files. Building it takes a
+   * fraction of a second for a real API, and one chat turn asks for it
+   * several times. A store that hands out new objects on every read, or a
+   * catalog that cannot say whether it changed, is simply built from each
+   * time, as before.
+   */
+  let heldContext: { readonly from: readonly unknown[]; readonly context: ConciergeContext } | null = null;
+  const conciergeContext = (): ConciergeContext => {
+    const connections = store.listConnections();
+    const reports = store.listReports();
+    const stamp = options.catalog ? options.catalog.stamp() : "none";
+    const from = [stamp, connections.length, ...connections, ...connections.map(connectionHasKey), reports.length, ...reports];
+    if (
+      heldContext &&
+      heldContext.from.length === from.length &&
+      heldContext.from.every((one, index) => one === from[index])
+    )
+      return heldContext.context;
+    const context = buildConciergeContext({
+      connections,
+      reports,
       // So a read is never offered for an API that would answer 401 to every
       // request it spent. The concierge sends the user to the key panel instead.
       hasKey: connectionHasKey,
@@ -2227,6 +2257,10 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
        */
       maps: options.catalog?.list() ?? [],
     });
+    /* Handed to every caller until something changes, so nobody may change it. */
+    heldContext = { from, context: deepFreeze(context) };
+    return context;
+  };
 
   /*
    * Registered whether or not there is an AI key.
@@ -4315,6 +4349,18 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
      */
     const paginationOf = (connection: string): unknown =>
       store.getConnection(connection)?.dialect?.pagination;
+    /**
+     * `paginationOf` for one pass over the bindings: each connection is looked
+     * up once, however many of its endpoints ask. A workspace has a few
+     * connections and hundreds of endpoints, and every binding asks.
+     */
+    const paginationLookup = (): ((connection: string) => unknown) => {
+      const seen = new Map<string, unknown>();
+      return (connection) => {
+        if (!seen.has(connection)) seen.set(connection, paginationOf(connection));
+        return seen.get(connection);
+      };
+    };
 
     const rowsForOp = (body: unknown, rowsPath: string): Record<string, unknown>[] => {
       try {
@@ -4430,7 +4476,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           if (!parsed.success) {
             return { error: `${WRITE_TOOL_NAME} needs a \`resource\` name and an \`id\`` };
           }
-          const bindings = bindingsFor({ context: conciergeContext(), pagination: paginationOf });
+          const bindings = bindingsFor({ context: conciergeContext(), pagination: paginationLookup() });
           const binding = bindingFor(bindings, parsed.data.resource);
           const principal = principalSchema.safeParse(ctx.auth.extra?.["principal"]);
           return planWrite({
@@ -4449,7 +4495,7 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
           const dashboard = dashboardFor(ctx.auth);
           if (!dashboard) return { error: "there is no dashboard to read from" };
           const context = conciergeContext();
-          const bindings = bindingsFor({ context, pagination: paginationOf });
+          const bindings = bindingsFor({ context, pagination: paginationLookup() });
           const binding = bindings.find(
             (entry) => entry.verb === "query" && entry.id === parsed.data.resource,
           );
@@ -5180,8 +5226,8 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
            * restart — unlike the tool schema, which the engine takes once.
            */
           records: [
-            readRoster(bindingsFor({ context: conciergeContext(), pagination: paginationOf })),
-            queryRoster(bindingsFor({ context: conciergeContext(), pagination: paginationOf })),
+            readRoster(bindingsFor({ context: conciergeContext(), pagination: paginationLookup() })),
+            queryRoster(bindingsFor({ context: conciergeContext(), pagination: paginationLookup() })),
           ].join("\n\n"),
           board: {
             getDashboard: () => store.getDashboard(dashboard.id),
