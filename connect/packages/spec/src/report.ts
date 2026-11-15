@@ -191,8 +191,26 @@ export const isStale = (report: CapabilityReport, connection: ConnectionSpec): b
   (report.connectionFingerprint !== undefined &&
     report.connectionFingerprint !== fingerprintConnection(connection));
 
+/*
+ * A frozen connection's fingerprint, kept with the object. Working one out
+ * serialises every endpoint, which for a large API takes milliseconds, and a
+ * host asks on every read. Only a connection frozen together with its
+ * endpoints is kept: anything else may still change after it was asked about.
+ */
+const fingerprints = new WeakMap<object, string>();
+
 /** Execution identity only; titles and timestamps do not change returned data. */
-export const fingerprintConnection = (connection: ConnectionSpec): string =>
+export const fingerprintConnection = (connection: ConnectionSpec): string => {
+  if (!Object.isFrozen(connection) || !Object.isFrozen(connection.ops)) return fingerprintOf(connection);
+  let held = fingerprints.get(connection);
+  if (held === undefined) {
+    held = fingerprintOf(connection);
+    fingerprints.set(connection, held);
+  }
+  return held;
+};
+
+const fingerprintOf = (connection: ConnectionSpec): string =>
   fnv1a(
     JSON.stringify({
       kind: connection.kind,

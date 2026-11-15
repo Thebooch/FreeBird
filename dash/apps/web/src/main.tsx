@@ -103,15 +103,30 @@ const useLiveDashboard = (
     error: null,
   });
 
+  /*
+   * The connections as last fetched, and for which reload. They are megabytes
+   * for a real API and do not change when somebody switches tabs, so a tab
+   * switch reads the board alone; anything that changes a connection asks for
+   * a reload, which fetches them again.
+   */
+  const heldConnections = useRef<{ token: number; body: Promise<unknown[]> } | null>(null);
+
   useEffect(() => {
     let cancelled = false;
 
     void (async () => {
       try {
-        const [listResponse, connectionsResponse] = await Promise.all([
-          fetch("/api/dashboards"),
-          fetch("/api/connections"),
-        ]);
+        let connectionsBody = heldConnections.current?.token === reloadToken ? heldConnections.current.body : null;
+        if (!connectionsBody) {
+          const body = fetch("/api/connections").then((response) => response.json() as Promise<unknown[]>);
+          heldConnections.current = { token: reloadToken, body };
+          /* A failed fetch is not kept: the next load asks again. */
+          body.catch(() => {
+            if (heldConnections.current?.body === body) heldConnections.current = null;
+          });
+          connectionsBody = body;
+        }
+        const [listResponse, raw] = await Promise.all([fetch("/api/dashboards"), connectionsBody]);
         const available = (await listResponse.json()) as DashboardSummary[];
 
         /*
@@ -141,7 +156,6 @@ const useLiveDashboard = (
         const parsed = parseDashboard(await dashboardResponse.json());
         if (!parsed.ok) throw new Error(parsed.errors.join("; "));
 
-        const raw = (await connectionsResponse.json()) as unknown[];
         const registry = new AdapterRegistry().register(new ProxyAdapter("rest")).register(new ProxyAdapter("mcp"));
         const connections: ConnectionSpec[] = [];
         /*

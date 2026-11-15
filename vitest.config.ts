@@ -10,6 +10,7 @@ export default defineConfig({
       "dash/packages/**/*.test.ts",
       "dash/packages/**/*.test.tsx",
       "dash/apps/**/src/**/*.test.ts",
+      "dash/apps/**/src/**/*.test.tsx",
     ],
     environment: "node",
     globals: false,
