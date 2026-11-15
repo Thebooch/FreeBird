@@ -22,7 +22,12 @@ export const BookingPage = ({ workspace, token }: { readonly workspace: string; 
   const [state, setState] = useState<LinkState | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   /* "status" while there's a booking to show; "pick" to choose a time, for a new booking or to move one. */
-  const [mode, setMode] = useState<{ readonly kind: "status" } | { readonly kind: "pick"; readonly moving?: PublicBooking }>({ kind: "status" });
+  /*
+   * `stay`: the person just changed their booking from the status view, so
+   * what became of it is shown there. Without it a booking they had just
+   * cancelled went straight to the times, with nothing saying it was cancelled.
+   */
+  const [mode, setMode] = useState<{ readonly kind: "status"; readonly stay?: boolean } | { readonly kind: "pick"; readonly moving?: PublicBooking }>({ kind: "status" });
   const [chosenType, setChosenType] = useState<PublicType | null>(null);
 
   useEffect(() => {
@@ -51,10 +56,18 @@ export const BookingPage = ({ workspace, token }: { readonly workspace: string; 
   };
   const type = state.type ?? chosenType;
 
-  if (mode.kind === "status" && state.booking && (ACTIVE.has(state.booking.status) || !state.canBook || !type)) {
+  if (mode.kind === "status" && state.booking && (ACTIVE.has(state.booking.status) || !state.canBook || !type || mode.stay)) {
     return (
       <Shell brand={state.workspace} width="narrow" footer={footer}>
-        <StatusView api={api} state={state} onChange={setState} onPick={(moving) => setMode({ kind: "pick", ...(moving ? { moving } : {}) })} />
+        <StatusView
+          api={api}
+          state={state}
+          onChange={(next) => {
+            setState(next);
+            setMode({ kind: "status", stay: true });
+          }}
+          onPick={(moving) => setMode({ kind: "pick", ...(moving ? { moving } : {}) })}
+        />
       </Shell>
     );
   }
@@ -181,6 +194,8 @@ const Picker = ({
   const [times, setTimes] = useState<TimesResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [problem, setProblem] = useState<string | null>(null);
+  /* Why they are back on the times. Its own state: `problem` is cleared by the very reload that follows a taken time. */
+  const [notice, setNotice] = useState<string | null>(null);
   const [step, setStep] = useState<Step>("time");
   const [asked, setAsked] = useState(false);
   const [day, setDay] = useState<string | null>(null);
@@ -277,6 +292,11 @@ const Picker = ({
             <Alert tone="info" title={moving.status === "suggested" ? "Asking for another time" : "Moving your booking"}>
               Now: {whenWords(moving.start, moving.end, zone)}. {moving.status === "confirmed" ? "It keeps this time until the new one is confirmed." : ""}
             </Alert>
+          </div>
+        ) : null}
+        {notice && step === "time" ? (
+          <div style={{ marginBottom: 18 }}>
+            <Alert tone="warn" title={notice} />
           </div>
         ) : null}
         {problem && step !== "review" ? (
@@ -407,6 +427,7 @@ const Picker = ({
                         aria-pressed={slot?.start === one.start}
                         onClick={() => {
                           setSlot(one);
+                          setNotice(null);
                           setStep("review");
                         }}
                       >
@@ -439,7 +460,7 @@ const Picker = ({
             {...(moving ? { moving } : {})}
             onBack={() => setStep("time")}
             onTaken={(message) => {
-              setProblem(message);
+              setNotice(message);
               setSlot(null);
               setStep("time");
               void load();
