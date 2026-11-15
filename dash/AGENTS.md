@@ -180,6 +180,12 @@ Mirrors the FreeBird monorepo: `"type": "module"`, tsup ESM builds, zod ^3 as a 
 
 The `LlmAdapter` / `LlmTool` / `LlmStreamChunk` interfaces in `@freebirdai/dash-agent` are copied byte-for-byte from `@freebirdai/core`'s `adapters/llm.ts` so `@freebirdai/adapters-llm-openai` and `-anthropic` drop in unchanged once published. **Do not drift them.**
 
+## Screen tests (web)
+
+- A screen is tested by opening it: `apps/web/src/testing/screen.ts` has `mount`, `fakeServer` (routes by `"METHOD /path"`, every request kept in `calls`), `settle`, `click`, `type`, `submit`, `button` and `shown`. A test file is `*.test.tsx` beside the screen with `// @vitest-environment happy-dom` on its first line.
+- Hold a screen to what it sends, not to how it looks: what opening it asks for, that nothing is written before the button that should write, and the body of each write. `public/BookingPage.test.tsx`, `public/ApprovalPage.test.tsx`, `comms/RegistrationWizard.test.tsx`, `comms/PhoneSheet.test.tsx` and `ConnectionManager.test.tsx` are the pattern.
+- A sheet draws outside its mount point, so look in `document.body` and clear it in `afterEach`.
+
 ## Hard rules
 
 - **No in-process `eval`, no `new Function`, no third-party JSONPath library.** Grafana's JSON API plugin shipped an XSS because `jsonpath-plus` allows embedded subexpressions implemented as arbitrary JavaScript. `@freebirdai/expr` is hand-rolled and parses to an AST. The one place code that is not this repository's runs is connector code, and only inside the `ConnectorSandbox` (below) — never in the server's process, the browser, or `@dash/expr`.
