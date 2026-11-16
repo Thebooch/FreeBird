@@ -4461,6 +4461,18 @@ export const buildServer = (options: BuildServerOptions): FastifyInstance => {
          */
         [WRITE_TOOL_NAME]: WRITE_TOOL,
       },
+      /*
+       * A data question that was answered is settled by its answer.
+       *
+       * After `answer_from_data` the loop used to run one more step, a model
+       * call of a second or two that nearly always decided there was nothing
+       * else to do, before the reply was written. When the search found the
+       * answer, the reply is written from it straight away. Anything else it
+       * came back with (nothing found, a source that refused, a partial
+       * answer) keeps the step, so the model can still open the record, try
+       * the other tools, or say what it would need.
+       */
+      extraToolConcludes: (tool) => tool.name === ANSWER_TOOL.name && (tool.result as { outcome?: unknown } | null)?.outcome === "found",
       executeExtraTool: async (name, args, ctx) => {
         /** What a tool is allowed to touch, for this turn's board. */
         const toolDepsFor = (dashboard: DashboardSpec, context: ConciergeContext): ToolDeps => ({

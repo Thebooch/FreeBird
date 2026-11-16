@@ -1256,3 +1256,98 @@ describe("ChatEngine — what preflight fills in reaches the card", () => {
     expect(updated.action.preview?.rows[0]?.value).toBe("none → always");
   });
 });
+
+describe("ChatEngine - extraToolConcludes", () => {
+  const lookUp = { look_up: { name: "look_up", description: "look something up", schema: z.object({ q: z.string() }) } };
+
+  /** A loop model that calls `look_up` on its first step, and counts every step it is asked for. */
+  const run = async (options: {
+    readonly result: unknown;
+    readonly concludes?: (tool: { name: string; args: unknown; result: unknown }) => boolean;
+    readonly mode?: "always" | "fallback";
+    readonly firstStep?: Array<{ name: string; args: unknown }>;
+  }) => {
+    const loop: string[] = [];
+    const written: string[] = [];
+    const scripted: LlmAdapter = {
+      defaultModel: "loop",
+      generate: async () => ({ text: "", toolCalls: [] }),
+      stream: async function* (opts) {
+        loop.push(opts.messages.map((m) => m.content).join("\n"));
+        if (loop.length === 1) {
+          for (const [index, call] of (options.firstStep ?? [{ name: "look_up", args: { q: "x" } }]).entries()) {
+            yield { toolCall: { id: `t${index}`, name: call.name, args: call.args } };
+          }
+          return;
+        }
+        yield { textDelta: "nothing else to do" };
+      },
+    };
+    const writer: LlmAdapter = {
+      defaultModel: "writer",
+      generate: async () => ({ text: "", toolCalls: [] }),
+      stream: async function* (opts) {
+        written.push(opts.messages.map((m) => m.content).join("\n"));
+        yield { textDelta: "There are 38." };
+      },
+    };
+    const { registry, db, knowledge } = setup();
+    const session = await db.createSession({ title: "T" }, auth);
+    const engine = new ChatEngine({
+      db,
+      llm: scripted,
+      registry,
+      knowledge,
+      maxToolSteps: 5,
+      ...(options.mode === "fallback" ? {} : { finalReply: { mode: "always" as const, llm: writer } }),
+      executeExtraTool: async () => options.result,
+      ...(options.concludes ? { extraToolConcludes: options.concludes } : {}),
+    });
+    const events = await collect(engine.send({ sessionId: session.id, text: "how many?", extraTools: lookUp }, auth));
+    const saved = events.find((event) => event.kind === "assistant_saved") as { assistantMessage?: { content?: string } } | undefined;
+    return { loop, written, reply: saved?.assistantMessage?.content ?? "" };
+  };
+
+  it("runs the step after an extra tool when nothing says its result settles the turn", async () => {
+    const { loop, written, reply } = await run({ result: { outcome: "found", answer: "38" } });
+    expect(loop).toHaveLength(2);
+    expect(written).toHaveLength(1);
+    expect(reply).toBe("There are 38.");
+  });
+
+  it("skips that step when the result settles the turn, and still writes the reply from the result", async () => {
+    const asked: Array<{ name: string; args: unknown; result: unknown }> = [];
+    const { loop, written, reply } = await run({
+      result: { outcome: "found", answer: "RESULT-MARKER-38" },
+      concludes: (tool) => (asked.push(tool), (tool.result as { outcome?: string }).outcome === "found"),
+    });
+    expect(loop).toHaveLength(1);
+    expect(asked).toEqual([{ name: "look_up", args: { q: "x" }, result: { outcome: "found", answer: "RESULT-MARKER-38" } }]);
+    expect(written).toHaveLength(1);
+    expect(written[0]).toContain("RESULT-MARKER-38");
+    expect(reply).toBe("There are 38.");
+  });
+
+  it("keeps the step when the host says the result does not settle it", async () => {
+    const { loop } = await run({ result: { outcome: "not-found" }, concludes: (tool) => (tool.result as { outcome?: string }).outcome === "found" });
+    expect(loop).toHaveLength(2);
+  });
+
+  it("keeps the step when one of several tools in the step does not settle it, or the check throws", async () => {
+    let call = 0;
+    const mixed = await run({
+      result: { outcome: "found" },
+      firstStep: [{ name: "look_up", args: { q: "a" } }, { name: "look_up", args: { q: "b" } }],
+      concludes: () => call++ === 0,
+    });
+    expect(mixed.loop).toHaveLength(2);
+    const thrown = await run({ result: { outcome: "found" }, concludes: () => { throw new Error("no"); } });
+    expect(thrown.loop).toHaveLength(2);
+  });
+
+  it("is ignored where the loop itself writes the reply", async () => {
+    const { loop, reply } = await run({ result: { outcome: "found" }, mode: "fallback", concludes: () => true });
+    expect(loop).toHaveLength(2);
+    expect(reply).toContain("nothing else to do");
+  });
+});

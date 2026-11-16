@@ -190,6 +190,7 @@ The `LlmAdapter` / `LlmTool` / `LlmStreamChunk` interfaces in `@freebirdai/dash-
 
 - `pnpm eval:latency` (`apps/server/src/eval/chat-latency.mts`) sends chat messages through the real server with the real model and times every model call by task. APIs are answered with made-up rows; `--live <connection>` reads one keyless public API for real (JSONPlaceholder), which is the fair case, since made-up rows rarely hold an answer and send the search through every round. It spends tokens.
 - Measured 2026-11-15: the server’s own time in a turn is 0.1 to 0.5 s; the rest is model calls, one after another. A data question is the loop’s `chat` step, then `answer_from_data`’s `context` calls (rank a source, judge its rows, again for each further source: `context/harness.ts`), then a second `chat` step, then the `respond` call that writes the reply.
+- Two of those waits are cut where they cannot change the answer. The ranker’s second choice is read and judged alongside its first when it is held (`cached`) and one answer is wanted, so a miss on the first does not start the next round from nothing (`ahead` in `context/harness.ts`; `lookAhead: false` turns it off). And when `answer_from_data` comes back `found`, the second `chat` step is not run: `extraToolConcludes` in `server.ts` (guide’s option) sends the turn straight to `respond`. Any other outcome keeps the step, so the model can still open a record or try another tool.
 
 ## Hard rules
 

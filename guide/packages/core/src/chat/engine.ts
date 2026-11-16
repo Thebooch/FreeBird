@@ -206,6 +206,23 @@ export interface ChatEngineOptions {
     ctx: { auth: AuthContext; sessionId: string },
   ) => Promise<unknown>;
   /**
+   * Whether an extra tool's result settles the turn.
+   *
+   * After a step that ran extra tools the engine runs another step, so the
+   * model can read the results and decide what else to do. That step is a
+   * whole model call, and for a tool whose result is itself the answer it
+   * usually decides "nothing else". When this returns true for every extra
+   * tool a step ran, and the step did nothing else (no action started or
+   * changed, nothing opened, no registry search), the loop ends there and
+   * the final reply is written from the results.
+   *
+   * Only under `finalReply.mode: "always"`, where the final step writes the
+   * reply from everything the turn produced; elsewhere the extra step is what
+   * writes the answer, so this is ignored. Return false to keep the step:
+   * for a lookup that came back empty, say, so the model can try another way.
+   */
+  extraToolConcludes?: (tool: { readonly name: string; readonly args: unknown; readonly result: unknown }) => boolean;
+  /**
    * When true (default), every `send()` persists a non-empty assistant
    * message — using deterministic fallbacks and, if needed, one final
    * tool-free LLM summarization step.
@@ -537,6 +554,7 @@ export class ChatEngine {
   private readonly onLlmUsage: ChatEngineOptions["onLlmUsage"];
   private readonly estimateLlmCostUsd: ChatEngineOptions["estimateLlmCostUsd"];
   private readonly executeExtraTool: ChatEngineOptions["executeExtraTool"];
+  private readonly extraToolConcludes: ChatEngineOptions["extraToolConcludes"];
   private readonly requireAssistantReply: boolean;
   /** True when the final step is the only writer of the reply. */
   private readonly finalReplyAlways: boolean;
@@ -579,6 +597,7 @@ export class ChatEngine {
     this.onLlmUsage = opts.onLlmUsage;
     this.estimateLlmCostUsd = opts.estimateLlmCostUsd;
     this.executeExtraTool = opts.executeExtraTool;
+    this.extraToolConcludes = opts.extraToolConcludes;
     this.requireAssistantReply = opts.requireAssistantReply !== false;
     this.finalReplyAlways = opts.finalReply?.mode === "always";
     this.renderFinalReply = opts.finalReply?.render ?? renderTurnSummaryPrompt;
@@ -1378,6 +1397,31 @@ export class ChatEngine {
         // A question outranks every reason to loop: the next thing that
         // happens is a person clicking, not another model call.
         if (pendingQuestion) break;
+        /*
+         * The results are the answer, by the host's word (`extraToolConcludes`):
+         * the final step writes from them, and the step that would only have
+         * decided to do nothing more is not run.
+         */
+        if (
+          this.finalReplyAlways &&
+          this.extraToolConcludes &&
+          ranExtraTools &&
+          !ranSearchTool &&
+          stepOpened.length === 0 &&
+          stepActionEvents.length === 0 &&
+          !stepLayoutCalled
+        ) {
+          const ran = executedExtraTools.slice(-stepExtraToolCalls.length);
+          let settled = ran.length > 0;
+          for (const one of ran) {
+            try {
+              if (!this.extraToolConcludes(one)) settled = false;
+            } catch {
+              settled = false;
+            }
+          }
+          if (settled) break;
+        }
         const shouldLoopForExtraTools = (ranExtraTools || ranSearchTool || stepOpened.length > 0) && !stepLayoutCalled;
         const shouldLoop =
           shouldLoopForExtraTools ||
