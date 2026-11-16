@@ -283,6 +283,11 @@ export const runContextHarness = async (
      */
     const judged: Evidence = {
       ...read,
+      /*
+       * Counted in code over every row read: what is reported as read is all
+       * of them, and it is partial only if the API itself holds more.
+       */
+      ...(verdict.counted ? { coverage: { ...read.coverage, scanned: verdict.counted.of, partial: read.coverage.of === null } } : {}),
       ...(verdict.answer ? { answer: verdict.answer } : {}),
       matched: picked.length,
     };

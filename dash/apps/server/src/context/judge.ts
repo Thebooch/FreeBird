@@ -59,6 +59,25 @@ const judgeSchema = z.object({
         "you were shown. Name every one that matches and nothing that does not. Leave it " +
         "empty when the question is about the set as a whole rather than particular rows.",
     ),
+  count: z
+    .object({
+      where: z
+        .array(
+          z.object({
+            field: z.string().min(1).max(200).describe("A column name, exactly as listed."),
+            equals: z.union([z.string().max(300), z.number(), z.boolean()]).describe("The value that column must have."),
+          }),
+        )
+        .min(1)
+        .max(4),
+    })
+    .optional()
+    .describe(
+      "ONLY when you were told more rows were read than you were shown, AND the question asks " +
+        "how many records meet plain conditions (a column equal to a value). Give the conditions " +
+        "and list in `matched` every shown row that meets them: the same conditions are then " +
+        "counted over the rows you were not shown. Leave it out for anything else.",
+    ),
 });
 
 const judgeTool: LlmTool = {
@@ -79,6 +98,15 @@ export interface JudgeResult {
    * hand for looking up anything related.
    */
   readonly matched: readonly number[];
+  /**
+   * A count made in code over every row that was read, not only the sample.
+   *
+   * Set when the judge named plain conditions for a "how many" question and
+   * those conditions picked, among the rows it was shown, exactly the rows it
+   * said matched. `answer` already says the number; this is how many rows it
+   * was counted over, so what is reported as read can say so too.
+   */
+  readonly counted?: { readonly matches: number; readonly of: number };
   readonly error?: string;
 }
 
@@ -296,6 +324,14 @@ export const buildJudgePrompt = (input: {
         `verdict is "partial", never "found" — you cannot rule out a record you were not shown.`
       : `Rows: all ${rows.length} of them. Nothing was withheld, so "not present here" is a ` +
         `real finding you can report as found.`,
+    ...(unseenCount(evidence, rows.length) > 0
+      ? [
+          `${unseenCount(evidence, rows.length)} more row(s) were read and are held, but not shown to you. ` +
+            "If the question asks how many records meet plain conditions (a column equal to a value), " +
+            "give those conditions in `count`, and list in `matched` every row below that meets them: " +
+            "the rest are then counted for you, and the count covers every row read.",
+        ]
+      : []),
     ...(fitted.droppedFields.length > 0
       ? [
           `Each row has been narrowed to the columns this widget displays. Fields not shown ` +
@@ -377,10 +413,72 @@ export const judgeEvidence = async (
     (index) => index < judgeSample(input.evidence).shown.length,
   );
 
+  const counted = parsed.data.count ? countAll(input.evidence, parsed.data.count.where, matched) : null;
+  if (counted) {
+    /*
+     * Every row read was counted, so this is an answer about the source as
+     * read, not about a sample. It stays "partial" only when the API itself
+     * holds more than was read (a page cap), which the answer then says.
+     */
+    const whole = input.evidence.coverage.of !== null;
+    return {
+      verdict: whole ? "found" : "partial",
+      answer: counted.says + (whole ? "" : " The API holds more records than were read, so the full number may be higher."),
+      missing: whole ? "" : "the records past what the API returned",
+      matched,
+      counted: { matches: counted.matches, of: counted.of },
+    };
+  }
+
   return {
     verdict: parsed.data.verdict,
     answer: parsed.data.answer.trim(),
     missing: parsed.data.missing.trim(),
     matched,
   };
+};
+
+/** Rows read that the judge is not shown: past the sample, and any the sample had to drop. */
+const unseenCount = (evidence: Evidence, shown: number): number => evidence.rows.length - shown + (evidence.rest?.length ?? 0);
+
+type Condition = { readonly field: string; readonly equals: string | number | boolean };
+
+/** Whether a row's value is the one asked for: numbers by value, words without regard to case or outer spaces. */
+const sameValue = (value: unknown, wanted: string | number | boolean): boolean => {
+  if (value === null || value === undefined || typeof value === "object") return false;
+  if (typeof wanted === "boolean") return value === wanted || String(value).trim().toLowerCase() === String(wanted);
+  if (typeof wanted === "number") return typeof value === "number" ? value === wanted : String(value).trim() !== "" && Number(value) === wanted;
+  if (typeof value === "number" && wanted.trim() !== "" && Number.isFinite(Number(wanted))) return value === Number(wanted);
+  return String(value).trim().toLowerCase() === wanted.trim().toLowerCase();
+};
+
+/**
+ * Count the rows meeting plain conditions, over everything that was read.
+ *
+ * The conditions are the model's reading of the question, so they are held to
+ * its own judgement before they are trusted: among the rows it was shown, they
+ * must pick exactly the rows it listed as matching. Conditions that pick more,
+ * fewer or others are not what it meant, and nothing is counted: the answer
+ * stays the model's own, about the sample. Null too when there is nothing
+ * unseen to count, or a condition names a column the rows do not have.
+ */
+export const countAll = (
+  evidence: Evidence,
+  where: readonly Condition[],
+  matched: readonly number[],
+): { readonly matches: number; readonly of: number; readonly says: string } | null => {
+  const shown = judgeSample(evidence).shown.length;
+  if (unseenCount(evidence, shown) <= 0) return null;
+  const all = [...evidence.rows, ...(evidence.rest ?? [])];
+  if (where.some((one) => !all.some((row) => one.field in row))) return null;
+  const meets = (row: Record<string, unknown>) => where.every((one) => sameValue(row[one.field], one.equals));
+
+  const picked = new Set(matched);
+  for (let index = 0; index < shown; index++) {
+    if (meets(evidence.rows[index]!) !== picked.has(index)) return null;
+  }
+
+  const matches = all.filter(meets).length;
+  const conditions = where.map((one) => `${one.field} is ${JSON.stringify(one.equals)}`).join(" and ");
+  return { matches, of: all.length, says: `${matches} of the ${all.length} records read have ${conditions}. Every record read was counted.` };
 };
