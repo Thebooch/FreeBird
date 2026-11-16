@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/vue",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "FreeBird Vue 3 bindings: plugin, composables, and headless component primitives.",
   "license": "MIT",
   "repository": {

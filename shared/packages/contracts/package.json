@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/contracts",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "The contracts FreeBird's products share: the LLM adapter shape and the approval digest.",
   "license": "MIT",
   "repository": {

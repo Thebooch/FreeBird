@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/embed",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "FreeBird script-tag embed: Shadow-DOM chat widget, declarative data-freebird-* component registration, local DOM actions.",
   "license": "MIT",
   "repository": {

@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/phone",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Dash Phone's provider contract: numbers, texts, calls and text registration behind one interface per capability, plus a fake carrier for sandboxes and tests.",
   "license": "MIT",
   "repository": {

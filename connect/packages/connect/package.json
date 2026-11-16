@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/connect",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "FreeBird Connect: connect to any API, understand its records, keep its data fresh and make reviewed changes, with or without a dashboard.",
   "license": "MIT",
   "repository": {

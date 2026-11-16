@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/adapters-phone-telnyx",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Telnyx for Dash Phone: verify an account, numbers, texts with Ed25519-signed webhooks, 10DLC registration, and SIP connections for calls.",
   "license": "MIT",
   "repository": {

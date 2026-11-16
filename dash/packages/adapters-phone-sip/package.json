@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/adapters-phone-sip",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Any carrier calls for Dash Phone over a SIP trunk the business sets up: voice only, no text API.",
   "license": "MIT",
   "repository": {

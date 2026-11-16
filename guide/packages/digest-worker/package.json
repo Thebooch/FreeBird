@@ -1,6 +1,6 @@
 {
   "name": "@freebirdai/digest-worker",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Standalone digest worker for FreeBird. Runs the same digest engine as @freebirdai/server but as its own process.",
   "license": "MIT",
   "repository": {
