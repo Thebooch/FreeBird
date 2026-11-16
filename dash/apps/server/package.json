@@ -16,6 +16,7 @@
     "eval:reply": "tsx src/eval/reply.mts",
     "eval:scenarios": "tsx src/eval/scenarios.mts",
     "eval:related": "tsx src/eval/related.mts",
+    "eval:latency": "tsx src/eval/chat-latency.mts",
     "bench": "tsx src/bench/cli.mts"
   },
   "dependencies": {

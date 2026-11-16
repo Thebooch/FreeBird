@@ -16,6 +16,9 @@ import type { Candidate, Coverage, Evidence, OpReader } from "./types.js";
 /** What one dump hands to the model, and what the bubble says it read. */
 export const PAGE_SIZE = 50;
 
+/** The most rows kept in hand past the sample, for counting in code (`Evidence.rest`). */
+export const REST_MAX = 5_000;
+
 /**
  * Fan-out sources are deliberately not driven here.
  *
@@ -219,12 +222,14 @@ export const readWidget = async (input: ReadWidgetInput): Promise<Evidence | nul
     ),
   );
   const shows = columns.filter((name) => bound.has(name));
+  const rest = readableDates(executed.rows.slice(limit, limit + REST_MAX) as Record<string, unknown>[], executed.columns);
   return {
     candidate: input.candidate,
     rows: readableDates(
       executed.rows.slice(0, limit) as Record<string, unknown>[],
       executed.columns,
     ),
+    ...(rest.length > 0 ? { rest } : {}),
     columns,
     ...(shows.length > 0 ? { shows } : {}),
     coverage: {
@@ -307,6 +312,7 @@ export const readEndpoint = async (
   return {
     candidate: input.candidate,
     rows: rows.slice(0, limit),
+    ...(rows.length > limit ? { rest: rows.slice(limit, limit + REST_MAX) } : {}),
     columns,
     coverage: {
       ...coverageOf({ total: rows.length, orderedBy: null }),

@@ -101,6 +101,17 @@ export interface HarnessDeps {
    * not a partial answer but a wrong one.
    */
   readonly scope?: { readonly mode?: "best" | "all" } | undefined;
+  /**
+   * Whether the ranker's second choice is read and judged alongside its
+   * first, when that costs no request (see the loop). On unless `false`.
+   */
+  readonly lookAhead?: boolean | undefined;
+}
+
+/** What looking at one source gave: its rows, and what the judge made of them. */
+interface Looked {
+  readonly read: Evidence | null;
+  readonly verdict: Awaited<ReturnType<typeof judgeEvidence>> | null;
 }
 
 export const runContextHarness = async (
@@ -147,6 +158,20 @@ export const runContextHarness = async (
    * blind second guess into a directed one. Ranking is a cheap call against a
    * list that is already in memory; a wasted upstream read is not.
    */
+  /** Read a source, and judge what it returned unless it refused. */
+  const look = async (candidate: Candidate, left: Budget): Promise<Looked> => {
+    const read = await deps.readCandidate(candidate, left);
+    if (!read || read.refused) return { read, verdict: null };
+    const verdict = await judgeEvidence(
+      deps.llm,
+      { question, evidence: read },
+      { ...(deps.model ? { model: deps.model } : {}), ...(deps.signal ? { signal: deps.signal } : {}) },
+    );
+    return { read, verdict };
+  };
+  /** The runner-up of the last ranking, being read and judged while the first choice is. */
+  let ahead: { readonly candidate: Candidate; readonly looked: Promise<Looked> } | null = null;
+
   let spentOut = false;
   while (sources < budget.sources && requests < budget.requests) {
     // The money ran out even though the request budget had not. Treated the
@@ -156,32 +181,71 @@ export const runContextHarness = async (
       spentOut = true;
       break;
     }
-    const ranked = await rankSources(
-      deps.llm,
-      {
-        question,
-        candidates: deps.candidates,
-        exclude: tried,
-        ...(missing ? { missing } : {}),
-      },
-      { ...(deps.model ? { model: deps.model } : {}), ...(deps.signal ? { signal: deps.signal } : {}) },
-    );
-    const next = ranked.sources[0];
-    if (!next) {
-      // Nothing left worth reading. Not a failure of the loop - an answer.
-      if (!missing && ranked.reason) missing = ranked.reason;
-      break;
+    let candidate: Candidate;
+    let looked: Looked;
+    if (ahead) {
+      /*
+       * The runner-up, already read and judged while the first choice was.
+       * Taken as this round's source without ranking again: it was the
+       * ranker's own second choice a moment ago.
+       */
+      candidate = ahead.candidate;
+      const pending = ahead.looked;
+      ahead = null;
+      tried.push(candidate.id);
+      sources += 1;
+      looked = await pending;
+    } else {
+      const ranked = await rankSources(
+        deps.llm,
+        {
+          question,
+          candidates: deps.candidates,
+          exclude: tried,
+          ...(missing ? { missing } : {}),
+        },
+        { ...(deps.model ? { model: deps.model } : {}), ...(deps.signal ? { signal: deps.signal } : {}) },
+      );
+      const next = ranked.sources[0];
+      if (!next) {
+        // Nothing left worth reading. Not a failure of the loop - an answer.
+        if (!missing && ranked.reason) missing = ranked.reason;
+        break;
+      }
+
+      const found = deps.candidates.find((entry) => entry.id === next);
+      if (!found) break;
+      candidate = found;
+      tried.push(candidate.id);
+      sources += 1;
+
+      /*
+       * A head start on the runner-up.
+       *
+       * Reading and judging a source is a model call of a second or more,
+       * and when the first choice does not answer, the next round used to
+       * start from nothing: rank again, read, judge. The ranker's second
+       * choice is read and judged alongside the first instead, so that round
+       * is already done when it is needed.
+       *
+       * Only where it is free and cannot change an answer: the runner-up is
+       * held (`cached`, so no request is spent on anybody's API), there is
+       * room for two sources, and one answer is wanted (`best`). When the
+       * first choice answers, the runner-up's judgement is simply not used;
+       * its cost was one cheap model call.
+       */
+      const spare = mode === "best" ? deps.candidates.find((entry) => entry.id === ranked.sources[1]) : undefined;
+      if (spare && spare.cached && !tried.includes(spare.id) && sources + 1 <= budget.sources && deps.lookAhead !== false) {
+        const run = look(spare, { sources: budget.sources - sources - 1, requests: 0 });
+        /* Not waited for when the first choice answers; a failure then is nobody's to handle. */
+        run.catch(() => undefined);
+        ahead = { candidate: spare, looked: run };
+      }
+
+      looked = await look(candidate, { sources: budget.sources - sources, requests: budget.requests - requests });
     }
 
-    const candidate = deps.candidates.find((entry) => entry.id === next);
-    if (!candidate) break;
-    tried.push(candidate.id);
-    sources += 1;
-
-    const read = await deps.readCandidate(candidate, {
-      sources: budget.sources - sources,
-      requests: budget.requests - requests,
-    });
+    const read = looked.read;
     if (!read) continue;
     requests += read.requests;
 
@@ -194,16 +258,12 @@ export const runContextHarness = async (
      * sentence the reply can carry, and losing it turns "your key expired" into
      * "there is nothing there".
      */
-    if (read.refused) {
+    if (read.refused || !looked.verdict) {
       unreadable.push({ candidate, reason: read.warnings.join("; ") });
       continue;
     }
 
-    const verdict = await judgeEvidence(
-      deps.llm,
-      { question, evidence: read },
-      { ...(deps.model ? { model: deps.model } : {}), ...(deps.signal ? { signal: deps.signal } : {}) },
-    );
+    const verdict = looked.verdict;
 
     /*
      * A miss still keeps the evidence when nothing else has been found.
@@ -223,6 +283,11 @@ export const runContextHarness = async (
      */
     const judged: Evidence = {
       ...read,
+      /*
+       * Counted in code over every row read: what is reported as read is all
+       * of them, and it is partial only if the API itself holds more.
+       */
+      ...(verdict.counted ? { coverage: { ...read.coverage, scanned: verdict.counted.of, partial: read.coverage.of === null } } : {}),
       ...(verdict.answer ? { answer: verdict.answer } : {}),
       matched: picked.length,
     };

@@ -689,3 +689,123 @@ describe("across every source", () => {
     expect(result.outcome).toBe("exhausted");
   });
 });
+
+/**
+ * The runner-up, read and judged alongside the first choice.
+ *
+ * A model here answers by what it was asked rather than by turn, since two
+ * judgements are now made at once and their order is not the point.
+ */
+const answering = (ranks: Array<{ sources: string[]; reason?: string }>, verdicts: Record<string, { verdict: string; answer?: string; missing?: string }>) => {
+  const asked: string[] = [];
+  let rank = 0;
+  const llm = {
+    defaultModel: "test",
+    stream: async function* () {},
+    generate: async (options: { messages: Array<{ content: string }>; tools?: Record<string, unknown> }) => {
+      const text = options.messages.map((message) => message.content).join("\n");
+      if (options.tools && "rank_sources" in options.tools) {
+        asked.push("rank");
+        const args = ranks[rank++] ?? { sources: [], reason: "nothing left" };
+        return { text: "", toolCalls: [{ id: "r", name: "rank_sources", args: { reason: "", ...args } }] };
+      }
+      const source = /Source: (\S+)/.exec(text)?.[1] ?? "";
+      asked.push(`judge ${source}`);
+      const args = { answer: "", missing: "", matched: [], ...(verdicts[source] ?? { verdict: "miss" }) };
+      return { text: "", toolCalls: [{ id: "j", name: "judge_evidence", args }] };
+    },
+  };
+  return { llm: llm as never, asked };
+};
+
+describe("runContextHarness, with a head start on the runner-up", () => {
+  const read = (reads: string[]) => async (c: Candidate) => {
+    reads.push(c.id);
+    return evidenceFor(c, [{ name: c.id }]);
+  };
+
+  it("does not rank again when the first choice misses and the runner-up answers", async () => {
+    const { llm, asked } = answering([{ sources: ["leases", "rent"] }], {
+      leases: { verdict: "miss", missing: "no rent column here" },
+      rent: { verdict: "found", answer: "4,200" },
+    });
+    const reads: string[] = [];
+    const result = await runContextHarness("what is the highest rent?", { llm, candidates: [candidate("leases"), candidate("rent")], readCandidate: read(reads) });
+
+    expect(result.outcome).toBe("found");
+    expect(result.answer).toBe("4,200");
+    expect(result.tried).toEqual(["leases", "rent"]);
+    expect(result.spent.sources).toBe(2);
+    /* One ranking, and each source judged once. */
+    expect(asked.filter((one) => one === "rank")).toHaveLength(1);
+    expect([...asked].sort()).toEqual(["judge leases", "judge rent", "rank"]);
+    expect([...reads].sort()).toEqual(["leases", "rent"]);
+  });
+
+  it("answers from the first choice alone when it answers, and reports only that source", async () => {
+    const { llm } = answering([{ sources: ["leases", "rent"] }], {
+      leases: { verdict: "found", answer: "38 active" },
+      rent: { verdict: "found", answer: "something else" },
+    });
+    const result = await runContextHarness("how many active leases?", { llm, candidates: [candidate("leases"), candidate("rent")], readCandidate: read([]) });
+    expect(result.outcome).toBe("found");
+    expect(result.answer).toBe("38 active");
+    expect(result.tried).toEqual(["leases"]);
+    expect(result.evidence.map((one) => one.candidate.id)).toEqual(["leases"]);
+    expect(result.spent).toEqual({ requests: 0, sources: 1 });
+  });
+
+  it("never reads a runner-up ahead when that would cost a request", async () => {
+    const { llm, asked } = answering([{ sources: ["leases", "rent"] }, { sources: ["rent"] }], {
+      leases: { verdict: "miss", missing: "no rent here" },
+      rent: { verdict: "found", answer: "4,200" },
+    });
+    const order: string[] = [];
+    const result = await runContextHarness("what is the highest rent?", {
+      llm,
+      candidates: [candidate("leases"), candidate("rent", { cached: false })],
+      readCandidate: async (c) => {
+        order.push(`read ${c.id} after ${asked.length} model calls`);
+        return evidenceFor(c, [{ name: c.id }], c.cached ? 0 : 1);
+      },
+    });
+    /* Rent is read only after leases was judged and the sources ranked again. */
+    expect(order).toEqual(["read leases after 1 model calls", "read rent after 3 model calls"]);
+    expect(asked).toEqual(["rank", "judge leases", "rank", "judge rent"]);
+    expect(result.spent).toEqual({ requests: 1, sources: 2 });
+  });
+
+  it("looks ahead only when one answer is wanted, and not when told not to", async () => {
+    const verdicts = { leases: { verdict: "miss", missing: "not here" }, rent: { verdict: "found", answer: "4,200" } };
+    const everywhere = answering([{ sources: ["leases", "rent"] }, { sources: ["rent"] }], verdicts);
+    await runContextHarness("q", { llm: everywhere.llm, candidates: [candidate("leases"), candidate("rent")], readCandidate: read([]), scope: { mode: "all" } });
+    expect(everywhere.asked.slice(0, 4)).toEqual(["rank", "judge leases", "rank", "judge rent"]);
+
+    const off = answering([{ sources: ["leases", "rent"] }, { sources: ["rent"] }], verdicts);
+    await runContextHarness("q", { llm: off.llm, candidates: [candidate("leases"), candidate("rent")], readCandidate: read([]), lookAhead: false });
+    expect(off.asked).toEqual(["rank", "judge leases", "rank", "judge rent"]);
+  });
+
+  it("stays inside the source budget: no runner-up when only one source is left", async () => {
+    const { llm, asked } = answering([{ sources: ["leases", "rent"] }], { leases: { verdict: "miss", missing: "x" }, rent: { verdict: "found", answer: "y" } });
+    const reads: string[] = [];
+    const result = await runContextHarness("q", { llm, candidates: [candidate("leases"), candidate("rent")], readCandidate: read(reads), budget: { sources: 1, requests: 8 } });
+    expect(reads).toEqual(["leases"]);
+    expect(asked).toEqual(["rank", "judge leases"]);
+    expect(result.spent.sources).toBe(1);
+    expect(result.outcome).not.toBe("found");
+  });
+
+  it("goes on to rank again, with what is missing, when the runner-up misses too", async () => {
+    const { llm, asked } = answering([{ sources: ["leases", "rent"] }, { sources: ["units"] }], {
+      leases: { verdict: "miss", missing: "not here" },
+      rent: { verdict: "miss", missing: "these are rents, not units" },
+      units: { verdict: "found", answer: "12" },
+    });
+    const result = await runContextHarness("how many units?", { llm, candidates: [candidate("leases"), candidate("rent"), candidate("units")], readCandidate: read([]) });
+    expect(result.outcome).toBe("found");
+    expect(result.tried).toEqual(["leases", "rent", "units"]);
+    expect(asked.filter((one) => one === "rank")).toHaveLength(2);
+    expect(asked.filter((one) => one === "judge units")).toHaveLength(1);
+  });
+});

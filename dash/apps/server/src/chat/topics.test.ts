@@ -227,6 +227,38 @@ describe("chat topic routes", () => {
     expect(next.json()).toEqual({ topicId: id, name: "Rent for unit 4", isNew: false });
   });
 
+  it("takes a reply within a few minutes as the same topic, without asking a model", async () => {
+    let asked = 0;
+    const counting: LlmAdapter = { ...model({ topic: -1, name: "Something else" }), generate: async () => (asked++, { text: "", toolCalls: [{ id: "1", name: "choose_topic", args: { topic: -1, name: "Something else" } }] }) as never };
+    const minutes = (count: number) => count / 60;
+    const current = await topic("Rent", [[minutes(10), "user", "rent?"], [minutes(1), "assistant", "$1,200."]]);
+    const app = await build({ llm: counting });
+
+    const quick = await app.inject({ method: "POST", url: "/api/chat/route", payload: { text: "and unit 5?", topicId: current, tz: "UTC" } });
+    expect(quick.json()).toEqual({ topicId: current, name: "Rent", isNew: false });
+    expect(asked).toBe(0);
+
+    /* "New topic" still splits, however soon it is said. */
+    const split = await app.inject({ method: "POST", url: "/api/chat/route", payload: { text: "new topic: vendors", topicId: current, tz: "UTC" } });
+    expect(split.json()).toMatchObject({ isNew: true, name: "Vendors" });
+
+    /* Jumped to another topic from the timeline: the model is asked which one they mean. */
+    const older = await topic("Orders", [[2, "user", "orders?"]]);
+    const jumped = await app.inject({ method: "POST", url: "/api/chat/route", payload: { text: "about those", topicId: current, viewing: older, tz: "UTC" } });
+    expect(asked).toBe(1);
+    expect(jumped.json()).toMatchObject({ isNew: true, name: "Something else" });
+  });
+
+  it("asks the model again once the topic has been quiet for a while", async () => {
+    let asked = 0;
+    const counting: LlmAdapter = { ...model({ topic: 0 }), generate: async () => (asked++, { text: "", toolCalls: [{ id: "1", name: "choose_topic", args: { topic: -1, name: "Vendors" } }] }) as never };
+    const current = await topic("Rent", [[1, "user", "rent?"], [10 / 60, "assistant", "$1,200."]]);
+    const app = await build({ llm: counting });
+    const later = await app.inject({ method: "POST", url: "/api/chat/route", payload: { text: "who are our vendors?", topicId: current, tz: "UTC" } });
+    expect(asked).toBe(1);
+    expect(later.json()).toMatchObject({ isNew: true, name: "Vendors" });
+  });
+
   it("starts a new topic on a new day", async () => {
     const yesterday = await topic("Rent", [[30, "user", "rent?"]]);
     const app = await build();

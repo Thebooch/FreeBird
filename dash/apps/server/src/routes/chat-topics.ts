@@ -6,6 +6,7 @@ import {
   contextTopics,
   dayOf,
   decideTopic,
+  explicitNewTopic,
   isDay,
   recentLines,
   safeTimeZone,
@@ -30,6 +31,9 @@ export interface TimelineTask {
   /** Where it opens, as an app route (`#/agent/...`). */
   readonly link?: string | undefined;
 }
+
+/** How soon after the topic's last message the next one is taken as part of it, unasked. */
+export const QUICK_REPLY_MS = 3 * 60_000;
 
 const routeBody = z.object({
   text: z.string().min(1).max(20_000),
@@ -86,6 +90,24 @@ export const chatTopicRoutes = (deps: {
       // Each day starts its own topic, so the timeline reads day by day.
       const stale = current !== null && dayOf(current.lastAt, tz) !== dayOf(at, tz);
       let fresh = current === null ? ("first" as const) : stale ? ("new-day" as const) : undefined;
+
+      /*
+       * A reply within a few minutes is the same conversation, and nothing is
+       * asked of a model to say so. That call took about a second, in front of
+       * every message, and most messages are the next thing somebody says.
+       * Still asked: after a pause, after jumping to another topic, and never
+       * in place of "new topic", which always splits.
+       */
+      if (
+        current &&
+        !stale &&
+        at - Date.parse(current.lastAt) <= QUICK_REPLY_MS &&
+        at >= Date.parse(current.lastAt) &&
+        (!viewing || viewing === current.id) &&
+        !explicitNewTopic(text)
+      ) {
+        return { topicId: current.id, name: current.name, isNew: false };
+      }
 
       const chosen = [] as Array<{ id: string; name: string }>;
       if (current && !stale) {

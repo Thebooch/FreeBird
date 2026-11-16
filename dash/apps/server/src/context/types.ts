@@ -87,6 +87,15 @@ export interface Evidence {
    * therefore what they are asking about.
    */
   readonly shows?: readonly string[];
+  /**
+   * Rows that were read and are in hand, past the ones in `rows`.
+   *
+   * Never shown to a model: `rows` is the sample, sized to what a model can
+   * read. These are here so that a question about how many records meet a
+   * plain condition can be counted over everything read, in code, instead of
+   * answered for the sample alone. Absent when the sample is all there is.
+   */
+  readonly rest?: readonly Record<string, unknown>[];
   readonly coverage: Coverage;
   /**
    * What the judge read out of *these* rows, and how many it matched.

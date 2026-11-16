@@ -148,6 +148,8 @@ export interface CreateFreeBirdRouterOptions<TAuth = unknown> {
    * are discarded, which is worse than not offering them.
    */
   executeExtraTool?: import("@freebirdai/core").ChatEngineOptions["executeExtraTool"];
+  /** Whether an extra tool's result settles the turn, so the step after it is not run. See the engine's option. */
+  extraToolConcludes?: import("@freebirdai/core").ChatEngineOptions["extraToolConcludes"];
   /** Inner LLM steps per message. Default 3; 1 disables the loop. */
   maxToolSteps?: import("@freebirdai/core").ChatEngineOptions["maxToolSteps"];
   /** Forwarded to ChatEngineOptions.harnessArgsMode: `"per_action"` (default) or `"catalog"` (one tool for the whole app), `"typed"`, `"loose"`. */
@@ -239,6 +241,7 @@ export const resolveDeps = <TAuth = unknown>(opts: CreateFreeBirdRouterOptions<T
       navigation: opts.navigation,
       processingToolCatalog: opts.processingToolCatalog,
       executeExtraTool: opts.executeExtraTool,
+      extraToolConcludes: opts.extraToolConcludes,
       finalReply: opts.finalReply,
     });
   const tabs = opts.tabs ?? createCustomTabsService(opts.db);
@@ -373,6 +376,7 @@ export const createDepsResolver = <TAuth = unknown>(
         navigation: opts.navigation,
         processingToolCatalog: opts.processingToolCatalog,
         executeExtraTool: opts.executeExtraTool,
+      extraToolConcludes: opts.extraToolConcludes,
         finalReply: opts.finalReply,
       });
       return {
